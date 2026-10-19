@@ -73,7 +73,6 @@ import {
   emailOtpAfterHook,
   emailOtpSessionCreationHook,
 } from "@/utils/auth/email-otp";
-import { invalidateUserOwnAddresses } from "@/utils/user/own-addresses";
 
 const logger = createScopedLogger("auth");
 const renamedAuthUsers = new WeakMap<
@@ -882,7 +881,6 @@ export async function handleLinkAccount(
       )[0];
 
     // A renamed mailbox clears this itself; a token refresh changes nothing.
-    if (!linkedEmailAccount) await invalidateUserOwnAddresses(account.userId);
 
     await clearAccountDisconnectedErrorIfResolved({
       userId: account.userId,

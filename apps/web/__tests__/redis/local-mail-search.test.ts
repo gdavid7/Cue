@@ -104,7 +104,11 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         },
       } as unknown as UIMessageStreamWriter);
 
-      expect(await search.search({ query: "x", limit: 20 })).toEqual(answer);
+      // RD-3: only the ids of what matched cross Redis.
+      expect(await search.search({ query: "x", limit: 20 })).toEqual({
+        status: "ok",
+        messages: [{ id: "m1", threadId: "t1" }],
+      });
       await vi.waitFor(() => expect(saved).toEqual([true, false]));
       expect(await redis!.exists(keys[0])).toBe(0);
     });

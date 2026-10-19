@@ -1,151 +1,120 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import prisma from "@/utils/__mocks__/prisma";
-import { redis } from "@/utils/redis";
 import {
-  createOwnedAccountMemo,
   getEmailAccount,
-  invalidateAccountValidation,
+  invalidateAccountOwnership,
+  readKeyForOwnedAccounts,
 } from "./account-validation";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(), set: vi.fn(), del: vi.fn(), publish: vi.fn() },
-}));
-vi.mock("@/utils/redis/shared-subscriber", () => ({
-  getSharedSubscriber: () => ({
-    listen: () => ({ ready: Promise.resolve(), close: () => {} }),
-  }),
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 
 describe("getEmailAccount", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(redis.set).mockResolvedValue("OK");
-    vi.mocked(redis.del).mockResolvedValue(1);
+    recordingRedis.reset();
   });
 
-  // Every authenticated API request checks the account; an instance answers
-  // repeat checks from memory instead of a Redis read each time.
-  it("checks an owned account once per instance while fresh", async () => {
-    vi.mocked(redis.get).mockResolvedValue("me@example.com");
-    const key = { userId: "user-memo", emailAccountId: "account-memo" };
-
-    expect(await getEmailAccount(key)).toBe("me@example.com");
-    expect(await getEmailAccount(key)).toBe("me@example.com");
-
-    expect(redis.get).toHaveBeenCalledOnce();
-  });
-
-  it("does not remember an account the user does not own", async () => {
-    vi.mocked(redis.get).mockResolvedValue(null);
-    prisma.emailAccount.findUnique.mockResolvedValue(null);
-    const key = { userId: "user-other", emailAccountId: "account-other" };
-
-    expect(await getEmailAccount(key)).toBeNull();
-    expect(await getEmailAccount(key)).toBeNull();
-
-    expect(prisma.emailAccount.findUnique).toHaveBeenCalledTimes(2);
-  });
-
-  it("checks again after the ownership is invalidated", async () => {
-    vi.mocked(redis.get).mockResolvedValue("me@example.com");
-    const key = { userId: "user-moved", emailAccountId: "account-moved" };
-
-    await getEmailAccount(key);
-    await invalidateAccountValidation(key);
-    vi.mocked(redis.get).mockResolvedValue(null);
-    prisma.emailAccount.findUnique.mockResolvedValue(null);
-
-    expect(await getEmailAccount(key)).toBeNull();
-  });
-
-  it("falls back to the database when Redis refuses", async () => {
-    vi.mocked(redis.get).mockRejectedValue(new Error("limit exceeded"));
-    vi.mocked(redis.set).mockRejectedValue(new Error("limit exceeded"));
+  it("returns the address of an account the user owns", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue({
       email: "me@example.com",
     } as never);
 
     expect(
-      await getEmailAccount({
-        userId: "user-db",
-        emailAccountId: "account-db",
-      }),
+      await getEmailAccount({ userId: "user-1", emailAccountId: "account-1" }),
     ).toBe("me@example.com");
+    expect(prisma.emailAccount.findUnique).toHaveBeenCalledWith({
+      where: { id: "account-1", userId: "user-1" },
+      select: { email: true },
+    });
+  });
+
+  it("returns null for an account the user does not own", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue(null);
+
+    expect(
+      await getEmailAccount({ userId: "user-1", emailAccountId: "account-2" }),
+    ).toBeNull();
+  });
+
+  // RD-3: the address is personal data, so it is never cached server-side,
+  // and an account moved to another user is refused on the very next check.
+  it("keeps the address out of the cache and sees a transfer at once", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValueOnce({
+      email: "me@example.com",
+    } as never);
+    const key = { userId: "user-1", emailAccountId: "account-1" };
+    expect(await getEmailAccount(key)).toBe("me@example.com");
+
+    prisma.emailAccount.findUnique.mockResolvedValueOnce(null);
+    expect(await getEmailAccount(key)).toBeNull();
+    expect(recordingRedis.everythingWritten()).not.toContain("me@example.com");
   });
 });
 
-describe("createOwnedAccountMemo", () => {
-  // A merge or transfer moves an account to another user; every instance
-  // must stop trusting the old owner at once, not when its memo expires.
-  it("drops an invalidated account on every instance", async () => {
-    const bus = fakeBus();
-    const first = createOwnedAccountMemo(bus);
-    const second = createOwnedAccountMemo(bus);
-    const load = vi.fn(async () => "me@example.com");
-
-    await first.get("account:u1:a1", load);
-    await second.get("account:u1:a1", load);
-    await first.invalidate("account:u1:a1");
-    await second.get("account:u1:a1", load);
-    await first.get("account:u1:a1", load);
-
-    expect(load).toHaveBeenCalledTimes(4);
+describe("account ownership in Redis", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recordingRedis.reset();
   });
 
-  it("forgets everything again on a second dropped connection", async () => {
-    const bus = fakeBus();
-    const memo = createOwnedAccountMemo(bus);
-    const load = vi.fn(async () => "me@example.com");
+  // RD-3: the flag is "1" under ids; the address never reaches Redis.
+  it("remembers an owned account by id alone and asks the database once", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      id: "account-1",
+    } as never);
+    recordingRedis.store.set("version:account-1", "v1");
 
-    await memo.get("account:u1:a1", load);
-    bus.drop();
-    await memo.get("account:u1:a1", load);
-    bus.drop();
-    await memo.get("account:u1:a1", load);
+    expect(Object.fromEntries(await read())).toEqual({ "account-1": "v1" });
+    expect(Object.fromEntries(await read())).toEqual({ "account-1": "v1" });
 
-    expect(load).toHaveBeenCalledTimes(3);
+    expect(prisma.emailAccount.findUnique).toHaveBeenCalledTimes(1);
+    expect(recordingRedis.writes).toEqual([
+      { key: "account-owner:user-1:account-1", value: "1" },
+    ]);
   });
 
-  it("forgets everything when invalidations may have been missed", async () => {
-    const bus = fakeBus();
-    const memo = createOwnedAccountMemo(bus);
-    const load = vi.fn(async () => "me@example.com");
+  it("asks the database again once ownership is forgotten", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValueOnce({
+      id: "account-1",
+    } as never);
+    recordingRedis.store.set("version:account-1", "v1");
+    await read();
 
-    await memo.get("account:u1:a1", load);
-    bus.drop();
-    await memo.get("account:u1:a1", load);
+    await invalidateAccountOwnership({
+      userId: "user-1",
+      emailAccountId: "account-1",
+    });
+    prisma.emailAccount.findUnique.mockResolvedValueOnce(null);
 
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(Object.fromEntries(await read())).toEqual({});
+  });
+
+  it("reads each owned account's key and leaves out the rest", async () => {
+    recordingRedis.store.set("account-owner:user-1:account-1", "1");
+    recordingRedis.store.set("version:account-1", "v1");
+    recordingRedis.store.set("version:account-2", "v2");
+    prisma.emailAccount.findUnique.mockResolvedValue(null);
+
+    const owned = await readKeyForOwnedAccounts({
+      userId: "user-1",
+      emailAccountIds: ["account-1", "account-2"],
+      keyFor: (id) => `version:${id}`,
+    });
+
+    expect(Object.fromEntries(owned)).toEqual({ "account-1": "v1" });
   });
 });
 
-// Like the shared subscriber: a dropped connection tells only listeners that
-// were live, and a listener is live again only once it subscribes again.
-function fakeBus() {
-  type Listener = { onMessage: (message: string) => void; onLost: () => void };
-  const listeners = new Set<Listener>();
-  const live = new Set<Listener>();
-  return {
-    listen(_channel: string, listener: Listener) {
-      listeners.add(listener);
-      live.add(listener);
-      return {
-        ready: Promise.resolve(),
-        close: () => {
-          listeners.delete(listener);
-          live.delete(listener);
-        },
-      };
-    },
-    async publish(_channel: string, message: string) {
-      for (const listener of listeners) listener.onMessage(message);
-    },
-    drop() {
-      const lost = [...live];
-      live.clear();
-      for (const listener of lost) listener.onLost();
-    },
-  };
+function read() {
+  return readKeyForOwnedAccounts({
+    userId: "user-1",
+    emailAccountIds: ["account-1"],
+    keyFor: (id) => `version:${id}`,
+  });
 }

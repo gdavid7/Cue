@@ -11,7 +11,7 @@ vi.mock("@/utils/middleware", async () => {
   return createWithEmailAccountTestMiddleware();
 });
 
-import { PATCH } from "./route";
+import { GET, PATCH } from "./route";
 
 describe("PATCH /api/chats/[chatId]", () => {
   beforeEach(() => {
@@ -53,3 +53,44 @@ describe("PATCH /api/chats/[chatId]", () => {
     });
   });
 });
+
+describe("GET /api/chats/[chatId]", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The client waits on a marked reply, so a dead run's marker isn't reported.
+  it("reports a running reply but not one whose run is past its limit", async () => {
+    const startedAt = new Date();
+    prisma.chat.findFirst.mockResolvedValueOnce({
+      id: "chat-1",
+      messages: [],
+      activeStreamId: "stream-1",
+      activeStreamStartedAt: startedAt,
+    } as never);
+    prisma.chat.findFirst.mockResolvedValueOnce({
+      id: "chat-1",
+      messages: [],
+      activeStreamId: "stream-1",
+      activeStreamStartedAt: new Date(Date.now() - 600_000),
+    } as never);
+
+    const live = await (await get()).json();
+    const stale = await (await get()).json();
+
+    expect(live).toMatchObject({
+      activeStreamId: "stream-1",
+      activeStreamStartedAt: startedAt.toISOString(),
+    });
+    expect(stale).toMatchObject({
+      activeStreamId: null,
+      activeStreamStartedAt: null,
+    });
+  });
+});
+
+function get() {
+  return GET(new Request("http://localhost/api/chats/chat-1") as never, {
+    params: Promise.resolve({ chatId: "chat-1" }),
+  });
+}

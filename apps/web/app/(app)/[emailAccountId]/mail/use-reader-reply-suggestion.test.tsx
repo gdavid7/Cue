@@ -16,6 +16,7 @@ import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insight
 const mocks = vi.hoisted(() => ({
   useReplySuggestion: vi.fn(),
   useSuggestedReply: vi.fn(),
+  useThreadContext: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
   draftReplies: drafting("on"),
   plans: [] as { status: string; rule: { systemType: string | null } }[],
@@ -26,6 +27,10 @@ vi.mock("@/hooks/useReplySuggestion", () => ({
 }));
 vi.mock("@/hooks/useSuggestedReply", () => ({
   useSuggestedReply: mocks.useSuggestedReply,
+}));
+vi.mock("@/hooks/useThreadContext", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useThreadContext")>()),
+  useThreadContext: mocks.useThreadContext,
 }));
 vi.mock("@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies", () => ({
   useDraftReplies: () => mocks.draftReplies,
@@ -59,6 +64,7 @@ describe("useReaderReplySuggestion", () => {
       suggestion: undefined,
     });
     mocks.useSuggestedReply.mockReturnValue({ data: undefined });
+    mocks.useThreadContext.mockReturnValue({ data: { items: [] } });
     mocks.insights = undefined;
     mocks.draftReplies = drafting("on");
     mocks.plans = [];
@@ -109,18 +115,20 @@ describe("useReaderReplySuggestion", () => {
 
   // The draft Cue saved keeps its credit when the conversation is reopened.
   it("brings back the suggestion behind a saved draft without writing a new one", () => {
-    mocks.useSuggestedReply.mockImplementation(({ enabled, cachedFor }) => ({
-      data:
-        enabled && cachedFor === "ask"
-          ? {
-              suggestion: {
-                status: "suggested",
-                reply: "See you Thursday.",
-                citations: [],
-              },
-            }
-          : undefined,
-    }));
+    mocks.useSuggestedReply.mockImplementation(
+      ({ enabled, keptOnly, messageId }) => ({
+        data:
+          enabled && keptOnly && messageId === "ask"
+            ? {
+                suggestion: {
+                  status: "suggested",
+                  reply: "See you Thursday.",
+                  citations: [],
+                },
+              }
+            : undefined,
+      }),
+    );
 
     const { result } = renderSuggestion([
       incoming("ask", ["INBOX", "Label_to_reply"]),
@@ -149,6 +157,47 @@ describe("useReaderReplySuggestion", () => {
     render(<div>{result.current.replyStatus}</div>);
 
     expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  // RD-3g: the context the reader gathered is handed over, so the server
+  // doesn't read the same related mail and linked pages again.
+  it("hands the reader's context to the suggestion once it has it", () => {
+    const item = {
+      id: "thread-2",
+      kind: "web",
+      title: "Opening hours",
+      snippet: "",
+      at: "2026-10-01T00:00:00.000Z",
+      reasons: [],
+      text: "Open 9 to 5.",
+    };
+    mocks.useThreadContext.mockReturnValue({ data: undefined });
+    const { result, rerender } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(lastEnabled()).toBe(false);
+    expect(result.current.replyStatus).not.toBeNull();
+
+    mocks.useThreadContext.mockReturnValue({ data: { items: [item] } });
+    rerender();
+
+    expect(mocks.useReplySuggestion).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: true, context: [item] }),
+    );
+  });
+
+  // Read back from this browser, the items have no text to hand over.
+  it("lets the server gather the context when the reader's has no text", () => {
+    mocks.useThreadContext.mockReturnValue({
+      data: { items: [{ id: "thread-2", kind: "email", reasons: [] }] },
+    });
+
+    renderSuggestion([incoming("ask", ["INBOX", "Label_to_reply"])]);
+
+    expect(mocks.useReplySuggestion).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: true, context: undefined }),
+    );
   });
 
   // "Auto draft replies" off means Cue doesn't write replies in the reader either.

@@ -7,11 +7,14 @@ import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { announceTodayChanged } from "@/utils/home/today-changes";
 import {
-  readCachedToday,
-  resetCachedTodayBlocksForTesting,
-  writeCachedToday,
-} from "@/utils/home/today-cache";
+  resetBrowserCacheForTesting,
+  setBrowserCacheUser,
+} from "@/utils/browser-cache";
+import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { useHome, useWarmHome } from "./useHome";
+
+// The zone useHome asks the server to count "today" in.
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -30,7 +33,7 @@ describe("useHome", () => {
   });
 
   it("asks again for a pending lane twelve times, then gives up until retried", async () => {
-    const fetcher = vi.fn(async () => ({ pending: ["alsoInInbox"] }));
+    const fetcher = vi.fn(async () => answer(["alsoInInbox"]));
     const { result } = renderHook(() => useHome("account"), {
       wrapper: wrapper(fetcher),
     });
@@ -50,7 +53,7 @@ describe("useHome", () => {
   });
 
   it("reloads when Cue changes what needs a reply, so new mail shows without a reload", async () => {
-    const fetcher = vi.fn(async () => ({ pending: [] }));
+    const fetcher = vi.fn(async () => answer([]));
     renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
     await act(() => vi.advanceTimersByTimeAsync(100));
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -80,7 +83,7 @@ describe("useHome", () => {
   });
 
   it("reloads when the user comes back to the tab", async () => {
-    const fetcher = vi.fn(async () => ({ pending: [] }));
+    const fetcher = vi.fn(async () => answer([]));
     renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
     await act(() => vi.advanceTimersByTimeAsync(60_000));
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -96,8 +99,8 @@ describe("useHome", () => {
   it("stops asking once every lane has loaded", async () => {
     const fetcher = vi
       .fn()
-      .mockResolvedValueOnce({ pending: ["waiting"] })
-      .mockResolvedValue({ pending: [] });
+      .mockResolvedValueOnce(answer(["waiting"]))
+      .mockResolvedValue(answer([]));
     const { result } = renderHook(() => useHome("account"), {
       wrapper: wrapper(fetcher),
     });
@@ -116,7 +119,7 @@ describe("useHome with a cached Today", () => {
       toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame"],
     });
     window.localStorage.clear();
-    resetCachedTodayBlocksForTesting();
+    resetBrowserCacheForTesting("user");
   });
   afterEach(() => {
     cleanup();
@@ -125,13 +128,13 @@ describe("useHome with a cached Today", () => {
 
   it("opens on what Today last showed, then replaces it with one fresh load", async () => {
     writeCachedToday({
-      userId: "user",
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
     const loads = pendingLoads();
-    const { result } = renderHook(() => useHome("account", "user"), {
+    const { result } = renderHook(() => useHome("account"), {
       wrapper: wrapper(loads.fetcher),
     });
 
@@ -148,8 +151,8 @@ describe("useHome with a cached Today", () => {
     expect(loads.fetcher).toHaveBeenCalledTimes(1);
     expect(
       readCachedToday({
-        userId: "user",
         emailAccountId: "account",
+        timeZone: ZONE,
         now: Date.now(),
       }),
     ).toEqual(todayData("fresh"));
@@ -157,13 +160,13 @@ describe("useHome with a cached Today", () => {
 
   it("shows an action on a cached row, and the fresh load still lands", async () => {
     writeCachedToday({
-      userId: "user",
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
     const loads = pendingLoads();
-    const { result } = renderHook(() => useHome("account", "user"), {
+    const { result } = renderHook(() => useHome("account"), {
       wrapper: wrapper(loads.fetcher),
     });
     await act(() => vi.advanceTimersByTimeAsync(20));
@@ -192,7 +195,7 @@ describe("useHome with a cached Today", () => {
 
   it("settles on the newest load when a change arrives while one is on its way", async () => {
     const loads = pendingLoads();
-    const { result } = renderHook(() => useHome("account", "user"), {
+    const { result } = renderHook(() => useHome("account"), {
       wrapper: wrapper(loads.fetcher),
     });
     await act(() => vi.advanceTimersByTimeAsync(20));
@@ -210,14 +213,47 @@ describe("useHome with a cached Today", () => {
     expect(result.current.data).toEqual(todayData("load 1"));
   });
 
+  it("keeps the cached rows of a lane Gmail is slow to serve, and asks again", async () => {
+    writeCachedToday({
+      emailAccountId: "account",
+      timeZone: ZONE,
+      data: todayData("cached"),
+      now: Date.now(),
+    });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...todayData("ignored"),
+        needsYou: [],
+        pending: ["needsYou"],
+        stats: { needsYou: 0 },
+      })
+      .mockResolvedValue(todayData("fresh"));
+    const { result } = renderHook(() => useHome("account"), {
+      wrapper: wrapper(fetcher),
+    });
+
+    await act(() => vi.advanceTimersByTimeAsync(20));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    // No placeholders over rows already on screen.
+    expect(result.current.data?.pending).toEqual([]);
+    expect(result.current.data?.needsYou[0].subject).toBe("cached");
+    expect(result.current.data?.stats.needsYou).toBe(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.current.data).toEqual(todayData("fresh"));
+  });
+
   it("shows another user's Today to nobody", () => {
     writeCachedToday({
-      userId: "someone-else",
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("theirs"),
       now: Date.now(),
     });
-    const { result } = renderHook(() => useHome("account", "user"), {
+    setBrowserCacheUser("someone-else");
+    const { result } = renderHook(() => useHome("account"), {
       wrapper: wrapper(() => new Promise(() => {})),
     });
     expect(result.current.data).toBeUndefined();
@@ -258,26 +294,27 @@ describe("useWarmHome", () => {
     // Today opens while the load is still on its way, and shares it.
     rerender({ wanted: true, open: true });
     await act(async () => {
-      loads.resolve({ pending: [] });
+      loads.resolve(answer([]));
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(loads.fetcher).toHaveBeenCalledTimes(1);
-    expect(result.current.data).toEqual({ pending: [] });
+    expect(result.current.data).toEqual(answer([]));
   });
 
   it("opens on the saved copy after a hover, with one load", async () => {
     window.localStorage.clear();
+    resetBrowserCacheForTesting("user");
     writeCachedToday({
-      userId: "user",
       emailAccountId: "account",
+      timeZone: ZONE,
       data: todayData("cached"),
       now: Date.now(),
     });
     const loads = pendingLoads();
     const { result, rerender } = renderHook(
       ({ open }: { open: boolean }) => {
-        useWarmHome("account", true, "user");
-        return useHome(open ? "account" : null, "user");
+        useWarmHome("account", true);
+        return useHome(open ? "account" : null);
       },
       { initialProps: { open: false }, wrapper: wrapper(loads.fetcher, 2000) },
     );
@@ -295,7 +332,7 @@ describe("useWarmHome", () => {
   });
 
   it("refreshes a hover's load that something changed before Today opened", async () => {
-    const fetcher = vi.fn(async () => ({ pending: [] }));
+    const fetcher = vi.fn(async () => answer([]));
     const { result, rerender } = renderHook(
       ({ open }: { open: boolean }) => {
         useWarmHome("account", true);
@@ -309,7 +346,7 @@ describe("useWarmHome", () => {
     // Such as the user's reply, before anything on screen listens for it.
     announceTodayChanged();
     rerender({ open: true });
-    expect(result.current.data).toEqual({ pending: [] });
+    expect(result.current.data).toEqual(answer([]));
     await act(() => vi.advanceTimersByTimeAsync(100));
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
@@ -337,7 +374,18 @@ function todayData(subject: string) {
     alsoInInbox: [],
     pending: [],
     failed: [],
+    agentTasks: [],
+    cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
+    today: { checked: 0, filed: 0, filedLabel: null },
+    calendar: { connected: true, next: null },
+    nextUp: [],
+    stats: { needsYou: 1, estimatedMinutes: 3, needsYouCapped: false },
   } as unknown as GetHomeResponse;
+}
+
+/** A whole answer, with these lanes still pending. */
+function answer(pending: string[] = []) {
+  return { ...todayData("answer"), pending } as unknown as GetHomeResponse;
 }
 
 function starFirstRow(data: GetHomeResponse): GetHomeResponse {

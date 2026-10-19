@@ -15,6 +15,7 @@ import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { onSWRErrorRetry } from "@/utils/swr";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
@@ -63,6 +64,8 @@ describe("CueStrip", () => {
     mocks.insightByMessage = {};
     mocks.insightGate = null;
     mocks.aiAccess = true;
+    window.localStorage.clear();
+    resetBrowserCacheForTesting();
   });
   afterEach(cleanup);
 
@@ -71,6 +74,20 @@ describe("CueStrip", () => {
 
     const strip = await screen.findByRole("region", { name: "Cue summary" });
     expect(await within(strip).findByText(SUMMARY)).toBeTruthy();
+  });
+
+  // RD-3: the server keeps no briefs, so this browser keeps the one it got.
+  it("shows a reopened conversation's brief from this browser without asking again", async () => {
+    renderStrip({ labels: ["Label_reply"] });
+    await screen.findByText(SUMMARY);
+    cleanup();
+
+    renderStrip({ labels: ["Label_reply"] });
+
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(
+      mocks.requests.filter((r) => r.url.startsWith("/api/user/thread-brief")),
+    ).toHaveLength(1);
   });
 
   // Opening each conversation already speaks its subject; the strip filling in
@@ -440,7 +457,18 @@ async function fetcher(key: string | [string, string]) {
     if (byMessage && mocks.insightGate) await mocks.insightGate;
     const insight = byMessage ? { action: byMessage } : mocks.insight;
     return {
-      insights: insight ? { t1: { insight, meeting: null, reply: null } } : {},
+      insights: insight
+        ? {
+            t1: {
+              messageId: asked,
+              insight,
+              people: [],
+              withAi: true,
+            },
+          }
+        : {},
+      events: [],
+      draftRepliesEnabled: true,
     };
   }
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };

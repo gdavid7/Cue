@@ -18,6 +18,7 @@ import { ErrorMessages } from "@/app/(app)/ErrorMessages";
 import { GoogleSignInReminder } from "@/app/(app)/GoogleSignInReminder";
 import { DesktopMailIndicators } from "@/app/(app)/DesktopMailIndicators";
 import { TabUnreadTitle } from "@/app/(app)/TabUnreadTitle";
+import { KeepTodayPrefetched } from "@/app/(app)/KeepTodayPrefetched";
 import { WebNewMailNotifications } from "@/app/(app)/WebNewMailNotifications";
 import { ProviderRateLimitBanner } from "@/app/(app)/ProviderRateLimitBanner";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
@@ -27,6 +28,7 @@ import { SettingsDialog } from "@/app/(app)/settings/SettingsDialog";
 import { AnnouncementDialog } from "@/components/feature-announcements/AnnouncementDialog";
 import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
+import { recordLastLogin } from "@/utils/user/last-login";
 import { createScopedLogger } from "@/utils/logger";
 import { getEnabledMailboxProviders } from "@/utils/oauth/provider-config";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
@@ -83,10 +85,7 @@ export default async function AppLayout({
   after(async () => {
     const email = session.user.email;
     try {
-      await prisma.user.update({
-        where: { email },
-        data: { lastLogin: new Date() },
-      });
+      await recordLastLogin(email);
     } catch (error) {
       logger.error("Failed to update last login", { email, error });
       captureException(error, { userEmail: email });
@@ -105,6 +104,7 @@ export default async function AppLayout({
             <SideNavWithTopNav defaultOpen={!isClosed}>
               <DesktopMailIndicators />
               <TabUnreadTitle />
+              <KeepTodayPrefetched />
               <WebNewMailNotifications />
               <AiAutomationStatusBanner
                 aiAccess={aiAccess}

@@ -59,6 +59,12 @@ const answer = {
   ],
 };
 
+// What the run gets back: which messages matched, nothing they say.
+const matched = {
+  status: "ok" as const,
+  messages: [{ id: "m1", threadId: "t1" }],
+};
+
 describe("createLocalMailSearch", () => {
   beforeEach(() => {
     store.clear();
@@ -95,7 +101,7 @@ describe("createLocalMailSearch", () => {
       limit: 20,
     });
 
-    expect(result).toEqual(answer);
+    expect(result).toEqual(matched);
     expect(writer.write).toHaveBeenCalledWith({
       type: "data-local-mail-search",
       data: {
@@ -182,6 +188,35 @@ describe("createLocalMailSearch", () => {
     expect(await search.search({ query: "x", limit: 20 })).toBeNull();
   });
 
+  // RD-3: the browser's answer crosses Redis between instances, so only the
+  // ids of what matched are stored; the run reads the messages from the
+  // provider.
+  it("keeps only the matched ids in Redis, never what the messages say", async () => {
+    const values: string[] = [];
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger: createTestLogger(),
+      pollIntervalMs: 5,
+    });
+    search.attach({
+      write: vi.fn((part: { data: { requestId: string } }) => {
+        setTimeout(async () => {
+          await saveLocalMailSearchResult({
+            emailAccountId: ACCOUNT,
+            requestId: part.data.requestId,
+            result: answer,
+          });
+          values.push(...store.values());
+        }, 5);
+      }),
+    } as unknown as UIMessageStreamWriter);
+
+    expect(await search.search({ query: "x", limit: 20 })).toEqual(matched);
+    expect(values.join()).toContain("m1");
+    expect(values.join()).not.toContain("Next steps");
+    expect(values.join()).not.toContain("jobs@acme.com");
+  });
+
   it("won't take an answer for a request it never sent", async () => {
     expect(
       await saveLocalMailSearchResult({
@@ -218,7 +253,7 @@ describe("createLocalMailSearch", () => {
       }),
     } as unknown as UIMessageStreamWriter);
 
-    expect(await search.search({ query: "x", limit: 20 })).toEqual(answer);
+    expect(await search.search({ query: "x", limit: 20 })).toEqual(matched);
     expect(saved).toEqual([true, false]);
   });
 

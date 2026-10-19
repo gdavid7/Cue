@@ -1,85 +1,118 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CalendarEvent } from "@/utils/calendar/event-types";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import type { EmailProvider } from "@/utils/email/types";
 import { createScopedLogger } from "@/utils/logger";
-import { getInboxInsights, nextMeetingWith } from "./get-inbox-insights";
+import { getInboxInsights } from "./get-inbox-insights";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-const { cache, redisCalls } = vi.hoisted(() => ({
-  cache: new Map<string, unknown>(),
-  redisCalls: [] as string[],
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
-vi.mock("@/utils/redis", () => ({
-  redis: {
-    eval: async () => 1,
-    get: async (key: string) => {
-      redisCalls.push("get");
-      return cache.get(key) ?? null;
-    },
-    mget: async (...keys: string[]) => {
-      redisCalls.push("mget");
-      return keys.map((key) => cache.get(key) ?? null);
-    },
-    set: async (key: string, value: unknown) => {
-      redisCalls.push("set");
-      cache.set(key, value);
-      return "OK";
-    },
-  },
+vi.mock("@/utils/rate-limit", () => ({
+  assertWithinUserRateLimit: async () => {},
 }));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
-  fetchCalendarEventsInWindow: async () => ({ events: [] }),
+  fetchCalendarEventsInWindow: async () => ({
+    events: [
+      {
+        id: "e1",
+        title: "Renewal call",
+        startTime: new Date("2026-10-20T17:00:00Z"),
+        endTime: new Date("2026-10-20T18:00:00Z"),
+        attendees: [
+          { email: "Sarah@Acme.com" },
+          { email: "no@acme.com", declined: true },
+        ],
+      },
+    ],
+  }),
 }));
 vi.mock("@/utils/user/get", () => ({
   getEmailAccountWithAi: async () => null,
 }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getSuggestedReplySettings: async () => ({
-    draftReplies: "off" as const,
+    draftReplies: "on" as const,
     webLookupEnabled: false,
   }),
-  getCachedSuggestedReplies: async (keys: unknown[]) =>
-    keys.map(() => ({ status: "unavailable" })),
 }));
+
+const logger = createScopedLogger("test");
 
 describe("getInboxInsights", () => {
   beforeEach(() => {
-    cache.clear();
-    redisCalls.length = 0;
+    recordingRedis.reset();
   });
 
-  // Every list change refetches every row; each Redis command is billed, so
-  // a page of rows is one read, not one per row.
-  it("reads a page of cached insights in one Redis command", async () => {
-    const items = ["m1", "m2", "m3"].map((messageId) => ({
-      threadId: `t-${messageId}`,
-      messageId,
+  // RD-3: what Cue reads from an email goes to the browser, which keeps it
+  // and names those messages next time.
+  it("reads only the emails the browser doesn't hold, and caches none of them", async () => {
+    const getMessage = vi.fn(async (id: string) => ({
+      id,
+      headers: {
+        from: "Sarah Chen <sarah@acme.com>",
+        to: "me@example.com",
+        subject: "Renewal",
+      },
+      labelIds: ["INBOX"],
     }));
-    for (const { messageId } of items)
-      cache.set(`inbox-insight:a1:${messageId}`, {
-        insight: { kind: "question", text: `About ${messageId}` },
-        people: [],
-      });
-    const getMessage = vi.fn();
 
-    const { insights } = await getInboxInsights({
+    const { insights, events, draftRepliesEnabled } = await getInboxInsights({
       emailAccountId: "a1",
       userId: "u1",
       userEmail: "me@example.com",
-      items,
+      items: ["m1", "m2", "m3"].map((messageId) => ({
+        threadId: `t-${messageId}`,
+        messageId,
+      })),
+      known: ["m1", "m2"],
       emailProvider: { getMessage } as unknown as EmailProvider,
-      logger: createScopedLogger("test"),
+      logger,
     });
 
-    expect(insights["t-m2"]?.insight).toMatchObject({ text: "About m2" });
-    expect(getMessage).not.toHaveBeenCalled();
-    expect(redisCalls).toEqual(["mget"]);
+    expect(getMessage).toHaveBeenCalledTimes(1);
+    expect(getMessage).toHaveBeenCalledWith("m3");
+    expect(Object.keys(insights)).toEqual(["t-m3"]);
+    expect(insights["t-m3"]).toMatchObject({
+      messageId: "m3",
+      people: [{ email: "sarah@acme.com", name: "Sarah Chen" }],
+      withAi: false,
+    });
+    expect(events).toEqual([
+      {
+        title: "Renewal call",
+        at: "2026-10-20T17:00:00.000Z",
+        attendees: ["sarah@acme.com"],
+      },
+    ]);
+    expect(draftRepliesEnabled).toBe(true);
+    expect(recordingRedis.everythingWritten()).not.toContain("sarah");
   });
 
-  // Each entry is kept for a month; a mailing to hundreds of recipients must
-  // not store all of them, since only a handful can share a meeting.
-  it("stores a bounded list of the people on an email", async () => {
+  it("reads no email and no calendar for a page the browser holds", async () => {
+    const getMessage = vi.fn();
+
+    const { insights, events } = await getInboxInsights({
+      emailAccountId: "a1",
+      userId: "u1",
+      userEmail: "me@example.com",
+      items: [{ threadId: "t1", messageId: "m1" }],
+      known: ["m1"],
+      emailProvider: { getMessage } as unknown as EmailProvider,
+      logger,
+    });
+
+    expect(getMessage).not.toHaveBeenCalled();
+    expect(insights).toEqual({});
+    expect(events).toEqual([]);
+  });
+
+  // The browser keeps each entry for a month; a mailing to hundreds of
+  // recipients must not send all of them, since only a handful can share a
+  // meeting.
+  it("returns a bounded list of the people on an email", async () => {
     const recipients = Array.from(
       { length: 300 },
       (_, i) => `Person ${i} <person${i}@example.com>`,
@@ -90,53 +123,17 @@ describe("getInboxInsights", () => {
       labelIds: ["INBOX"],
     }));
 
-    await getInboxInsights({
+    const { insights } = await getInboxInsights({
       emailAccountId: "a1",
       userId: "u1",
       userEmail: "me@example.com",
       items: [{ threadId: "t-big", messageId: "m-big" }],
       emailProvider: { getMessage } as unknown as EmailProvider,
-      logger: createScopedLogger("test"),
+      logger,
     });
 
-    const stored = cache.get("inbox-insight:a1:m-big") as {
-      people: unknown[];
-    };
-    expect(stored.people.length).toBeGreaterThan(0);
-    expect(stored.people.length).toBeLessThanOrEqual(25);
+    const people = insights["t-big"]?.people ?? [];
+    expect(people.length).toBeGreaterThan(0);
+    expect(people.length).toBeLessThanOrEqual(25);
   });
 });
-
-describe("nextMeetingWith", () => {
-  it("picks the soonest meeting someone on the email is also invited to", () => {
-    const meeting = nextMeetingWith(
-      [{ email: "sarah@acme.com", name: "Sarah Chen" }],
-      [
-        event("later", "2026-10-20T17:00:00Z", ["sarah@acme.com"]),
-        event("sooner", "2026-10-16T17:00:00Z", ["Sarah@Acme.com"]),
-        event("unrelated", "2026-10-14T17:00:00Z", ["kevin@ucsd.edu"]),
-      ],
-    );
-
-    expect(meeting).toMatchObject({ title: "sooner", with: "Sarah Chen" });
-  });
-
-  it("ignores meetings the person declined", () => {
-    const declined = event("declined", "2026-10-16T17:00:00Z", []);
-    declined.attendees = [{ email: "sarah@acme.com", declined: true }];
-
-    expect(
-      nextMeetingWith([{ email: "sarah@acme.com", name: "" }], [declined]),
-    ).toBeNull();
-  });
-});
-
-function event(title: string, start: string, emails: string[]): CalendarEvent {
-  return {
-    id: title,
-    title,
-    startTime: new Date(start),
-    endTime: new Date(start),
-    attendees: emails.map((email) => ({ email })),
-  } as CalendarEvent;
-}

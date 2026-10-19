@@ -19,7 +19,6 @@ import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import prisma from "@/utils/prisma";
-import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   collectThreadContext,
@@ -50,7 +49,6 @@ const MAX_SOURCE_TEXT = 2000;
 const WEB_SEARCH_RESULTS = 3;
 // Everything Relevant context shows, so a fact the user can see there can back the reply.
 const MAX_CONTEXT_SOURCES = 8;
-const CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 const suggestionSchema = z.object({
   enoughEvidence: z
@@ -144,6 +142,8 @@ export async function suggestReply({
   emailProvider,
   logger,
   searchWeb: searchWebRequested = false,
+  webQuery: knownWebQuery,
+  context: knownContext,
   settings: knownSettings,
   now = new Date(),
 }: {
@@ -154,6 +154,16 @@ export async function suggestReply({
   logger: Logger;
   /** After an abstention: search the web for what was missing and try again. */
   searchWeb?: boolean;
+  /**
+   * The public query the abstention asked for, when the caller kept it: the
+   * web pass then skips writing the plain answer again.
+   */
+  webQuery?: string;
+  /**
+   * The context the reader already gathered for this thread, so the related
+   * mail, events and linked pages aren't fetched again for the suggestion.
+   */
+  context?: Awaited<ReturnType<typeof collectThreadContext>>["items"];
   /** From `getSuggestedReplySettings`, when the caller already has them. */
   settings?: SuggestedReplySettings;
   now?: Date;
@@ -165,6 +175,7 @@ export async function suggestReply({
     emailProvider,
     logger,
     now,
+    knownItems: knownContext,
   });
   const latest = thread?.messages.at(-1);
   if (!thread || !latest) return null;
@@ -181,13 +192,8 @@ export async function suggestReply({
     return { status: "unavailable" };
   const searchWeb = searchWebRequested && settings.webLookupEnabled;
 
-  // A new message changes the key, so a cached suggestion is never stale.
-  const keyFor = { emailAccountId, threadId, messageId: latest.id };
-  const cacheKey = suggestionCacheKey(keyFor);
-  const webCacheKey = suggestionCacheKey({ ...keyFor, web: true });
-  const cached = await getCached(searchWeb ? webCacheKey : cacheKey);
-  if (cached) return cached;
-
+  // Nothing is cached server-side: a suggestion quotes the user's mail, so
+  // the browser keeps the one it was given (RD-3).
   const emailAccount = await getEmailAccountWithAi({ emailAccountId });
   if (!emailAccount) return null;
   const hasAccess = await assertHasAiAccess({
@@ -239,17 +245,14 @@ export async function suggestReply({
       now,
     });
 
-  let plain = searchWeb ? await getCached(cacheKey) : null;
-  if (!plain) {
-    plain = await suggest([]);
-    await setCached(cacheKey, plain);
-  }
-  if (!searchWeb || plain.status !== "insufficient" || !isExaSearchEnabled())
-    return plain;
+  const knownQuery = searchWeb ? knownWebQuery?.trim() : undefined;
+  const plain = knownQuery ? null : await suggest([]);
+  if (plain && (!searchWeb || plain.status !== "insufficient")) return plain;
+  if (!isExaSearchEnabled()) return plain ?? suggest([]);
   // Only the model's public query leaves for the web: never the subject or
   // anything else from the user's mail. No query means nothing public helps.
-  const query = webSearchQuery(plain);
-  if (!query) return plain;
+  const query = knownQuery || (plain ? webSearchQuery(plain) : "");
+  if (!query) return plain ?? suggest([]);
 
   const results = await searchExa({
     query,
@@ -268,9 +271,8 @@ export async function suggestReply({
         text: result.text ?? "",
       }),
     );
-  const suggestion = pages.length ? await suggest(pages) : plain;
-  await setCached(webCacheKey, suggestion);
-  return suggestion;
+  if (pages.length) return suggest(pages);
+  return plain ?? suggest([]);
 }
 
 /**
@@ -629,73 +631,6 @@ export async function getSuggestedReplySettings(
     draftReplies: getDraftRepliesSetting(settings?.rules[0]),
     webLookupEnabled: Boolean(settings?.webLookupEnabled),
   };
-}
-
-/**
- * The reply Cue last worked out for a message, without working out a new
- * one: the web pass's answer when there was one, else the first answer.
- * Settings apply here as they do to `suggestReply`: nothing while drafting is
- * off, and no web answer while web lookup is off.
- */
-export async function getCachedSuggestedReply(
-  key: {
-    emailAccountId: string;
-    threadId: string;
-    messageId: string;
-  },
-  settings: SuggestedReplySettings,
-): Promise<SuggestedReply | null> {
-  const [reply] = await getCachedSuggestedReplies([key], settings);
-  return reply ?? null;
-}
-
-/**
- * `getCachedSuggestedReply` for many messages in one Redis command, as an
- * inbox page asks for every row at once.
- */
-export async function getCachedSuggestedReplies(
-  keys: { emailAccountId: string; threadId: string; messageId: string }[],
-  settings: SuggestedReplySettings,
-): Promise<(SuggestedReply | null)[]> {
-  if (!canWriteRequestedReplies(settings.draftReplies))
-    return keys.map(() => ({ status: "unavailable" }));
-  if (keys.length === 0) return [];
-  const perKey = settings.webLookupEnabled ? 2 : 1;
-  const cacheKeys = keys.flatMap((key) =>
-    settings.webLookupEnabled
-      ? [suggestionCacheKey({ ...key, web: true }), suggestionCacheKey(key)]
-      : [suggestionCacheKey(key)],
-  );
-  const stored = await redis
-    .mget<(SuggestedReply | null)[]>(...cacheKeys)
-    .catch(() => [] as (SuggestedReply | null)[]);
-  // The web pass's answer, when there is one, comes first for each message.
-  return keys.map((_, index) => {
-    const at = index * perKey;
-    return stored[at] ?? (perKey === 2 ? stored[at + 1] : undefined) ?? null;
-  });
-}
-
-function suggestionCacheKey({
-  emailAccountId,
-  threadId,
-  messageId,
-  web = false,
-}: {
-  emailAccountId: string;
-  threadId: string;
-  messageId: string;
-  web?: boolean;
-}) {
-  return `${web ? "suggested-reply-web" : "suggested-reply"}:v2:${emailAccountId}:${threadId}:${messageId}`;
-}
-
-function getCached(key: string) {
-  return redis.get<SuggestedReply>(key).catch(() => null);
-}
-
-async function setCached(key: string, suggestion: SuggestedReply) {
-  await redis.set(key, suggestion, { ex: CACHE_TTL_SECONDS }).catch(() => null);
 }
 
 function formatTime(iso: string, timezone: string | null) {

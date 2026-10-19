@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { extractMainLinks, fetchLinkedPages } from "./linked-pages";
 
-const { mockGetExaContents, mockRedis } = vi.hoisted(() => ({
+const { mockGetExaContents } = vi.hoisted(() => ({
   mockGetExaContents: vi.fn(),
-  mockRedis: {
-    get: vi.fn(async (_key: string) => null),
-    set: vi.fn(async (_key: string, _value: unknown, _opts?: unknown) => "OK"),
-  },
 }));
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/utils/redis", () => ({ redis: mockRedis }));
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
+}));
 vi.mock("@/utils/exa/search", () => ({
   isExaSearchEnabled: () => true,
   getExaContents: mockGetExaContents,
@@ -151,31 +151,34 @@ describe("extractMainLinks", () => {
 });
 
 describe("fetchLinkedPages", () => {
-  it("caches pages under a hash of the URL, not the URL itself", async () => {
+  // RD-3: a page linked from an email is personal data, so each open reads it
+  // again and neither its URL nor its text reaches the server cache.
+  it("reads a linked page on every open and caches neither its URL nor its text", async () => {
+    recordingRedis.reset();
+    mockGetExaContents.mockClear();
     const url =
       "https://news.example.com/2026/10/15/city-council-approves-budget";
-    mockGetExaContents.mockResolvedValue([{ title: "Budget", text: "Body" }]);
+    mockGetExaContents.mockResolvedValue([
+      { title: "Budget", text: "Council approves budget" },
+    ]);
+    const message = {
+      id: "m1",
+      threadId: "t1",
+      headers,
+      textHtml: `<a href="${url}">Read</a>`,
+      textPlain: "",
+      internalDate: "1760544000000",
+    } as never;
 
-    await fetchLinkedPages({
-      message: {
-        id: "m1",
-        threadId: "t1",
-        headers,
-        textHtml: `<a href="${url}">Read</a>`,
-        textPlain: "",
-        internalDate: "1760544000000",
-      } as never,
+    await fetchLinkedPages({ message, logger: createTestLogger() });
+    const second = await fetchLinkedPages({
+      message,
       logger: createTestLogger(),
     });
 
-    const keys = [
-      ...mockRedis.get.mock.calls.map(([key]) => key),
-      ...mockRedis.set.mock.calls.map(([key]) => key),
-    ];
-    expect(keys.length).toBeGreaterThan(0);
-    for (const key of keys) {
-      expect(key).not.toContain("example.com");
-      expect(key).toMatch(/^linked-page:[0-9a-f]{64}$/);
-    }
+    expect(mockGetExaContents).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(second)).toContain("Council approves budget");
+    expect(recordingRedis.everythingWritten()).not.toContain("example.com");
+    expect(recordingRedis.everythingWritten()).not.toContain("Council");
   });
 });

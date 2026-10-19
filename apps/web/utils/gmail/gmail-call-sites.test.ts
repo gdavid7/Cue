@@ -49,6 +49,28 @@ describe("Gmail call sites", () => {
 
     expect(unmetered).toEqual([]);
   });
+
+  // Gmail also refuses a user's requests past how many it has in flight, so
+  // every send holds the account's in-flight slots: one slot call per raw
+  // fetch, or per Gaxios default adapter call in the REST client. The batch,
+  // client and upload tests check the cap itself.
+  it("send only while holding the account's in-flight slots", () => {
+    const senders = Object.keys(ALLOWED).filter(
+      (path) => path !== "utils/gmail/oauth.ts",
+    );
+    const counts = senders.map((path) => {
+      const source = readFileSync(join(APP_ROOT, path), "utf8");
+      const count = (pattern: RegExp) => source.match(pattern)?.length ?? 0;
+      return {
+        path,
+        sends: count(/\bfetch\(/g) + count(/\bdefaultAdapter\(prepared\)/g),
+        slots: count(/\bwithGmailInflightSlot\(/g),
+      };
+    });
+
+    for (const { path, sends, slots } of counts)
+      expect({ path, slots }).toEqual({ path, slots: sends });
+  });
 });
 
 function sourceFiles(dir: string): string[] {

@@ -26,7 +26,7 @@ const DEADLINE_WINDOW_DAYS = 7;
 // Today shouldn't wait on a slow app or calendar: what's late is left out.
 const CALENDAR_TIMEOUT_MS = 3000;
 const SOURCE_TIMEOUT_MS = 2500;
-const DEADLINE_CACHE_SECONDS = 5 * 60;
+const DEADLINE_PAUSE_SECONDS = 5 * 60;
 const TASK_LIST_CACHE_SECONDS = 7 * 24 * 60 * 60;
 const EVENING_HOUR = 17;
 const SUGGESTION_WINDOW_DAYS = 30;
@@ -251,12 +251,15 @@ async function getDeadlines({
           (item) => new Date(item.at) > now && new Date(item.at) < windowEnd,
         );
 
-      const key = `home-deadlines:${app}:${accountId}`;
-      const cached = await redis.get<NextUpItem[]>(key).catch(() => null);
-      if (Array.isArray(cached)) return inWindow(cached);
+      // Only a pause is kept: the items name the user's own tasks, so they
+      // go to the browser and never into the server cache (RD-3).
+      const pausedKey = `home-deadlines-paused:${app}:${accountId}`;
+      if (await redis.get(pausedKey).catch(() => null)) return [];
 
       const skipForAWhile = () =>
-        redis.set(key, [], { ex: DEADLINE_CACHE_SECONDS }).catch(() => null);
+        redis
+          .set(pausedKey, "1", { ex: DEADLINE_PAUSE_SECONDS })
+          .catch(() => null);
 
       const fetching = source
         .fetch(execute, {
@@ -266,27 +269,18 @@ async function getDeadlines({
           windowEnd,
           timeZone,
         })
-        .then(
-          async (items) => {
-            await redis
-              .set(key, items, { ex: DEADLINE_CACHE_SECONDS })
-              .catch(() => null);
-            return items;
-          },
-          async (error) => {
-            // An app that's down stays down for a while: asking on every
-            // visit only waits on the same failure.
-            if (isAppServerError(error)) await skipForAWhile();
-            throw error;
-          },
-        );
+        .catch(async (error) => {
+          // An app that's down stays down for a while: asking on every
+          // visit only waits on the same failure.
+          if (isAppServerError(error)) await skipForAWhile();
+          throw error;
+        });
       try {
         return inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
       } catch (error) {
         if (error instanceof TimeoutError) {
           logger.warn("Connected app timed out", { app });
-          // A slow app is as slow on the next visit. The fetch still running
-          // fills the cache with what it finds if it finishes.
+          // A slow app is as slow on the next visit.
           await skipForAWhile();
         } else if (isAppServerError(error)) {
           logger.trace("Connected app down for deadlines", { app });

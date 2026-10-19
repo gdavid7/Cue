@@ -88,11 +88,24 @@ vi.mock("@/utils/redis", () => ({
 vi.mock("@/utils/prisma", () => ({
   default: {
     emailAccount: {
-      findUnique: vi.fn(async () => ({
-        user: {
-          mobilePushTokens: [{ token: DEVICE_A }, { token: DEVICE_B }],
-        },
-      })),
+      findUnique: vi.fn(
+        async (args: {
+          where: { id: string; userId?: string };
+          select?: { email?: boolean };
+        }) =>
+          // The mail stream's ownership check reads the address from the
+          // database; RD-3 keeps no copy of it in Redis.
+          args.select?.email
+            ? args.where.id === "account-gmail" &&
+              args.where.userId === "user-1"
+              ? { email: "gmail-push@example.com" }
+              : null
+            : {
+                user: {
+                  mobilePushTokens: [{ token: DEVICE_A }, { token: DEVICE_B }],
+                },
+              },
+      ),
     },
     mobilePushToken: {
       deleteMany: vi.fn(),
@@ -303,10 +316,6 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
     });
 
     it("delivers mailbox-change to the desktop client after a webhook", async () => {
-      await redisState.client!.set(
-        `account:user-1:${GMAIL_ACCOUNT}`,
-        GMAIL_EMAIL,
-      );
       const changes: string[] = [];
       const abort = new AbortController();
       const following = followMailboxSignal({

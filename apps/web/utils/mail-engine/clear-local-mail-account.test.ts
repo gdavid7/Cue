@@ -4,7 +4,6 @@ import { clearLocalMailAccountState } from "./clear-local-mail-account";
 const account = vi.hoisted(() => ({
   drafts: vi.fn(),
   swr: vi.fn(),
-  today: vi.fn(),
   search: vi.fn(),
   archive: vi.fn(),
   trash: vi.fn(),
@@ -20,10 +19,6 @@ vi.mock("@/utils/mail-engine/reply-drafts", () => ({
 vi.mock("@/utils/swr-persistence", () => ({
   clearPersistedSwrCacheForAccount: (emailAccountId: string) =>
     account.swr(emailAccountId),
-}));
-vi.mock("@/utils/home/today-cache", () => ({
-  clearCachedTodayForAccount: (emailAccountId: string) =>
-    account.today(emailAccountId),
 }));
 vi.mock("@/store/mail-search-history", () => ({
   clearRecentSearchHistoryForAccount: (emailAccountId: string) =>
@@ -62,7 +57,6 @@ describe("clearLocalMailAccountState", () => {
     await clearLocalMailAccountState("account-1");
     expect(account.drafts).toHaveBeenCalledWith("account-1");
     expect(account.swr).toHaveBeenCalledWith("account-1");
-    expect(account.today).toHaveBeenCalledWith("account-1");
     expect(account.search).toHaveBeenCalledWith("account-1");
     expect(account.archive).toHaveBeenCalledWith("account-1");
     expect(account.trash).toHaveBeenCalledWith("account-1");

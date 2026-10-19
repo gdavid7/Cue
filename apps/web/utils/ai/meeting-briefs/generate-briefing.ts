@@ -14,10 +14,6 @@ import type { ParsedMessage } from "@/utils/types";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { escapeHtml } from "@/utils/string";
 import { formatDateTimeInUserTimezone } from "@/utils/date";
-import {
-  getCachedResearch,
-  setCachedResearch,
-} from "@/utils/redis/research-cache";
 import type { Logger } from "@/utils/logger";
 import { createMcpToolsForAgent } from "@/utils/ai/mcp/mcp-tools";
 import {
@@ -64,8 +60,6 @@ Use public research only for useful missing professional context. A shared mailb
 
 const searchInputSchema = z.object({
   query: z.string().describe("The search query"),
-  email: z.string().describe("The guest's email address (used for caching)"),
-  name: z.string().optional().describe("The guest's name if known"),
 });
 
 export async function aiGenerateMeetingBriefing({
@@ -219,20 +213,9 @@ async function buildSearchTools({
     tools.perplexitySearch = tool({
       description: "Search for information using Perplexity",
       inputSchema: searchInputSchema,
-      execute: async ({ query, email, name }) => {
+      execute: async ({ query }) => {
         logger.info("Perplexity search");
-        logger.trace("Perplexity search details", { query, email, name });
-
-        const cached = await getCachedResearch(
-          emailAccount.userId,
-          "perplexity",
-          email,
-          name,
-        );
-        if (cached) {
-          logger.info("Using cached Perplexity result");
-          return cached;
-        }
+        logger.trace("Perplexity search details", { query });
 
         try {
           const perplexity = createPerplexity({
@@ -257,19 +240,7 @@ async function buildSearchTools({
             prompt: query,
           });
 
-          const text = searchResult.text;
-
-          setCachedResearch(
-            emailAccount.userId,
-            "perplexity",
-            email,
-            name,
-            text,
-          ).catch((error) => {
-            logger.error("Failed to cache Perplexity result", { error });
-          });
-
-          return text;
+          return searchResult.text;
         } catch (error) {
           logger.error("Perplexity search failed", { error, query });
           return "Search failed. Try another search tool.";
@@ -348,20 +319,9 @@ function createWebSearchTool({
   return tool({
     description: "Search the web for information",
     inputSchema: searchInputSchema,
-    execute: async ({ query, email, name }) => {
+    execute: async ({ query }) => {
       logger.info(`Web search (${providerName})`);
-      logger.trace("Web search details", { query, email, name });
-
-      const cached = await getCachedResearch(
-        emailAccount.userId,
-        "websearch",
-        email,
-        name,
-      );
-      if (cached) {
-        logger.info("Using cached web search result");
-        return cached;
-      }
+      logger.trace("Web search details", { query });
 
       try {
         const webGenerateText = createGenerateText({
@@ -381,19 +341,7 @@ function createWebSearchTool({
           prepareStep,
         });
 
-        const text = searchResult.text;
-
-        setCachedResearch(
-          emailAccount.userId,
-          "websearch",
-          email,
-          name,
-          text,
-        ).catch((error) => {
-          logger.error("Failed to cache web search result", { error });
-        });
-
-        return text;
+        return searchResult.text;
       } catch (error) {
         logger.error("Web search failed", { error, query });
         return "Search failed. Try another search tool.";

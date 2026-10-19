@@ -40,7 +40,7 @@ vi.mock("@/utils/gmail/oauth", () => ({
 }));
 
 vi.mock("@/utils/redis/account-validation", () => ({
-  invalidateAccountValidation: vi.fn(),
+  invalidateAccountOwnership: vi.fn(async () => {}),
 }));
 
 vi.mock("@/utils/log-error-with-dedupe", () => ({

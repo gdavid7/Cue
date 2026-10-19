@@ -189,7 +189,8 @@ describe("MCP mail client tools", () => {
     ).rejects.toThrow("Folder is no longer available");
     expect(getThreadsWithQuery).toHaveBeenCalledTimes(1);
   });
-  it("shares fresh navigation across concurrent page loads but rechecks ownership", async () => {
+  // RD-3: label names can name people, so no instance keeps them between calls.
+  it("reads navigation for every page load and rechecks ownership", async () => {
     const getLabels = vi.fn().mockResolvedValue([]);
     const getFolderCounts = vi.fn().mockResolvedValue([]);
     vi.mocked(createEmailProvider).mockResolvedValue({
@@ -202,13 +203,9 @@ describe("MCP mail client tools", () => {
       browseMailForMcp("user", args, logger),
       browseMailForMcp("user", { ...args, pageToken: "next" }, logger),
     ]);
-    expect(getLabels).toHaveBeenCalledTimes(1);
-    expect(getFolderCounts).toHaveBeenCalledTimes(1);
-    expect(resolveMcpEmailAccount).toHaveBeenCalledTimes(2);
-    testTime += 61_000;
-    vi.setSystemTime(testTime);
-    await browseMailForMcp("user", args, logger);
     expect(getLabels).toHaveBeenCalledTimes(2);
+    expect(getFolderCounts).toHaveBeenCalledTimes(2);
+    expect(resolveMcpEmailAccount).toHaveBeenCalledTimes(2);
   });
   it("keeps mail available when sidebar metadata fails", async () => {
     const mail = getMockMessage({ id: "message", threadId: "thread" });

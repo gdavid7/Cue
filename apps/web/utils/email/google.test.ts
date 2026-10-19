@@ -6,6 +6,7 @@ import { GmailLabel } from "@/utils/gmail/label";
 import * as gmailLabelModule from "@/utils/gmail/label";
 import * as gmailThreadModule from "@/utils/gmail/thread";
 import { DraftNotFoundError } from "@/utils/error";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { GmailProvider } from "./google";
 
 const {
@@ -62,22 +63,9 @@ vi.mock("@/utils/gmail/message", async (importOriginal) => {
 
 vi.mock("@/utils/gmail/draft", () => gmailDraftMock);
 
-const redisValues = vi.hoisted(() => new Map<string, unknown>());
-vi.mock("@/utils/redis", () => ({
-  redis: {
-    mget: async (...keys: string[]) =>
-      keys.map((key) => redisValues.get(key) ?? null),
-    pipeline: () => {
-      const pipeline = {
-        set: (key: string, value: unknown) => {
-          redisValues.set(key, value);
-          return pipeline;
-        },
-        exec: async () => [],
-      };
-      return pipeline;
-    },
-  },
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 
 vi.mock("@/utils/gmail/signature-settings", () => gmailSignatureMock);
@@ -994,18 +982,29 @@ describe("GmailProvider.getThreadsWithQuery", () => {
     );
   });
 
-  it("reads a listed thread again only when its historyId has changed", async () => {
-    redisValues.clear();
+  // RD-3: headers name senders and recipients, so they are read from Gmail
+  // for every listing and never kept in the server cache.
+  it("reads listed thread headers from Gmail each time, in listing order", async () => {
+    recordingRedis.reset();
     const listed = vi.spyOn(gmailThreadModule, "getThreadsWithNextPageToken");
     const getThreadsBatch = vi
       .spyOn(gmailThreadModule, "getThreadsBatch")
       .mockImplementation(async (ids) =>
-        ids.map((id) => ({
+        [...ids].reverse().map((id) => ({
           id,
-          historyId: id === "thread-2" ? "8" : "5",
-          messages: [],
+          historyId: "5",
+          messages: [
+            {
+              id: `${id}-m`,
+              threadId: id,
+              payload: {
+                headers: [{ name: "From", value: "Alice <alice@example.com>" }],
+              },
+            },
+          ],
         })),
       );
+    getThreadsBatch.mockClear();
     const provider = new GmailProvider(
       {
         context: {
@@ -1017,22 +1016,17 @@ describe("GmailProvider.getThreadsWithQuery", () => {
       undefined,
       "account-1",
     );
-
-    listed.mockResolvedValueOnce({
+    const page = {
       threads: [
         { id: "thread-1", historyId: "5" },
         { id: "thread-2", historyId: "5" },
       ],
       nextPageToken: undefined,
-    });
+    };
+
+    listed.mockResolvedValueOnce(page);
     await provider.getThreadsWithQuery({ messageFormat: "metadata" });
-    listed.mockResolvedValueOnce({
-      threads: [
-        { id: "thread-1", historyId: "5" },
-        { id: "thread-2", historyId: "8" },
-      ],
-      nextPageToken: undefined,
-    });
+    listed.mockResolvedValueOnce(page);
     const { threads } = await provider.getThreadsWithQuery({
       messageFormat: "metadata",
     });
@@ -1041,12 +1035,14 @@ describe("GmailProvider.getThreadsWithQuery", () => {
       "thread-1",
       "thread-2",
     ]);
+    expect(getThreadsBatch).toHaveBeenCalledTimes(2);
     expect(getThreadsBatch).toHaveBeenLastCalledWith(
-      ["thread-2"],
+      ["thread-1", "thread-2"],
       "access-token",
       expect.anything(),
       { format: "metadata" },
     );
+    expect(recordingRedis.everythingWritten()).not.toContain("alice");
   });
 });
 

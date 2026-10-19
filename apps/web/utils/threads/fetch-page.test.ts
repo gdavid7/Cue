@@ -3,9 +3,6 @@ import { fetchThreadsPage } from "@/utils/threads/fetch-page";
 import { threadsQuery } from "@/utils/threads/validation";
 import { getCueMembership } from "@/utils/split-inbox/cue-membership.server";
 
-vi.mock("@/utils/redis/thread-page-buffer", () => ({
-  createPageBuffer: vi.fn(() => undefined),
-}));
 vi.mock("@/utils/split-inbox/cue-membership.server", () => ({
   getCueMembership: vi.fn(),
 }));

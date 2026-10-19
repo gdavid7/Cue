@@ -1,5 +1,6 @@
 import { SafeError } from "@/utils/error";
 import { getGoogleGmailApiRootUrl } from "@/utils/gmail/oauth";
+import { withGmailInflightSlot } from "@/utils/gmail/inflight";
 import { gmailRequestCost, meterGmailCall } from "@/utils/gmail/quota";
 
 /**
@@ -33,20 +34,22 @@ export async function startGmailDraftUploadSession({
       priority: "interactive",
     },
     () =>
-      fetch(url, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json; charset=UTF-8",
-          "X-Upload-Content-Type": "message/rfc822",
-          "X-Upload-Content-Length": String(totalBytes),
-        },
-        body: JSON.stringify({
-          id: draftId,
-          message: threadId ? { threadId } : {},
+      withGmailInflightSlot({ emailAccountId, priority: "interactive" }, () =>
+        fetch(url, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": "message/rfc822",
+            "X-Upload-Content-Length": String(totalBytes),
+          },
+          body: JSON.stringify({
+            id: draftId,
+            message: threadId ? { threadId } : {},
+          }),
+          signal: AbortSignal.timeout(30_000),
         }),
-        signal: AbortSignal.timeout(30_000),
-      }),
+      ),
   );
   if (response.status === 404)
     throw new SafeError(
@@ -84,15 +87,17 @@ export async function uploadGmailDraftChunk({
       priority: "interactive",
     },
     () =>
-      fetch(sessionUri, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${totalBytes}`,
-        },
-        body: bytes,
-        signal: AbortSignal.timeout(60_000),
-      }),
+      withGmailInflightSlot({ emailAccountId, priority: "interactive" }, () =>
+        fetch(sessionUri, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${totalBytes}`,
+          },
+          body: bytes,
+          signal: AbortSignal.timeout(60_000),
+        }),
+      ),
   );
   if (response.status === 308) {
     const range = response.headers.get("range")?.match(/^bytes=0-(\d+)$/u);

@@ -24,6 +24,8 @@ vi.mock("next-safe-action/hooks", () => ({
   useAction: () => ({ executeAsync: mocks.executeAsync }),
 }));
 vi.mock("swr", () => ({
+  // useContactPhoto reads the configured fetcher.
+  useSWRConfig: () => ({}),
   default: () => ({ data: undefined }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({

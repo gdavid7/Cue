@@ -63,11 +63,22 @@ export const GET = withEmailProvider(
     const { emailProvider, logger } = request;
     const { emailAccountId } = request.auth;
 
-    const cached = await getCachedCounts(emailAccountId, logger);
+    // Only Gmail's counts are cached: each label needs its own read there,
+    // while other providers report every folder in one call.
+    const cacheable = isGoogleProvider(emailProvider.name);
+    const cached = cacheable
+      ? await getCachedCounts(emailAccountId, logger)
+      : null;
     if (cached) {
-      return NextResponse.json(
-        await refreshCachedInboxCount({ cached, emailProvider, logger }),
-      );
+      const named = await nameCachedCounts({ cached, emailProvider, logger });
+      if (named)
+        return NextResponse.json(
+          await refreshCachedInboxCount({
+            cached: named,
+            emailProvider,
+            logger,
+          }),
+        );
     }
 
     const { anyFailed, ...response } = await getCounts({
@@ -75,7 +86,7 @@ export const GET = withEmailProvider(
       logger,
     });
     // A transient lookup failure must not be frozen in the cache for a minute.
-    if (response.counts.length && !anyFailed) {
+    if (cacheable && response.counts.length && !anyFailed) {
       await setCachedCounts(emailAccountId, response, logger);
     }
 
@@ -226,11 +237,51 @@ function getCacheKey(emailAccountId: string) {
   return `${CACHE_KEY_PREFIX}:${emailAccountId}`;
 }
 
+// Label names are the user's own words, often people's names, so the cache
+// keeps ids and numbers only (RD-3) and names are read back from Gmail.
+type CachedLabelCounts = {
+  counts: Omit<LabelCount, "name">[];
+  partial: boolean;
+};
+
 async function getCachedCounts(emailAccountId: string, logger: Logger) {
   try {
-    return await redis.get<LabelCountsResponse>(getCacheKey(emailAccountId));
+    return await redis.get<CachedLabelCounts>(getCacheKey(emailAccountId));
   } catch (error) {
     logger.warn("Failed to read cached label counts", { error });
+    return null;
+  }
+}
+
+/** The cached counts with their names, or null to count afresh. */
+async function nameCachedCounts({
+  cached,
+  emailProvider,
+  logger,
+}: {
+  cached: CachedLabelCounts;
+  emailProvider: EmailProvider;
+  logger: Logger;
+}): Promise<LabelCountsResponse | null> {
+  try {
+    const names = new Map(
+      [...SYSTEM_LABELS, ...CATEGORY_LABELS].map((label) => [
+        label.id,
+        label.name,
+      ]),
+    );
+    for (const label of await emailProvider.getLabels())
+      names.set(label.id, label.name);
+    const counts: LabelCount[] = [];
+    for (const count of cached.counts) {
+      const name = names.get(count.id);
+      // A label renamed away or deleted since: count afresh.
+      if (name === undefined) return null;
+      counts.push({ ...count, name });
+    }
+    return { counts, partial: cached.partial };
+  } catch (error) {
+    logger.warn("Failed to name cached label counts", { error });
     return null;
   }
 }
@@ -241,7 +292,11 @@ async function setCachedCounts(
   logger: Logger,
 ) {
   try {
-    await redis.set(getCacheKey(emailAccountId), response, {
+    const cached: CachedLabelCounts = {
+      counts: response.counts.map(({ name: _name, ...count }) => count),
+      partial: response.partial,
+    };
+    await redis.set(getCacheKey(emailAccountId), cached, {
       ex: CACHE_TTL_SECONDS,
     });
   } catch (error) {

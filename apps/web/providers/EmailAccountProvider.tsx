@@ -27,6 +27,7 @@ import {
   fetchEmailAccounts,
   subscribeEmailAccounts,
 } from "@/utils/fetch-email-accounts";
+import { setBrowserCacheUser } from "@/utils/browser-cache";
 
 type Context = {
   /**
@@ -83,6 +84,11 @@ export function EmailAccountProvider({
   accounts?: ServerEmailAccount[];
   userId?: string;
 }) {
+  // Before any child reads the browser caches: their entries are this user's.
+  setBrowserCacheUser(
+    userId,
+    serverAccounts.map((account) => account.id),
+  );
   const params = useParams<{
     emailAccountId: string | undefined;
     accountIndex: string | undefined;

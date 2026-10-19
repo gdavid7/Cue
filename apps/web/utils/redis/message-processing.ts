@@ -1,4 +1,5 @@
 import { redis } from "@/utils/redis";
+import { hashAddressForKey } from "@/utils/redis/address-key";
 import {
   acquireOwnedLock,
   clearOwnedLock,
@@ -16,6 +17,24 @@ function getProcessingKey({
   userEmail: string;
   messageId: string;
 }) {
+  return `processing-message:${hashAddressForKey(userEmail)}:${messageId}`;
+}
+
+// Keys written before RD-3 named the address. Until the last of them expires
+// (eight days after RD-3 shipped; scripts/deletePiiCacheKeys.ts renames the
+// processed ones sooner), a message an older deploy holds or handled under
+// the address key counts as held or processed here too. That covers an old
+// deploy that runs first. Old and new can still both process a message while
+// both deploys are live: Outlook's check and claim are two commands, and an
+// old Gmail run never reads the new key. That window is accepted, because
+// writing the address key again would bring the address back into Redis.
+function getLegacyProcessingKey({
+  userEmail,
+  messageId,
+}: {
+  userEmail: string;
+  messageId: string;
+}) {
   return `processing-message:${userEmail}:${messageId}`;
 }
 
@@ -26,6 +45,10 @@ export async function markMessageAsProcessing({
   userEmail: string;
   messageId: string;
 }): Promise<boolean> {
+  // An older deploy may hold the message under the address key for its
+  // five minutes.
+  if (await redis.exists(getLegacyProcessingKey({ userEmail, messageId })))
+    return false;
   const result = await redis.set(
     getProcessingKey({ userEmail, messageId }),
     "true",
@@ -72,7 +95,24 @@ export async function acquireMessageProcessing(key: {
         processingTtlSeconds: MESSAGE_PROCESSING_TTL_SECONDS,
       });
     const lockToken = await claim();
-    if (lockToken) return { status: "acquired", lockToken };
+    if (lockToken) {
+      const legacy = await redis.get<string>(getLegacyProcessingKey(key));
+      // A retry marker only says when to try again, which this run may do.
+      if (legacy == null || getRetryAt(legacy) !== undefined)
+        return { status: "acquired", lockToken };
+      if (legacy === MESSAGE_PROCESSED_STATUS) {
+        await markOwnedLockProcessed({
+          key: getProcessingKey(key),
+          lockToken,
+          processedStatus: MESSAGE_PROCESSED_STATUS,
+          processedTtlSeconds: MESSAGE_PROCESSED_TTL_SECONDS,
+        });
+        return { status: "processed" };
+      }
+      // An older deploy's run holds it under the address key.
+      await clearOwnedLock({ key: getProcessingKey(key), lockToken });
+      return { status: "held" };
+    }
     const stored = await redis.get<string>(getProcessingKey(key));
     if (stored === MESSAGE_PROCESSED_STATUS) return { status: "processed" };
     const retryAt = getRetryAt(stored);
@@ -195,7 +235,7 @@ function getFailuresKey({
   userEmail: string;
   messageId: string;
 }) {
-  return `processing-message-failures:${userEmail}:${messageId}`;
+  return `processing-message-failures:${hashAddressForKey(userEmail)}:${messageId}`;
 }
 
 type OutboundMessageKey = {

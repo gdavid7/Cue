@@ -4,6 +4,10 @@ import { createScopedLogger } from "@/utils/logger";
 import { getGmailClientWithRefresh } from "@/utils/gmail/client";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { createGmailQuotaStats, runWithGmailQuota } from "@/utils/gmail/quota";
+import {
+  GMAIL_INFLIGHT_LIMIT,
+  resetGmailInflightState,
+} from "@/utils/gmail/inflight";
 
 vi.mock("@/utils/gmail/quota-store", async () => {
   const { createMemoryGmailQuotaStore } = await import(
@@ -32,6 +36,7 @@ const QUOTA_REFUSAL = {
 describe("Gmail client metering", () => {
   beforeEach(() => {
     (gmailQuotaStore as unknown as { reset(): void }).reset();
+    resetGmailInflightState();
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -89,10 +94,35 @@ describe("Gmail client metering", () => {
     expect(gmail.gmailRequests()).toBe(2);
     expect(stats.admittedCost).toBe(2 * MESSAGE_GET_UNITS);
   });
+
+  it("keeps no more of the account's calls in flight than the cap", async () => {
+    let inflight = 0;
+    let maxInflight = 0;
+    const calls = 3 * GMAIL_INFLIGHT_LIMIT;
+    const slowLabels = () => async () => {
+      inflight += 1;
+      maxInflight = Math.max(maxInflight, inflight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inflight -= 1;
+      return jsonResponse(200, { labels: [] })();
+    };
+    const gmail = await fakeGmail(Array.from({ length: calls }, slowLabels));
+
+    await runWithGmailQuota({ caller: "test", priority: "interactive" }, () =>
+      Promise.all(
+        Array.from({ length: calls }, () =>
+          gmail.client.users.labels.list({ userId: "me" }),
+        ),
+      ),
+    );
+
+    expect(gmail.gmailRequests()).toBe(calls);
+    expect(maxInflight).toBe(GMAIL_INFLIGHT_LIMIT);
+  });
 });
 
 /** A Gmail client whose requests answer from `responses` in order. */
-async function fakeGmail(responses: Array<() => Response>) {
+async function fakeGmail(responses: Array<() => Response | Promise<Response>>) {
   const requests: string[] = [];
   const fetchImpl = async (input: unknown) => {
     const url = String(input instanceof URL ? input.href : input);

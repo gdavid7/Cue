@@ -2,13 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionType } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import { getMockMessage } from "@/__tests__/helpers";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { createScopedLogger } from "@/utils/logger";
 import type { EmailProvider } from "@/utils/email/types";
 import {
   checkSuggestion,
   contextSources,
-  getCachedSuggestedReplies,
-  getCachedSuggestedReply,
   renderSource,
   type Source,
   suggestReply,
@@ -19,28 +18,43 @@ import {
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-const { cache, redisCalls, collectThreadContext, getEmailAccountWithAi } =
+const { collectThreadContext, getEmailAccountWithAi, generateObject, exa } =
   vi.hoisted(() => ({
-    cache: new Map<string, unknown>(),
-    redisCalls: [] as string[],
     collectThreadContext: vi.fn(),
     getEmailAccountWithAi: vi.fn(),
+    generateObject: vi.fn(),
+    exa: { enabled: true, search: vi.fn() },
   }));
-vi.mock("@/utils/redis", () => ({
-  redis: {
-    get: async (key: string) => {
-      redisCalls.push("get");
-      return cache.get(key) ?? null;
-    },
-    mget: async (...keys: string[]) => {
-      redisCalls.push("mget");
-      return keys.map((key) => cache.get(key) ?? null);
-    },
-  },
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
-vi.mock("@/utils/thread-context/get-thread-context", () => ({
-  collectThreadContext,
+vi.mock("@/utils/llms", () => ({
+  createGenerateObject: () => generateObject,
 }));
+vi.mock("@/utils/llms/use-cases", () => ({
+  getModelForUseCase: () => ({}),
+  LlmUseCase: { DraftReply: "draft-reply" },
+}));
+vi.mock("@/utils/premium/limits", () => ({
+  assertHasAiAccess: async () => {},
+}));
+vi.mock("@/utils/ai/reply/reply-memory", () => ({
+  getReplyMemoriesForPrompt: async () => ({ selectedMemories: [] }),
+}));
+vi.mock("@/utils/exa/search", () => ({
+  isExaSearchEnabled: () => exa.enabled,
+  searchExa: exa.search,
+}));
+vi.mock(
+  "@/utils/thread-context/get-thread-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/utils/thread-context/get-thread-context")
+    >()),
+    collectThreadContext,
+  }),
+);
 vi.mock("@/utils/user/get", () => ({ getEmailAccountWithAi }));
 
 const SOURCES: Source[] = [
@@ -230,151 +244,6 @@ describe("webSearchQuery", () => {
 
   it("skips the web when nothing public would settle it", () => {
     expect(webSearchQuery({ webQuery: "  " })).toBe("");
-  });
-});
-
-describe("getCachedSuggestedReply", () => {
-  const key = { emailAccountId: "a1", threadId: "t1", messageId: "m1" };
-  const enabled = { draftReplies: "on" as const, webLookupEnabled: true };
-
-  // The reader shows the web pass's answer when there was one, so the
-  // inbox row must agree with it.
-  it("prefers the answer from the web pass", async () => {
-    cache.clear();
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "insufficient",
-      missing: "Flight time",
-      unsupported: [],
-      webQuery: "",
-    });
-    cache.set("suggested-reply-web:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Landing at 6:35 PM.",
-      citations: [],
-    });
-
-    expect(await getCachedSuggestedReply(key, enabled)).toMatchObject({
-      status: "suggested",
-    });
-  });
-
-  // The route serves cached replies without running suggestReply, so the
-  // same settings must hold here.
-  it("returns nothing while auto draft replies are off", async () => {
-    cache.clear();
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Yes.",
-      citations: [],
-    });
-
-    expect(
-      await getCachedSuggestedReply(key, {
-        ...enabled,
-        draftReplies: "off" as const,
-      }),
-    ).toEqual({ status: "unavailable" });
-  });
-
-  // "Draft a reply" works for a mailbox that never turned drafting on, so
-  // the reply it got must read back too.
-  it("returns the reply while auto draft replies were never chosen", async () => {
-    cache.clear();
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Yes.",
-      citations: [],
-    });
-
-    expect(
-      await getCachedSuggestedReply(key, {
-        ...enabled,
-        draftReplies: "unset" as const,
-      }),
-    ).toMatchObject({ status: "suggested", reply: "Yes." });
-  });
-
-  it("ignores the web pass's answer while web lookup is off", async () => {
-    cache.clear();
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "insufficient",
-      missing: "Flight time",
-      unsupported: [],
-      webQuery: "",
-    });
-    cache.set("suggested-reply-web:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Landing at 6:35 PM.",
-      citations: [],
-    });
-
-    expect(
-      await getCachedSuggestedReply(key, {
-        ...enabled,
-        webLookupEnabled: false,
-      }),
-    ).toMatchObject({ status: "insufficient" });
-  });
-
-  // An inbox page asks for up to 50 rows at once; each Redis command is
-  // billed, so the whole page is one read.
-  it("reads a page of messages' replies in one Redis command", async () => {
-    cache.clear();
-    redisCalls.length = 0;
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Yes.",
-      citations: [],
-    });
-    cache.set("suggested-reply-web:v2:a1:t2:m2", {
-      status: "suggested",
-      reply: "Landing at 6:35 PM.",
-      citations: [],
-    });
-
-    const replies = await getCachedSuggestedReplies(
-      [
-        key,
-        { emailAccountId: "a1", threadId: "t2", messageId: "m2" },
-        { emailAccountId: "a1", threadId: "t3", messageId: "m3" },
-      ],
-      enabled,
-    );
-
-    expect(replies).toMatchObject([
-      { status: "suggested", reply: "Yes." },
-      { status: "suggested", reply: "Landing at 6:35 PM." },
-      null,
-    ]);
-    expect(redisCalls).toEqual(["mget"]);
-  });
-
-  it("reads nothing while auto draft replies are off", async () => {
-    redisCalls.length = 0;
-
-    expect(
-      await getCachedSuggestedReplies([key], {
-        ...enabled,
-        draftReplies: "off" as const,
-      }),
-    ).toEqual([{ status: "unavailable" }]);
-    expect(redisCalls).toEqual([]);
-  });
-
-  it("falls back to the first answer, and to nothing for a new message", async () => {
-    cache.clear();
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Yes.",
-      citations: [],
-    });
-
-    expect(await getCachedSuggestedReply(key, enabled)).toMatchObject({
-      status: "suggested",
-    });
-    expect(
-      await getCachedSuggestedReply({ ...key, messageId: "m2" }, enabled),
-    ).toBeNull();
   });
 });
 
@@ -623,7 +492,7 @@ describe("vouchedLinkMessageIds", () => {
 describe("suggestReply when auto draft replies are off", () => {
   const logger = createScopedLogger("suggest-reply-test");
 
-  it("suggests nothing, even when a suggestion is cached", async () => {
+  it("suggests nothing while they are off", async () => {
     const latest = getMockMessage({
       id: "m1",
       threadId: "t1",
@@ -632,11 +501,6 @@ describe("suggestReply when auto draft replies are off", () => {
     collectThreadContext.mockResolvedValue({
       thread: { id: "t1", messages: [latest], snippet: "" },
       items: [],
-    });
-    cache.set("suggested-reply:v2:a1:t1:m1", {
-      status: "suggested",
-      reply: "Sure, Friday works.",
-      citations: [],
     });
     prisma.emailAccount.findUnique.mockResolvedValue({
       webLookupEnabled: true,
@@ -667,10 +531,22 @@ describe("suggestReply when auto draft replies are off", () => {
       thread: { id: "t4", messages: [latest], snippet: "" },
       items: [],
     });
-    cache.set("suggested-reply:v2:a1:t4:m4", {
-      status: "suggested",
-      reply: "Sure, Friday works.",
-      citations: [],
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: false,
+        missing: "Which Friday.",
+        webQuery: "",
+        reply: "",
+        claims: [],
+      },
     });
     prisma.emailAccount.findUnique.mockResolvedValue({
       webLookupEnabled: true,
@@ -685,7 +561,8 @@ describe("suggestReply when auto draft replies are off", () => {
       logger,
     });
 
-    expect(result).toMatchObject({ status: "suggested" });
+    expect(result).toMatchObject({ status: "insufficient" });
+    expect(getEmailAccountWithAi).toHaveBeenCalled();
   });
 
   it("suggests nothing when the To Reply rule is turned off", async () => {
@@ -715,39 +592,108 @@ describe("suggestReply when auto draft replies are off", () => {
   });
 });
 
-describe("suggestReply when web lookup is off", () => {
-  it("answers from mail and calendar only, without searching the web", async () => {
+describe("suggestReply and the server cache", () => {
+  const logger = createScopedLogger("suggest-reply-test");
+  const abstain = {
+    enoughEvidence: false,
+    missing: "The venue's opening hours.",
+    webQuery: "venue opening hours",
+    reply: "",
+    claims: [],
+  };
+
+  beforeEach(() => {
+    recordingRedis.reset();
+    generateObject.mockReset();
+    exa.search.mockReset();
+    exa.enabled = true;
     const latest = getMockMessage({
       id: "m3",
       threadId: "t3",
       from: "sarah@example.com",
+      textPlain: "When does the venue open on Friday?",
     });
     collectThreadContext.mockResolvedValue({
       thread: { id: "t3", messages: [latest], snippet: "" },
       items: [],
     });
-    const plain = {
-      status: "insufficient",
-      missing: "The venue's opening hours.",
-      unsupported: [],
-      webQuery: "venue opening hours",
-    };
-    cache.set("suggested-reply:v2:a1:t3:m3", plain);
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+  });
+
+  function settings({ webLookupEnabled = true } = {}) {
     prisma.emailAccount.findUnique.mockResolvedValue({
-      webLookupEnabled: false,
+      webLookupEnabled,
       rules: [{ enabled: true, actions: [{ type: ActionType.DRAFT_EMAIL }] }],
     } as never);
+  }
 
-    const result = await suggestReply({
+  function suggest(options: { searchWeb?: boolean; webQuery?: string } = {}) {
+    return suggestReply({
       emailAccountId: "a1",
       userEmail: "me@example.com",
       threadId: "t3",
       emailProvider: {} as EmailProvider,
-      logger: createScopedLogger("suggest-reply-test"),
-      searchWeb: true,
+      logger,
+      ...options,
+    });
+  }
+
+  // RD-3: a suggestion quotes the user's mail, so the browser keeps it.
+  it("works a suggestion out without keeping it on the server", async () => {
+    settings();
+    generateObject.mockResolvedValue({ object: abstain });
+
+    await expect(suggest()).resolves.toMatchObject({
+      status: "insufficient",
+      webQuery: "venue opening hours",
+    });
+    expect(recordingRedis.everythingWritten()).not.toContain("venue");
+  });
+
+  it("runs only the web pass when the browser kept the abstention's query", async () => {
+    settings();
+    exa.search.mockResolvedValue([
+      {
+        title: "Venue hours",
+        url: "https://venue.example/hours",
+        text: "Open from 9 AM on Fridays.",
+      },
+    ]);
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: true,
+        missing: "",
+        webQuery: "",
+        reply: "It opens at 9 AM on Friday.",
+        claims: [
+          { fact: "Opens at 9", sourceId: "c1", quote: "Open from 9 AM" },
+        ],
+      },
     });
 
-    expect(result).toEqual(plain);
-    expect(getEmailAccountWithAi).not.toHaveBeenCalled();
+    await expect(
+      suggest({ searchWeb: true, webQuery: "venue opening hours" }),
+    ).resolves.toMatchObject({ status: "suggested" });
+    expect(generateObject).toHaveBeenCalledTimes(1);
+    expect(exa.search).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "venue opening hours" }),
+    );
+  });
+
+  it("answers from mail and calendar only while web lookup is off", async () => {
+    settings({ webLookupEnabled: false });
+    generateObject.mockResolvedValue({ object: abstain });
+
+    await expect(
+      suggest({ searchWeb: true, webQuery: "venue opening hours" }),
+    ).resolves.toMatchObject({ status: "insufficient" });
+    expect(exa.search).not.toHaveBeenCalled();
   });
 });

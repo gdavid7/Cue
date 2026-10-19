@@ -25,7 +25,6 @@ import {
   type ThreadSignals,
 } from "@/utils/thread-context/connector-context";
 import { fetchLinkedPages, linksIn } from "@/utils/thread-context/linked-pages";
-import { redis } from "@/utils/redis";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { ParsedMessage } from "@/utils/types";
 
@@ -43,10 +42,11 @@ const SNIPPET_LENGTH = 180;
 // Suggested replies are checked against these same items, so a short list
 // hides evidence the reply needs; the ranker still drops weak matches.
 const CONTEXT_LIMIT = 8;
+/** The most of each item's text that leaves for the browser and comes back. */
+export const CONTEXT_TEXT_LIMIT = 2000;
 // The reader panel and the suggested reply both ask for the same thread's
 // context. A new message in this thread changes the key, but related threads
 // and meetings change too, so the result is kept only for a few minutes.
-const CONTEXT_CACHE_TTL_SECONDS = 10 * 60;
 
 export type ThreadContextItem = {
   /** For emails, the thread id, so the panel can open that conversation. */
@@ -83,7 +83,7 @@ export async function getThreadContext({
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
-}): Promise<{ items: ThreadContextItem[] }> {
+}): Promise<{ items: (ThreadContextItem & { text: string })[] }> {
   const { items } = await collectThreadContext({
     emailAccountId,
     userEmail,
@@ -92,7 +92,14 @@ export async function getThreadContext({
     logger,
     now,
   });
-  return { items: items.map(({ text: _text, ...item }) => item) };
+  // With its text, capped, so the reader can hand the same context to a
+  // suggested reply instead of it being gathered again (no server cache).
+  return {
+    items: items.map((item) => ({
+      ...item,
+      text: item.text.slice(0, CONTEXT_TEXT_LIMIT),
+    })),
+  };
 }
 
 /**
@@ -106,6 +113,7 @@ export async function collectThreadContext({
   emailProvider,
   logger,
   now = new Date(),
+  knownItems,
 }: {
   emailAccountId: string;
   userEmail: string;
@@ -113,6 +121,8 @@ export async function collectThreadContext({
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
+  /** Context the reader already gathered: only the thread is read again. */
+  knownItems?: (ThreadContextItem & { text: string })[];
 }): Promise<{
   thread: EmailThread | null;
   items: (ThreadContextItem & { text: string })[];
@@ -126,12 +136,7 @@ export async function collectThreadContext({
     return null;
   });
   if (!thread?.messages.length) return { thread: null, items: [] };
-
-  const cacheKey = `thread-context:${emailAccountId}:${threadId}:${thread.messages.at(-1)!.id}`;
-  const cached = await redis
-    .get<(ThreadContextItem & { text: string })[]>(cacheKey)
-    .catch(() => null);
-  if (cached) return { thread, items: cached };
+  if (knownItems) return { thread, items: knownItems };
 
   const focus = toFocus(thread);
   const participants = focus.people
@@ -141,9 +146,8 @@ export async function collectThreadContext({
     )
     .slice(0, MAX_PARTICIPANTS);
 
-  // Each source is optional, but a result missing one is not cached: the
-  // next open asks again instead of showing the gap for minutes.
-  let complete = true;
+  // Each source is optional. Nothing is cached server-side (RD-3): the
+  // related mail, events and pages are personal data, so every open asks again.
   const [peopleThreads, topicThreads, events, connectors, linkedPages] =
     await Promise.all([
       mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
@@ -155,14 +159,12 @@ export async function collectThreadContext({
           .catch((error) => {
             if (isGmailCallDeferredError(error)) throw error;
             logger.warn("Failed to fetch threads with participant", { error });
-            complete = false;
             return [];
           }),
       ),
       findTopicThreads({ focus, emailProvider }).catch((error) => {
         if (isGmailCallDeferredError(error)) throw error;
         logger.warn("Failed to search threads by topic", { error });
-        complete = false;
         return [];
       }),
       fetchCalendarEventsInWindow({
@@ -172,15 +174,9 @@ export async function collectThreadContext({
         maxResultsPerProvider: 50,
         logger,
       })
-        .then((result) => {
-          // Someone without a calendar has nothing more to read, so the
-          // result is as complete as it will get and is worth caching.
-          if (!result.complete && !result.noCalendarConnected) complete = false;
-          return result.events;
-        })
+        .then((result) => result.events)
         .catch((error) => {
           logger.warn("Failed to fetch calendar events for context", { error });
-          complete = false;
           return [];
         }),
       fetchConnectorCandidates({
@@ -223,10 +219,6 @@ export async function collectThreadContext({
     linkedFrom: candidate.linkedFrom,
     reasons,
   }));
-  if (complete && connectors.complete && linkedPages.complete)
-    await redis
-      .set(cacheKey, items, { ex: CONTEXT_CACHE_TTL_SECONDS })
-      .catch(() => null);
   return { thread, items };
 }
 

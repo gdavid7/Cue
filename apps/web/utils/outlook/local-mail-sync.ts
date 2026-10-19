@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { redis } from "@/utils/redis";
 import { WELL_KNOWN_FOLDERS } from "@/utils/outlook/constants";
 import { RetryHandlerOptions } from "@microsoft/microsoft-graph-client";
@@ -53,8 +54,10 @@ const cursorSchema = z.object({
   before: z.number().int().optional(),
   link: z.string().url(),
 });
+// Category names are the user's own words, so the catalog is cached under a
+// hash of each name (RD-3). A null id keeps an orphaned name as it is.
 const categoryCacheSchema = z.object({
-  entries: z.array(z.tuple([z.string().min(1), z.string().min(1)])),
+  entries: z.array(z.tuple([z.string().min(1), z.string().min(1).nullable()])),
   nextLink: z.string().optional(),
 });
 type Cursor = z.infer<typeof cursorSchema>;
@@ -437,12 +440,13 @@ async function resolveLocalMailCategories(
   } catch {
     throw new LocalMailSyncPausedError();
   }
-  let categoryMap = new Map(cached?.entries);
+  let stored = new Map(cached?.entries);
+  const known = () => [...names].every((name) => stored.has(hashName(name)));
   if (cached && !cached.nextLink) {
-    if ([...names].every((name) => categoryMap.has(name))) return categoryMap;
+    if (known()) return resolveCategoryNames(names, stored);
     // Newly assigned categories can precede the shared catalog cache expiry.
     cached = null;
-    categoryMap = new Map();
+    stored = new Map();
   }
   const link = cached?.nextLink;
   if (link) validateCategoryLink(link);
@@ -468,16 +472,18 @@ async function resolveLocalMailCategories(
   );
   validatePage(response);
   for (const category of response.value) {
+    const nameHash =
+      typeof category.displayName === "string" && category.displayName
+        ? hashName(category.displayName)
+        : null;
     if (
       typeof category.id !== "string" ||
       !category.id ||
-      typeof category.displayName !== "string" ||
-      !category.displayName ||
-      (categoryMap.has(category.displayName) &&
-        categoryMap.get(category.displayName) !== category.id)
+      !nameHash ||
+      (stored.has(nameHash) && stored.get(nameHash) !== category.id)
     )
       throw new Error("Outlook category identities are unavailable");
-    categoryMap.set(category.displayName, category.id);
+    stored.set(nameHash, category.id);
   }
   const nextLink = response["@odata.nextLink"];
   if (nextLink) validateCategoryLink(nextLink);
@@ -485,12 +491,12 @@ async function resolveLocalMailCategories(
     // Match ordinary provider reads for categories absent from a complete catalog.
     // Cache misses until expiry so an orphaned name cannot refetch every page.
     for (const name of names)
-      if (!categoryMap.has(name)) categoryMap.set(name, name);
+      if (!stored.has(hashName(name))) stored.set(hashName(name), null);
   }
   try {
     await redis.set(
       key,
-      { entries: [...categoryMap], ...(nextLink ? { nextLink } : {}) },
+      { entries: [...stored], ...(nextLink ? { nextLink } : {}) },
       { ex: 300 },
     );
   } catch {
@@ -498,7 +504,25 @@ async function resolveLocalMailCategories(
   }
   // One catalog page per operation preserves quota admission and resumability.
   if (nextLink) throw new LocalMailSyncPausedError(1000);
+  return resolveCategoryNames(names, stored);
+}
+
+/** Each name a message carries, mapped to its category id, or to itself when orphaned. */
+function resolveCategoryNames(
+  names: Set<string>,
+  stored: Map<string, string | null>,
+) {
+  const categoryMap = new Map<string, string>();
+  for (const name of names) {
+    const nameHash = hashName(name);
+    if (stored.has(nameHash))
+      categoryMap.set(name, stored.get(nameHash) ?? name);
+  }
   return categoryMap;
+}
+
+function hashName(name: string) {
+  return createHash("sha256").update(name).digest("hex");
 }
 
 function validateCategoryLink(link: string) {

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { summarise } from "@/app/api/ai/summarise/controller";
 import { withEmailAccount } from "@/utils/middleware";
 import { summariseBody } from "@/app/api/ai/summarise/validation";
-import { getSummary } from "@/utils/redis/summary";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 import { emailToContentForAI } from "@/utils/ai/content-sanitizer";
 import { assertHasAiAccess } from "@/utils/premium/limits";
@@ -31,9 +30,6 @@ export const POST = withEmailAccount(async (request) => {
     userId: userAi.userId,
     hasUserApiKey: !!userAi.user.aiApiKey,
   });
-
-  const cachedSummary = await getSummary(prompt);
-  if (cachedSummary) return new NextResponse(cachedSummary);
 
   const stream = await summarise({
     text: prompt,

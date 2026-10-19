@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { orgOf } from "@cue/context";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
@@ -29,7 +30,7 @@ export type MeetingNews = {
  * Recent public news about the outside organization in each meeting of the
  * next few days, so the user walks in knowing what's going on with them.
  * Searched, not written: no model call. News is the same for everyone, so
- * it's cached by organization.
+ * it's cached by a hash of the organization.
  */
 export async function getMeetingNews({
   emailAccountId,
@@ -110,7 +111,8 @@ async function organizationNews({
   logger: Logger;
   now: Date;
 }): Promise<MeetingNews["news"]> {
-  const key = `meeting-news:${organization}`;
+  // Hashed: whom the user meets is personal, the headlines are not (RD-3).
+  const key = `meeting-news:${createHash("sha256").update(organization).digest("hex")}`;
   const cached = await redis.get<MeetingNews["news"]>(key).catch(() => null);
   if (cached) return cached;
   try {

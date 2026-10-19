@@ -57,14 +57,25 @@ export function useCombinedMailThreads({
         : undefined,
     [accountIds, labelNames, labelsByAccount],
   );
-  // Each account reads the search in its own provider's syntax.
+  // Each account reads the search in its own provider's syntax, and
+  // `label:Name` by its own labels.
   const searchPredicate = useMemo(
     () =>
       searchQuery
-        ? (searchQueryForAccounts(searchQuery, { now: new Date() }, accounts) ??
-          undefined)
+        ? (searchQueryForAccounts(
+            searchQuery,
+            { now: new Date() },
+            accounts.map((account) => {
+              const labels = labelsByAccount[account.id];
+              return {
+                id: account.id,
+                provider: account.provider,
+                labels: labels && Object.values(labels),
+              };
+            }),
+          ) ?? undefined)
         : undefined,
-    [searchQuery, accounts],
+    [searchQuery, accounts, labelsByAccount],
   );
   const query = useMemo<ThreadsQuery>(() => {
     if (searchQuery) return { q: searchQuery };
@@ -146,9 +157,16 @@ function useLabelsByAccount(accountIds: string[]): Record<string, EmailLabels> {
       if (!fetcher) return {};
       const entries = await Promise.all(
         accountIds.map(async (accountId) => {
-          const response = (await fetcher(["/api/labels", accountId])) as
-            | LabelsResponse
-            | undefined;
+          // One account's failed fetch leaves only that account without
+          // labels, rather than every account.
+          let response: LabelsResponse | undefined;
+          try {
+            response = (await fetcher(["/api/labels", accountId])) as
+              | LabelsResponse
+              | undefined;
+          } catch {
+            response = undefined;
+          }
           return [accountId, labelsResponseToMap(response)] as const;
         }),
       );

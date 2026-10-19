@@ -25,9 +25,6 @@ export async function saveThread({
   thread: {
     threadId: string;
     jobId: string;
-    from: string;
-    subject: string;
-    snippet: string;
     date: Date;
     archive?: boolean;
     label?: string;

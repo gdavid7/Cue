@@ -17,10 +17,8 @@ import { HANDLED_LABELS } from "@/utils/home/get-home";
 import prisma from "@/utils/prisma";
 import { updateThreadTrackers } from "@/utils/reply-tracker/handle-conversation-status";
 import { applyThreadStatusLabel } from "@/utils/reply-tracker/label-helpers";
-import {
-  getCachedSuggestedReply,
-  getSuggestedReplySettings,
-} from "@/utils/thread-context/suggest-reply";
+import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
+import { canWriteRequestedReplies } from "@/utils/rule/draft-replies-enabled";
 import type { ParsedMessage } from "@/utils/types";
 import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
@@ -93,7 +91,7 @@ export const saveSuggestedReplyAction = actionClient
   .action(
     async ({
       ctx: { emailAccountId, emailAccount, provider, logger, userId },
-      parsedInput: { threadId, content },
+      parsedInput: { threadId, content, suggested },
     }) => {
       const emailProvider = await createEmailProvider({
         emailAccountId,
@@ -142,13 +140,14 @@ export const saveSuggestedReplyAction = actionClient
 
       // Remember the suggestion as Cue wrote it, not the edited text, so edits
       // made here and later in the mail app both teach reply memories when
-      // the draft is sent. Without the cached original there is nothing to
-      // compare against, so the draft is saved without being remembered.
-      const suggestion = await getCachedSuggestedReply(
-        { emailAccountId, threadId, messageId: replyTo.id },
-        await getSuggestedReplySettings(emailAccountId),
-      );
-      if (suggestion?.status === "suggested") {
+      // the draft is sent. Without the original there is nothing to compare
+      // against, so the draft is saved without being remembered.
+      if (
+        suggested &&
+        canWriteRequestedReplies(
+          (await getSuggestedReplySettings(emailAccountId)).draftReplies,
+        )
+      ) {
         try {
           await prisma.suggestedReplyDraft.upsert({
             where: { emailAccountId_draftId: { emailAccountId, draftId } },
@@ -157,9 +156,9 @@ export const saveSuggestedReplyAction = actionClient
               threadId,
               messageId: replyTo.id,
               draftId,
-              content: suggestion.reply,
+              content: suggested,
             },
-            update: { messageId: replyTo.id, content: suggestion.reply },
+            update: { messageId: replyTo.id, content: suggested },
           });
         } catch (error) {
           // The draft is saved; only learning from its edits is lost.

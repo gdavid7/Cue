@@ -1,31 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import prisma from "@/utils/__mocks__/prisma";
-import {
-  getUserOwnAddresses,
-  invalidateUserOwnAddresses,
-  isOwnAddress,
-} from "@/utils/user/own-addresses";
-
-const store = vi.hoisted(() => new Map<string, unknown>());
+import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/redis", () => ({
-  redis: {
-    get: vi.fn(async (key: string) => store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: unknown) => {
-      store.set(key, value);
-    }),
-    del: vi.fn(async (key: string) => {
-      store.delete(key);
-    }),
-  },
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 
 describe("getUserOwnAddresses", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    store.clear();
+    recordingRedis.reset();
   });
 
   it("returns every connected address of the user, normalized", async () => {
@@ -43,7 +31,9 @@ describe("getUserOwnAddresses", () => {
     );
   });
 
-  it("serves later reads from the cache until it is invalidated", async () => {
+  // RD-3: addresses stay out of the server cache, so a newly linked or removed
+  // mailbox counts at once without anything to invalidate.
+  it("reads the current addresses every time and caches none of them", async () => {
     prisma.emailAccount.findMany.mockResolvedValueOnce([
       { email: "a@example.com" },
     ] as never);
@@ -53,24 +43,11 @@ describe("getUserOwnAddresses", () => {
       { email: "a@example.com" },
       { email: "b@example.com" },
     ] as never);
-    expect(await getUserOwnAddresses("user-1")).toEqual(["a@example.com"]);
-
-    await invalidateUserOwnAddresses("user-1");
     expect(await getUserOwnAddresses("user-1")).toEqual([
       "a@example.com",
       "b@example.com",
     ]);
-  });
-
-  it("still answers from the database when the cache is down", async () => {
-    const { redis } = await import("@/utils/redis");
-    vi.mocked(redis.get).mockRejectedValueOnce(new Error("down"));
-    vi.mocked(redis.set).mockRejectedValueOnce(new Error("down"));
-    prisma.emailAccount.findMany.mockResolvedValue([
-      { email: "a@example.com" },
-    ] as never);
-
-    expect(await getUserOwnAddresses("user-1")).toEqual(["a@example.com"]);
+    expect(recordingRedis.everythingWritten()).not.toContain("@example.com");
   });
 });
 

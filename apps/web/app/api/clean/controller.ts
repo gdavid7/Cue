@@ -95,9 +95,6 @@ export async function cleanThread({
     thread: {
       threadId,
       jobId,
-      subject: lastMessage.headers.subject,
-      from: lastMessage.headers.from,
-      snippet: lastMessage.snippet,
       date: internalDateToDate(lastMessage.internalDate),
     },
   });

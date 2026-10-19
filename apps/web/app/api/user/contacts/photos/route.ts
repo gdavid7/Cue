@@ -4,9 +4,8 @@ import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { withEmailProvider } from "@/utils/middleware";
 import {
-  getCachedContactPhotos,
-  setCachedContactPhotos,
-  setFailedContactPhotoSweep,
+  isContactPhotoSweepPaused,
+  pauseContactPhotoSweep,
 } from "@/utils/redis/contact-photos";
 
 export type ContactPhotosResponse = Awaited<ReturnType<typeof getData>>;
@@ -40,17 +39,18 @@ async function getData({
   emailProvider: Pick<EmailProvider, "getContactPhotos">;
   logger: Logger;
 }) {
-  const cached = await getCachedContactPhotos(emailAccountId, logger);
-  if (cached) return { photos: cached };
+  // `swept` tells the browser the photos are complete and worth keeping;
+  // the server keeps none of them (RD-3).
+  if (await isContactPhotoSweepPaused(emailAccountId, logger))
+    return { photos: {} as Record<string, string>, swept: false };
 
   try {
     const photos = await emailProvider.getContactPhotos();
-    await setCachedContactPhotos(emailAccountId, photos, logger);
-    return { photos };
+    return { photos, swept: true };
   } catch (error) {
     // Avatars fall back to initials.
     logger.warn("Failed to load contact photos", { error });
-    await setFailedContactPhotoSweep(emailAccountId, logger);
-    return { photos: {} };
+    await pauseContactPhotoSweep(emailAccountId, logger);
+    return { photos: {} as Record<string, string>, swept: false };
   }
 }
