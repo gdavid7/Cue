@@ -241,11 +241,13 @@ export function createEmailProviderMailboxSource(input: {
             }),
           });
         // The backfill only fills in older mail, so it yields to everything
-        // else. The primary scan fills the inbox the user is waiting on, and
-        // after a sign-in the screen waits on its very first page.
-        let priority: GmailQuotaPriority = "sync";
-        if (isBackfill) priority = "background";
-        else if (isFirstSyncFirstPage) priority = "interactive";
+        // else. The primary scan fills the inbox the user is waiting on, its
+        // first page after a sign-in included: that page is sync too, so it
+        // never takes the in-flight slots or the share of the second kept
+        // for what a person opens meanwhile. It goes first all the same, as
+        // the first sync's first call, with background held off until the
+        // scan ends and a full bucket that covers it above sync's floor.
+        const priority: GmailQuotaPriority = isBackfill ? "background" : "sync";
         const syncPage = isGmail
           ? await runWithGmailQuota({ priority }, () =>
               withGmailSyncBudget(

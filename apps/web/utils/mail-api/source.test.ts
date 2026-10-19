@@ -1587,7 +1587,7 @@ describe("createEmailProviderMailboxSource", () => {
     });
   });
 
-  it("asks Gmail for a first sync's first page at the priority of someone waiting", async () => {
+  it("asks Gmail for a first sync's first page as sync, leaving a person's share free", async () => {
     const priorities: string[] = [];
     const getMessagesWithPagination = vi.fn(async () => {
       priorities.push(currentGmailQuotaContext().priority);
@@ -1617,7 +1617,7 @@ describe("createEmailProviderMailboxSource", () => {
     await enumerate({ scopeId: "primary" });
     await enumerate({ scopeId: "history", initial: true });
 
-    expect(priorities).toEqual(["interactive", "sync", "sync", "background"]);
+    expect(priorities).toEqual(["sync", "sync", "sync", "background"]);
   });
 
   it("keeps a first backfill whole for a client that can't record a window", async () => {

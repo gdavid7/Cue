@@ -434,6 +434,36 @@ describe("Gmail quota on a first load", () => {
     expect(firstPage?.ms).toBeLessThanOrEqual(2600);
   }, 60_000);
 
+  // Right after a sign-in, the first sync's first page is the inbox someone
+  // waits on, but they may open a conversation from the server's preview
+  // rows before it lands. That read must not queue behind the page.
+  it("serves a thread opened during a first sync's first page in one round trip", async () => {
+    const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
+      await startReplay(30_000, { unitsPerSecond: GMAIL_UNITS_PER_SECOND });
+    let openedIn: number | null = null;
+    const actors = Promise.all([
+      engineScope("a", "primary", { initial: true }),
+      engineScope("a", "history", { initial: true }),
+      // The bootstrap's reads take three round trips; the page is listed and
+      // its first batches are in flight.
+      sleep(1100).then(async () => {
+        const openedAt = Date.now();
+        const result = await route("threads/detail", () =>
+          provider.getThread("t3"),
+        );
+        if (result.ok) openedIn = Date.now() - openedAt;
+      }),
+    ]);
+    await advanceUntilSettled(actors, 30_000);
+
+    expect(gmail.limitedCalls()).toEqual([]);
+    expect(rateLimitModes).toEqual([]);
+    expect(
+      gmail.unitsByCaller(start, start + 1200)["mail/v1/enumeration"],
+    ).toBeGreaterThan(0);
+    expect(openedIn).toBe(250);
+  }, 60_000);
+
   // Production, 20:14: Today on a large mailbox ran into the route's 30 s
   // limit while the account's sync held the gate, and every SWR retry did the
   // same. Today must answer within its budget, with whatever Gmail could not
@@ -747,7 +777,11 @@ async function startReplay(
   const running = () => Date.now() - start < endMs;
 
   // Each tab or device runs its own engine with its own local store.
-  const engineScope = async (tab: string, scopeId: string) => {
+  const engineScope = async (
+    tab: string,
+    scopeId: string,
+    { initial }: { initial?: boolean } = {},
+  ) => {
     const source = createEmailProviderMailboxSource({
       provider,
       accountId: ACCOUNT,
@@ -766,6 +800,7 @@ async function startReplay(
           ...context,
           scope: { id: scopeId, kind: "account", folderId: null },
           afterMs: null,
+          initial,
         }),
       );
       if (begun.ok && begun.value.status === "ok")
