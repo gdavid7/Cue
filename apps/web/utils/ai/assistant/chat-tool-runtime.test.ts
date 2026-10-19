@@ -76,7 +76,7 @@ describe("withChatToolRuntime", () => {
     await runWithGmailQuota(
       { caller: "mail/v1/enumeration", priority: "sync" },
       () =>
-        meterGmailCall({ emailAccountId: ACCOUNT, cost: 800 }, async () => 1),
+        meterGmailCall({ emailAccountId: ACCOUNT, cost: 1200 }, async () => 1),
     );
     const gmailCalls = vi.fn(async () => "page");
     const logger = createTestLogger();
@@ -90,7 +90,7 @@ describe("withChatToolRuntime", () => {
             try {
               for (let page = 0; page < 6; page++) {
                 await meterGmailCall(
-                  { emailAccountId: ACCOUNT, cost: 300 },
+                  { emailAccountId: ACCOUNT, cost: 600 },
                   gmailCalls,
                 );
               }

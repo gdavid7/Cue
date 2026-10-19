@@ -1479,8 +1479,8 @@ describe("createEmailProviderMailboxSource", () => {
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
     const [reservation] =
       vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
-    expect(reservation?.cost).toBe(1005);
-    expect(reservation?.unspentCost?.(deferred)).toBe(1005 - 605);
+    expect(reservation?.cost).toBe(3005);
+    expect(reservation?.unspentCost?.(deferred)).toBe(3005 - 605);
     // Any other failure may have reached Gmail, so nothing is given back.
     expect(reservation?.unspentCost?.(new Error("Gmail failed"))).toBe(0);
   });

@@ -84,7 +84,7 @@ describe("Gmail quota gate", () => {
     vi.useRealTimers();
   });
 
-  it("charges Gmail's documented cost per method", () => {
+  it("charges each method its cost, three times a light read for a full one", () => {
     const base = "https://gmail.googleapis.com/gmail/v1/users/me";
     // A read with no format is a full one.
     expect(gmailRequestCost("GET", `${base}/messages/abc`)).toBe(60);
@@ -679,7 +679,7 @@ describe("Gmail quota gate", () => {
     expect(after).toBeLessThanOrEqual(before / 2);
   });
 
-  it("admits a 1,005-unit first page at once", async () => {
+  it("admits a 1,005-unit request at once from a full bucket", async () => {
     const page = vi.fn(async () => "page");
 
     await expect(

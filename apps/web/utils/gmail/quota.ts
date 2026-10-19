@@ -38,9 +38,9 @@ const BUDGET = {
 const TRAILING_WINDOW_MS = 60_000;
 // What each priority must leave in the bucket after its debit: sync leaves
 // a person a page of the inbox or several thread opens, and still finds a
-// first sync's first page of 50 metadata reads (about 1,005 units) in a full
-// bucket; background leaves more, so it only runs on capacity nobody else is
-// using.
+// first sync's first page (a screen of whole messages, about 725 units) in a
+// full bucket; background leaves more, so it only runs on capacity nobody
+// else is using.
 const FLOOR: Record<GmailQuotaPriority, number> = {
   interactive: 0,
   sync: 800,
@@ -910,15 +910,17 @@ export function resetGmailQuotaInstanceState() {
 }
 
 /**
- * The documented quota cost of one Gmail REST call, from its HTTP method and
- * URL, whose `format` query parameter decides what a read costs. Unknown
- * calls are charged like a write so they are never undercounted.
+ * What the gate charges one Gmail REST call, from its HTTP method and URL,
+ * whose `format` query parameter decides what a read costs. These are Cue's
+ * own conservative units, modelled on Google's published costs: a full, raw
+ * or html read at three times a metadata or minimal one. Unknown calls are
+ * charged like a write so they are never undercounted.
  */
 export function gmailRequestCost(method: string, url: string | URL): number {
   const parsed = typeof url === "string" ? new URL(url, "https://x") : url;
   const match = parsed.pathname.match(/\/gmail\/v1\/users\/[^/]+(\/.*)?$/);
-  // Gmail reads a message, thread or draft in full when no format is given,
-  // and charges a full read three times a lighter one.
+  // Gmail reads a message, thread or draft in full when no format is given;
+  // a full read is charged three times a lighter one.
   const format = parsed.searchParams.get("format")?.toLowerCase() ?? "full";
   const fullRead = format === "full" || format === "raw" || format === "html";
   const parts = (match?.[1] ?? "").split("/").filter(Boolean);

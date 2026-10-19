@@ -1,10 +1,11 @@
 import { Readable } from "node:stream";
 import { getAuditContext } from "@/utils/audit/context";
 
-// An independent copy of Google's published per-method costs, so the test
-// measures what Gmail would charge rather than what Cue believes it costs.
-// A message, draft or thread read costs three times as much in full (the
-// default) or raw as in metadata or minimal format.
+// An independent copy of per-method costs modelled on Google's published
+// quota table, so the test measures what the fake charges rather than what
+// the gate believes. These are conservative stand-ins, not Gmail's exact
+// accounting: a message, draft or thread read costs three times as much in
+// full (the default) or raw as in metadata or minimal format.
 // https://developers.google.com/workspace/gmail/api/reference/quota
 const GMAIL_COSTS: Array<[method: string, pattern: RegExp, units: number]> = [
   ["GET", /^\/profile$/, 1],
@@ -51,7 +52,7 @@ export type FakeGmailCall = {
 };
 
 /**
- * A Gmail double that charges each request its documented cost and, like
+ * A Gmail double that charges each request its modelled cost and, like
  * Gmail, refuses requests once a rolling minute of accepted cost would pass
  * `unitsPerMinute`. Recent mail is `recentCount` messages; older mail is
  * `historyCount` more. With `unitsPerSecond`, it also refuses what would push

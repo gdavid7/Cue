@@ -18,9 +18,8 @@ import {
 
 // Gmail charges every request in a batch at once, so a batch is one burst.
 // Each is sized to fit the gate's per-second pace at the caller's priority
-// and the format it reads (17 metadata reads or 5 full ones interactive, 12
-// or 4 sync, 6 or 2 background) rather than 25 full reads at a time, which
-// Gmail answered by refusing the tail of each batch.
+// and the format it reads: 17 metadata reads or 5 full ones interactive, 12
+// or 4 sync, 6 or 2 background.
 const MAX_BATCH_RETRIES = 3;
 const MAX_RETRY_JITTER_MS = 1000;
 

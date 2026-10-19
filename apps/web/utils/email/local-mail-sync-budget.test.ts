@@ -68,10 +68,10 @@ describe("local mail sync admission", () => {
     expect(keys).toContain("local-mail-budget:google:account-1:total");
     expect(args).toEqual([
       "500",
-      "4000",
-      "120000",
-      "2000",
-      "60000",
+      "10000",
+      "360000",
+      "5000",
+      "180000",
       expect.any(String),
     ]);
     expect(redis.eval).toHaveBeenLastCalledWith(
@@ -88,8 +88,8 @@ describe("local mail sync admission", () => {
     );
     expect(vi.mocked(redis.eval).mock.calls[0]?.[2]).toEqual([
       "500",
-      "4000",
-      "120000",
+      "10000",
+      "360000",
       "0",
       "0",
       expect.any(String),
@@ -215,7 +215,7 @@ describe("local mail sync admission", () => {
   });
   it("rejects work larger than a bounded reservation", async () => {
     await expect(
-      withLocalMailSyncBudget({ ...input, cost: 1101 }, vi.fn()),
+      withLocalMailSyncBudget({ ...input, cost: 3101 }, vi.fn()),
     ).rejects.toThrow("Invalid local mail sync reservation");
     expect(redis.eval).not.toHaveBeenCalled();
   });

@@ -146,8 +146,8 @@ const HOME_BUDGET_MS = 10_000;
 // window and backfilling older mail, a deep-linked thread plus three more
 // opened over the minute (each with its context panel, suggested reply and
 // insight), inbox insights for the first rows, Today and sidebar reads, a
-// stats refresh and a webhook. A fake Gmail charges each call its documented
-// cost and refuses calls past 6,000 units in any rolling minute, as Gmail does.
+// stats refresh and a webhook. A fake Gmail charges each call its modelled
+// cost and refuses calls past the per-user limit in any rolling minute.
 describe("Gmail quota on a first load", () => {
   let start = 0;
 
@@ -589,7 +589,7 @@ describe("Gmail quota on a first load", () => {
     expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
     expect(opens).toHaveLength(3);
     // About 2,410 units: what sync may spend of the bucket, then the rest at
-    // a 10,000-unit budget's refill, around the thread's reads.
+    // a 12,000-unit budget's refill, around the thread's reads.
     expect(recentWindowMs).not.toBeNull();
     expect(recentWindowMs).toBeLessThanOrEqual(12_000);
   }, 60_000);
@@ -709,7 +709,7 @@ describe("Gmail quota on a first load", () => {
 });
 
 /**
- * A fake Gmail that charges documented costs, wired under the real Gmail
+ * A fake Gmail that charges modelled costs, wired under the real Gmail
  * client and provider, and the actors a replay is built from: a route that
  * records rate-limit mode, an SWR-style retry, and a tab's engine scope.
  */

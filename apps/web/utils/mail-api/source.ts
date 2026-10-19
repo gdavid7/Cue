@@ -70,7 +70,8 @@ const GMAIL_FIRST_BACKFILL_WINDOW_MS = 30 * DAY_MS;
 // The two scans start at different times, so the backfill reaches into the
 // recent window to leave no gap at the boundary between them.
 const GMAIL_HISTORY_OVERLAP_MS = DAY_MS;
-const GMAIL_THREAD_COST = 40;
+// A conversation read whole, in the sync envelope's units.
+const GMAIL_THREAD_COST = 120;
 // The first page of a scan is what the inbox shows first. It reads whole
 // messages, so it creates no hydration that would hold the engine's command
 // loop, and a first screen of them comes back on its own so the inbox fills
