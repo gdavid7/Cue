@@ -161,6 +161,65 @@ describe("searchContext", () => {
     );
   });
 
+  it("finds mail with the searches Cue made of a question, not its words", async () => {
+    const itinerary = thread("itinerary", {
+      from: "United <receipts@united.com>",
+      subject: "Your trip confirmation",
+      snippet: "Departing Wednesday, November 25",
+    });
+    const searchThreads = vi.fn(async ({ query }: { query: string }) => ({
+      threads: query.startsWith("flight") ? [itinerary] : [],
+    }));
+    const provider = {
+      searchThreads,
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    const { results } = await searchContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      query: "when is my flight?",
+      searches: ["flight OR itinerary newer_than:3m", "subject:confirmation"],
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+    });
+
+    expect(searchThreads.mock.calls.map(([options]) => options.query)).toEqual([
+      "flight OR itinerary newer_than:3m",
+      "subject:confirmation",
+    ]);
+    expect(results.map((r) => r.id)).toContain("itinerary");
+  });
+
+  it("runs searches that are all operators, ranking by the question's words", async () => {
+    const statement = thread("statement", {
+      from: "Bank <alerts@bank.example>",
+      subject: "Your statement is ready",
+      snippet: "Statement attached",
+    });
+    const searchThreads = vi.fn(async () => ({ threads: [statement] }));
+    const provider = {
+      searchThreads,
+      getThreadsWithParticipant: vi.fn(async () => []),
+    } as unknown as EmailProvider;
+
+    const { results } = await searchContext({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      query: "which statement came yesterday?",
+      searches: ["has:attachment after:1760857200"],
+      emailProvider: provider,
+      logger: createTestLogger(),
+      now: NOW,
+    });
+
+    expect(searchThreads).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "has:attachment after:1760857200" }),
+    );
+    expect(results.map((r) => r.id)).toContain("statement");
+  });
+
   it("searches once when threads with every word fill the page", async () => {
     const full = Array.from({ length: 15 }, (_, i) =>
       thread(`t${i}`, {

@@ -152,6 +152,7 @@ describe("LLM use cases", () => {
       [LlmUseCase.ReplyMemorySelection]: "economy",
       [LlmUseCase.ReplyNudge]: "chat",
       [LlmUseCase.SearchAnswer]: "economy",
+      [LlmUseCase.SearchIntent]: "economy",
       [LlmUseCase.Summarise]: "default",
       [LlmUseCase.TranslateEmail]: "economy",
       [LlmUseCase.UnsubscribePageState]: "economy",

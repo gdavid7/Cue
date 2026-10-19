@@ -148,13 +148,31 @@ describe("GET /api/user/search-answer", () => {
     expect(await get("quarterly offsite")).toBeNull();
     expect(mocks.generateObject).not.toHaveBeenCalled();
   });
+
+  it("finds a question's mail with the searches Cue made of it", async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { answer: null, sourceIds: [] },
+    });
+
+    await get("when is my flight?", [
+      "flight OR boarding OR itinerary",
+      "subject:confirmation",
+    ]);
+
+    expect(mocks.searchContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "when is my flight?",
+        searches: ["flight OR boarding OR itinerary", "subject:confirmation"],
+      }),
+    );
+  });
 });
 
-async function get(q: string) {
+async function get(q: string, searches: string[] = []) {
+  const params = new URLSearchParams({ q });
+  for (const search of searches) params.append("s", search);
   const response = await GET(
-    new NextRequest(
-      `http://localhost:3000/api/user/search-answer?q=${encodeURIComponent(q)}`,
-    ),
+    new NextRequest(`http://localhost:3000/api/user/search-answer?${params}`),
     { params: Promise.resolve({}) },
   );
   return response.json();
