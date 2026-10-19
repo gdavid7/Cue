@@ -11,7 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotificationsSection } from "@/app/(app)/settings/NotificationsSection";
 import { readStoredMode } from "@/utils/web-notifications/preference";
 
+const { push } = vi.hoisted(() => ({ push: { available: false } }));
+
 vi.mock("@/components/Toast", () => ({ toastError: vi.fn() }));
+vi.mock("@/utils/web-push/subscription", () => ({
+  isWebPushAvailable: () => push.available,
+  syncWebPushSubscription: vi.fn(async () => true),
+}));
 // Radix's select needs a real pointer; a native one exercises the same handler.
 vi.mock("@/components/ui/select", () => ({
   Select: ({
@@ -56,6 +62,7 @@ function stubNotification(permission: NotificationPermission) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  push.available = false;
 });
 
 afterEach(() => {
@@ -85,6 +92,14 @@ describe("NotificationsSection", () => {
       expect(notification.requestPermission).toHaveBeenCalledOnce(),
     );
     expect(readStoredMode()).toBe("important");
+  });
+
+  it("says notifications arrive with no tab open when push is available", () => {
+    push.available = true;
+    stubNotification("granted");
+    render(<NotificationsSection />);
+
+    expect(screen.getByText(/even when Cue isn't open/i)).toBeTruthy();
   });
 
   it("explains how to unblock when the browser denied permission", () => {

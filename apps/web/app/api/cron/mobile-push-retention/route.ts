@@ -3,6 +3,7 @@ import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import { type RequestWithLogger, withError } from "@/utils/middleware";
 import { deleteExpiredMobilePushDeliveries } from "@/utils/mobile-push-retention";
+import { deleteExpiredWebPushDeliveries } from "@/utils/web-push/retention";
 
 export const maxDuration = 300;
 
@@ -31,7 +32,10 @@ export const POST = withError("cron/mobile-push-retention", async (request) => {
 async function runRetention(request: RequestWithLogger) {
   const result = await runCronJob({
     logger: request.logger,
-    run: async () => ({ deleted: await deleteExpiredMobilePushDeliveries() }),
+    run: async () => ({
+      deleted: await deleteExpiredMobilePushDeliveries(),
+      webPushDeleted: await deleteExpiredWebPushDeliveries(),
+    }),
   });
   return NextResponse.json(result);
 }

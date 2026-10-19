@@ -114,9 +114,10 @@ model User {
   feedback      Feedback[]
 
   // Referral relationships
-  referralsMade    Referral[]        @relation("ReferrerUser")
-  referralReceived Referral?         @relation("ReferredUser")
-  mobilePushTokens MobilePushToken[]
+  referralsMade        Referral[]            @relation("ReferrerUser")
+  referralReceived     Referral?             @relation("ReferredUser")
+  mobilePushTokens     MobilePushToken[]
+  webPushSubscriptions WebPushSubscription[]
 
   oauthClientRecords       OauthClient[]
   oauthRefreshTokenRecords OauthRefreshToken[]
@@ -263,6 +264,7 @@ model EmailAccount {
   apiKeys                ApiKey[]
   classificationFeedback ClassificationFeedback[]
   mailSplits             MailSplit[]
+  webPushDeliveries      WebPushDelivery[]
 
   @@index([userId])
   @@index([lastSummaryEmailAt])
@@ -2109,9 +2111,9 @@ model McpConnection {
   expiresAt    DateTime?
 
   // The app's own account, as the app last confirmed it (e.g. the Canvas user)
-  verifiedAt   DateTime?
-  verifiedAs   String?
-  verifiedAsId String?
+  verifiedAt       DateTime?
+  verifiedAs       String?
+  verifiedAsId     String?
   // The app turned the stored credentials away; left alone until reconnected
   needsReconnectAt DateTime?
 
@@ -2169,6 +2171,44 @@ model MobilePushDelivery {
   @@unique([deduplicationKey, mobilePushTokenId], map: "MobilePushDelivery_key_token_key")
   @@index([createdAt])
   @@index([mobilePushTokenId])
+}
+
+// A browser's push subscription for new-mail notifications with no Cue tab open.
+model WebPushSubscription {
+  id            String      @id @default(cuid())
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  endpoint      String      @unique
+  p256dh        String
+  auth          String
+  userAgent     String?
+  mode          WebPushMode @default(IMPORTANT)
+  lastSuccessAt DateTime?
+  // Consecutive failed sends that weren't the push service saying it's gone.
+  failureCount  Int         @default(0)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// One row per notified message so a retried webhook doesn't notify twice.
+model WebPushDelivery {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  messageId String
+
+  emailAccountId String
+  emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([emailAccountId, messageId])
+  @@index([createdAt])
+}
+
+enum WebPushMode {
+  IMPORTANT
+  ALL
 }
 
 enum MobilePushPlatform {

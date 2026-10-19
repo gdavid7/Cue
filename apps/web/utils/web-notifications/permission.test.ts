@@ -6,6 +6,14 @@ import {
   shouldOfferWebNotifications,
 } from "@/utils/web-notifications/permission";
 import { readStoredMode } from "@/utils/web-notifications/preference";
+import { syncWebPushSubscription } from "@/utils/web-push/subscription";
+
+const { push } = vi.hoisted(() => ({ push: { available: true } }));
+
+vi.mock("@/utils/web-push/subscription", () => ({
+  isWebPushAvailable: () => push.available,
+  syncWebPushSubscription: vi.fn(async () => true),
+}));
 
 function stubNotification(
   permission: NotificationPermission,
@@ -18,6 +26,8 @@ function stubNotification(
 
 beforeEach(() => {
   window.localStorage.clear();
+  push.available = true;
+  vi.mocked(syncWebPushSubscription).mockClear();
 });
 
 afterEach(() => {
@@ -45,6 +55,33 @@ describe("chooseWebNotificationMode", () => {
     expect(requestPermission).not.toHaveBeenCalled();
     expect(result).toBe("denied");
     expect(readStoredMode()).toBe("all");
+  });
+
+  it("subscribes this browser to push with the mode once notifications are allowed", async () => {
+    stubNotification("default", "granted");
+
+    await chooseWebNotificationMode("all");
+
+    expect(syncWebPushSubscription).toHaveBeenCalledWith("all");
+  });
+
+  it("unsubscribes this browser from push when turned off", async () => {
+    stubNotification("granted");
+
+    await chooseWebNotificationMode("off");
+
+    expect(syncWebPushSubscription).toHaveBeenCalledWith("off");
+  });
+
+  it("leaves push alone when notifications aren't allowed or push is unavailable", async () => {
+    stubNotification("default", "denied");
+    await chooseWebNotificationMode("important");
+
+    push.available = false;
+    stubNotification("granted");
+    await chooseWebNotificationMode("all");
+
+    expect(syncWebPushSubscription).not.toHaveBeenCalled();
   });
 });
 

@@ -5,6 +5,8 @@ import { WebNewMailNotifications } from "@/app/(app)/WebNewMailNotifications";
 
 const mocks = vi.hoisted(() => ({
   observeMailbox: vi.fn(),
+  syncWebPush: vi.fn(),
+  resyncDue: true,
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -22,6 +24,11 @@ vi.mock("@/hooks/useAccounts", () => ({
     },
   }),
 }));
+vi.mock("@/utils/web-push/subscription", () => ({
+  isWebPushAvailable: () => true,
+  isWebPushResyncDue: () => mocks.resyncDue,
+  syncWebPushSubscription: mocks.syncWebPush,
+}));
 vi.mock("@/utils/branding", () => ({ BRAND_ICON_URL: "/icon.png" }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => ({ observeMailbox: mocks.observeMailbox }),
@@ -30,6 +37,9 @@ vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
 beforeEach(() => {
   window.localStorage.clear();
   mocks.observeMailbox.mockReset();
+  mocks.syncWebPush.mockReset();
+  mocks.syncWebPush.mockResolvedValue(true);
+  mocks.resyncDue = true;
   mocks.observeMailbox.mockImplementation(() => ({
     getSnapshot: () => ({ status: "loading", data: null }),
     subscribe: () => () => undefined,
@@ -40,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function stubPermission(permission: NotificationPermission) {
@@ -92,5 +103,32 @@ describe("WebNewMailNotifications", () => {
     render(<WebNewMailNotifications />);
 
     expect(mocks.observeMailbox).not.toHaveBeenCalled();
+  });
+
+  it("re-sends this browser's push subscription when a daily re-sync is due", () => {
+    stubPermission("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "all");
+
+    render(<WebNewMailNotifications />);
+
+    expect(mocks.syncWebPush).toHaveBeenCalledExactlyOnceWith("all");
+  });
+
+  it("leaves push alone when notifications are off, blocked or recently synced", () => {
+    stubPermission("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "off");
+    render(<WebNewMailNotifications />);
+    cleanup();
+
+    stubPermission("denied");
+    window.localStorage.setItem("cue:web-notifications:mode", "all");
+    render(<WebNewMailNotifications />);
+    cleanup();
+
+    stubPermission("granted");
+    mocks.resyncDue = false;
+    render(<WebNewMailNotifications />);
+
+    expect(mocks.syncWebPush).not.toHaveBeenCalled();
   });
 });

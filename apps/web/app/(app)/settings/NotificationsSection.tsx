@@ -21,6 +21,7 @@ import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import {
   chooseWebNotificationMode,
   getWebNotificationPermission,
+  type WebNotificationPermission,
 } from "@/utils/web-notifications/permission";
 import {
   readEffectiveMode,
@@ -28,6 +29,7 @@ import {
   type WebNotificationMode,
   WEB_NOTIFICATION_MODES,
 } from "@/utils/web-notifications/preference";
+import { isWebPushAvailable } from "@/utils/web-push/subscription";
 
 const MODE_LABELS: Record<WebNotificationMode, string> = {
   off: "Off",
@@ -58,11 +60,7 @@ export function NotificationsSection() {
       <Item size="sm">
         <ItemContent>
           <ItemTitle>Desktop notifications</ItemTitle>
-          <ItemDescription>
-            {permission === "denied"
-              ? "Notifications are blocked. Allow them for this site in your browser settings."
-              : "Get a notification for new mail while Cue is open in a browser tab."}
-          </ItemDescription>
+          <ItemDescription>{describeNotifications(permission)}</ItemDescription>
         </ItemContent>
         <ItemActions>
           <Select
@@ -102,4 +100,12 @@ export function NotificationsSection() {
       </Item>
     </>
   );
+}
+
+function describeNotifications(permission: WebNotificationPermission) {
+  if (permission === "denied")
+    return "Notifications are blocked. Allow them for this site in your browser settings.";
+  if (isWebPushAvailable())
+    return "Get a notification for new mail, even when Cue isn't open.";
+  return "Get a notification for new mail while Cue is open in a browser tab.";
 }

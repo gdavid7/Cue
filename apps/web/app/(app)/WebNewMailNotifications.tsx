@@ -34,6 +34,11 @@ import {
   trackCueTabFocus,
 } from "@/utils/web-notifications/tab-focus";
 import type { TrackedConversation } from "@/utils/web-notifications/new-mail";
+import {
+  isWebPushAvailable,
+  isWebPushResyncDue,
+  syncWebPushSubscription,
+} from "@/utils/web-push/subscription";
 
 const MAX_WATCHED_ACCOUNTS = 50;
 const WATCHED_UNREAD_PAGE_SIZE = 25;
@@ -180,6 +185,13 @@ export function WebNewMailNotifications() {
       handle.close();
     };
   }, [active, client, connectedAccountIds]);
+
+  // Keeps the server's copy of this browser's push subscription fresh, so mail
+  // still notifies after the browser rotates it or the server dropped it.
+  useEffect(() => {
+    if (!active || !isWebPushAvailable() || !isWebPushResyncDue()) return;
+    syncWebPushSubscription(mode).catch(() => undefined);
+  }, [active, mode]);
 
   // The one-time offer needs to know a first sync finished, and nothing else.
   const mightOffer =

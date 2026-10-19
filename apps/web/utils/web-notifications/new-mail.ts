@@ -38,6 +38,14 @@ export function createNewMailTracker({ startedAtMs }: { startedAtMs: number }) {
   };
 }
 
+/**
+ * Shared by the open tab and the service worker's push handler, so the browser
+ * collapses the two into one notification when both fire for a message.
+ */
+export function newMailNotificationTag(accountId: string, messageId: string) {
+  return `cue-mail-${accountId}-${messageId}`;
+}
+
 export function senderDisplayName(from: string) {
   const match = from.match(/^\s*"?([^"<]*?)"?\s*<([^>]*)>\s*$/);
   if (!match) return from.trim();
