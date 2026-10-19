@@ -4,12 +4,16 @@ import { createTestLogger } from "@/__tests__/helpers";
 import { getMockParsedMessage } from "@/__tests__/mocks/email-provider.mock";
 import { ActionType, SystemType, WebPushMode } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
+import { getCueReadingType } from "@/utils/split-inbox/cue-membership.server";
 import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 
 const { vapid } = vi.hoisted(() => ({ vapid: { configured: true } }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/split-inbox/cue-membership.server", () => ({
+  getCueReadingType: vi.fn(),
+}));
 vi.mock("web-push", () => ({
   default: { sendNotification: vi.fn() },
 }));
@@ -89,7 +93,8 @@ describe("sendNewMailWebPush", () => {
       subscription("all", WebPushMode.ALL),
     ] as never);
     prisma.webPushDelivery.createMany.mockResolvedValue({ count: 1 });
-    prisma.executedRule.findMany.mockResolvedValue([]);
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    vi.mocked(getCueReadingType).mockResolvedValue(null);
     sendNotification.mockResolvedValue({
       statusCode: 201,
       body: "",
@@ -132,35 +137,61 @@ describe("sendNewMailWebPush", () => {
     });
   });
 
-  it("only pushes to all-mail browsers when Cue triaged the message as a newsletter or marketing", async () => {
-    prisma.executedRule.findMany.mockResolvedValue([
-      { rule: { systemType: SystemType.NEWSLETTER }, actionItems: [] },
-    ] as never);
+  it("only pushes to all-mail browsers when Cue sorted the thread into Reading", async () => {
+    vi.mocked(getCueReadingType).mockResolvedValue(SystemType.NEWSLETTER);
 
     await send();
 
+    expect(getCueReadingType).toHaveBeenCalledWith({
+      emailAccountId: "account-1",
+      threadId: "thread-1",
+    });
     expect(sentEndpoints()).toEqual([
       "https://fcm.googleapis.com/fcm/send/all",
     ]);
   });
 
-  it("treats mail Cue sorted elsewhere as important", async () => {
-    prisma.executedRule.findMany.mockResolvedValue([
-      { rule: { systemType: SystemType.TO_REPLY }, actionItems: [] },
-    ] as never);
-
+  it("treats mail Cue didn't sort into Reading as important", async () => {
     await send();
 
     expect(sentEndpoints()).toHaveLength(2);
   });
 
-  it("does not push mail a rule moved out of the inbox", async () => {
-    prisma.executedRule.findMany.mockResolvedValue([
-      { rule: null, actionItems: [{ type: ActionType.ARCHIVE }] },
+  it("skips the Reading lookup when every browser wants all mail", async () => {
+    prisma.webPushSubscription.findMany.mockResolvedValue([
+      subscription("all", WebPushMode.ALL),
     ] as never);
 
     await send();
 
+    expect(getCueReadingType).not.toHaveBeenCalled();
+    expect(sentEndpoints()).toHaveLength(1);
+  });
+
+  it("does not push mail a rule took out of the inbox", async () => {
+    prisma.executedRule.findFirst.mockResolvedValue({ id: "run-1" } as never);
+
+    await send();
+
+    expect(prisma.executedRule.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        emailAccountId: "account-1",
+        messageId: "message-1",
+        actionItems: {
+          some: {
+            type: {
+              in: [
+                ActionType.ARCHIVE,
+                ActionType.MOVE_FOLDER,
+                ActionType.MARK_SPAM,
+                ActionType.DELETE,
+              ],
+            },
+          },
+        },
+      }),
+      select: { id: true },
+    });
     expect(sendNotification).not.toHaveBeenCalled();
   });
 
@@ -198,17 +229,22 @@ describe("sendNewMailWebPush", () => {
     });
   });
 
-  it("counts other failures against the subscription and keeps it", async () => {
+  it("counts other failures and drops a subscription after ten in a row", async () => {
     sendNotification.mockRejectedValue(
-      Object.assign(new Error("Unavailable"), { statusCode: 503 }),
+      Object.assign(new Error("Forbidden"), { statusCode: 403 }),
     );
 
     await send();
 
-    expect(prisma.webPushSubscription.deleteMany).not.toHaveBeenCalled();
     expect(prisma.webPushSubscription.updateMany).toHaveBeenCalledWith({
       where: { id: "important" },
       data: { failureCount: { increment: 1 } },
+    });
+    expect(prisma.webPushSubscription.deleteMany).toHaveBeenCalledWith({
+      where: { id: "important", failureCount: { gte: 10 } },
+    });
+    expect(prisma.webPushSubscription.deleteMany).not.toHaveBeenCalledWith({
+      where: { id: "important" },
     });
   });
 

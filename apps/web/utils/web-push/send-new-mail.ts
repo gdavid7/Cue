@@ -2,7 +2,6 @@ import webpush from "web-push";
 import {
   ActionType,
   ExecutedRuleStatus,
-  SystemType,
   WebPushMode,
 } from "@/generated/prisma/enums";
 import { mapWithConcurrency } from "@/utils/async";
@@ -10,6 +9,7 @@ import { BRAND_ICON_URL } from "@/utils/branding";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
+import { getCueReadingType } from "@/utils/split-inbox/cue-membership.server";
 import { truncate } from "@/utils/string";
 import type { ParsedMessage } from "@/utils/types";
 import {
@@ -30,12 +30,20 @@ const SEND_TIMEOUT_MS = 10_000;
 // A browser that stays offline longer than this gets nothing rather than
 // stale mail alerts when it comes back.
 const PUSH_TTL_SECONDS = 60 * 60;
-const BULK_TYPES: SystemType[] = [SystemType.NEWSLETTER, SystemType.MARKETING];
+// A key rotation turns every send into a 403; this stops retrying those.
+const MAX_CONSECUTIVE_FAILURES = 10;
+const LEFT_INBOX_ACTIONS: ActionType[] = [
+  ActionType.ARCHIVE,
+  ActionType.MOVE_FOLDER,
+  ActionType.MARK_SPAM,
+  ActionType.DELETE,
+];
 
 /**
  * Pushes a new inbox message to the user's subscribed browsers. Runs after the
- * message's rules, so "important" browsers can skip what Cue triaged as bulk;
- * mail that triage didn't classify counts as important.
+ * message's rules, so "important" browsers skip what Cue sorted into Reading
+ * (Newsletter, Marketing) by the same rule as the Reading tabs; mail triage
+ * didn't sort there counts as important.
  */
 export async function sendNewMailWebPush({
   emailAccountId,
@@ -73,12 +81,22 @@ export async function sendNewMailWebPush({
   });
   if (claim.count === 0) return;
 
-  const triage = await getTriageOutcome({
-    emailAccountId,
-    messageId: message.id,
+  const leftInbox = await prisma.executedRule.findFirst({
+    where: {
+      emailAccountId,
+      messageId: message.id,
+      status: ExecutedRuleStatus.APPLIED,
+      actionItems: { some: { type: { in: LEFT_INBOX_ACTIONS } } },
+    },
+    select: { id: true },
   });
-  if (triage.leftInbox) return;
-  const targets = triage.bulk
+  if (leftInbox) return;
+
+  const threadId = message.threadId;
+  const isReading =
+    subscriptions.some(({ mode }) => mode === WebPushMode.IMPORTANT) &&
+    (await getCueReadingType({ emailAccountId, threadId })) !== null;
+  const targets = isReading
     ? subscriptions.filter(({ mode }) => mode === WebPushMode.ALL)
     : subscriptions;
   if (targets.length === 0) return;
@@ -97,31 +115,6 @@ export async function sendNewMailWebPush({
       logger.warn("Web push bookkeeping failed", { error }),
     ),
   );
-}
-
-async function getTriageOutcome({
-  emailAccountId,
-  messageId,
-}: {
-  emailAccountId: string;
-  messageId: string;
-}) {
-  const executions = await prisma.executedRule.findMany({
-    where: { emailAccountId, messageId, status: ExecutedRuleStatus.APPLIED },
-    select: {
-      rule: { select: { systemType: true } },
-      actionItems: {
-        where: { type: ActionType.ARCHIVE },
-        select: { type: true },
-      },
-    },
-  });
-  return {
-    bulk: executions.some(
-      ({ rule }) => !!rule?.systemType && BULK_TYPES.includes(rule.systemType),
-    ),
-    leftInbox: executions.some(({ actionItems }) => actionItems.length > 0),
-  };
 }
 
 async function deliver({
@@ -161,6 +154,12 @@ async function deliver({
     await prisma.webPushSubscription.updateMany({
       where: { id: subscription.id },
       data: { failureCount: { increment: 1 } },
+    });
+    await prisma.webPushSubscription.deleteMany({
+      where: {
+        id: subscription.id,
+        failureCount: { gte: MAX_CONSECUTIVE_FAILURES },
+      },
     });
     return;
   }
