@@ -68,6 +68,8 @@ vi.mock("@/utils/redis", () => ({
     del: (key: string) => redisState.client!.del(key),
     publish: (channel: string, message: string) =>
       redisState.client!.publish(channel, message),
+    eval: (script: string, keys: string[], args: string[]) =>
+      redisState.client!.eval(script, keys.length, ...keys, ...args),
     set: (
       key: string,
       value: string,

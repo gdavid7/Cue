@@ -15,6 +15,7 @@ import { browserStoragePressure } from "./storage-pressure";
 import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
+import { PUSHED_CHANGES_CATCH_UP_INTERVAL_MS } from "@/utils/mail-engine/follow-mailbox-changes";
 
 // Compiling sqlite-wasm takes a while and opens no files, so it starts as
 // soon as the worker loads rather than when the engine starts.
@@ -76,6 +77,7 @@ async function createWorkerEngine(
     assistant: ports.assistant,
     runtime,
     ownerId: "browser-worker",
+    changesCatchUpIntervalMs: PUSHED_CHANGES_CATCH_UP_INTERVAL_MS,
   });
   if (shouldReleaseDeferredOnStart(input.online)) {
     await created.requestSync([input.accountId]);
