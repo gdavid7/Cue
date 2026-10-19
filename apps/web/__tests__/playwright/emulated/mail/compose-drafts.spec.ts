@@ -10,6 +10,7 @@ import {
   openMailboxFromSidebar,
   waitForComposeOutboxSend,
   openThreadIdFromUrl,
+  requestMailSync,
 } from "./mail-test-helpers";
 
 test("saves a closed new message with attachments in Drafts and discards it from the mailbox", async ({
@@ -95,9 +96,18 @@ test("saves a closed new message with attachments in Drafts and discards it from
     .toHaveLength(0);
   await page.reload();
   await expect(conversations).toBeVisible();
-  await expect(
-    conversationWithSubject(page, conversations, "Mailbox draft example"),
-  ).toHaveCount(0);
+  // The reload drops the in-memory hide, so the row stays until the engine
+  // syncs the discard; without the mail stream that waits on a poll.
+  await expect
+    .poll(async () => {
+      await requestMailSync(page);
+      return conversationWithSubject(
+        page,
+        conversations,
+        "Mailbox draft example",
+      ).count();
+    })
+    .toBe(0);
 });
 
 test("removes the mailbox draft after sending a new message", async ({
