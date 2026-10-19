@@ -463,7 +463,8 @@ function labelPredicate(
   // Gmail writes a label's spaces and slashes as hyphens in a query.
   const wanted = labelQueryName(value);
   const matches = labels.flatMap(({ id, accountId, name }): MailPredicate[] =>
-    id === value || labelQueryName(name) === wanted
+    // A raw id means one label only within its own account.
+    (!accountId && id === value) || labelQueryName(name) === wanted
       ? [
           {
             kind: "membership",

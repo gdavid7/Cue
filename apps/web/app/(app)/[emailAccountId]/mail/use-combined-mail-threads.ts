@@ -157,9 +157,16 @@ function useLabelsByAccount(accountIds: string[]): Record<string, EmailLabels> {
       if (!fetcher) return {};
       const entries = await Promise.all(
         accountIds.map(async (accountId) => {
-          const response = (await fetcher(["/api/labels", accountId])) as
-            | LabelsResponse
-            | undefined;
+          // One account's failed fetch leaves only that account without
+          // labels, rather than every account.
+          let response: LabelsResponse | undefined;
+          try {
+            response = (await fetcher(["/api/labels", accountId])) as
+              | LabelsResponse
+              | undefined;
+          } catch {
+            response = undefined;
+          }
           return [accountId, labelsResponseToMap(response)] as const;
         }),
       );

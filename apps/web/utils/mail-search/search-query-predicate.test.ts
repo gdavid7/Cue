@@ -152,6 +152,7 @@ describe("searchQueryToPredicate, read by the local store", () => {
     ["label:Work", ["amy"]],
     ["label:work", ["amy"]],
     ["label:travel-trips", ["bob"]],
+    ["label:Label_work", ["amy"]],
     ["label:important", ["bob"]],
     ["category:social", ["amy"]],
     ["category:updates", ["bob"]],
@@ -556,6 +557,31 @@ describe("label:Name across accounts", () => {
       "a-work",
       "b-work",
     ]);
+  });
+
+  it("doesn't read a raw label id across accounts, where it means a different label in each", async () => {
+    expect(await labelledMatches("label:Label_1")).toEqual([]);
+  });
+
+  it("still matches the other accounts by name when one account's labels failed to load", async () => {
+    // A failed fetch reads as an account with no labels.
+    const failed = ACCOUNTS.map((account) =>
+      account.id === "gmail-b" ? { ...account, labels: [] } : account,
+    );
+    expect(await labelledMatches("label:Work", failed)).toEqual([
+      "a-work",
+      "o-work",
+    ]);
+  });
+
+  it("leaves a provider group's labels to its providers while any of its accounts' labels are unknown", async () => {
+    const partial = ACCOUNTS.map((account) =>
+      account.id === "gmail-b"
+        ? { id: account.id, provider: account.provider }
+        : account,
+    );
+    // The Outlook group has its labels; the Gmail group waits on gmail-b.
+    expect(await labelledMatches("label:Work", partial)).toEqual(["o-work"]);
   });
 
   it("leaves a label to the providers while labels load", async () => {
