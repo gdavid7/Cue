@@ -867,6 +867,70 @@ describe("ChatProvider interrupted replies", () => {
     }
   });
 
+  // A run whose instance died never clears its marker, and the refetched
+  // chat is the same each time, so the wait ends on the clock.
+  it("stops waiting for a reply once its run is past the chat route's limit", async () => {
+    vi.useFakeTimers();
+    const mutate = vi.fn();
+    mockUseSWRConfig.mockReturnValue({ mutate });
+    chatState.status = "error";
+    chatState.messages = [{ id: "stream-1", role: "assistant" }];
+    const data = {
+      messages: [],
+      activeStreamId: "stream-1",
+      activeStreamStartedAt: new Date().toISOString(),
+    };
+    mockUseChatMessages.mockReturnValue({ data });
+    let latest: ReturnType<typeof useChat> | undefined;
+    function Consumer() {
+      latest = useChat();
+      return null;
+    }
+
+    try {
+      renderWithProvider(<Consumer />);
+      expect(latest?.replyFinishing).toBe(true);
+
+      await act(async () => {
+        vi.advanceTimersByTime(301_000);
+      });
+      expect(latest?.replyFinishing).toBe(false);
+      const polls = mutate.mock.calls.length;
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(mutate.mock.calls.length).toBe(polls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't check back while the tab is hidden", async () => {
+    vi.useFakeTimers();
+    const mutate = vi.fn();
+    mockUseSWRConfig.mockReturnValue({ mutate });
+    chatState.status = "error";
+    chatState.messages = [{ id: "stream-1", role: "assistant" }];
+    mockUseChatMessages.mockReturnValue({
+      data: {
+        messages: [],
+        activeStreamId: "stream-1",
+        activeStreamStartedAt: new Date().toISOString(),
+      },
+    });
+    setVisibility("hidden");
+
+    try {
+      renderWithProvider(<div />);
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(mutate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("doesn't say a reply is finishing once its run is too old to be alive", () => {
     mockUseChatMessages.mockReturnValue({
       data: {

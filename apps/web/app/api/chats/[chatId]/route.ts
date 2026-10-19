@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import prisma from "@/utils/prisma";
 import { withEmailAccount } from "@/utils/middleware";
+import { getLiveStreamId } from "@/utils/chat/active-run";
 import { softDeleteChat } from "@/utils/chat/soft-delete";
 
 export type GetChatResponse = Awaited<ReturnType<typeof getChat>>;
@@ -120,8 +121,16 @@ async function getChat({
       },
     },
   });
+  if (!chat) return chat;
 
-  return chat;
+  // A marker older than a run can last belongs to an instance that died
+  // before clearing it; the reply it marks will never be saved.
+  const activeStreamId = getLiveStreamId(chat);
+  return {
+    ...chat,
+    activeStreamId,
+    activeStreamStartedAt: activeStreamId ? chat.activeStreamStartedAt : null,
+  };
 }
 
 async function updateChat({

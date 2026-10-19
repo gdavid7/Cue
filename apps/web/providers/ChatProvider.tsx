@@ -318,10 +318,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const isRunActive =
     chat.status === "submitted" || chat.status === "streaming";
   const activeStreamId = data?.activeStreamId ?? null;
+  const activeStreamStartedAt = data?.activeStreamStartedAt ?? null;
+  // Set when a run outlives the chat route's limit without clearing its
+  // marker (its instance died), so the wait ends even if the data never
+  // changes again.
+  const [expiredStreamId, setExpiredStreamId] = useState<string | null>(null);
   const replyFinishing =
     !isRunActive &&
     Boolean(activeStreamId) &&
-    isRecentRun(data?.activeStreamStartedAt);
+    activeStreamId !== expiredStreamId &&
+    isRecentRun(activeStreamStartedAt);
   // The partial reply shown stays until the run saves the whole one.
   const keepPartialReply =
     replyFinishing && chat.messages.at(-1)?.id === activeStreamId;
@@ -371,13 +377,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // can't be reattached; its run still finishes and saves it. Until then the
   // chat says the reply is finishing and checks back for it.
   useEffect(() => {
-    if (!replyFinishing || !chatId) return;
-    const timer = setInterval(
-      () => mutate(chatMessagesKey(chatId, emailAccountId)),
-      FINISHING_POLL_MS,
+    if (!replyFinishing || !chatId || !activeStreamId || !activeStreamStartedAt)
+      return;
+    const poll = setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      mutate(chatMessagesKey(chatId, emailAccountId));
+    }, FINISHING_POLL_MS);
+    const deadline = setTimeout(
+      () => setExpiredStreamId(activeStreamId),
+      new Date(activeStreamStartedAt).getTime() + MAX_CHAT_RUN_MS - Date.now(),
     );
-    return () => clearInterval(timer);
-  }, [chatId, emailAccountId, mutate, replyFinishing]);
+    return () => {
+      clearInterval(poll);
+      clearTimeout(deadline);
+    };
+  }, [
+    activeStreamId,
+    activeStreamStartedAt,
+    chatId,
+    emailAccountId,
+    mutate,
+    replyFinishing,
+  ]);
 
   // Mobile browsers drop the connection of a backgrounded tab while the reply
   // keeps running, so reattach when the tab comes back.
@@ -752,7 +773,7 @@ export function useChat(): ChatContextType {
   return context;
 }
 
-function isRecentRun(startedAt: Date | string | null | undefined) {
+function isRecentRun(startedAt: Date | string | null) {
   if (!startedAt) return false;
   return Date.now() - new Date(startedAt).getTime() < MAX_CHAT_RUN_MS;
 }
