@@ -536,14 +536,24 @@ describe("runRules with a To Reply rule that never chose drafting", () => {
 
   it("still leaves the draft out of a bulk run that skips drafts", async () => {
     mockMatchingRules([{ rule: conversationMetaRule, matchReasons: [] }]);
-    mockExecutedRuleCreate({ rule: toReplyRule });
+    const createSpy = mockExecutedRuleCreate({ rule: toReplyRule });
 
-    await runRulesWithDefaults({
+    const results = await runRulesWithDefaults({
       rules: [toReplyRule],
       skipDraftReplies: true,
     });
 
     expect(getActionItemsWithAiArgs).not.toHaveBeenCalled();
+    expect(results).toEqual([
+      expect.objectContaining({ status: ExecutedRuleStatus.SKIPPED }),
+    ]);
+    const { data } = createSpy.mock.calls.at(-1)![0];
+    expect(data).toMatchObject({
+      status: ExecutedRuleStatus.SKIPPED,
+      rule: { connect: { id: toReplyRule.id } },
+    });
+    expect(data.reason).toContain("bulk run");
+    expect(data).not.toHaveProperty("actionItems");
   });
 });
 

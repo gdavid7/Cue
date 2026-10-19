@@ -97,6 +97,21 @@ describe("withDefaultDraftReply", () => {
     expect(withDefaultDraftReply(rule)).toBe(rule);
   });
 
+  it("adds no email draft to a rule that drafts to a messaging channel", () => {
+    const rule = toReply({
+      actions: [getAction({ type: ActionType.DRAFT_MESSAGING_CHANNEL })],
+    });
+
+    expect(withDefaultDraftReply(rule)).toBe(rule);
+  });
+
+  // DR-5a: an enabled To Reply rule whose draft action the user removed in
+  // the rule editor can't be told apart from one that never chose, so it
+  // reads as on. Needs a saved "off" that isn't the rule being disabled.
+  it.todo(
+    "keeps drafting off after the user removes the draft action in the rule editor",
+  );
+
   it("leaves a To Reply rule the user turned off alone", () => {
     const rule = toReply({ enabled: false, actions: [] });
 

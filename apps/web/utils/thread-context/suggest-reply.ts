@@ -706,7 +706,7 @@ type SuggestReplyOutcome = {
     | "error";
 };
 
-export function getSuggestReplyOutcome(
+function getSuggestReplyOutcome(
   suggestion: SuggestedReply | null,
   draftReplies: DraftRepliesSetting,
 ): SuggestReplyOutcome {

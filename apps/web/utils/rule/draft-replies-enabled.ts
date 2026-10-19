@@ -1,5 +1,6 @@
 import { env } from "@/env";
 import { ActionType, SystemType } from "@/generated/prisma/enums";
+import { isDraftReplyActionType } from "@/utils/actions/draft-reply";
 import type { RuleWithActions } from "@/utils/types";
 
 type ToReplyRule =
@@ -43,7 +44,8 @@ export function withDefaultDraftReply(rule: RuleWithActions): RuleWithActions {
   if (
     rule.systemType !== SystemType.TO_REPLY ||
     getDraftRepliesSetting(rule) !== "on" ||
-    rule.actions.some((action) => action.type === ActionType.DRAFT_EMAIL)
+    // A rule that already drafts, to the mailbox or a messaging channel.
+    rule.actions.some((action) => isDraftReplyActionType(action.type))
   ) {
     return rule;
   }
