@@ -106,7 +106,10 @@ test("switching between Today and the inbox answers at once", async ({
     // has fetched Today's route, which is what this measures past.
     await page.waitForTimeout(2000);
     await switchTo("today", "reload");
-    recorder.add("today-cache-bytes", await page.evaluate(cachedTodayBytes));
+    const cacheBytes = await page.evaluate(cachedTodayBytes);
+    recorder.add("today-cache-bytes", cacheBytes);
+    // What a returning visit opens on.
+    expect.soft(cacheBytes).toBeGreaterThan(0);
   } catch (error) {
     testInfo.annotations.push({ type: "failed-at", description: page.url() });
     await page.screenshot({ path: testInfo.outputPath("switch-failure.png") });
@@ -155,7 +158,7 @@ function cachedTodayBytes() {
   let bytes = 0;
   for (let index = 0; index < window.localStorage.length; index++) {
     const key = window.localStorage.key(index);
-    if (key?.startsWith("cue:today:"))
+    if (key && /^cue:browser-cache:v2:[^:]+:today:/.test(key))
       bytes += key.length + (window.localStorage.getItem(key)?.length ?? 0);
   }
   return bytes;
