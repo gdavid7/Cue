@@ -755,7 +755,9 @@ export function MailShell() {
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
     emptySearchMessage = "";
-  const showCueFound = cueSearch.stage !== "off" && isSearchCommitted;
+  // Like the answer card, it stays while the search is edited, so picking
+  // one of its searches to edit doesn't pull it out from under the pointer.
+  const showCueFound = cueSearch.stage !== "off";
   // Nothing matched only once Cue's own searches have found nothing too.
   const searchFoundNothingAtAll =
     searchFoundNothing &&
@@ -2192,7 +2194,7 @@ export function MailShell() {
                   request={cueSearch.answerRequest}
                 />
               ) : null}
-              {showCueFound && cueSearch.stage !== "off" ? (
+              {cueSearch.stage !== "off" ? (
                 <CueFoundSection
                   expandedPreview={expandedPreview}
                   intent={cueSearch.intent}
