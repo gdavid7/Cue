@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useInsertionEffect, useRef } from "react";
 import { format } from "date-fns";
 import groupBy from "lodash/groupBy";
 import { toast } from "sonner";
@@ -67,11 +67,17 @@ export function useThreadActions({
   const listTargetsByKey = useRef(new Map<string, ThreadActionTarget>());
   const activeReaderTarget = useRef<ThreadActionTarget | undefined>(undefined);
   const client = useOptionalMailClient();
+  // Switching account replaces the engine, and an undo (the shortcut, or a
+  // toast shown before the switch) must reach the one running now. Batches
+  // carry their own accounts, so the last one stays undoable across a switch.
+  const clientRef = useRef(client);
+  useInsertionEffect(() => {
+    clientRef.current = client;
+  });
   useEffect(() => {
     if (retainedEmailAccountId.current !== emailAccountId) {
       retainedEmailAccountId.current = emailAccountId;
       listTargetsByKey.current.clear();
-      lastAction.current = null;
     }
     activeReaderTarget.current = readerTarget?.messageIds.length
       ? readerTarget
@@ -141,6 +147,7 @@ export function useThreadActions({
 
   const undoBatch = useCallback(
     async (batch: UndoableBatch) => {
+      const client = clientRef.current;
       if (batch.undone || !client) return [];
       batch.undone = true;
       if (lastAction.current === batch) lastAction.current = null;
@@ -205,7 +212,7 @@ export function useThreadActions({
       }
       return restoredKeys;
     },
-    [client, notifyRestored],
+    [notifyRestored],
   );
 
   const undo = useCallback(async () => {
