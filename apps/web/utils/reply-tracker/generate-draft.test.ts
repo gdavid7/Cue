@@ -15,10 +15,9 @@ vi.mock("@/utils/ai/reply/draft-reply", () => ({
   aiDraftReplyWithConfidence: vi.fn(),
 }));
 
-vi.mock("@/utils/redis/reply", () => ({
-  getReplyWithConfidence: vi.fn().mockResolvedValue(null),
-  getReply: vi.fn().mockResolvedValue(null),
-  saveReply: vi.fn().mockResolvedValue(undefined),
+vi.mock("@/utils/redis", async () => ({
+  redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
+    .client,
 }));
 
 vi.mock("@/utils/prisma", () => ({
@@ -99,7 +98,7 @@ import {
   formatRecordedMeetingContextForPrompt,
 } from "@/utils/meeting-recorder/reply-context";
 import prisma from "@/utils/prisma";
-import { getReplyWithConfidence, saveReply } from "@/utils/redis/reply";
+import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { mcpAgent } from "@/utils/ai/mcp/mcp-agent";
 
 const logger = createTestLogger();
@@ -755,54 +754,43 @@ describe("fetchMessagesAndGenerateDraft - thread ordering", () => {
 describe("fetchMessagesAndGenerateDraftWithConfidenceThreshold", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getReplyWithConfidence).mockResolvedValue(null);
+    recordingRedis.reset();
     vi.mocked(selectDraftAttachmentsForRule).mockResolvedValue({
       selectedAttachments: [],
       attachmentContext: null,
     });
   });
 
-  it("uses cached drafts when cached confidence meets the threshold", async () => {
-    vi.mocked(getReplyWithConfidence).mockResolvedValue({
-      reply: "Cached draft reply",
-      confidence: DraftReplyConfidence.STANDARD,
-      attribution: {
-        provider: "openai",
-        modelName: "gpt-5.1",
-        pipelineVersion: DRAFT_PIPELINE_VERSION,
-      },
-      draftContextMetadata: createDraftContextMetadata(),
+  // RD-3: a draft is the user's reply to an email, so it is never kept in the
+  // server cache. A rerun drafts afresh; the saved draft is the record.
+  it("drafts afresh on a rerun and keeps no draft in the server cache", async () => {
+    vi.mocked(aiDraftReplyWithConfidence).mockResolvedValue({
+      reply: "Happy to meet on Tuesday",
+      confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
+      attribution: null,
     });
-
-    const result = await fetchMessagesAndGenerateDraftWithConfidenceThreshold(
-      createMockEmailAccount(),
-      "thread-1",
-      createMockClient(),
-      createMockMessage(),
-      logger,
-      DraftReplyConfidence.STANDARD,
+    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(
+      createMockEmailAccountSettings(),
     );
 
-    expect(result).toEqual({
-      draft: "Cached draft reply",
-      confidence: DraftReplyConfidence.STANDARD,
-      attribution: {
-        provider: "openai",
-        modelName: "gpt-5.1",
-        pipelineVersion: DRAFT_PIPELINE_VERSION,
-      },
-      draftContextMetadata: expect.objectContaining({
-        draft: { confidence: DraftReplyConfidence.STANDARD },
-      }),
-    });
-    expect(aiDraftReplyWithConfidence).not.toHaveBeenCalled();
+    for (let run = 0; run < 2; run++) {
+      const result = await fetchMessagesAndGenerateDraftWithConfidenceThreshold(
+        createMockEmailAccount(),
+        "thread-1",
+        createMockClient(),
+        createMockMessage(),
+        logger,
+        DraftReplyConfidence.STANDARD,
+        "rule-1",
+      );
+      expect(result).toMatchObject({ draft: "Happy to meet on Tuesday" });
+    }
+
+    expect(aiDraftReplyWithConfidence).toHaveBeenCalledTimes(2);
+    expect(recordingRedis.everythingWritten()).not.toContain("Tuesday");
   });
 
-  it("regenerates drafts when cached confidence is below the threshold", async () => {
-    vi.mocked(getReplyWithConfidence).mockResolvedValue({
-      reply: "Old cached draft",
-      confidence: DraftReplyConfidence.ALL_EMAILS,
-    });
+  it("returns a draft that meets the threshold with its context", async () => {
     vi.mocked(aiDraftReplyWithConfidence).mockResolvedValue({
       reply: "Fresh draft",
       confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
@@ -853,25 +841,6 @@ describe("fetchMessagesAndGenerateDraftWithConfidenceThreshold", () => {
         }),
       }),
     );
-    expect(saveReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        emailAccountId: "test-account-id",
-        messageId: "msg-1",
-        reply: "Fresh draft",
-        confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
-        attribution: {
-          provider: "anthropic",
-          modelName: "claude-sonnet-4-5",
-          pipelineVersion: DRAFT_PIPELINE_VERSION,
-        },
-        draftContextMetadata: expect.objectContaining({
-          draft: { confidence: DraftReplyConfidence.HIGH_CONFIDENCE },
-          replyMemories: expect.objectContaining({
-            ids: ["memory-1"],
-          }),
-        }),
-      }),
-    );
   });
 
   it("skips drafting when confidence is below the threshold", async () => {
@@ -911,67 +880,6 @@ describe("fetchMessagesAndGenerateDraftWithConfidenceThreshold", () => {
         }),
       }),
     );
-    expect(saveReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        emailAccountId: "test-account-id",
-        messageId: "msg-1",
-        reply: "Draft that should be skipped",
-        confidence: DraftReplyConfidence.ALL_EMAILS,
-        attribution: {
-          provider: "openai",
-          modelName: "gpt-5.1",
-          pipelineVersion: DRAFT_PIPELINE_VERSION,
-        },
-        draftContextMetadata: expect.objectContaining({
-          draft: { confidence: DraftReplyConfidence.ALL_EMAILS },
-          replyMemories: expect.objectContaining({
-            ids: ["memory-1"],
-          }),
-        }),
-      }),
-    );
-  });
-
-  it("returns a generated draft even when caching it fails", async () => {
-    vi.mocked(aiDraftReplyWithConfidence).mockResolvedValue({
-      reply: "Fresh draft",
-      confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
-      attribution: {
-        provider: "anthropic",
-        modelName: "claude-sonnet-4-5",
-        pipelineVersion: DRAFT_PIPELINE_VERSION,
-      },
-    });
-    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(
-      createMockEmailAccountSettings(),
-    );
-    vi.mocked(saveReply).mockRejectedValueOnce(new Error("redis unavailable"));
-
-    const result = await fetchMessagesAndGenerateDraftWithConfidenceThreshold(
-      createMockEmailAccount(),
-      "thread-1",
-      createMockClient(),
-      createMockMessage(),
-      logger,
-      DraftReplyConfidence.STANDARD,
-    );
-
-    expect(result).toMatchObject({
-      draft: "Fresh draft",
-      confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
-      attribution: {
-        provider: "anthropic",
-        modelName: "claude-sonnet-4-5",
-        pipelineVersion: DRAFT_PIPELINE_VERSION,
-      },
-    });
-    expect(result.draftContextMetadata).toEqual(
-      expect.objectContaining({
-        replyMemories: expect.objectContaining({
-          ids: ["memory-1"],
-        }),
-      }),
-    );
   });
 
   it("drafts without connected-app context when the app research fails", async () => {
@@ -1006,7 +914,7 @@ describe("fetchMessagesAndGenerateDraftWithConfidenceThreshold", () => {
     );
   });
 
-  it("passes selected attachment context into drafting and caches it per rule", async () => {
+  it("passes selected attachment context into drafting", async () => {
     const selectedAttachments = [
       {
         driveConnectionId: "drive-1",
@@ -1055,24 +963,6 @@ reason: Matched the requested property packet
     expect(aiDraftReplyWithConfidence).toHaveBeenCalledWith(
       expect.objectContaining({
         attachmentContext: expect.stringContaining("lease.pdf"),
-      }),
-    );
-
-    expect(saveReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        emailAccountId: "test-account-id",
-        messageId: "msg-1",
-        reply: "Attached the lease packet for review.",
-        confidence: DraftReplyConfidence.HIGH_CONFIDENCE,
-        attribution: null,
-        attachments: selectedAttachments,
-        ruleId: "rule-1",
-        draftContextMetadata: expect.objectContaining({
-          attachments: {
-            injected: true,
-            selectedCount: 1,
-          },
-        }),
       }),
     );
 
