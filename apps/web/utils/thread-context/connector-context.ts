@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ContextCandidate, Person } from "@cue/context";
 import { z } from "zod";
 import { connectionExecutor } from "@/utils/mcp/provider-connection";
@@ -767,7 +768,8 @@ async function isConnectedJiraSite(
 /** The cloud id Atlassian publishes for a site, cached since it never changes. */
 async function jiraCloudId(site: string): Promise<string | null> {
   if (!JIRA_SITE.test(site)) return null;
-  const key = `jira-cloud-id:${site}`;
+  // Hashed: the site comes from a link in the user's mail (RD-3).
+  const key = `jira-cloud-id:${createHash("sha256").update(site).digest("hex")}`;
   const cached = await redis.get<string>(key).catch(() => null);
   if (cached) return cached;
   const response = await fetch(`https://${site}/_edge/tenant_info`, {
