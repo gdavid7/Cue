@@ -8,7 +8,6 @@ import {
   formatSemanticJudgeActual,
   judgeEvalOutput,
 } from "@/__tests__/eval/semantic-judge";
-import { TZDate } from "@date-fns/tz";
 import {
   aiInterpretSearch,
   buildSearchIntentPrompt,
@@ -218,8 +217,9 @@ describe.runIf(shouldRunEval)("search-intent eval", () => {
             labelNames: LABELS,
           });
           const output = {
-            // Epoch seconds, as Gmail gets them, written out for the judge.
-            search: readableDates(intent.searches[0] ?? ""),
+            // The search with its epoch-second dates as Gmail days, as a
+            // person editing it sees them.
+            search: intent.editableSearches[0] ?? "",
             explanation: intent.explanation,
             isQuestion: intent.isQuestion,
           };
@@ -262,14 +262,3 @@ The account's labels: ${LABELS.join(", ")}`,
     evalReporter.printReport();
   });
 });
-
-function readableDates(search: string) {
-  return search.replace(
-    /\b(after|before):(\d{9,11})\b/g,
-    (_, name: string, seconds: string) => {
-      const local = new TZDate(Number(seconds) * 1000, TIMEZONE);
-      const pad = (n: number) => String(n).padStart(2, "0");
-      return `${name}:${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())}T${pad(local.getHours())}:${pad(local.getMinutes())}`;
-    },
-  );
-}
