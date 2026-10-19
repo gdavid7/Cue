@@ -42,6 +42,11 @@ const extractionsWithoutAi = createBrowserCache<InboxInsightExtraction>({
   maxEntries: 500,
 });
 
+// What this page was given, whether or not the browser could keep it: the
+// browser's store can refuse a write (no user yet, full, blocked, too big),
+// and an answer it dropped must not be asked for again on this page.
+const answered = new Map<string, InboxInsightExtraction>();
+
 type InboxInsightItem = {
   /** Where the caller looks the insight up; unique across accounts. */
   key: string;
@@ -220,6 +225,7 @@ export function resetInboxInsightRequestsForTesting() {
   }
   queues.clear();
   attempts.clear();
+  answered.clear();
   meta.clear();
   mailSettled = false;
 }
@@ -289,6 +295,11 @@ function pump(queue: Queue) {
       : "",
     keptPeople ? "events=1" : "",
   ].filter(Boolean);
+  // Every email sent counts as a try, whatever comes back, so a request
+  // can't repeat for an answer that wasn't kept.
+  for (const item of batch) {
+    if (!known.includes(item)) countAttempt({ emailAccountId, ...item });
+  }
   queue.inflight = true;
   notify();
   fetcher([`/api/user/inbox-insights?${params.join("&")}`, emailAccountId])
@@ -300,13 +311,12 @@ function pump(queue: Queue) {
       for (const item of batch) {
         const fresh = response.insights[item.threadId];
         if (fresh?.messageId === item.messageId) {
+          answered.set(attemptKey({ emailAccountId, ...item }), fresh);
           (fresh.withAi ? extractions : extractionsWithoutAi).set(
             emailAccountId,
             item.messageId,
             fresh,
           );
-        } else if (!known.includes(item)) {
-          countAttempt({ emailAccountId, ...item });
         }
       }
       queue.failures = 0;
@@ -318,15 +328,12 @@ function pump(queue: Queue) {
       queue.failures += 1;
       queue.error = error;
       const status = (error as { status?: number } | null)?.status;
-      for (const item of batch) {
-        const key = attemptKey({ emailAccountId, ...item });
-        // A rate limit is asked about once more, after its window.
-        countAttempt(
-          { emailAccountId, ...item },
-          status === 429
-            ? Math.max(MAX_ATTEMPTS - 1, (attempts.get(key) ?? 0) + 1)
-            : undefined,
-        );
+      // A rate limit is asked about once more, after its window.
+      if (status === 429) {
+        for (const item of batch) {
+          const key = attemptKey({ emailAccountId, ...item });
+          attempts.set(key, Math.max(MAX_ATTEMPTS - 1, attempts.get(key) ?? 0));
+        }
       }
       const hint = getRetryHint(
         error as { status?: number; retryAfterMs?: number },
@@ -390,7 +397,8 @@ function countAttempt(
 function keptExtraction(emailAccountId: string, messageId: string) {
   return (
     extractions.get(emailAccountId, messageId) ??
-    extractionsWithoutAi.get(emailAccountId, messageId)
+    extractionsWithoutAi.get(emailAccountId, messageId) ??
+    answered.get(attemptKey({ emailAccountId, messageId }))
   );
 }
 

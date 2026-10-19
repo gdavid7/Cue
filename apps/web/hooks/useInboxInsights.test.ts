@@ -225,6 +225,53 @@ describe("useInboxInsights", () => {
   });
 });
 
+// RL-1 review M3: the browser's store can refuse a write; an answer it
+// dropped must not be asked for again and again.
+describe("useInboxInsights when this browser can't keep what it read", () => {
+  beforeEach(() => {
+    // No signed-in user yet: the browser's store keeps nothing.
+    resetBrowserCacheForTesting(null);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("asks once for the rows and shows the answer from this page", async () => {
+    const fetcher = vi.fn(async () => fromServer({ t1: extraction("t1") }));
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await waitFor(() =>
+      expect(result.current.data).toEqual({ "work:t1": SHOWN }),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a bounded number of times for the open conversation the server keeps leaving out", async () => {
+    const fetcher = vi.fn(async () => fromServer({}));
+    renderHook(
+      () =>
+        useInboxInsights([
+          threadInsightItem({
+            emailAccountId: "work",
+            threadId: "t9",
+            messageId: "t9-latest",
+          }),
+        ]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+    expect(fetcher.mock.calls.length).toBeGreaterThan(0);
+    expect(fetcher.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+});
+
 // RD-3: the server keeps none of this, so the browser does.
 describe("useInboxInsights and what this browser keeps", () => {
   it("never asks again on this page, and names what it kept on the next", async () => {
