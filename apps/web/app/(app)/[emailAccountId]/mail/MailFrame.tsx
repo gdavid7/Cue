@@ -1,5 +1,6 @@
 "use client";
 
+import { markRumAccountSwitch } from "@/utils/analytics/rum-app-open";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { useRouter } from "next/navigation";
 import {
@@ -46,12 +47,14 @@ export function MailFrame({
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   // Switching accounts keeps you where you are.
   const selectAccount = useCallback(
-    (accountId: string) =>
+    (accountId: string) => {
+      if (!isToday) markRumAccountSwitch();
       redirectToSafeUrl(
         isToday
           ? prefixPath(accountId, "/home")
           : getMailAccountUrl(accountIds, accountId, window.location),
-      ),
+      );
+    },
     [accountIds, isToday],
   );
   // On Today, all accounts is Today across them, as one account keeps Today.

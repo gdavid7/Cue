@@ -1,5 +1,6 @@
 "use client";
 
+import { completeRumAction } from "@/utils/analytics/rum-actions";
 import {
   type EmailAttachmentMetadata,
   EMAIL_INLINE_IMAGE_MIME_TYPES,
@@ -1018,6 +1019,7 @@ function ComposeEmailFormContent({
     setBodyHtml(editorRef.current?.getValue().editableHtml ?? "");
     removeUnusedInlineAttachments(state.inlineContentIds);
     if (!editorInitialized.current) {
+      completeRumAction("compose_open");
       queueMicrotask(() => {
         editorInitialized.current = true;
       });

@@ -20,6 +20,7 @@ import {
   EmailAccountScopeProvider,
   useAccount,
 } from "@/providers/EmailAccountProvider";
+import { beginRumAction, cancelRumAction } from "@/utils/analytics/rum-actions";
 import { deleteDraftAction } from "@/utils/actions/mail";
 import { parseMailPath } from "@/utils/mail-url";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
@@ -116,6 +117,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     returnOpenReply();
     setIsExpanded(false);
     setPoppedOutReply(undefined);
+    beginRumAction("compose_open");
     openModal();
   }, [openModal, returnOpenReply, rememberOpener]);
   const popOutReply = useCallback(
@@ -130,6 +132,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   );
   // Keeps the popped-out reply so undo send can reopen it.
   const closeCompose = useCallback(() => {
+    cancelRumAction("compose_open");
     setIsExpanded(false);
     closeModal();
   }, [closeModal]);

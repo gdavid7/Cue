@@ -3,6 +3,7 @@
 import { addDays } from "date-fns/addDays";
 import { startOfDay } from "date-fns/startOfDay";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { markRumRowsShown } from "@/utils/analytics/rum-actions";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
@@ -90,6 +91,10 @@ export const ThreadList = memo(function ThreadList({
   const { emailAccountId } = useAccount();
   const isMobile = useIsMobile();
   const dayStart = useDayStart();
+  const hasRows = threads.length > 0;
+  useEffect(() => {
+    if (hasRows) markRumRowsShown();
+  }, [hasRows]);
   const sentThreadIds = useMemo(
     () =>
       showSentOpenStatus

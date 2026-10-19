@@ -15,6 +15,11 @@ export function hasLocalMailbox(
   return readAccountIds(cookieValue).includes(accountId);
 }
 
+/** In the browser: whether it holds a synced mailbox for the account. */
+export function isLocalMailboxMarked(accountId: string) {
+  return hasLocalMailbox(readCookie(), accountId);
+}
+
 export function markLocalMailboxSynced(accountId: string) {
   const accountIds = readAccountIds(readCookie());
   if (accountIds.includes(accountId)) return;

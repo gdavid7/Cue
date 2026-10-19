@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { ReplyAssist } from "@/components/email-list/reply-assist";
@@ -16,6 +16,11 @@ import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 import { contextWithText, useThreadContext } from "@/hooks/useThreadContext";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
+import {
+  beginRumAction,
+  cancelRumAction,
+  completeRumAction,
+} from "@/utils/analytics/rum-actions";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
 import { getRuleLabel } from "@/utils/rule/consts";
@@ -127,6 +132,25 @@ export function useReaderReplySuggestion({
     context: contextWithText(context.data),
   });
   const { suggestion } = replySuggestion;
+  const suggestionAsked = run && Boolean(latestId);
+  useEffect(() => {
+    if (suggestionAsked) beginRumAction("reply_suggestion", { key: latestId });
+    return () => cancelRumAction("reply_suggestion", latestId);
+  }, [suggestionAsked, latestId]);
+  const suggestionError = Boolean(replySuggestion.error);
+  useEffect(() => {
+    if (suggestionError) {
+      completeRumAction("reply_suggestion", {
+        key: latestId,
+        outcome: "error",
+      });
+    } else if (suggestion) {
+      completeRumAction("reply_suggestion", {
+        key: latestId,
+        outcome: suggestion.status === "suggested" ? "ok" : "empty",
+      });
+    }
+  }, [suggestion, suggestionError, latestId]);
   // Gathering the context is the first part of checking the user's mail.
   const phase =
     enabled && run && !contextSettled ? "checking-mail" : replySuggestion.phase;
