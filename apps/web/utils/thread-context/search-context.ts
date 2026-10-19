@@ -83,12 +83,11 @@ export async function searchContext({
   now?: Date;
 }): Promise<{ results: ContextSearchResult[] }> {
   // A question's own words ("when", "my") say little about its mail; the
-  // searches' words find and rank it.
-  const focusText = searches?.length
-    ? searches.flatMap(searchWords).join(" ")
-    : query;
+  // searches' words rank it, and its own when the searches are all operators.
+  const searchText = searches?.flatMap(searchWords).join(" ").trim();
+  const focusText = searchText || query;
   const terms = queryTerms(focusText);
-  if (!terms.length) return { results: [] };
+  if (!terms.length && !searches?.length) return { results: [] };
 
   const thread = threadId
     ? await emailProvider.getThread(threadId).catch((error) => {
