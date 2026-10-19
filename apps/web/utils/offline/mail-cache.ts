@@ -8,6 +8,8 @@ export const CLEAR_OFFLINE_MAIL_ACCOUNT =
   "inbox-zero:clear-offline-mail-account";
 export const SAVE_OFFLINE_MAIL = "inbox-zero:save-offline-mail";
 export const SKIP_WAITING = "SKIP_WAITING";
+/** Marks the worker's own refresh of a saved shell, which needs no inbox rows. */
+export const OFFLINE_MAIL_SAVE_HEADER = "x-cue-offline-save";
 
 type WaitUntil = (promise: Promise<unknown>) => void;
 
@@ -94,21 +96,29 @@ export function createOfflineMailCache({
         contentType.includes(isDocument ? "text/html" : "application/json") &&
         startedAtGeneration === generation
       ) {
-        // Headers can arrive while the streamed HTML stalls indefinitely.
-        // Keep the timeout active until the document is actually readable.
-        await response.clone().arrayBuffer();
-        const copy = response.clone();
+        // Headers can arrive while the streamed HTML stalls indefinitely, so
+        // the timeout holds until the body's first bytes show it is readable.
+        // The page then reads the rest as it streams, as it would without
+        // this worker: the server streams the inbox's first rows last, and
+        // waiting for the whole document would hold back the first paint and
+        // every script it loads. The saved copy waits for the whole body.
+        const { saved: whole } = await readableCopy(response);
         waitUntil(
-          queueWrite(async (cache) => {
-            // Logout can happen while opening Cache Storage or writing another entry.
-            if (
-              startedAtGeneration === generation &&
-              ((!isDocument && key !== `${origin}${ACCOUNT_PATH}`) ||
-                startedAccountsGeneration === accountsGeneration)
-            ) {
-              await cache.put(key, copy);
-            }
-          }),
+          whole
+            .then((saved) =>
+              queueWrite(async (cache) => {
+                // Logout can happen while opening Cache Storage or writing another entry.
+                if (
+                  startedAtGeneration === generation &&
+                  ((!isDocument && key !== `${origin}${ACCOUNT_PATH}`) ||
+                    startedAccountsGeneration === accountsGeneration)
+                ) {
+                  await cache.put(key, saved);
+                }
+              }),
+            )
+            // A body that fails after its first bytes is not saved.
+            .catch(() => {}),
         );
       }
       return response;
@@ -161,7 +171,7 @@ export function createOfflineMailCache({
       const response = await handle(
         new Request(url, {
           credentials: "include",
-          headers: { Accept: "text/html" },
+          headers: { Accept: "text/html", [OFFLINE_MAIL_SAVE_HEADER]: "1" },
         }),
         trackWork,
       );
@@ -268,4 +278,30 @@ export function clearsOfflineMailOnGet(request: Request, origin: string) {
         url.pathname,
       ))
   );
+}
+
+/**
+ * Resolves once the response's body has started, with a promise of a complete
+ * copy to save; the response itself is left for the page to stream.
+ */
+async function readableCopy(
+  response: Response,
+): Promise<{ saved: Promise<Response> }> {
+  const copy = response.clone();
+  const reader = copy.body?.getReader();
+  if (!reader) return { saved: Promise.resolve(copy) };
+  const first = await reader.read();
+  const rest = (async () => {
+    const chunks: Uint8Array[] = first.value ? [first.value] : [];
+    for (let next = first; !next.done; ) {
+      next = await reader.read();
+      if (next.value) chunks.push(next.value);
+    }
+    return new Response(new Blob(chunks as BlobPart[]), {
+      status: copy.status,
+      statusText: copy.statusText,
+      headers: copy.headers,
+    });
+  })();
+  return { saved: rest };
 }

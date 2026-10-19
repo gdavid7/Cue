@@ -8,6 +8,7 @@ import {
   bodyObservationSchema,
   providerChangeSchema,
 } from "@inboxzero/mail-core/sync";
+import { applyMetadataPatch } from "@inboxzero/mail-core/effective-state";
 import type { ParsedMessage } from "@/utils/types";
 
 describe("parsedMessageMetadata", () => {
@@ -112,6 +113,44 @@ describe("parsedMessageMetadata", () => {
     } as ParsedMessage);
     expect(metadata.roles).toEqual([]);
     expect(metadata.read).toBe(false);
+  });
+});
+
+describe("parsedMessagePatch", () => {
+  it("leaves a stored attachment flag alone when reading metadata only", () => {
+    const message = {
+      id: "m9",
+      threadId: "t9",
+      historyId: "2",
+      date: "2026-01-01T00:00:00.000Z",
+      labelIds: ["INBOX"],
+      headers: { from: "ada@example.com", to: "me@example.com", date: "" },
+      inline: [],
+    } as unknown as ParsedMessage;
+    const stored = parsedMessageMetadata({
+      ...message,
+      hasAttachment: true,
+    } as ParsedMessage);
+
+    const metadataRead = parsedMessagePatch("acc-1", "google", message, {
+      format: "metadata",
+    });
+    const fullRead = parsedMessagePatch("acc-1", "google", message);
+    if (
+      metadataRead.kind !== "message_patch" ||
+      fullRead.kind !== "message_patch"
+    )
+      throw new Error("expected message patches");
+
+    expect(metadataRead.fields).not.toHaveProperty("hasAttachments");
+    expect(applyMetadataPatch(stored, metadataRead.fields).hasAttachments).toBe(
+      true,
+    );
+    // A whole message is authoritative either way.
+    expect(applyMetadataPatch(stored, fullRead.fields).hasAttachments).toBe(
+      false,
+    );
+    expect(() => providerChangeSchema.parse(metadataRead)).not.toThrow();
   });
 });
 
