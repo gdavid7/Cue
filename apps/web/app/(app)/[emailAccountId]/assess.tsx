@@ -9,6 +9,7 @@ import {
 } from "@/utils/actions/assess";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOrgAccess } from "@/hooks/useOrgAccess";
+import { scheduleAfterPageLoad } from "@/utils/schedule-after-page-load";
 
 export function AssessUser() {
   const { emailAccountId, provider } = useAccount();
@@ -36,8 +37,15 @@ export function AssessUser() {
       }
     }
 
-    assess();
-    executeAnalyzeWritingStyle();
+    // Both read Gmail and queue ahead of navigations; they wait for the page
+    // to settle so the first load and the first sync go first.
+    return scheduleAfterPageLoad(
+      () => {
+        assess();
+        executeAnalyzeWritingStyle();
+      },
+      { fallbackDelay: 5000, idleTimeout: 8000 },
+    );
   }, [emailAccountId, isAccountOwner]);
 
   return null;
