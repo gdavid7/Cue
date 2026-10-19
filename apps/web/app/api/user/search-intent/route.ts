@@ -13,7 +13,9 @@ export type GetSearchIntentResponse = Awaited<
   ReturnType<typeof interpretSearch>
 >;
 
-export const maxDuration = 15;
+// Shares the 30s group: on the Hobby plan each distinct route config is a
+// separate function, and a deployment may hold at most 12.
+export const maxDuration = 30;
 
 export const GET = withEmailProvider(
   "user/search-intent",
