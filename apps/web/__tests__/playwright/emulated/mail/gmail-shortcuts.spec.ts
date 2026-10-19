@@ -28,6 +28,8 @@ test("archives the selected conversation with the right bracket and restores it"
 
   await page.keyboard.press("z");
   await expect(row).toBeVisible();
+  // The next test reloads the mailbox; the restore has to have landed first.
+  await expectMutation(page, emailAccountId, "unarchive");
 });
 
 test("marks the selected conversation important with = and not important with -", async ({
