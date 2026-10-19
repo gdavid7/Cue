@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { MAIL_IPC_PROTOCOL_VERSION } from "@inboxzero/mail-core/protocol/mail-ipc";
 import { dispatchMailIpc } from "./ipc";
 
 describe("dispatchMailIpc", () => {
@@ -19,5 +20,20 @@ describe("dispatchMailIpc", () => {
       payload: { accountId: "acc-1" },
     });
     expect(result).toMatchObject({ status: "invalid" });
+  });
+
+  it("hands a confirmed draft deletion to the desktop engine", async () => {
+    const forgetDeletedDrafts = vi.fn(async () => {});
+    const result = await dispatchMailIpc({ forgetDeletedDrafts } as never, {
+      protocolVersion: MAIL_IPC_PROTOCOL_VERSION,
+      requestId: "req-1",
+      method: "forgetDeletedDrafts",
+      payload: { accountId: "acc-1", messageIds: ["draft-1"] },
+    });
+    expect(result).toEqual({ status: "ok", result: null });
+    expect(forgetDeletedDrafts).toHaveBeenCalledWith({
+      accountId: "acc-1",
+      messageIds: ["draft-1"],
+    });
   });
 });

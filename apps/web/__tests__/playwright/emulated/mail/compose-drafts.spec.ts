@@ -95,6 +95,8 @@ test("saves a closed new message with attachments in Drafts and discards it from
     .toHaveLength(0);
   await page.reload();
   await expect(conversations).toBeVisible();
+  // No sync first: the discard removed the draft from the local mailbox, so
+  // the reloaded page must not show it while sync is still catching up.
   await expect(
     conversationWithSubject(page, conversations, "Mailbox draft example"),
   ).toHaveCount(0);
