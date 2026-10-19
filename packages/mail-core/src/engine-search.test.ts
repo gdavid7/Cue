@@ -36,7 +36,10 @@ describe("typed searches in the engine", () => {
         { kind: "mailbox", mailbox: "all" },
       ],
     });
-    expect(view.getSnapshot().data?.providerSearch).toBe("complete");
+    expect(view.getSnapshot().data?.providerSearch).toEqual([
+      { accountId: "a", state: "complete", answered: true },
+      { accountId: "b", state: "complete", answered: true },
+    ]);
     view.close();
     await harness.engine.close();
   });
@@ -135,17 +138,145 @@ describe("typed searches in the engine", () => {
   });
 
   it.each([
+    // Quota held it back: Gmail is busy, not gone.
+    [{ status: "paused", retryAfterMs: 60_000, reason: "throttled" }, "busy"],
     [
       { status: "paused", retryAfterMs: 60_000, reason: "unavailable" },
       "unavailable",
     ],
+    [{ status: "blocked_auth" }, "reconnect"],
     [{ status: "unsupported" }, "unsupported"],
   ] as const)("tells the view when the provider answers %j", async (answer, state) => {
     const harness = searchHarness({ search: () => answer });
     const view = harness.engine.observeMailbox(searchQuery("larger:5M"));
     await harness.run();
 
-    expect(view.getSnapshot().data?.providerSearch).toBe(state);
+    expect(view.getSnapshot().data?.providerSearch).toEqual([
+      { accountId: "a", state, answered: false },
+    ]);
+    view.close();
+    await harness.engine.close();
+  });
+
+  it("remembers that the provider answered when a later page is held back", async () => {
+    let calls = 0;
+    const harness = searchHarness({
+      search: () => {
+        calls += 1;
+        if (calls > 1)
+          return {
+            status: "paused",
+            retryAfterMs: 60_000,
+            reason: "throttled",
+          };
+        return {
+          status: "ok",
+          value: {
+            matches: [{ accountId: "a", messageId: "m1" }],
+            nextPage: "page-2",
+            semantics: "exact",
+          },
+        };
+      },
+    });
+    const view = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await harness.run();
+    await harness.run();
+
+    expect(view.getSnapshot().data?.providerSearch).toEqual([
+      { accountId: "a", state: "busy", answered: true },
+    ]);
+    view.close();
+    await harness.engine.close();
+  });
+
+  it("asks the provider again for a search committed again after a minute", async () => {
+    let now = 1_000_000;
+    const harness = searchHarness({
+      search: () => exact(["m1"]),
+      nowMs: () => now,
+    });
+    const first = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await harness.run();
+    first.close();
+    now += 10_000;
+    const soon = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await harness.run();
+    soon.close();
+    expect(harness.searches).toHaveLength(1);
+
+    now += 61_000;
+    const later = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await harness.run();
+    expect(harness.searches).toHaveLength(2);
+    later.close();
+    await harness.engine.close();
+  });
+
+  it("searches each account only with the query written for its provider", async () => {
+    const harness = searchHarness({
+      search: (accountId) => exact([`${accountId}-1`], accountId),
+    });
+    const query: ConversationQuery = {
+      ...searchQuery("x", { accountIds: ["gmail", "outlook"] }),
+      predicate: {
+        kind: "any",
+        predicates: [
+          {
+            kind: "search",
+            query: "larger:5M",
+            local: FALSE,
+            possible: TRUE,
+            accountIds: ["gmail"],
+          },
+          {
+            kind: "search",
+            query: "size>5MB",
+            local: FALSE,
+            possible: TRUE,
+            accountIds: ["outlook"],
+          },
+        ],
+      },
+    };
+    const view = harness.engine.observeMailbox(query);
+    await harness.run();
+
+    expect(harness.searchedBy).toEqual([
+      ["gmail", "larger:5M"],
+      ["outlook", "size>5MB"],
+    ]);
+    expect(harness.lastRead()).toEqual({
+      kind: "any",
+      predicates: [
+        {
+          kind: "all",
+          predicates: [
+            { kind: "account", ids: ["gmail"] },
+            {
+              kind: "any",
+              predicates: [
+                FALSE,
+                { kind: "message", accountId: "gmail", ids: ["gmail-1"] },
+              ],
+            },
+          ],
+        },
+        {
+          kind: "all",
+          predicates: [
+            { kind: "account", ids: ["outlook"] },
+            {
+              kind: "any",
+              predicates: [
+                FALSE,
+                { kind: "message", accountId: "outlook", ids: ["outlook-1"] },
+              ],
+            },
+          ],
+        },
+      ],
+    });
     view.close();
     await harness.engine.close();
   });
@@ -199,7 +330,9 @@ function exact(
 
 function searchHarness(input: {
   search: (accountId: string) => Awaited<ReturnType<MailboxSource["search"]>>;
+  nowMs?: () => number;
 }) {
+  const searchedBy: Array<[string, string]> = [];
   const jobs: ClaimedWork[] = [];
   const reads: MailPredicate[] = [];
   const searches: string[] = [];
@@ -262,7 +395,10 @@ function searchHarness(input: {
       predicate: MailPredicate;
       session: { accountId: string };
     }) {
-      if (predicate.kind === "search") searches.push(predicate.query);
+      if (predicate.kind === "search") {
+        searches.push(predicate.query);
+        searchedBy.push([session.accountId, predicate.query]);
+      }
       return input.search(session.accountId);
     },
   } as unknown as MailboxSource;
@@ -277,11 +413,12 @@ function searchHarness(input: {
         return { status: "uncertain", receiptId: null };
       },
     },
-    runtime: createHostRuntime(),
+    runtime: createHostRuntime(input.nowMs ? { nowMs: input.nowMs } : {}),
   });
   return {
     engine,
     searches,
+    searchedBy,
     lastRead: () => reads.at(-1),
     async run() {
       await engine.runUntil(Date.now() + 50);

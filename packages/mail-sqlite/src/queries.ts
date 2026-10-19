@@ -136,8 +136,20 @@ export function compilePredicate(
       return compileTextPredicate(predicate, search, alias);
     // The engine adds the provider's matches before a view reads; anything
     // else answers from the store alone.
-    case "search":
-      return compilePredicate(predicate.local, search, alias);
+    case "search": {
+      const local = compilePredicate(predicate.local, search, alias);
+      if (!predicate.accountIds) return local;
+      return {
+        sql: `(${alias}.account_id IN (${predicate.accountIds.map(() => "?").join(",")}) AND ${local.sql})`,
+        bindings: [...predicate.accountIds, ...local.bindings],
+      };
+    }
+    case "account":
+      if (!predicate.ids.length) return { sql: "0=1", bindings: [] };
+      return {
+        sql: `${alias}.account_id IN (${predicate.ids.map(() => "?").join(",")})`,
+        bindings: predicate.ids,
+      };
     default: {
       const exhaustive: never = predicate;
       return exhaustive;
@@ -341,11 +353,20 @@ function compileUnindexedText(
 
 // A typed search read here stands for its local part, which is spliced in.
 function topLevelClauses(predicate: MailPredicate): MailPredicate[] {
-  if (predicate.kind === "search") return topLevelClauses(predicate.local);
+  if (predicate.kind === "search") return searchClauses(predicate);
   if (predicate.kind !== "all") return [predicate];
   return predicate.predicates.flatMap((clause) =>
-    clause.kind === "search" ? topLevelClauses(clause.local) : [clause],
+    clause.kind === "search" ? searchClauses(clause) : [clause],
   );
+}
+
+function searchClauses(
+  search: Extract<MailPredicate, { kind: "search" }>,
+): MailPredicate[] {
+  const local = topLevelClauses(search.local);
+  return search.accountIds
+    ? [{ kind: "account", ids: search.accountIds }, ...local]
+    : local;
 }
 
 function compileMailboxPredicate(

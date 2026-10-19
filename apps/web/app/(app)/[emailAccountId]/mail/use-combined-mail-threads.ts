@@ -13,6 +13,7 @@ import {
 import type { LabelsResponse } from "@/app/api/labels/route";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import { searchQueryForAccounts } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
 const EMPTY_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
@@ -56,6 +57,15 @@ export function useCombinedMailThreads({
         : undefined,
     [accountIds, labelNames, labelsByAccount],
   );
+  // Each account reads the search in its own provider's syntax.
+  const searchPredicate = useMemo(
+    () =>
+      searchQuery
+        ? (searchQueryForAccounts(searchQuery, { now: new Date() }, accounts) ??
+          undefined)
+        : undefined,
+    [searchQuery, accounts],
+  );
   const query = useMemo<ThreadsQuery>(() => {
     if (searchQuery) return { q: searchQuery };
     if (labelNames?.length) {
@@ -69,7 +79,7 @@ export function useCombinedMailThreads({
     accountIds: accountIds.length ? accountIds : [emailAccountId],
     accounts: accountsById,
     query,
-    predicate: searchQuery ? undefined : predicate,
+    predicate: searchQuery ? searchPredicate : predicate,
     providerSearch,
     enabled,
   });

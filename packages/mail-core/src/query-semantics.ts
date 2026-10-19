@@ -83,7 +83,14 @@ export function messageMatchesPredicate(
         predicate.match,
       );
     case "search":
+      if (
+        predicate.accountIds &&
+        !predicate.accountIds.includes(message.accountId)
+      )
+        return false;
       return messageMatchesPredicate(message, predicate.local);
+    case "account":
+      return predicate.ids.includes(message.accountId);
     default: {
       const exhaustive: never = predicate;
       return exhaustive;
@@ -236,12 +243,32 @@ export function resolveSearchPredicates(
               ]
             : [],
       );
-      if (!messages.length) return local;
-      const matched = chunkedAny(messages);
-      const possible = isAlwaysTrue(predicate.possible)
-        ? matched
-        : { kind: "all" as const, predicates: [predicate.possible, matched] };
-      return { kind: "any", predicates: [local, possible] };
+      const resolved: MailPredicate = messages.length
+        ? {
+            kind: "any",
+            predicates: [
+              local,
+              isAlwaysTrue(predicate.possible)
+                ? chunkedAny(messages)
+                : {
+                    kind: "all",
+                    predicates: [predicate.possible, chunkedAny(messages)],
+                  },
+            ],
+          }
+        : local;
+      if (!predicate.accountIds) return resolved;
+      const accounts: MailPredicate = {
+        kind: "account",
+        ids: predicate.accountIds,
+      };
+      return {
+        kind: "all",
+        predicates:
+          resolved.kind === "all"
+            ? [accounts, ...resolved.predicates]
+            : [accounts, resolved],
+      };
     }
     case "all":
       return {

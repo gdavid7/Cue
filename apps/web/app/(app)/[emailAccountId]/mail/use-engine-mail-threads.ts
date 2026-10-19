@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type {
   ConversationSummary,
+  MailboxView,
   MailPredicate,
 } from "@inboxzero/mail-core/queries";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
@@ -156,6 +157,15 @@ export function useEngineMailThreads({
       mailbox.data?.providerSearch,
       conversationQuery.predicate,
     ),
+    /**
+     * A committed search the provider hasn't answered yet, so an empty list
+     * isn't its answer.
+     */
+    providerSearchPending: Boolean(
+      mailbox.data?.providerSearch?.some(
+        (account) => account.state === "searching" && !account.answered,
+      ),
+    ),
     isLoading: engineStarting || (enabled && mailbox.status === "loading"),
     error: mailboxQueryError(mailbox.error),
     hasMore: mailbox.canLoadMore,
@@ -242,14 +252,43 @@ async function readFailedAccountIds(
   });
 }
 
+export type ProviderSearchNotice = {
+  kind: "busy" | "unavailable" | "reconnect" | "unsupported";
+  accountId: string;
+  /** The provider answered part of the search: a note, not a warning. */
+  partial: boolean;
+};
+
+// Most severe first.
+const NOTICE_ORDER: ProviderSearchNotice["kind"][] = [
+  "reconnect",
+  "unavailable",
+  "busy",
+  "unsupported",
+];
+
 function providerSearchNotice(
-  state: "searching" | "complete" | "unavailable" | "unsupported" | undefined,
+  accounts: MailboxView["providerSearch"],
   predicate: MailPredicate,
-): "unavailable" | "unsupported" | null {
-  if (state === "unavailable") return "unavailable";
-  if (state === "unsupported" && searchNeedsProvider(predicate))
-    return "unsupported";
-  return null;
+): ProviderSearchNotice | null {
+  let notice: ProviderSearchNotice | null = null;
+  for (const account of accounts ?? []) {
+    const kind = account.state;
+    if (kind === "searching" || kind === "complete") continue;
+    // Outlook not running a search only matters when local mail can't
+    // answer any of it.
+    if (kind === "unsupported" && !searchNeedsProvider(predicate)) continue;
+    if (
+      !notice ||
+      NOTICE_ORDER.indexOf(kind) < NOTICE_ORDER.indexOf(notice.kind)
+    )
+      notice = {
+        kind,
+        accountId: account.accountId,
+        partial: account.answered,
+      };
+  }
+  return notice;
 }
 
 function mailboxQueryError(

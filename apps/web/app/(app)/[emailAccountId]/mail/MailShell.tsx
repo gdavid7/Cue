@@ -161,6 +161,10 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { useTeamCommentsAvailable } from "@/components/team-comments/use-team-comments-available";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import {
+  SearchProviderNotice,
+  searchOnEnterHint,
+} from "@/app/(app)/[emailAccountId]/mail/SearchProviderNotice";
 
 // Module-level so an "empty" reader doesn't hand children a new array each render.
 const NO_MESSAGES: ThreadMessage[] = [];
@@ -722,12 +726,19 @@ export function MailShell() {
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
   const { data: searchAnswer } = useSearchAnswer(emailAccountId, searchParam);
   const searchFoundNothing = Boolean(
-    searchQuery && hasProviderResponse && !threads.length,
+    searchQuery &&
+      hasProviderResponse &&
+      !threads.length &&
+      // A committed search the provider is still running hasn't found
+      // nothing yet.
+      !providerState.providerSearchPending,
   );
   const isSearchCommitted = searchCommitted;
   let emptySearchMessage: string | undefined;
   if (searchFoundNothing)
-    emptySearchMessage = `No emails match “${searchQuery}”.`;
+    emptySearchMessage = searchCommitted
+      ? `No emails match “${searchQuery}”.`
+      : searchOnEnterHint(isAllAccounts ? null : provider);
   // A committed search's card above speaks for it: the answer leads to the
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
@@ -2037,15 +2048,18 @@ export function MailShell() {
                 />
               ) : null}
               {searchQuery && providerState.providerSearchNotice ? (
-                <p
-                  role="status"
-                  className="px-5 pt-3 text-muted-foreground text-xs"
-                >
-                  {providerSearchNoticeText(
-                    providerState.providerSearchNotice,
-                    isAllAccounts ? null : provider,
-                  )}
-                </p>
+                <SearchProviderNotice
+                  notice={providerState.providerSearchNotice}
+                  provider={
+                    isAllAccounts
+                      ? combinedAccounts.find(
+                          (account) =>
+                            account.id ===
+                            providerState.providerSearchNotice?.accountId,
+                        )?.provider
+                      : provider
+                  }
+                />
               ) : null}
               {!isAllAccounts && accountThreadState.cueSortingUnavailable ? (
                 <p
@@ -2351,16 +2365,4 @@ function getListPlaceholderMessage({
   if (isAllAccounts) return allInboxesFirstSyncMessage ?? "Loading your mail…";
   if (isFirstSync) return "Getting your last 3 days of mail first…";
   return `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
-}
-
-function providerSearchNoticeText(
-  notice: "unavailable" | "unsupported",
-  provider: string | null,
-) {
-  let name: string | null = null;
-  if (isGoogleProvider(provider)) name = "Gmail";
-  else if (isMicrosoftProvider(provider)) name = "Outlook";
-  if (notice === "unavailable")
-    return `Can't reach ${name ?? "your mail provider"}; showing mail on this device.`;
-  return `${name ?? "Your mail provider"} can't run this search; showing mail on this device.`;
 }

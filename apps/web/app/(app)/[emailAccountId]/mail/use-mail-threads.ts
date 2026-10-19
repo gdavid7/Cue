@@ -8,10 +8,9 @@ import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
 import { useLabels } from "@/hooks/useLabels";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
-  isGoogleProvider,
-  isMicrosoftProvider,
-} from "@/utils/email/provider-types";
-import type { SearchQueryContext } from "@/utils/mail-search/search-query-predicate";
+  type SearchQueryContext,
+  searchProvider,
+} from "@/utils/mail-search/search-query-predicate";
 import {
   threadsQueryToPredicate,
   threadsQueryUsesCue,
@@ -46,10 +45,7 @@ export function useMailThreads({
       query.q
         ? {
             labels: userLabels,
-            provider:
-              isGoogleProvider(provider) || isMicrosoftProvider(provider)
-                ? provider
-                : undefined,
+            provider: searchProvider(provider),
           }
         : undefined,
     [query.q, userLabels, provider],

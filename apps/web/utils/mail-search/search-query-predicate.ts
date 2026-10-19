@@ -60,6 +60,8 @@ const FALSE: MailPredicate = { kind: "any", predicates: [] };
 export function searchQueryToPredicate(
   query: string,
   context: SearchQueryContext,
+  /** Limits the search to these accounts, all of `context.provider`. */
+  accountIds?: string[],
 ): MailPredicate | null {
   const trimmed = query.trim();
   if (!trimmed) return null;
@@ -70,12 +72,53 @@ export function searchQueryToPredicate(
     query: trimmed,
     local: compileSearchNode(ast, context),
     possible: compile(ast, context, "over", true),
+    ...(accountIds ? { accountIds } : {}),
   };
   if (reachesSpamOrTrash(ast, context.provider)) return search;
   return {
     kind: "all",
     predicates: [search, { kind: "mailbox", mailbox: "all" }],
   };
+}
+
+/**
+ * A search across accounts, each read in its own provider's syntax: a Gmail
+ * account never filters by Outlook's KQL, and each provider's own spam and
+ * trash tokens widen only its accounts. Accounts sharing a provider share one
+ * search, so a view of one provider's accounts reads like a single account.
+ */
+export function searchQueryForAccounts(
+  query: string,
+  context: Omit<SearchQueryContext, "provider" | "labels">,
+  accounts: Array<{ id: string; provider: string }>,
+): MailPredicate | null {
+  const groups = new Map<SearchQueryContext["provider"], string[]>();
+  for (const account of accounts) {
+    const provider = searchProvider(account.provider);
+    groups.set(provider, [...(groups.get(provider) ?? []), account.id]);
+  }
+  if (groups.size <= 1) {
+    const [provider] = groups.keys();
+    return searchQueryToPredicate(query, { ...context, provider });
+  }
+  const predicates = [...groups].flatMap(([provider, accountIds]) => {
+    const predicate = searchQueryToPredicate(
+      query,
+      { ...context, provider },
+      accountIds,
+    );
+    return predicate ? [predicate] : [];
+  });
+  return predicates.length ? anyOf(predicates) : null;
+}
+
+/** The syntax an account's provider reads, when it is one Cue knows. */
+export function searchProvider(
+  provider: string | null | undefined,
+): SearchQueryContext["provider"] {
+  return provider === "google" || provider === "microsoft"
+    ? provider
+    : undefined;
 }
 
 /**
@@ -143,9 +186,17 @@ export function gmailTokenToPredicate(id: string): MailPredicate {
 // negation swaps them so each stays what it is.
 type Bound = "under" | "over";
 
-// `looseText` leaves words to the provider too: its word matching (stems,
-// attachments, bodies the store never got) differs from the store's, so a
-// bound that must not drop the provider's matches can't judge them.
+// Conditions the provider may answer differently from the store: words (it
+// stems, and reads bodies and attachments the store may not hold),
+// attachments (it counts some inline parts the store doesn't), and snoozing
+// (Gmail's own snooze, which Cue's isn't).
+function providerJudges(leaf: MailPredicate) {
+  if (leaf.kind === "text" || leaf.kind === "has_attachment") return true;
+  return leaf.kind === "mailbox" && leaf.mailbox === "snoozed";
+}
+
+// `looseText` leaves what providerJudges names to the provider, for a bound
+// that must not drop the provider's own matches.
 function compile(
   node: SearchNode,
   context: SearchQueryContext,
@@ -171,7 +222,7 @@ function compile(
     }
     default: {
       const leaf = leafPredicate(node, context);
-      if (leaf && !(looseText && leaf.kind === "text")) return leaf;
+      if (leaf && !(looseText && providerJudges(leaf))) return leaf;
       return bound === "under" ? FALSE : TRUE;
     }
   }

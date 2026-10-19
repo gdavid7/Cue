@@ -80,6 +80,11 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       query: z.string().min(1).max(4096),
       local: mailPredicateSchema,
       possible: mailPredicateSchema,
+      accountIds: z.array(accountIdSchema).min(1).max(50).optional(),
+    }),
+    z.object({
+      kind: z.literal("account"),
+      ids: z.array(accountIdSchema).max(50),
     }),
   ]),
 );
@@ -128,7 +133,14 @@ export type MailPredicate =
       query: string;
       local: MailPredicate;
       possible: MailPredicate;
-    };
+      /**
+       * The accounts the query is written for, when a view across accounts
+       * reads it differently per provider. Left out, every account's.
+       */
+      accountIds?: string[];
+    }
+  /** Mail of these accounts. */
+  | { kind: "account"; ids: string[] };
 
 export const conversationQuerySchema = z.object({
   accountIds: z.array(accountIdSchema).min(1).max(50),
@@ -184,11 +196,27 @@ export const mailboxViewSchema = z.object({
   coverage: z.array(coverageSchema),
   connection: z.enum(["ready", "offline", "blocked_auth"]).optional(),
   /**
-   * For a view with a typed search: whether the provider's search for it is
-   * still running, answered, can't be reached, or can't run it at all.
+   * For a view with a typed search, per account: whether the provider's
+   * search is still running, answered, held back by quota, can't be reached,
+   * needs the account reconnected, or can't run the query at all.
    */
   providerSearch: z
-    .enum(["searching", "complete", "unavailable", "unsupported"])
+    .array(
+      z.object({
+        accountId: accountIdSchema,
+        state: z.enum([
+          "searching",
+          "complete",
+          "busy",
+          "unavailable",
+          "reconnect",
+          "unsupported",
+        ]),
+        /** Whether the provider has answered any of the search yet. */
+        answered: z.boolean(),
+      }),
+    )
+    .max(50)
     .optional(),
 });
 export type MailboxView = z.infer<typeof mailboxViewSchema>;

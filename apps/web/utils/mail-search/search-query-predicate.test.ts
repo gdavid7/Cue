@@ -15,6 +15,7 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/outlook-search-query";
 import { resolveSearchPredicates } from "@inboxzero/mail-core/query-semantics";
 import {
+  searchQueryForAccounts,
   searchQueryToPredicate,
   searchReachesSpamOrTrash,
 } from "@/utils/mail-search/search-query-predicate";
@@ -310,6 +311,14 @@ describe("the provider's matches", () => {
     ]);
   });
 
+  it.each([
+    // Gmail counts attachments the store may not, and has its own snooze.
+    "has:attachment larger:5M",
+    "is:snoozed larger:5M",
+  ])("keeps a match on %s, which the store can't judge either", async (query) => {
+    expect(await localMatches(query, "google", ["bob"])).toEqual(["bob"]);
+  });
+
   it("still leaves spam and trash out", async () => {
     expect(await localMatches("larger:5M", "google", ["spam"])).toEqual([]);
   });
@@ -342,6 +351,97 @@ describe("searchReachesSpamOrTrash", () => {
       "amy",
       "sent",
     ]);
+  });
+});
+
+describe("searching across a Gmail and an Outlook account", () => {
+  const ACCOUNTS = [
+    { id: "gmail", provider: "google" },
+    { id: "outlook", provider: "microsoft" },
+  ];
+  let mixed: Awaited<ReturnType<typeof createSqliteMailStore>>;
+
+  beforeAll(async () => {
+    mixed = await createSqliteMailStore(createNodeSqliteDriver());
+    for (const account of ACCOUNTS) {
+      await mixed.ensureAccount({
+        accountId: account.id,
+        provider: account.provider as "google" | "microsoft",
+        generation: "g1",
+      });
+      const message = (
+        id: string,
+        fields: Partial<MessageMetadata>,
+      ): Extract<ProviderChange, { kind: "message_patch" }> => ({
+        ...messagePatch({ id, ...fields }),
+        key: { accountId: account.id, messageId: id },
+      });
+      await mixed.applySyncPage({
+        ownerId: "owner",
+        page: {
+          session: { accountId: account.id, generation: "g1" },
+          requestId: "seed",
+          from: { streamId: "primary", generation: "g1", checkpoint: null },
+          to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+          changes: [
+            message(`${account.id}-inbox`, {
+              subject: "Dinner menu",
+              roles: ["inbox"],
+              hasAttachments: true,
+              receivedAtMs: 2,
+            }),
+            message(`${account.id}-junk`, {
+              subject: "Dinner prize",
+              roles: ["spam"],
+              receivedAtMs: 1,
+            }),
+          ],
+          requiredHydration: [],
+          roundComplete: true,
+        },
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await mixed.close();
+  });
+
+  async function mixedMatches(query: string) {
+    const predicate = searchQueryForAccounts(query, { now: NOW }, ACCOUNTS);
+    if (!predicate) throw new Error("No predicate");
+    const { view } = await mixed.readMailboxView({
+      accountIds: ACCOUNTS.map((account) => account.id),
+      predicate,
+      order: "newest_first",
+      pageSize: 50,
+      after: null,
+    });
+    return view.conversations.map((row) => row.key.conversationId).sort();
+  }
+
+  it.each<[string, string[]]>([
+    ["dinner", ["gmail-inbox", "outlook-inbox"]],
+    ["has:attachment", ["gmail-inbox", "outlook-inbox"]],
+    // Outlook's KQL filters Outlook mail; to Gmail it is just words.
+    ["hasattachments:true", ["outlook-inbox"]],
+    // Each provider's spam tokens reach only its own spam.
+    ["in:junk dinner", ["outlook-junk"]],
+    ["in:spam dinner", ["gmail-junk", "outlook-junk"]],
+    ["in:anywhere dinner", ["gmail-inbox", "gmail-junk", "outlook-inbox"]],
+  ])("%s", async (query, expected) => {
+    expect(await mixedMatches(query)).toEqual(expected);
+  });
+
+  it("reads one provider's accounts as one search", () => {
+    expect(
+      searchQueryForAccounts("dinner", { now: NOW }, [
+        { id: "a", provider: "google" },
+        { id: "b", provider: "google" },
+      ]),
+    ).toEqual(
+      searchQueryToPredicate("dinner", { now: NOW, provider: "google" }),
+    );
   });
 });
 
