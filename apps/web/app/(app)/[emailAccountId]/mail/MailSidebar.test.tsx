@@ -16,6 +16,10 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+vi.mock("@/utils/mail-engine/MailEngineHost", () => ({
+  useMailEngineStarting: () => false,
+}));
+
 vi.mock("@/components/ui/sidebar", () => ({
   SidebarTrigger: () => null,
 }));

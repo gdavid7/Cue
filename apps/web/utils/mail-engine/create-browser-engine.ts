@@ -41,6 +41,14 @@ let prewarmed: {
   worker: Worker;
   timer: ReturnType<typeof setTimeout>;
 } | null = null;
+// The worker asks for SQLite's wasm only once its own scripts have loaded and
+// run. Asked for here as the worker is created, the two download together,
+// and the worker's own request is answered from the cache.
+const SQLITE_WASM_URL = new URL(
+  "../../node_modules/@sqlite.org/sqlite-wasm/dist/sqlite3.wasm",
+  import.meta.url,
+);
+let sqliteWasmRequested = false;
 
 export type BrowserEngineHooks = {
   /** Called when a corrupt mailbox is being rebuilt during start. */
@@ -373,7 +381,14 @@ function takePrewarmedWorker() {
 }
 
 function createEngineWorker() {
-  return new Worker(new URL("./engine-worker.ts", import.meta.url), {
+  const worker = new Worker(new URL("./engine-worker.ts", import.meta.url), {
     type: "module",
   });
+  if (!sqliteWasmRequested) {
+    sqliteWasmRequested = true;
+    fetch(SQLITE_WASM_URL)
+      .then((response) => response.arrayBuffer())
+      .catch(() => undefined);
+  }
+  return worker;
 }

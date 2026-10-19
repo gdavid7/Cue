@@ -66,6 +66,8 @@ type MailEngineRuntimeStatus = {
   unavailable: boolean;
   /** A corrupt local mailbox is being rebuilt before the engine can start. */
   rebuilding: boolean;
+  /** This page is starting the engine and has no client from it yet. */
+  starting: boolean;
   requestBrowserEngine: () => void;
   retryStart: () => void;
 };
@@ -91,9 +93,19 @@ const MailEngineRuntimeStatusContext = createContext<MailEngineRuntimeStatus>({
   mounted: false,
   unavailable: false,
   rebuilding: false,
+  starting: false,
   requestBrowserEngine: () => {},
   retryStart: () => {},
 });
+
+/**
+ * Whether this page is still starting its mail engine, whose first load (its
+ * worker, SQLite and first sync) everything else the page fetches competes
+ * with.
+ */
+export function useMailEngineStarting() {
+  return useContext(MailEngineRuntimeStatusContext).starting;
+}
 
 export function useMailEngineDemand() {
   const { requestBrowserEngine } = useContext(MailEngineRuntimeStatusContext);
@@ -461,6 +473,10 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         mounted: true,
         unavailable,
         rebuilding,
+        starting:
+          Boolean(emailAccountId && enabled && mailProvider) &&
+          !client &&
+          !unavailable,
         requestBrowserEngine,
         retryStart,
       }}

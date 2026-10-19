@@ -12,6 +12,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Badge } from "@/components/ui/badge";
+import { useMailEngineStarting } from "@/utils/mail-engine/MailEngineHost";
 import {
   getAppPageFromNavItem,
   getAppPageFromPathname,
@@ -43,6 +44,9 @@ export function SideNavMenu({
   const { closeMobileSidebar } = useSidebar();
   const pathname = usePathname();
   const currentAppPage = getAppPageFromPathname(pathname);
+  // Other pages are fetched ahead only once the mail engine has started, so
+  // they don't compete with its first load; Today keeps its own prefetch.
+  const engineStarting = useMailEngineStarting();
 
   return (
     <SidebarMenu>
@@ -57,6 +61,11 @@ export function SideNavMenu({
           >
             <Link
               href={item.href}
+              prefetch={
+                engineStarting && !item.href.endsWith("/home")
+                  ? false
+                  : undefined
+              }
               onClick={() => {
                 const destinationAppPage = getAppPageFromNavItem({
                   name: item.name,
