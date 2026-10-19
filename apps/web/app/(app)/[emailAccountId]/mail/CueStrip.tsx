@@ -1,12 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  Loader2Icon,
-  MailMinusIcon,
-  PenLineIcon,
-  SparklesIcon,
-} from "lucide-react";
+import { MailMinusIcon, SparklesIcon } from "lucide-react";
 import {
   getCueStripVisibility,
   getThreadCategories,
@@ -46,8 +41,6 @@ export function CueStrip({
   userLabels,
   newestIsIncoming,
   enabled,
-  reply,
-  onDraftReply,
   onAskCue,
 }: {
   /** The account that owns the thread, not the one the screen started on. */
@@ -63,8 +56,6 @@ export function CueStrip({
    * with the keyboard never asks for anything.
    */
   enabled: boolean;
-  reply: { canRequest: boolean; drafts: boolean; pending: boolean };
-  onDraftReply: () => void;
   /** Unset when the assistant can't see this thread, e.g. another account's. */
   onAskCue?: () => void;
 }) {
@@ -223,19 +214,6 @@ export function CueStrip({
           {/* Under the summary, so the line gets the strip's full width. Only
               what the toolbar and the phone's bottom bar don't already show. */}
           <div className="ml-4 flex min-h-6 flex-wrap items-center gap-1 pointer-coarse:min-h-9">
-            {visibility === "show" && (reply.canRequest || reply.pending) ? (
-              <StripButton
-                busy={reply.pending}
-                icon={reply.pending ? SpinnerIcon : PenLineIcon}
-                onClick={onDraftReply}
-              >
-                {reply.pending
-                  ? "Drafting…"
-                  : reply.drafts
-                    ? "Draft reply"
-                    : "Reply"}
-              </StripButton>
-            ) : null}
             {unsubscribeMessage ? (
               <StripUnsubscribeButton message={unsubscribeMessage} />
             ) : null}
@@ -319,20 +297,16 @@ function StripUnsubscribeButton({ message }: { message: ThreadMessage }) {
 
 function StripButton({
   icon: Icon,
-  busy = false,
   children,
   className,
   ...props
 }: React.ComponentProps<typeof Button> & {
   icon: React.ElementType;
-  busy?: boolean;
 }) {
   return (
     <Button
-      aria-busy={busy || undefined}
       className={cn(
         "gap-1 font-normal text-muted-foreground hover:text-foreground pointer-coarse:h-9 pointer-coarse:px-2.5",
-        busy && "pointer-events-none",
         className,
       )}
       size="xs"
@@ -342,13 +316,5 @@ function StripButton({
       <Icon aria-hidden className="size-3.5" />
       {children}
     </Button>
-  );
-}
-
-function SpinnerIcon({ className }: { className?: string }) {
-  return (
-    <Loader2Icon
-      className={cn("animate-spin motion-reduce:animate-none", className)}
-    />
   );
 }

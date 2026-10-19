@@ -330,23 +330,14 @@ describe("CueStrip", () => {
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
   });
 
-  it("drafts a reply through the reader", async () => {
-    const props = renderStrip({ labels: ["Label_reply"] });
-    const strip = await screen.findByRole("region", { name: "Cue summary" });
-
-    fireEvent.click(
-      await within(strip).findByRole("button", { name: "Draft reply" }),
-    );
-    expect(props.onDraftReply).toHaveBeenCalledTimes(1);
-  });
-
-  // The toolbar (or the phone's bottom bar) already has these on screen.
-  it("never repeats the reader's own Archive, Snooze or Add to calendar", async () => {
+  // The toolbar (or the phone's bottom bar) already has these on screen, and
+  // "Draft a reply" sits under the reply actions, so it's offered once.
+  it("never repeats the reader's own Archive, Snooze, Add to calendar or Draft a reply", async () => {
     renderStrip({ labels: ["Label_reply"] });
     const strip = await screen.findByRole("region", { name: "Cue summary" });
     await within(strip).findByText(SUMMARY);
 
-    for (const name of [/archive/i, /snooze/i, /calendar/i]) {
+    for (const name of [/archive/i, /snooze/i, /calendar/i, /draft/i]) {
       expect(within(strip).queryByRole("button", { name })).toBeNull();
     }
   });
@@ -368,40 +359,6 @@ describe("CueStrip", () => {
       screen.queryByRole("button", { name: "Ask Cue about this email" }),
     ).toBeNull();
   });
-
-  it("says Cue is drafting while the reply is being worked out", async () => {
-    renderStrip({
-      labels: ["Label_reply"],
-      reply: { canRequest: true, drafts: true, pending: true },
-    });
-
-    const drafting = await screen.findByRole("button", { name: "Drafting…" });
-    expect(drafting.getAttribute("aria-busy")).toBe("true");
-  });
-
-  it("says Reply, not Draft reply, when Cue doesn't write replies here", async () => {
-    const props = renderStrip({
-      labels: ["Label_reply"],
-      reply: { canRequest: true, drafts: false, pending: false },
-    });
-
-    fireEvent.click(await screen.findByRole("button", { name: "Reply" }));
-    expect(props.onDraftReply).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "Draft reply" })).toBeNull();
-  });
-
-  it("offers no draft for a conversation the user spoke last in", async () => {
-    renderStrip({
-      labels: ["Label_reply"],
-      reply: { canRequest: false, drafts: true, pending: false },
-    });
-    await screen.findByText(SUMMARY);
-
-    expect(screen.queryByRole("button", { name: "Draft reply" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Ask Cue about this email" }),
-    ).toBeTruthy();
-  });
 });
 
 function renderStripWithContainer(options: Parameters<typeof renderStrip>[0]) {
@@ -414,13 +371,11 @@ function renderStrip(
     labels,
     enabled = true,
     from = "Maya Patel <maya@example.com>",
-    reply = { canRequest: true, drafts: true, pending: false },
     ...overrides
   }: {
     labels: string[];
     enabled?: boolean;
     from?: string;
-    reply?: { canRequest: boolean; drafts: boolean; pending: boolean };
     onAskCue?: (() => void) | undefined;
   },
   swr: {
@@ -435,8 +390,6 @@ function renderStrip(
     userLabels: LABELS,
     newestIsIncoming: true,
     enabled,
-    reply,
-    onDraftReply: vi.fn(),
     onAskCue: vi.fn(),
     ...overrides,
   };

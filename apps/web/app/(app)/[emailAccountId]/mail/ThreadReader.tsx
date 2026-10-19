@@ -204,10 +204,10 @@ export function ThreadReader({
     enabled: canAssist,
     onOpenThread: openThread,
   });
-  // The strip's Draft reply opens the composer once Cue's suggestion settles:
+  // "Draft a reply" opens the composer once Cue's suggestion settles:
   // filled when every fact in it is backed, empty with a reason otherwise.
   const [draftRequestedFor, setDraftRequestedFor] = useState<string>();
-  const stripReplyFor =
+  const requestedReplyFor =
     draftRequestedFor && draftRequestedFor === reply.settledFor
       ? draftRequestedFor
       : undefined;
@@ -312,8 +312,6 @@ export function ThreadReader({
           enabled={canAssist}
           messages={receivedMessages}
           onAskCue={onAskCue}
-          onDraftReply={requestDraftReply}
-          reply={reply}
           newestIsIncoming={newestIsIncoming}
           threadId={threadId}
           userLabels={userLabels}
@@ -374,10 +372,12 @@ export function ThreadReader({
               renderMessageMenu={renderMessageMenu}
               enableMessageNavigation={enableMessageNavigation}
               autoOpenReplyForMessageId={
-                autoOpenReplyForMessageId ?? stripReplyFor ?? assist?.messageId
+                autoOpenReplyForMessageId ??
+                requestedReplyFor ??
+                assist?.messageId
               }
               focusAutoOpenedReply={Boolean(
-                autoOpenReplyForMessageId ?? stripReplyFor,
+                autoOpenReplyForMessageId ?? requestedReplyFor,
               )}
               afterLatestMessage={
                 canAssist && newestIsIncoming && emailAccountId && threadId ? (

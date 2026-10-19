@@ -177,8 +177,6 @@ export function useReaderReplySuggestion({
     replyStatus,
     reply: {
       canRequest: canRequestReply,
-      /** Whether asking gets Cue's draft, or just the composer. */
-      drafts: writesReplies,
       /**
        * Whether to offer "Draft a reply" under the reply actions: nothing is
        * on its way, and Cue isn't still deciding to write one unasked.
@@ -189,8 +187,6 @@ export function useReaderReplySuggestion({
         !run &&
         !(current?.eligible && insightLoading),
       request: requestReply,
-      /** Whether Cue is still working out the reply. */
-      pending: phase === "checking-mail" || phase === "checking-web",
       /**
        * The newest message once there's nothing to wait for: its suggestion
        * settled either way, or Cue doesn't write replies for this account.

@@ -170,7 +170,6 @@ describe("useReaderReplySuggestion", () => {
 
     expect(lastEnabled()).toBe(false);
     expect(result.current.reply.offer).toBe(true);
-    expect(result.current.reply.drafts).toBe(true);
 
     act(() => result.current.reply.request());
 
@@ -191,7 +190,7 @@ describe("useReaderReplySuggestion", () => {
     expect(lastEnabled()).toBe(true);
   });
 
-  describe("asked for from the Cue strip", () => {
+  describe("asked for with Draft a reply", () => {
     it("writes a reply to mail from a person that isn't labelled To Reply", () => {
       const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
       expect(lastEnabled()).toBe(false);
@@ -217,7 +216,6 @@ describe("useReaderReplySuggestion", () => {
       act(() => result.current.reply.request());
 
       expect(lastEnabled()).toBe(false);
-      expect(result.current.reply.drafts).toBe(false);
       expect(result.current.reply.settledFor).toBe("ask");
     });
 

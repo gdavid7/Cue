@@ -91,7 +91,7 @@ test.beforeEach(async ({ page }) => {
     match: `<subject>${UNSORTED_SUBJECT}</subject>`,
     object: { summary: UNSORTED_SUMMARY, keyPoints: [] },
   });
-  // FYI, not To Reply: Draft reply works for any email from a person, and
+  // FYI, not To Reply: Draft a reply works for any email from a person, and
   // nothing drafts on its own before the user asks.
   const [fyi, newsletter] = await Promise.all([
     ensureLabel(page, "FYI"),
@@ -179,7 +179,12 @@ test("sums up a conversation with a person, not a newsletter, and drafts the rep
   expect(await countBriefModelCalls()).toBe(briefModelCalls);
   await expect(editor).toHaveCount(0);
 
-  await strip.getByRole("button", { name: "Draft reply" }).click();
+  // Offered once, under the reply actions; the strip has no draft button.
+  await expect(strip.getByRole("button", { name: /draft/i })).toHaveCount(0);
+  await page
+    .getByTestId("thread-reader")
+    .getByRole("button", { name: "Draft a reply" })
+    .click();
   await expect(editor).toContainText(REPLY, { timeout: 60_000 });
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-draft-reply");
 });

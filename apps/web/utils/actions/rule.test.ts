@@ -83,6 +83,45 @@ describe("enableDraftRepliesAction", () => {
     });
   });
 
+  // The founder's call: turning drafts on must not touch Gmail. A mailbox
+  // without To Reply gets a draft-only rule, as new mailboxes do.
+  it("creates a draft-only to-reply rule without creating a Gmail label", async () => {
+    (
+      prisma.emailAccount.findUnique as ReturnType<typeof vi.fn>
+    ).mockResolvedValue({
+      email: "owner@example.com",
+      account: { userId: "u1", provider: "google" },
+    });
+    prisma.rule.findUnique.mockResolvedValue(null);
+    prisma.rule.create.mockResolvedValue({
+      id: "rule-new",
+      enabled: true,
+      actions: [],
+    } as never);
+
+    await enableDraftRepliesAction("ea_1" as never, { enable: true } as never);
+
+    expect(createEmailProvider).not.toHaveBeenCalled();
+    expect(prisma.rule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        emailAccountId: "ea_1",
+        systemType: SystemType.TO_REPLY,
+        enabled: true,
+      }),
+      include: { actions: true },
+    });
+    expect(prisma.rule.create.mock.calls[0][0].data).not.toHaveProperty(
+      "actions",
+    );
+    expect(prisma.action.create).toHaveBeenCalledTimes(1);
+    expect(prisma.action.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ruleId: "rule-new",
+        type: ActionType.DRAFT_EMAIL,
+      }),
+    });
+  });
+
   it("disables the existing to-reply rule when draft replies are turned off", async () => {
     (
       prisma.emailAccount.findUnique as ReturnType<typeof vi.fn>
