@@ -71,10 +71,75 @@ describe("engine new mail during a scan", () => {
   });
 });
 
+// RL-1 review: a scan page read before a change catch-up has applied must
+// not write its older copy back once it lands.
+describe("engine changes during a scan page", () => {
+  it("keeps mail archived or deleted while a scan page was in flight", async () => {
+    const gmail = gmailWithSlowScan({
+      firstPage: [
+        messagePatch("m-archived", { version: "10" }),
+        messagePatch("m-deleted", { version: "10" }),
+      ],
+      // Read before the changes below, landing after them.
+      heldPage: [
+        messagePatch("m-archived", { version: "10" }),
+        messagePatch("m-deleted", { version: "10" }),
+        messagePatch("m-scan-2"),
+      ],
+    });
+    const { engine, inbox } = await openMailbox(gmail.source);
+    await engine.runUntil(Date.now() + 300);
+    await vi.waitFor(() => expect(gmail.scanPagesStarted()).toBe(2));
+    expect(inboxMessageIds(inbox)).toEqual(
+      expect.arrayContaining(["m-archived", "m-deleted"]),
+    );
+
+    gmail.deliverChange(
+      messagePatch("m-archived", { version: "20", inbox: false }),
+    );
+    gmail.deliverChange({
+      kind: "message_deleted",
+      key: { accountId: "acc-1", messageId: "m-deleted" },
+      evidence: "r-delete",
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(Date.now() + 300);
+    expect(inboxMessageIds(inbox)).not.toContain("m-archived");
+    expect(inboxMessageIds(inbox)).not.toContain("m-deleted");
+
+    gmail.releaseScan();
+    await vi.waitFor(async () => {
+      await engine.runUntil(Date.now() + 100);
+      expect(inboxMessageIds(inbox)).toContain("m-scan-2");
+    });
+
+    expect(inboxMessageIds(inbox)).not.toContain("m-archived");
+    expect(inboxMessageIds(inbox)).not.toContain("m-deleted");
+    // The stream carries on from where catch-up reached.
+    gmail.deliver("m-later");
+    await engine.requestSync(["acc-1"]);
+    await vi.waitFor(async () => {
+      await engine.runUntil(Date.now() + 100);
+      expect(inboxMessageIds(inbox)).toContain("m-later");
+    });
+    expect(
+      gmail.changeReadsFrom().filter((from) => from === "primary-start"),
+    ).toHaveLength(1);
+    inbox.close();
+    await engine.close();
+  });
+});
+
 // The primary scan's first page lands at once; its second is held until
 // released. History has no backfill scope here.
-function gmailWithSlowScan() {
-  const arrived: string[] = [];
+function gmailWithSlowScan({
+  firstPage = [messagePatch("m-scan-1")],
+  heldPage = [messagePatch("m-scan-2")],
+}: {
+  firstPage?: ProviderChange[];
+  heldPage?: ProviderChange[];
+} = {}) {
+  const arrived: ProviderChange[] = [];
   const reads: string[] = [];
   let scanPages = 0;
   let release = () => {};
@@ -125,7 +190,7 @@ function gmailWithSlowScan() {
           value: {
             bootstrapId: "mailbox",
             scopeId: "primary",
-            changes: [messagePatch("m-scan-1")],
+            changes: firstPage,
             requiredHydration: [],
             bodies: [],
             nextPage: "primary-2",
@@ -139,7 +204,7 @@ function gmailWithSlowScan() {
         value: {
           bootstrapId: "mailbox",
           scopeId: "primary",
-          changes: [messagePatch("m-scan-2")],
+          changes: heldPage,
           requiredHydration: [],
           bodies: [],
           nextPage: null,
@@ -155,7 +220,7 @@ function gmailWithSlowScan() {
     async readChanges({ position, session, requestId }) {
       reads.push(position.checkpoint ?? "none");
       checkpoint += 1;
-      const changes = arrived.splice(0).map(messagePatch);
+      const changes = arrived.splice(0);
       return {
         status: "page",
         page: {
@@ -187,7 +252,8 @@ function gmailWithSlowScan() {
   };
   return {
     source,
-    deliver: (messageId: string) => arrived.push(messageId),
+    deliver: (messageId: string) => arrived.push(messagePatch(messageId)),
+    deliverChange: (change: ProviderChange) => arrived.push(change),
     scanPagesStarted: () => scanPages,
     changeReadsFrom: () => reads,
     releaseScan: () => release(),
@@ -354,6 +420,7 @@ function gmailWithBackfill() {
 
 function messagePatch(
   messageId: string,
+  { version = "1", inbox = true }: { version?: string; inbox?: boolean } = {},
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   const conversationId = messageId.replace(/^m-/, "c-");
   return {
@@ -363,7 +430,7 @@ function messagePatch(
       provider: "google",
       messageId,
       conversationId,
-      version: "1",
+      version,
     },
     fields: {
       subject: messageId,
@@ -374,10 +441,10 @@ function messagePatch(
       receivedAtMs: 1000,
       read: false,
       starred: false,
-      folderId: "inbox",
-      labelIds: ["INBOX"],
+      folderId: inbox ? "inbox" : null,
+      labelIds: inbox ? ["INBOX"] : [],
       categoryIds: [],
-      roles: ["inbox"],
+      roles: inbox ? ["inbox"] : [],
       hasAttachments: false,
     },
   };

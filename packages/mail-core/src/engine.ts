@@ -254,11 +254,6 @@ export function createMailEngine(input: {
   // slow the retry of every other command.
   const commandRequestFailures = new Map<string, number>();
   const idleCatchUpGates = new Map<string, IdleCatchUpGate>();
-  // Where catch-up alongside a running scan has applied changes up to, by
-  // scanCatchUpKey. The scan's own pages name where it began, so it hands
-  // its stream this instead. An engine restart forgets it, and catch-up then
-  // reads those changes again, which the store applies harmlessly.
-  const scanCatchUpPositions = new Map<string, SyncStreamPosition>();
   const syncLanes = new Map<string, SyncLane>();
   const syncLaneRetries = new Map<
     string,
@@ -1394,13 +1389,9 @@ export function createMailEngine(input: {
       }
       // The scan's last page names where it began; catch-up alongside the
       // scan has already applied the changes since, from where it reached.
-      const positionKey = scanCatchUpKey(input.session.accountId, scan.scopeId);
+      // The store keeps the position catch-up alongside the scan reached.
       const catchUpFrom: SyncStreamPosition | null =
-        scanCatchUpPositions.get(positionKey) ??
-        enumerated.value.catchUpFrom ??
-        scan.catchUpFrom;
-      if (enumerated.value.nextPage === null)
-        scanCatchUpPositions.delete(positionKey);
+        enumerated.value.catchUpFrom ?? scan.catchUpFrom;
       const repeatedCursor = enumerated.value.nextPage === scan.page;
       const applied = await store.applyBootstrapPage({
         session: input.session,
@@ -1841,10 +1832,11 @@ export function createMailEngine(input: {
   // old one (a resync) until it finishes, which for a large mailbox under
   // Gmail's quota can take minutes. So new mail doesn't wait for it (GP-8l),
   // changes are read alongside it from the position it will hand the
-  // stream, and that position moves on with them; mail the scan reads again
-  // later is an older or equal version, which the store skips.
-  // In a lane of its own: one page of a scan can wait tens of seconds for
-  // quota while the account's lane waits on it, and new mail must not.
+  // stream, and the store moves that position on with them and keeps it
+  // when the scan finishes. A copy the scan read before such a change is
+  // older (or of a message deleted since), which the store skips. In a lane
+  // of its own: one page of a scan can wait tens of seconds for quota while
+  // the account's lane waits on it, and new mail must not.
   async function catchUpRunningScans(
     account: AccountSyncState,
     signal: AbortSignal,
@@ -1920,10 +1912,6 @@ export function createMailEngine(input: {
       page: changes.page,
     });
     if (applied.status !== "committed") return;
-    scanCatchUpPositions.set(
-      scanCatchUpKey(session.accountId, streamId),
-      changes.page.to,
-    );
     if (changes.page.roundComplete) {
       idleGate.nextScanCatchUpAtMs.set(
         streamId,
@@ -1935,10 +1923,6 @@ export function createMailEngine(input: {
     await refreshViews();
     await noteConnection(session.accountId, "ok");
     notifySyncPageCommitted(changes.page);
-  }
-
-  function scanCatchUpKey(accountId: string, scopeId: string) {
-    return `${accountId}:${scopeId}`;
   }
 
   function idleCatchUpGateFor(accountId: string, generation: string) {
