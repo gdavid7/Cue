@@ -5,13 +5,11 @@ import { clearRecentSearchHistoryForAccount } from "@/store/mail-search-history"
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { clearLocalReplyDrafts } from "@/utils/mail-engine/reply-drafts";
 import { clearPersistedSwrCacheForAccount } from "@/utils/swr-persistence";
-import { clearCachedTodayForAccount } from "@/utils/home/today-cache";
 import { clearBrowserCachesForAccount } from "@/utils/browser-cache";
 
 export async function clearLocalMailAccountState(emailAccountId: string) {
   clearLocalReplyDrafts(emailAccountId);
   clearPersistedSwrCacheForAccount(emailAccountId);
-  clearCachedTodayForAccount(emailAccountId);
   clearBrowserCachesForAccount(emailAccountId);
   clearRecentSearchHistoryForAccount(emailAccountId);
   clearArchiveSenderStatuses(emailAccountId);

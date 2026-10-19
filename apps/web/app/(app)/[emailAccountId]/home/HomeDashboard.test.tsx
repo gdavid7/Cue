@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
+import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
+import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { HomeDashboard } from "./HomeDashboard";
 
 const mocks = vi.hoisted(() => ({
@@ -210,6 +212,57 @@ describe("HomeDashboard row actions", () => {
 
     expect(screen.getByText("Quarterly numbers")).toBeTruthy();
     expect(mocks.toastUndo).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "Archive conversation",
+    "Delete conversation",
+  ])("%s takes the row out of the saved copy too", async (action) => {
+    window.localStorage.clear();
+    resetBrowserCacheForTesting("user");
+    const timeZone = "UTC";
+    writeCachedToday({
+      emailAccountId: "account",
+      timeZone,
+      data: mocks.home.data as GetHomeResponse,
+    });
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("first")).getAllByRole("button", { name: action })[0],
+      );
+    });
+
+    const saved = readCachedToday({ emailAccountId: "account", timeZone });
+    expect(saved?.needsYou.map((row) => row.threadId)).toEqual(["second"]);
+  });
+
+  it("keeps a row the engine refused in the saved copy", async () => {
+    mocks.client.submitConversations.mockResolvedValue({
+      status: "rejected",
+      code: "queue_full",
+    });
+    window.localStorage.clear();
+    resetBrowserCacheForTesting("user");
+    const timeZone = "UTC";
+    writeCachedToday({
+      emailAccountId: "account",
+      timeZone,
+      data: mocks.home.data as GetHomeResponse,
+    });
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("first")).getAllByRole("button", {
+          name: "Archive conversation",
+        })[0],
+      );
+    });
+
+    const saved = readCachedToday({ emailAccountId: "account", timeZone });
+    expect(saved?.needsYou).toHaveLength(2);
   });
 
   it("opens the conversation with a reply started, returning to Today", () => {
@@ -542,6 +595,59 @@ describe("HomeDashboard states", () => {
   });
 });
 
+describe("HomeDashboard on a copy from an earlier day", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    window.localStorage.clear();
+    resetBrowserCacheForTesting("user");
+  });
+
+  afterEach(cleanup);
+
+  it("shows yesterday's conversations, not yesterday's All clear or counts", () => {
+    mocks.home.data = savedYesterday();
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toBe("Updating…");
+    expect(lanes()).toEqual(["Also in your inbox"]);
+    expect(screen.queryByText("All clear.")).toBeNull();
+    expect(screen.queryByText(/Nothing new today|Cue checked/)).toBeNull();
+    expect(screen.queryByText(/Design review/)).toBeNull();
+  });
+
+  it("says when the refresh didn't land, rather than updating forever", () => {
+    mocks.home.data = savedYesterday();
+    mocks.home.error = { error: "Failed to fetch" };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toBe(
+      "Couldn't refresh. Showing what Today had earlier.",
+    );
+    expect(lanes()).toEqual(["Also in your inbox"]);
+  });
+
+  it("marks rows a given-up refresh couldn't replace as possibly out of date", () => {
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      waiting: [thread("w", "Intro to Sam")],
+      stale: ["waiting"],
+    } as GetHomeResponse;
+    mocks.home.gaveUp = true;
+
+    renderToday();
+
+    const waiting = screen.getByRole("region", { name: "Waiting on" });
+    expect(within(waiting).getByText("May be out of date")).toBeTruthy();
+    const needsReply = screen.getByRole("region", { name: "Needs reply" });
+    expect(within(needsReply).queryByText("May be out of date")).toBeNull();
+  });
+});
+
 describe("HomeDashboard across accounts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -741,6 +847,34 @@ function nextEvent(tomorrow: boolean) {
     url: "https://calendar.example.com/review",
     tomorrow,
   };
+}
+
+/** Yesterday's All clear, with its counts and next meeting, read this morning. */
+function savedYesterday() {
+  const timeZone = "UTC";
+  const yesterday = Date.now() - 86_400_000;
+  writeCachedToday({
+    emailAccountId: "account",
+    timeZone,
+    now: yesterday,
+    data: {
+      ...homeData([]),
+      alsoInInbox: [thread("b", "Dentist")],
+      today: { checked: 42, filed: 12, filedLabel: null },
+      calendar: {
+        connected: true,
+        next: {
+          title: "Design review",
+          at: new Date(Date.now() + 3_600_000).toISOString(),
+          url: undefined,
+          tomorrow: true,
+        },
+      },
+    },
+  });
+  const copy = readCachedToday({ emailAccountId: "account", timeZone });
+  expect(copy?.earlierDay).toBe(true);
+  return copy;
 }
 
 function renderToday() {
