@@ -44,7 +44,10 @@ import {
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
 import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
-import { revokeGoogleGrants } from "@/utils/user/revoke-google-grants";
+import {
+  getGoogleGrants,
+  revokeGoogleGrants,
+} from "@/utils/user/revoke-google-grants";
 
 export const saveAboutAction = actionClient
   .metadata({ name: "saveAbout" })
@@ -197,11 +200,9 @@ export const deleteEmailAccountAction = actionClientUser
         logger,
       });
 
-      // A mailbox always remains here, and the removed one's connections move
-      // to it.
-      await revokeGoogleGrants({
-        emailAccountIds: [emailAccountId],
-        keepsConnections: true,
+      // Read before the delete removes them; revoked only once it commits.
+      const googleGrants = await getGoogleGrants({
+        where: { id: emailAccount.accountId, userId },
         logger,
       });
 
@@ -271,6 +272,8 @@ export const deleteEmailAccountAction = actionClientUser
           { emailAccountId, logger, userEmail },
         );
       }
+
+      await revokeGoogleGrants({ grants: googleGrants, logger });
 
       after(() =>
         deleteTinybirdEmailData([emailAccount.email]).catch((error) => {

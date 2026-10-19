@@ -310,7 +310,7 @@ describe("deleteEmailAccountAction", () => {
       vi.unstubAllGlobals();
     });
 
-    it("revokes the removed mailbox's refresh token after unwatching and before deleting it", async () => {
+    it("revokes the removed mailbox's refresh token after the delete commits", async () => {
       const result = await deleteEmailAccountAction({
         emailAccountId: "secondary-account",
       });
@@ -320,15 +320,23 @@ describe("deleteEmailAccountAction", () => {
       expect(
         new URLSearchParams(fetchMock.mock.calls[0][1].body).get("token"),
       ).toBe("refresh-token-2");
-      expect(
-        vi.mocked(stopWatchingEmailAccount).mock.invocationCallOrder[0],
-      ).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
-      expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(fetchMock.mock.invocationCallOrder[0]).toBeGreaterThan(
         prisma.$transaction.mock.invocationCallOrder[0],
       );
     });
 
-    it("keeps the grant when the mailbox's calendar connection moves to a remaining mailbox", async () => {
+    it("keeps the grant when the delete transaction fails", async () => {
+      prisma.$transaction.mockRejectedValue(newPrismaNotFoundError());
+
+      const result = await deleteEmailAccountAction({
+        emailAccountId: "secondary-account",
+      });
+
+      expect(result?.serverError).toBe("Email account already changed");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps the grant when a remaining calendar connection uses the same Google account", async () => {
       prisma.calendarConnection.count.mockResolvedValue(1);
 
       const result = await deleteEmailAccountAction({

@@ -22,7 +22,10 @@ import {
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
 import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
-import { revokeGoogleGrants } from "@/utils/user/revoke-google-grants";
+import {
+  getGoogleGrants,
+  revokeGoogleGrants,
+} from "@/utils/user/revoke-google-grants";
 
 export async function deleteUser({
   userId,
@@ -99,13 +102,11 @@ export async function deleteUser({
     );
     if (failedRelease) throw failedRelease.reason;
 
-    await revokeGoogleGrants({
-      emailAccountIds,
-      keepsConnections: false,
-      logger,
-    });
+    const googleGrants = await getGoogleGrants({ where: { userId }, logger });
 
     await deleteUserRows({ userId, emailAccountIds, logger });
+
+    await revokeGoogleGrants({ grants: googleGrants, logger });
 
     await Promise.all(
       emailAccountIds.map((emailAccountId) =>
