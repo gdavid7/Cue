@@ -2,7 +2,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/prisma";
 import { renameGoogleEmail } from "@/utils/auth/rename-email";
 
-vi.mock("@/utils/redis/account-validation", () => ({}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountOwnership: vi.fn(async () => {}),
+}));
 
 const userId = "email-rename-test-user";
 const otherUserId = "email-rename-test-other-user";

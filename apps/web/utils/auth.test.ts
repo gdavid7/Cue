@@ -63,8 +63,9 @@ vi.mock("better-auth/cookies", async (importActual) => ({
   ...(await importActual<typeof import("better-auth/cookies")>()),
   setSessionCookie: vi.fn(),
 }));
-vi.mock("@/utils/user/own-addresses", () => ({}));
-vi.mock("@/utils/redis/account-validation", () => ({}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountOwnership: vi.fn(async () => {}),
+}));
 vi.mock("@/utils/error-messages", () => ({
   addUserErrorMessage: vi.fn().mockResolvedValue(undefined),
   clearAccountDisconnectedErrorIfResolved: vi.fn().mockResolvedValue(undefined),

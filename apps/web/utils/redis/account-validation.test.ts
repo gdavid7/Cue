@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import prisma from "@/utils/__mocks__/prisma";
-import { getEmailAccount } from "./account-validation";
+import {
+  getEmailAccount,
+  invalidateAccountOwnership,
+  isAccountOwner,
+  readKeyForOwnedAccounts,
+} from "./account-validation";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
@@ -50,5 +55,56 @@ describe("getEmailAccount", () => {
     prisma.emailAccount.findUnique.mockResolvedValueOnce(null);
     expect(await getEmailAccount(key)).toBeNull();
     expect(recordingRedis.everythingWritten()).not.toContain("me@example.com");
+  });
+});
+
+describe("account ownership in Redis", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recordingRedis.reset();
+  });
+
+  // RD-3: the flag is "1" under ids; the address never reaches Redis.
+  it("remembers an owned account by id alone and asks the database once", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      id: "account-1",
+    } as never);
+    const key = { userId: "user-1", emailAccountId: "account-1" };
+
+    expect(await isAccountOwner(key)).toBe(true);
+    expect(await isAccountOwner(key)).toBe(true);
+
+    expect(prisma.emailAccount.findUnique).toHaveBeenCalledTimes(1);
+    expect(recordingRedis.writes).toEqual([
+      { key: "account-owner:user-1:account-1", value: "1" },
+    ]);
+  });
+
+  it("asks the database again once ownership is forgotten", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValueOnce({
+      id: "account-1",
+    } as never);
+    const key = { userId: "user-1", emailAccountId: "account-1" };
+    await isAccountOwner(key);
+
+    await invalidateAccountOwnership(key);
+    prisma.emailAccount.findUnique.mockResolvedValueOnce(null);
+
+    expect(await isAccountOwner(key)).toBe(false);
+  });
+
+  it("reads each owned account's key and leaves out the rest", async () => {
+    recordingRedis.store.set("account-owner:user-1:account-1", "1");
+    recordingRedis.store.set("version:account-1", "v1");
+    recordingRedis.store.set("version:account-2", "v2");
+    prisma.emailAccount.findUnique.mockResolvedValue(null);
+
+    const owned = await readKeyForOwnedAccounts({
+      userId: "user-1",
+      emailAccountIds: ["account-1", "account-2"],
+      keyFor: (id) => `version:${id}`,
+    });
+
+    expect(Object.fromEntries(owned)).toEqual({ "account-1": "v1" });
   });
 });

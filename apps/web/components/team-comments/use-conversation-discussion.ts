@@ -11,12 +11,16 @@ export function useConversationDiscussion(
   conversationId: string,
 ) {
   const [revoked, setRevoked] = useState(false);
+  // While the stream is live it reports changes and revocation itself, so
+  // the summary and comments are not also polled.
+  const [streamLive, setStreamLive] = useState(false);
+  const refreshInterval = streamLive ? 0 : 30_000;
   const query = `memberId=${encodeURIComponent(memberId)}`;
   const summary = useSWR<TeamConversationResponse>(
     `/api/team-comments/conversations/${conversationId}?${query}`,
     // Access can be granted again after a revocation, so any successful
     // summary load means the member can read the conversation.
-    { refreshInterval: 30_000, onSuccess: () => setRevoked(false) },
+    { refreshInterval, onSuccess: () => setRevoked(false) },
   );
   const generation = summary.data?.generation;
   const commentPages = useSWRInfinite<TeamCommentsResponse>(
@@ -25,7 +29,7 @@ export function useConversationDiscussion(
       const beforeRevision = index > 0 ? previousPage?.nextCursor : undefined;
       return `/api/team-comments/conversations/${conversationId}/comments?${query}&generation=${generation}&limit=100${beforeRevision ? `&beforeRevision=${beforeRevision}` : ""}`;
     },
-    { refreshInterval: 30_000 },
+    { refreshInterval },
   );
   const comments = {
     ...commentPages,
@@ -43,23 +47,60 @@ export function useConversationDiscussion(
   useEffect(() => {
     if (!generation) return;
     const url = `/api/team-comments/stream?conversationId=${encodeURIComponent(conversationId)}&${query}`;
-    const stream = new EventSource(url);
+    let stream: EventSource | null = null;
+    let ended = false;
     const refresh = () => {
       summary.mutate();
       commentPages.mutate();
     };
-    stream.addEventListener("change", refresh);
-    stream.addEventListener("revoked", () => {
-      setRevoked(true);
-      summary.mutate(undefined, { revalidate: false });
-      commentPages.mutate(undefined, { revalidate: false });
-      stream.close();
-    });
+    const closeStream = () => {
+      stream?.close();
+      stream = null;
+      setStreamLive(false);
+    };
+    // Each open stream holds a server function and checks access every 25
+    // seconds, so a hidden tab lets it go and catches up when shown.
+    const openStream = () => {
+      if (stream || ended || document.visibilityState === "hidden") return;
+      const opened = new EventSource(url);
+      stream = opened;
+      let connectedBefore = false;
+      opened.addEventListener("ready", () => {
+        if (stream !== opened) return;
+        setStreamLive(true);
+        // Changes during a reconnect are not replayed; polling was off.
+        if (connectedBefore) refresh();
+        connectedBefore = true;
+      });
+      opened.addEventListener("error", () => {
+        if (stream === opened) setStreamLive(false);
+      });
+      opened.addEventListener("change", refresh);
+      opened.addEventListener("revoked", () => {
+        ended = true;
+        setRevoked(true);
+        summary.mutate(undefined, { revalidate: false });
+        commentPages.mutate(undefined, { revalidate: false });
+        closeStream();
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        closeStream();
+        return;
+      }
+      openStream();
+      refresh();
+    };
     const onFocus = () => refresh();
+    openStream();
+    document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", onFocus);
     window.addEventListener("online", onFocus);
     return () => {
-      stream.close();
+      ended = true;
+      closeStream();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", onFocus);
     };

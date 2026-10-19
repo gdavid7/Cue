@@ -21,6 +21,7 @@ import {
   isMemberEmailAccountForeignKeyError,
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
+import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
 
 export async function deleteUser({
   userId,
@@ -98,6 +99,12 @@ export async function deleteUser({
     if (failedRelease) throw failedRelease.reason;
 
     await deleteUserRows({ userId, emailAccountIds, logger });
+
+    await Promise.all(
+      emailAccountIds.map((emailAccountId) =>
+        invalidateAccountOwnership({ userId, emailAccountId }),
+      ),
+    );
 
     await Promise.allSettled(
       emailAccounts.flatMap(({ email }) => [

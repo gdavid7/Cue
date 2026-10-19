@@ -20,7 +20,7 @@ vi.mock("@/utils/middleware", async () => {
   return createWithErrorTestMiddleware();
 });
 vi.mock("@/utils/redis", () => ({
-  redis: { set: vi.fn(), publish: vi.fn() },
+  redis: { set: vi.fn(), eval: vi.fn() },
 }));
 vi.mock("@/utils/webhook/outlook/process-history", () => ({
   processHistoryForUser: vi.fn(),
@@ -55,13 +55,13 @@ describe("Outlook realtime webhook hints", () => {
     vi.mocked(getWebhookEmailAccount).mockResolvedValue({
       id: "account-a",
     } as never);
-    vi.mocked(redis.publish).mockResolvedValue(1);
+    vi.mocked(redis.eval).mockResolvedValue(1);
     vi.mocked(redis.set).mockResolvedValue("OK");
     vi.mocked(processHistoryForUser).mockResolvedValue(undefined);
   });
   it("rejects unverified notifications without hints or automation", async () => {
     expect((await POST(request("invalid"))).status).toBe(403);
-    expect(redis.publish).not.toHaveBeenCalled();
+    expect(redis.eval).not.toHaveBeenCalled();
     expect(getWebhookEmailAccount).not.toHaveBeenCalled();
     expect(processHistoryForUser).not.toHaveBeenCalled();
   });
@@ -74,7 +74,11 @@ describe("Outlook realtime webhook hints", () => {
       { watchEmailsSubscriptionId: "subscription-a" },
       expect.anything(),
     );
-    expect(redis.publish).toHaveBeenCalledWith("local-mail:account-a", "{}");
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      ["local-mail-version:account-a"],
+      expect.arrayContaining(["local-mail:account-a", "{}"]),
+    );
     expect(processHistoryForUser).toHaveBeenCalledWith(
       expect.objectContaining({
         subscriptionId: "subscription-a",
@@ -85,7 +89,7 @@ describe("Outlook realtime webhook hints", () => {
     );
   });
   it("preserves automation when Redis fails", async () => {
-    vi.mocked(redis.publish).mockRejectedValue(new Error("Unavailable"));
+    vi.mocked(redis.eval).mockRejectedValue(new Error("Unavailable"));
     expect((await POST(request())).status).toBe(200);
     await vi.waitFor(() =>
       expect(processHistoryForUser).toHaveBeenCalledOnce(),
@@ -96,7 +100,7 @@ describe("Outlook realtime webhook hints", () => {
     const blockedRedis = new Promise<number>((resolve) => {
       release = resolve;
     });
-    vi.mocked(redis.publish).mockReturnValue(blockedRedis);
+    vi.mocked(redis.eval).mockReturnValue(blockedRedis);
     try {
       expect((await POST(request("valid-state", 2))).status).toBe(200);
       await vi.waitFor(() =>
@@ -143,7 +147,7 @@ describe("Outlook realtime webhook hints", () => {
     await vi.waitFor(() =>
       expect(processHistoryForUser).toHaveBeenCalledOnce(),
     );
-    expect(redis.publish).not.toHaveBeenCalled();
+    expect(redis.eval).not.toHaveBeenCalled();
   });
 });
 function request(clientState = "valid-state", count = 1) {

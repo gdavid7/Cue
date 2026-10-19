@@ -278,6 +278,17 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/redis/account-validation.ts": {
+    writes: 1,
+    keys: [
+      {
+        key: "account-owner:{userId}:{emailAccountId}",
+        holds:
+          '"1": the account belongs to the user; the address is never cached',
+        ttl: "1h, deleted on removal or merge",
+      },
+    ],
+  },
   "utils/redis/categorization-progress.ts": {
     writes: 2,
     keys: [
@@ -357,8 +368,13 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/redis/local-mail-hints.ts": {
-    writes: 1,
+    writes: 2,
     keys: [
+      {
+        key: "local-mail-version:{emailAccountId}",
+        holds: "a random version token per provider push (RD-2 poll)",
+        ttl: "7 days",
+      },
       {
         key: "local-mail:{emailAccountId} (pub/sub channel)",
         holds: '"{}" or {"kind":"trackers"}',

@@ -64,6 +64,7 @@ const FAST_REQUEST_SAMPLE_RATE = 0.08;
 const POLLING_REQUEST_SAMPLE_RATE = 0.015;
 const POLLING_SCOPES = new Set([
   "mail-stream",
+  "mail-version",
   "email-stream",
   "team-comments/stream",
   "health",
@@ -468,6 +469,11 @@ function parseCookieNames(cookieHeader: string | null): string[] {
 async function emailAccountMiddleware(
   req: NextRequest,
   options?: MiddlewareOptions,
+  /** Reads the address while checking ownership; one Postgres read either way. */
+  loadEmail: (input: {
+    userId: string;
+    emailAccountId: string;
+  }) => Promise<string | null> = getEmailAccount,
 ): Promise<RequestWithEmailAccount | Response> {
   const authReq = await authMiddleware(req);
   if (authReq instanceof Response) return authReq;
@@ -491,7 +497,7 @@ async function emailAccountMiddleware(
     const email = await runTimedMiddlewareStep({
       logger: middlewareLogger,
       step: "validate-email-account",
-      operation: () => getEmailAccount({ userId, emailAccountId }),
+      operation: () => loadEmail({ userId, emailAccountId }),
     });
 
     const emailAccountLogger = middlewareLogger.with({ email });
@@ -609,33 +615,26 @@ async function emailAccountMiddleware(
 async function emailProviderMiddleware(
   req: NextRequest,
 ): Promise<RequestWithEmailProvider | Response> {
-  // First run email account middleware
-  const emailAccountReq = await emailAccountMiddleware(req);
+  // The provider read checks ownership and gives the address, so the account
+  // step reuses it rather than reading the account twice.
+  const loaded: {
+    account: Awaited<ReturnType<typeof loadProviderAccount>>;
+  } = { account: null };
+  const emailAccountReq = await emailAccountMiddleware(
+    req,
+    undefined,
+    async ({ userId, emailAccountId }) => {
+      loaded.account = await loadProviderAccount({ userId, emailAccountId });
+      return loaded.account?.email ?? null;
+    },
+  );
   if (emailAccountReq instanceof Response) return emailAccountReq;
 
   const { userId, emailAccountId } = emailAccountReq.auth;
   const middlewareStartTime = Date.now();
+  const emailAccount = loaded.account;
 
   try {
-    const emailAccount = await runTimedMiddlewareStep({
-      logger: emailAccountReq.logger,
-      step: "load-email-account-provider",
-      operation: () =>
-        prisma.emailAccount.findUnique({
-          where: {
-            id: emailAccountId,
-            userId, // ensure it belongs to the user
-          },
-          include: {
-            account: {
-              select: {
-                provider: true,
-              },
-            },
-          },
-        }),
-    });
-
     if (!emailAccount) {
       return NextResponse.json(
         { error: "Email account not found", isKnownError: true },
@@ -994,4 +993,26 @@ function getSafeErrorStatusCode(statusCode?: number) {
     statusCode <= 599
     ? statusCode
     : 400;
+}
+
+function loadProviderAccount({
+  userId,
+  emailAccountId,
+}: {
+  userId: string;
+  emailAccountId: string;
+}) {
+  return prisma.emailAccount.findUnique({
+    where: {
+      id: emailAccountId,
+      userId, // ensure it belongs to the user
+    },
+    include: {
+      account: {
+        select: {
+          provider: true,
+        },
+      },
+    },
+  });
 }

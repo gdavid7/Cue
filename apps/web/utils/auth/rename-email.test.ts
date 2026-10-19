@@ -5,8 +5,9 @@ import prisma from "@/utils/__mocks__/prisma";
 import { env } from "@/env";
 
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/redis/account-validation", () => ({}));
-vi.mock("@/utils/user/own-addresses", () => ({}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountOwnership: vi.fn(async () => {}),
+}));
 vi.mock("@/utils/posthog", () => ({ posthogCaptureEvent: vi.fn() }));
 
 const input = {

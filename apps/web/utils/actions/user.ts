@@ -41,6 +41,7 @@ import {
   isMemberEmailAccountForeignKeyError,
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
+import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
 
 export const saveAboutAction = actionClient
   .metadata({ name: "saveAbout" })
@@ -348,6 +349,11 @@ async function runDeleteEmailAccountTransaction(
       "We couldn't delete this email account. Please contact support if this keeps happening.",
     );
   }
+
+  await invalidateAccountOwnership({
+    userId,
+    emailAccountId: context.emailAccountId,
+  });
 }
 
 function getPrismaErrorCode(error: unknown) {

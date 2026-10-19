@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@/generated/prisma/client";
 import prisma from "@/utils/__mocks__/prisma";
+import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
 import { updateAccountSeats } from "@/utils/premium/seats";
 import { aliasPosthogUser } from "@/utils/posthog";
 import { betterAuthConfig } from "@/utils/auth";
@@ -53,8 +54,9 @@ vi.mock("@/utils/posthog", () => ({
 vi.mock("@/utils/premium/seats", () => ({
   updateAccountSeats: vi.fn(),
 }));
-vi.mock("@/utils/redis/account-validation", () => ({}));
-vi.mock("@/utils/user/own-addresses", () => ({}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountOwnership: vi.fn(async () => {}),
+}));
 vi.mock("@/utils/ai/draft-cleanup", () => ({
   cleanupAIDraftsForAccount: vi.fn(),
   getConfiguredDraftCleanupDays: vi.fn(),
@@ -266,21 +268,10 @@ describe("deleteEmailAccountAction", () => {
     });
 
     expect(result?.serverError).toBeUndefined();
-  });
-
-  it("forgets the user's own addresses after deleting an account", async () => {
-    prisma.emailAccount.findUnique.mockResolvedValue({
-      email: "secondary@example.com",
-      accountId: "account-2",
-      account: { provider: "google" },
-      user: { email: "primary@example.com" },
-    } as Awaited<ReturnType<typeof prisma.emailAccount.findUnique>>);
-
-    const result = await deleteEmailAccountAction({
+    expect(invalidateAccountOwnership).toHaveBeenCalledWith({
+      userId: "user-1",
       emailAccountId: "secondary-account",
     });
-
-    expect(result?.serverError).toBeUndefined();
   });
 
   it("clears the last-account cookie after deleting the account it names", async () => {

@@ -39,7 +39,9 @@ vi.mock("@/utils/gmail/oauth", () => ({
   fetchGoogleOpenIdProfile: vi.fn(),
 }));
 
-vi.mock("@/utils/redis/account-validation", () => ({}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountOwnership: vi.fn(async () => {}),
+}));
 
 vi.mock("@/utils/log-error-with-dedupe", () => ({
   logErrorWithDedupe: vi.fn(),

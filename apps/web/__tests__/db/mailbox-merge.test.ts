@@ -8,7 +8,9 @@ import { getPremiumTransferOperations } from "@/utils/user/merge-premium";
 vi.mock("@/utils/user/merge-premium", () => ({
   getPremiumTransferOperations: vi.fn(),
 }));
-vi.mock("@/utils/redis/account-validation", () => ({}));
+vi.mock("@/utils/redis/account-validation", () => ({
+  invalidateAccountOwnership: vi.fn(async () => {}),
+}));
 
 const sourceUserId = "mailbox-merge-db-source";
 const targetUserId = "mailbox-merge-db-target";
