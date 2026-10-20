@@ -22,6 +22,7 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   createBrowserMailEngine,
   prewarmMailEngineWorker,
+  releasePrewarmedMailEngineWorker,
   type BrowserMailEngine,
 } from "@/utils/mail-engine/create-browser-engine";
 import {
@@ -294,6 +295,8 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         ) {
           return;
         }
+        // Another tab owns the engine and its files.
+        releasePrewarmedMailEngineWorker();
         publishClient(
           createTabFollowerClient({
             accountId: emailAccountId,
@@ -323,6 +326,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     }
 
     async function start() {
+      performance.mark("mail-engine:start");
       const create = async () => {
         engine = await createBrowserMailEngine(
           {
@@ -371,6 +375,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
 
     const unsubscribeLogout = subscribeMailEngineLogout(() => {
       abort.abort();
+      releasePrewarmedMailEngineWorker();
       engine?.close().catch(() => undefined);
     });
 

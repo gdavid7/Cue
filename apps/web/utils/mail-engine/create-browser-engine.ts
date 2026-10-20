@@ -13,9 +13,11 @@ import {
   requestSyncUnlessOffline,
   type BrowserEngineStart,
   type WorkerObserveKind,
+  type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
+import { MAIL_ENGINE_OWNER_LOCK } from "@/utils/mail-engine/tab-channel";
 import {
   finishPendingLocalMailboxWipe,
   isLocalMailboxWipePending,
@@ -115,9 +117,9 @@ async function startBrowserEngine(
 
 /**
  * Starts loading the engine worker and SQLite while the page is still
- * hydrating, so the engine can open the mailbox as soon as it starts. The
- * worker opens nothing until then, and none is started while a sign-out wipe
- * is unfinished, since that wipe must come before any mailbox opens.
+ * hydrating, and opens the mailbox too when no tab owns the engine, so this
+ * page is about to. None is started while a sign-out wipe is unfinished,
+ * since that wipe must come before any mailbox opens.
  */
 export function prewarmMailEngineWorker() {
   if (
@@ -127,6 +129,7 @@ export function prewarmMailEngineWorker() {
   ) {
     return;
   }
+  performance.mark("mail-engine:prewarm");
   const worker = createEngineWorker();
   const timer = setTimeout(() => {
     if (prewarmed?.worker !== worker) return;
@@ -134,6 +137,16 @@ export function prewarmMailEngineWorker() {
     worker.terminate();
   }, PREWARMED_WORKER_IDLE_MS);
   prewarmed = { worker, timer };
+  preopenUnlessOwned(worker);
+}
+
+/**
+ * Lets go of an early worker this page will not start, such as when another
+ * tab owns the engine, so a mailbox it opened early holds no files.
+ */
+export function releasePrewarmedMailEngineWorker() {
+  const worker = takePrewarmedWorker();
+  worker?.terminate();
 }
 
 async function createWorkerOwnedEngine(
@@ -391,4 +404,25 @@ function createEngineWorker() {
       .catch(() => undefined);
   }
   return worker;
+}
+
+function preopenUnlessOwned(worker: Worker) {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks?.query || !browserMailEngineCapabilities().opfs) return;
+  locks
+    .query()
+    .then(({ held = [], pending = [] }) => {
+      // Taken means the engine already sent its start, which opens the mailbox.
+      if (prewarmed?.worker !== worker) return;
+      if ([...held, ...pending].some(isOwnerLock)) return;
+      worker.postMessage({
+        type: "preopen",
+        maxPendingOperations: readPageMaxPendingOperations(),
+      } satisfies WorkerPreopenRequest);
+    })
+    .catch(() => undefined);
+}
+
+function isOwnerLock(lock: LockInfo) {
+  return lock.name === MAIL_ENGINE_OWNER_LOCK;
 }

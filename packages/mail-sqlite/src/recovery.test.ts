@@ -209,6 +209,38 @@ describe("openMailStoreWithRecovery", () => {
     await driver.close();
   });
 
+  it("opens a mailbox before the signed-in accounts are known, waiting for them only to carry work", async () => {
+    const healthy = await openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(await mailboxPath()),
+      wipe: async () => undefined,
+      stash: memoryStash(),
+      ownedAccountIds: new Promise(() => undefined),
+    });
+    await healthy.close();
+
+    const stash = memoryStash();
+    await stash.write(await pendingWorkFrom(await seededMailbox()));
+    let nameOwned: (accountIds: string[]) => void = () => undefined;
+    let opened = false;
+    const opening = openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(await mailboxPath()),
+      wipe: async () => undefined,
+      stash,
+      ownedAccountIds: new Promise((resolve) => {
+        nameOwned = resolve;
+      }),
+    }).then((store) => {
+      opened = true;
+      return store;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(opened).toBe(false);
+    nameOwned(["acc-1"]);
+    const store = await opening;
+    expect(await store.readDraft(DRAFT)).toMatchObject({ status: "found" });
+    await store.close();
+  });
+
   it("reports carried rows it could not restore, without their content", async () => {
     const work = await pendingWorkFrom(await seededMailbox());
     const draft = work.drafts[0];

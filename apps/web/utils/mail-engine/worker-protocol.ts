@@ -65,6 +65,15 @@ export function observeByKind(
   }
 }
 
+/**
+ * Opens the mailbox before the engine starts, while the page still hydrates.
+ * Only sent while no tab owns the engine, so no other tab needs the files.
+ */
+export type WorkerPreopenRequest = {
+  type: "preopen";
+  maxPendingOperations?: number;
+};
+
 export type WorkerRequest =
   | { id: string; type: "start"; input: BrowserEngineStart }
   | { id: string; type: "call"; method: string; args: unknown[] }

@@ -59,7 +59,7 @@ export async function createWasmMemoryDriver(): Promise<SqliteDriver> {
  */
 export async function createWasmMailStore(input: {
   persist?: boolean;
-  ownedAccountIds: string[];
+  ownedAccountIds: string[] | Promise<string[]>;
   options?: SqliteMailStoreOptions;
   onRebuild?: () => void;
   onDropped?: (drop: DroppedMailWork) => void;
@@ -69,6 +69,7 @@ export async function createWasmMailStore(input: {
     return createSqliteMailStore(createMemoryDriver(sqlite), input.options);
   }
   const releaseFiles = await holdMailboxFiles();
+  performance.mark("mail-engine:files-held");
   try {
     const pool = await sqlite
       .installOpfsSAHPoolVfs({
@@ -83,6 +84,7 @@ export async function createWasmMailStore(input: {
         if (isHeldFileError(error)) throw error;
         throw new MailboxUnavailableError(error);
       });
+    performance.mark("mail-engine:pool-installed");
     const store = await openMailStoreWithRecovery({
       async open() {
         if (pool.isPaused()) await pool.unpauseVfs();
@@ -99,6 +101,7 @@ export async function createWasmMailStore(input: {
           // journal is truncated back to this size after it commits.
           database.exec("PRAGMA journal_mode=PERSIST");
           database.exec("PRAGMA journal_size_limit=1048576");
+          performance.mark("mail-engine:database-opened");
           return createDatabaseDriver(database, release);
         } catch (error) {
           // The pool cannot wipe the files for a rebuild while this is open.

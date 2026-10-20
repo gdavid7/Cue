@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserMailEngine,
   prewarmMailEngineWorker,
+  releasePrewarmedMailEngineWorker,
 } from "./create-browser-engine";
+import { MAIL_ENGINE_OWNER_LOCK } from "./tab-channel";
 
 const wipe = vi.hoisted(() => ({
   finishPending: vi.fn(),
@@ -61,6 +63,30 @@ describe("createBrowserMailEngine", () => {
 
     expect(FakeWorker.instances).toHaveLength(1);
     expect(FakeWorker.instances[0].received("start")).toBe(1);
+  });
+
+  it("opens the mailbox early when no tab owns the engine", async () => {
+    stubBrowserStorage({ ownerLockHeld: false });
+    prewarmMailEngineWorker();
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0].received("preopen")).toBe(1),
+    );
+
+    await startEngine();
+
+    expect(FakeWorker.instances).toHaveLength(1);
+    expect(FakeWorker.instances[0].received("start")).toBe(1);
+  });
+
+  it("leaves the mailbox files alone while another tab owns the engine", async () => {
+    stubBrowserStorage({ ownerLockHeld: true });
+    prewarmMailEngineWorker();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(FakeWorker.instances[0].received("preopen")).toBe(0);
+    // The page becomes that tab's follower and lets its early worker go.
+    releasePrewarmedMailEngineWorker();
+    expect(FakeWorker.instances[0].terminated).toBe(true);
   });
 
   it("starts no worker early while a sign-out wipe is unfinished", () => {
@@ -219,6 +245,19 @@ describe("createBrowserMailEngine", () => {
     await expect(diagnostics).rejects.toThrow("mail engine worker closed");
   });
 });
+
+function stubBrowserStorage({ ownerLockHeld }: { ownerLockHeld: boolean }) {
+  vi.stubGlobal("navigator", {
+    onLine: true,
+    storage: { getDirectory: async () => ({}) },
+    locks: {
+      query: async () => ({
+        held: ownerLockHeld ? [{ name: MAIL_ENGINE_OWNER_LOCK }] : [],
+        pending: [],
+      }),
+    },
+  });
+}
 
 function startEngine() {
   return createBrowserMailEngine({
