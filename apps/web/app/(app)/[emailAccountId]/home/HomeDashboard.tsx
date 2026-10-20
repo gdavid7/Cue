@@ -63,6 +63,7 @@ import {
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatTime } from "./today-format";
+import { TodayWeather } from "./TodayWeather";
 import {
   type TodayRowCorrection,
   type TodayRowHandlers,
@@ -478,10 +479,13 @@ export function HomeDashboard() {
       tabIndex={-1}
     >
       <header>
-        <PageHeading>
-          {greetingText}
-          {firstName ? `, ${firstName}` : ""}
-        </PageHeading>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <PageHeading>
+            {greetingText}
+            {firstName ? `, ${firstName}` : ""}
+          </PageHeading>
+          <TodayWeather />
+        </div>
         {earlierDay ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
             {refreshFailed

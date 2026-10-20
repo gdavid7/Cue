@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
 import { withError } from "@/utils/middleware";
 import { SafeError } from "@/utils/error";
+import { todayWeatherLocationSchema } from "@/utils/actions/today-weather.validation";
 import { auth } from "@/utils/auth";
 import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
 import {
@@ -39,6 +40,7 @@ async function getUser({
       webhookSecret: true,
       announcementDismissedAt: true,
       dismissedHints: true,
+      todayWeather: true,
       premium: {
         select: {
           ...billingAccessPremiumSelect,
@@ -110,6 +112,8 @@ async function getUser({
     decisionModelEnabled: isDecisionModelEnabledForUser(user),
     announcementDismissedAt: user.announcementDismissedAt,
     dismissedHints: user.dismissedHints,
+    todayWeather:
+      todayWeatherLocationSchema.safeParse(user.todayWeather).data ?? null,
     premium,
     // Resolved here so the client never compares periods against its own clock.
     unsubscribeCreditsRemaining: getRemainingUnsubscribeCredits(
