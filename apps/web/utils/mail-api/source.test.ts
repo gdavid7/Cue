@@ -10,7 +10,15 @@ import {
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { syncPageSchema } from "@inboxzero/mail-core/sync";
 import { runWithAuditContext } from "@/utils/audit/context";
-import { createEmailProviderMailboxSource } from "./source";
+import {
+  createEmailProviderMailboxSource,
+  shouldLogLocalBudgetPause,
+} from "./source";
+import {
+  createRequestMetrics,
+  getRequestMetricsFields,
+  runWithRequestMetrics,
+} from "@/utils/request-metrics";
 import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
 import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
@@ -1519,6 +1527,43 @@ describe("createEmailProviderMailboxSource", () => {
       reason: "throttled",
     });
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
+  });
+
+  it("puts the sync budget's pause reason on the request's metrics", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockRejectedValueOnce(
+      new LocalMailSyncPausedError(12_000, "account_budget"),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(),
+      } as unknown as EmailProvider,
+    });
+    const metrics = createRequestMetrics();
+    await runWithRequestMetrics(metrics, () =>
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify({ scopeId: "history" }),
+        pageSize: 50,
+      }),
+    );
+    expect(getRequestMetricsFields(metrics)).toMatchObject({
+      pausedSource: "local_budget",
+      pausedReason: "account_budget",
+      pausedRetryAfterMs: 12_000,
+    });
+  });
+
+  it("logs a mailbox's local-budget pause at most once a minute", () => {
+    expect(shouldLogLocalBudgetPause("rate-a", 1000)).toBe(true);
+    expect(shouldLogLocalBudgetPause("rate-a", 30_000)).toBe(false);
+    expect(shouldLogLocalBudgetPause("rate-b", 30_000)).toBe(true);
+    expect(shouldLogLocalBudgetPause("rate-a", 61_000)).toBe(true);
   });
 
   it("reads a scan's first screen whole on its own, then 50 at a time", async () => {

@@ -26,6 +26,20 @@ describe("request metrics", () => {
     expect(fields.authMs).toBe(0);
   });
 
+  it("keeps batch fetches and idle waits out of the gmail bucket", async () => {
+    const metrics = createRequestMetrics();
+    await runWithRequestMetrics(metrics, async () => {
+      await timeRequestDependency("gmailBatch", () => Promise.resolve());
+      await timeRequestDependency("wait", async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    });
+    const fields = getRequestMetricsFields(metrics);
+    expect(fields.gmailBatchCalls).toBe(1);
+    expect(fields.waitMs).toBeGreaterThanOrEqual(15);
+    expect(fields.gmailCalls).toBe(0);
+  });
+
   it("counts a call that throws and rethrows its error", async () => {
     const metrics = createRequestMetrics();
     await expect(

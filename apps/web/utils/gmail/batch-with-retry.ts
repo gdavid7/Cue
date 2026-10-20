@@ -8,6 +8,7 @@ import {
   MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
 } from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
+import { timeRequestDependency } from "@/utils/request-metrics";
 import type { Logger } from "@/utils/logger";
 import {
   currentGmailQuotaContext,
@@ -255,7 +256,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
       firstReason: firstError?.errors?.[0]?.reason,
     });
     sleepBudget.remainingMs -= delayMs;
-    await sleep(delayMs);
+    await timeRequestDependency("wait", () => sleep(delayMs));
     const retryChunks = chunk(
       remainingIds,
       Math.max(
