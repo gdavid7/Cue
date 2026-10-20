@@ -10,7 +10,7 @@ import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { CONTEXT_TEXT_LIMIT } from "@/utils/thread-context/get-thread-context";
 import {
   getSuggestedReplySettings,
-  suggestReply,
+  suggestReaderReply,
 } from "@/utils/thread-context/suggest-reply";
 
 const suggestedReplyQuery = z.object({
@@ -78,7 +78,7 @@ const suggestedReplyBody = z.object({
 export type SuggestedReplyBody = z.infer<typeof suggestedReplyBody>;
 
 export type GetSuggestedReplyResponse = {
-  suggestion: Awaited<ReturnType<typeof suggestReply>>;
+  suggestion: Awaited<ReturnType<typeof suggestReaderReply>>;
   /** Whether an abstention can be retried with a web search. */
   canSearchWeb: boolean;
 };
@@ -129,7 +129,7 @@ export const POST = withEmailProvider(
     const suggestion = await runWithGmailWaitBudget(
       OPEN_THREAD_GMAIL_WAIT_MS,
       () =>
-        suggestReply({
+        suggestReaderReply({
           emailAccountId: request.auth.emailAccountId,
           userEmail: request.auth.email,
           threadId,

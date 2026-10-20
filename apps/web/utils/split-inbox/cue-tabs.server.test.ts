@@ -15,8 +15,17 @@ import {
   updateMailSplit,
 } from "@/utils/split-inbox/splits.server";
 
-const { afterCallbacks } = vi.hoisted(() => ({
+const { afterCallbacks, mockEnv } = vi.hoisted(() => ({
   afterCallbacks: [] as Array<() => unknown>,
+  mockEnv: { autoDraftDisabled: false },
+}));
+
+vi.mock("@/env", () => ({
+  env: {
+    get NEXT_PUBLIC_AUTO_DRAFT_DISABLED() {
+      return mockEnv.autoDraftDisabled;
+    },
+  },
 }));
 
 vi.mock("@/utils/prisma");
@@ -59,6 +68,7 @@ describe("setUpCueSorting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     afterCallbacks.length = 0;
+    mockEnv.autoDraftDisabled = false;
     prisma.rule.findMany.mockResolvedValue([]);
     // Most cases are accounts Cue has already sorted.
     prisma.executedRule.findFirst.mockResolvedValue({ id: "run" } as never);
@@ -67,6 +77,7 @@ describe("setUpCueSorting", () => {
     }) =>
       args.data.map((rule) => ({
         id: `new-${rule.systemType}`,
+        systemType: rule.systemType,
       }))) as never);
   });
 
@@ -105,6 +116,45 @@ describe("setUpCueSorting", () => {
       },
     ]);
     expect(afterCallbacks).toHaveLength(1);
+  });
+
+  // DR-5: a To Reply rule created here saves "Auto draft replies" as on, a
+  // suggestion kept in Cue; no other rule gets an action.
+  it("creates To Reply with its draft so drafting is saved as on", async () => {
+    await setUpCueSorting(WITH_TABS);
+
+    expect(prisma.action.createMany).toHaveBeenCalledTimes(1);
+    expect(prisma.action.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          type: ActionType.DRAFT_EMAIL,
+          ruleId: `new-${SystemType.TO_REPLY}`,
+          emailAccountId: "account",
+        },
+      ],
+    });
+  });
+
+  it("adds no draft when the deployment disables auto drafting", async () => {
+    mockEnv.autoDraftDisabled = true;
+
+    await setUpCueSorting(WITH_TABS);
+
+    expect(createdRules().length).toBeGreaterThan(0);
+    expect(prisma.action.createMany).not.toHaveBeenCalled();
+  });
+
+  it("adds no draft to a To Reply rule the account already has", async () => {
+    prisma.rule.findMany.mockResolvedValue([
+      { ...existingRule(SystemType.TO_REPLY), enabled: false },
+    ] as never);
+
+    await setUpCueSorting(WITHOUT_TABS);
+
+    expect(createdRules().map((rule) => rule.systemType)).not.toContain(
+      SystemType.TO_REPLY,
+    );
+    expect(prisma.action.createMany).not.toHaveBeenCalled();
   });
 
   it("keeps rules the account already has and still adds the tabs", async () => {
@@ -241,7 +291,14 @@ describe("setUpCueSorting", () => {
     prisma.executedRule.findFirst.mockResolvedValue(null);
     prisma.rule.findMany.mockResolvedValue(
       REPLY_TRACKING_RULES.map((systemType) =>
-        existingRule(systemType),
+        systemType === SystemType.TO_REPLY
+          ? {
+              ...existingRule(systemType),
+              actions: [
+                { id: "draft", type: ActionType.DRAFT_EMAIL, label: null },
+              ],
+            }
+          : existingRule(systemType),
       ) as never,
     );
 

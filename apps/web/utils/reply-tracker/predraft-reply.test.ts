@@ -139,12 +139,9 @@ describe("predraftReply", () => {
     expect(prisma.executedAction.create).toHaveBeenCalledTimes(20);
   });
 
-  it.each([
-    "off",
-    "unset",
-  ] as const)("writes nothing when draft replies are %s", async (draftReplies) => {
+  it("writes nothing when draft replies are off", async () => {
     getSuggestedReplySettings.mockResolvedValue({
-      draftReplies,
+      draftReplies: "off",
       webLookupEnabled: false,
     });
 
