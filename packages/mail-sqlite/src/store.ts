@@ -1101,6 +1101,16 @@ export async function createSqliteMailStore(
             "UPDATE messages SET local_change_sequence = ? WHERE account_id = ? AND message_id = ?",
             [revision.sequence, key.accountId, key.messageId],
           );
+          // A scan under way may have listed its scope before this change,
+          // such as a move back to the inbox, so leaving the message out
+          // proves nothing. The re-read follows the change.
+          const unlisted = await tx.execute(
+            "DELETE FROM bootstrap_existing_messages WHERE account_id = ? AND message_id = ?",
+            [key.accountId, key.messageId],
+          );
+          if (unlisted.changedRows > 0) {
+            await enqueueMetadataReread(tx, key, digest);
+          }
         }
         return { status: "committed", revision };
       });
@@ -2930,8 +2940,23 @@ async function applyChange(
   }
 
   if (change.kind === "removed_from_scope") {
-    const current = await loadConfirmed(tx, change.key);
+    const [row] = await tx.query(
+      "SELECT * FROM messages WHERE account_id = ? AND message_id = ?",
+      [change.key.accountId, change.key.messageId],
+    );
+    const current = row ? confirmedFromRow(row) : null;
     if (!current) return true;
+    // A removal carries no version, and one read before a change that put
+    // the message back, such as a move to the inbox, would undo it. A true
+    // removal comes back with the re-read, which follows the change.
+    if (
+      read &&
+      row?.local_change_sequence != null &&
+      Number(row.local_change_sequence) > read.sequence
+    ) {
+      await enqueueMetadataReread(tx, change.key, read.digest);
+      return false;
+    }
     const scopeFolderId = folderIdForBootstrapScope(change.scopeId);
     const namedInbox =
       change.scopeId === "inbox" || change.scopeId.endsWith(":inbox");
