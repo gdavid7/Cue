@@ -1,0 +1,348 @@
+import { describe, expect, it, vi } from "vitest";
+import { hashAddressForKey } from "@/utils/redis/address-key";
+import { fakeCleanupRedis as fakeRedis } from "@/__tests__/redis/fake-cleanup-redis";
+import {
+  deletePiiCacheKeys,
+  hashedClaimKey,
+  runPiiCleanupStep,
+} from "./pii-cache-keys";
+
+const HASH = "a".repeat(64);
+
+describe("deletePiiCacheKeys", () => {
+  it("deletes the keys that held mail or personal data and leaves the rest", async () => {
+    const redis = fakeRedis({
+      "summary:abc": "Renewal priced at $48k",
+      "thread-brief:a1:t1:m1": { summary: "Sarah asks about Friday" },
+      "inbox-insight:a1:m1": { people: [{ email: "sarah@acme.com" }] },
+      "thread:a1:job1:t1": { subject: "Invoice", from: "billing@acme.com" },
+      "account:u1:a1": "me@example.com",
+      "meeting-news:acme.com": [{ title: "Acme raises prices" }],
+      [`meeting-news:${HASH}`]: [{ title: "Acme raises prices" }],
+      "inbox-zero:chat-sdk:list:msg-history:telegram-1": [{ text: "Rent" }],
+      "usage-weekly-cost:me@example.com:2026-10-18": { cost: 1 },
+      "usage-weekly-cost:user:u1:2026-10-18": { cost: 1 },
+      "rate-limit:inbox-insights:u1": 3,
+      "contact-photos-paused:a1": "1",
+      "usage:me@example.com": { cost: 4 },
+      "usage:email-account:a1": { cost: 4 },
+      "account-owner:u1:a1": "1",
+      "inbox-zero:chat-sdk:cache:modal-context:slack:1": { text: "Rent" },
+      "inbox-zero:chat-sdk:cache:callback:abc": { url: "https://x.test" },
+    });
+
+    await deletePiiCacheKeys({ redis: redis.client });
+
+    expect([...redis.store.keys()].sort()).toEqual(
+      [
+        `meeting-news:${HASH}`,
+        "usage-weekly-cost:user:u1:2026-10-18",
+        "rate-limit:inbox-insights:u1",
+        "contact-photos-paused:a1",
+        "usage:email-account:a1",
+        // The id-only ownership flag that replaced account:{user}:{acct}.
+        "account-owner:u1:a1",
+        "inbox-zero:chat-sdk:cache:callback:abc",
+      ].sort(),
+    );
+  });
+
+  it("rewrites weekly-spend migration records by day, without addresses", async () => {
+    const redis = fakeRedis({
+      "usage-migration:weekly-usage-cost-user:u1:done": JSON.stringify({
+        weeklyCosts: {
+          "usage-weekly-cost:me@example.com:2026-10-18": 1.5,
+          "usage-weekly-cost:me@work.example:2026-10-18": 0.5,
+          "usage-weekly-cost:me@example.com:2026-10-17": 2,
+        },
+      }),
+    });
+
+    await deletePiiCacheKeys({ redis: redis.client });
+    const again = await deletePiiCacheKeys({ redis: redis.client });
+
+    expect(
+      JSON.parse(
+        String(
+          redis.store.get("usage-migration:weekly-usage-cost-user:u1:done"),
+        ),
+      ),
+    ).toEqual({ weeklyCostsByDay: { "2026-10-18": 2, "2026-10-17": 2 } });
+    expect(again["usage-migration:weekly-usage-cost-user:*:done"]).toBe(0);
+  });
+
+  it("rewrites a weekly migration record stored in the object shape", async () => {
+    const redis = fakeRedis({
+      "usage-migration:weekly-usage-cost-user:u1:done": {
+        weeklyCosts: { "usage-weekly-cost:me@example.com:2026-10-18": 1.5 },
+      },
+    });
+
+    await deletePiiCacheKeys({ redis: redis.client });
+
+    expect(
+      JSON.stringify(
+        redis.store.get("usage-migration:weekly-usage-cost-user:u1:done"),
+      ),
+    ).not.toContain("@");
+  });
+
+  it("moves a message claim to its hashed key, so a handled message stays handled", async () => {
+    const redis = fakeRedis({
+      "processing-message:me@example.com:m1": "processed",
+      [`processing-message:${hashAddressForKey("me@example.com")}:m2`]:
+        "lock-token",
+      "processing-message:me@example.com:m2": "processed",
+      // A run on an older deploy still holds this one; it expires with it.
+      "processing-message:me@example.com:m3": "live-lock-token",
+    });
+
+    await deletePiiCacheKeys({ redis: redis.client });
+
+    expect(Object.fromEntries(redis.store)).toEqual({
+      [`processing-message:${hashAddressForKey("me@example.com")}:m1`]:
+        "processed",
+      // A live lock under the hashed key: the old claim waits to expire.
+      [`processing-message:${hashAddressForKey("me@example.com")}:m2`]:
+        "lock-token",
+      "processing-message:me@example.com:m2": "processed",
+      "processing-message:me@example.com:m3": "live-lock-token",
+    });
+  });
+
+  it("changes nothing on a dry run, and nothing more on a second run", async () => {
+    const redis = fakeRedis({
+      "reply:a1:m1": "Happy to meet",
+      "processing-message:me@example.com:m1": "processed",
+    });
+
+    const planned = await deletePiiCacheKeys({
+      redis: redis.client,
+      dryRun: true,
+    });
+    expect(redis.store.size).toBe(2);
+    expect(planned["reply:*"]).toBe(1);
+
+    await deletePiiCacheKeys({ redis: redis.client });
+    const again = await deletePiiCacheKeys({ redis: redis.client });
+
+    expect(Object.values(again).every((count) => count === 0)).toBe(true);
+  });
+
+  it("pages through SCAN instead of asking for every key at once", async () => {
+    const keys = Object.fromEntries(
+      Array.from({ length: 250 }, (_, i) => [`linked-page:${i}`, "page"]),
+    );
+    const redis = fakeRedis(keys, 40);
+
+    await deletePiiCacheKeys({ redis: redis.client });
+
+    expect(redis.store.size).toBe(0);
+    expect(redis.scans).toBeGreaterThan(5);
+  });
+});
+
+describe("runPiiCleanupStep", () => {
+  it("keeps the ids-only Deep Clean threads that are still written", async () => {
+    const redis = fakeRedis({
+      "thread:a1:job1:t1": { threadId: "t1", status: "processing" },
+      "thread:a1:job1:t2": { threadId: "t2", from: "billing@acme.com" },
+    });
+
+    const { counts } = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+    });
+
+    expect(counts["thread:*"]).toBe(1);
+    expect([...redis.store.keys()]).toEqual(["thread:a1:job1:t1"]);
+  });
+
+  it("counts on a dry run without deleting, renaming or rewriting", async () => {
+    const redis = fakeRedis({
+      "reply:a1:m1": "Happy to meet",
+      "usage:me@example.com": { cost: 4 },
+      "processing-message:me@example.com:m1": "processed",
+    });
+    const unlink = vi.spyOn(redis.client, "unlink");
+    const set = vi.spyOn(redis.client, "set");
+    const renamenx = vi.spyOn(redis.client, "renamenx");
+
+    const { counts, nextCursor } = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: true,
+    });
+
+    expect(nextCursor).toBeNull();
+    expect(counts["reply:*"]).toBe(1);
+    expect(counts["usage:*@*"]).toBe(1);
+    expect(counts["processing-message:*@*"]).toBe(1);
+    expect(redis.store.size).toBe(3);
+    expect(unlink).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+    expect(renamenx).not.toHaveBeenCalled();
+  });
+
+  it("only scans and deletes the listed patterns, so a decoy survives", async () => {
+    const redis = fakeRedis({
+      "reply:a1:m1": "Happy to meet",
+      "reply-tracker:outbound-thread-status:a1:t1:m1": "1",
+      "summary-limit:a1": "1",
+      "digest:summary-limit:a1": "1",
+      "usage:email-account:a1": { cost: 1 },
+      "decoy:me@example.com": "keep",
+    });
+    const matches: string[] = [];
+    const scan = redis.client.scan;
+    redis.client.scan = (cursor, options) => {
+      matches.push(options.match);
+      return scan(cursor, options);
+    };
+
+    await runPiiCleanupStep({ redis: redis.client, dryRun: false });
+
+    expect([...redis.store.keys()].sort()).toEqual([
+      "decoy:me@example.com",
+      "digest:summary-limit:a1",
+      "reply-tracker:outbound-thread-status:a1:t1:m1",
+      "summary-limit:a1",
+      "usage:email-account:a1",
+    ]);
+    // One pass over the keyspace, not a scan per pattern.
+    expect(new Set(matches)).toEqual(new Set(["*"]));
+  });
+
+  it("stops at the time budget with a cursor, and resumes to finish", async () => {
+    const keys = Object.fromEntries([
+      ...Array.from({ length: 700 }, (_, i) => [`linked-page:${i}`, "page"]),
+      ...Array.from({ length: 5 }, (_, i) => [`reply:a1:${i}`, "text"]),
+    ]);
+    const redis = fakeRedis(keys, 300);
+    // Every clock read is 10ms later, so a 15ms budget allows two batches.
+    let tick = 0;
+    const now = () => (tick += 10);
+
+    const totals: Record<string, number> = {};
+    let cursor: string | null = null;
+    let calls = 0;
+    do {
+      const step: Awaited<ReturnType<typeof runPiiCleanupStep>> =
+        await runPiiCleanupStep({
+          redis: redis.client,
+          dryRun: false,
+          cursor,
+          budgetMs: 15,
+          now,
+        });
+      for (const [match, count] of Object.entries(step.counts))
+        totals[match] = (totals[match] ?? 0) + count;
+      cursor = step.nextCursor;
+      calls++;
+      if (cursor) expect(cursor).toMatch(/^[1-9]\d*$/);
+    } while (cursor);
+
+    expect(calls).toBeGreaterThan(1);
+    expect(totals["linked-page:*"]).toBe(700);
+    expect(totals["reply:*"]).toBe(5);
+    expect(redis.store.size).toBe(0);
+  });
+
+  it("makes progress even with a zero budget", async () => {
+    const redis = fakeRedis({ "summary:1": "x", "summary:2": "x" }, 1);
+
+    const first = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+      budgetMs: 0,
+    });
+
+    expect(first.nextCursor).not.toBeNull();
+    expect(redis.store.size).toBe(1);
+  });
+
+  it("keeps hashed jira-cloud-id and meeting-news keys and drops the rest", async () => {
+    const redis = fakeRedis({
+      "jira-cloud-id:acme.atlassian.net": "cloud-1",
+      [`jira-cloud-id:${HASH}`]: "cloud-1",
+      "meeting-news:acme.com": [],
+      [`meeting-news:${HASH}`]: [],
+    });
+
+    await runPiiCleanupStep({ redis: redis.client, dryRun: false });
+
+    expect([...redis.store.keys()].sort()).toEqual([
+      `jira-cloud-id:${HASH}`,
+      `meeting-news:${HASH}`,
+    ]);
+  });
+
+  it("drops the old claim when the hashed one is settled too", async () => {
+    const hashed = `processing-message:${hashAddressForKey("me@example.com")}:m1`;
+    const redis = fakeRedis({
+      "processing-message:me@example.com:m1": "processed",
+      [hashed]: "retry:1",
+    });
+
+    await runPiiCleanupStep({ redis: redis.client, dryRun: false });
+
+    expect(Object.fromEntries(redis.store)).toEqual({ [hashed]: "retry:1" });
+  });
+
+  it("treats a claim that expired mid-run as already gone", async () => {
+    const redis = fakeRedis({
+      "processing-message:me@example.com:m1": "processed",
+    });
+    const get = redis.client.get;
+    redis.client.get = async (key) => {
+      const value = await get(key);
+      // Expires between the read and the rename.
+      redis.store.delete(key);
+      return value;
+    };
+
+    const { counts } = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+    });
+
+    expect(counts["processing-message:*@*"]).toBe(1);
+  });
+
+  it("surfaces a Redis failure without the command the client quotes", async () => {
+    const redis = fakeRedis({ "usage:me@example.com": { cost: 4 } });
+    redis.client.unlink = async (...keys) => {
+      throw new Error(
+        `ERR timeout, command was: ${JSON.stringify(["UNLINK", ...keys])}`,
+      );
+    };
+
+    const failure = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+    }).catch((error: Error) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "Redis command failed during PII cleanup",
+    );
+    expect((failure as Error).cause).toBeUndefined();
+    expect(JSON.stringify(failure)).not.toContain("me@example.com");
+  });
+
+  it("rejects a cursor it did not hand out", async () => {
+    const redis = fakeRedis({});
+
+    await expect(
+      runPiiCleanupStep({ redis: redis.client, dryRun: true, cursor: "1:0" }),
+    ).rejects.toThrow("Invalid cleanup cursor");
+  });
+});
+
+describe("hashedClaimKey", () => {
+  it("hashes the address and keeps the message id", () => {
+    expect(hashedClaimKey("processing-message:me@example.com:m1")).toBe(
+      `processing-message:${hashAddressForKey("me@example.com")}:m1`,
+    );
+    expect(hashedClaimKey(`processing-message:${HASH}:m1`)).toBeNull();
+  });
+});

@@ -50,6 +50,9 @@ export default async function AdminPage() {
           <Button asChild variant="outline" size="sm">
             <Link href="/admin/access">Access requests</Link>
           </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/privacy-cleanup">Privacy cleanup</Link>
+          </Button>
         </div>
       </div>
 

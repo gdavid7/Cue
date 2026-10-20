@@ -15,6 +15,8 @@ import { premiumEntitlementSelect } from "@/utils/premium";
 import { createEmailProvider } from "@/utils/email/provider";
 import { processProviderHistory } from "@/utils/webhook/process-history";
 import { hash } from "@/utils/hash";
+import { redis } from "@/utils/redis";
+import { runPiiCleanupStep } from "@/utils/redis/pii-cache-keys";
 import {
   hashEmailBody,
   convertGmailUrlBody,
@@ -26,6 +28,7 @@ import {
   loadResponseTimeDataBody,
   disableAllRulesBody,
   cleanupDraftsBody,
+  piiCleanupBody,
 } from "@/utils/actions/admin.validation";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
 import { syncAppleSubscriptionToDb } from "@/ee/billing/apple";
@@ -37,6 +40,37 @@ import {
   getAdminResponseTimeProviderDelayMs,
   getResponseTimeStats,
 } from "@/utils/stats/response-time/controller";
+
+// Leaves room under the page's 300s limit for the batch in flight.
+const PII_CLEANUP_BUDGET_MS = 45_000;
+
+export const adminPiiCleanupAction = adminActionClient
+  .metadata({ name: "adminPiiCleanup" })
+  .inputSchema(piiCleanupBody)
+  .action(async ({ parsedInput: { mode, cursor }, ctx: { logger } }) => {
+    const { counts, nextCursor } = await runPiiCleanupStep({
+      redis: {
+        scan: (scanCursor, options) => redis.scan(scanCursor, options),
+        get: (key) => redis.get(key),
+        mget: (...keys) => redis.mget(...keys),
+        set: (key, value) => redis.set(key, value),
+        unlink: (...keys) => redis.unlink(...keys),
+        renamenx: (source, destination) => redis.renamenx(source, destination),
+      },
+      dryRun: mode === "dry-run",
+      cursor,
+      budgetMs: PII_CLEANUP_BUDGET_MS,
+    });
+
+    // Patterns and counts only: never a key name or value.
+    logger.info("Redis PII cleanup step", {
+      mode,
+      counts,
+      finished: !nextCursor,
+    });
+
+    return { counts, nextCursor };
+  });
 
 export const adminProcessHistoryAction = adminActionClient
   .metadata({ name: "adminProcessHistory", gmailPriority: "sync" })
