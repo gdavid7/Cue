@@ -82,6 +82,31 @@ describe("predraftReply", () => {
     });
   });
 
+  // The reader, reply memories and send tracking read a DRAFT_EMAIL's
+  // content as the mailbox's HTML body (DR-6), as a rule's draft stores it.
+  it("stores the reply as the HTML body a rule's draft stores", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      allowHiddenAiDraftLinks: false,
+      signature: "<div>Sam</div>",
+    } as never);
+    suggestReply.mockResolvedValue({
+      status: "suggested",
+      reply: `I'm in "Q3" & <ok>.\n\nI'll call.`,
+      citations: [],
+    });
+
+    await run();
+
+    expect(prisma.executedAction.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          content:
+            "I&#x27;m in &quot;Q3&quot; &amp; &lt;ok&gt;.\n\nI&#x27;ll call.\n\n<div>Sam</div>",
+        }),
+      }),
+    );
+  });
+
   it("keeps the suggestion where a rule's would wait, marked as a pre-draft", async () => {
     const logger = createScopedLogger("predraft-test");
     const info = vi.spyOn(logger, "info");
