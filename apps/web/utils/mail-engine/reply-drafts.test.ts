@@ -628,6 +628,10 @@ describe("a draft kept as its page goes away", () => {
     ...content,
     draft: { ...content.draft, editableHtml: "<p>Typed before reload</p>" },
   };
+  const savedElsewhere: ReplyDraftContent = {
+    ...content,
+    draft: { ...content.draft, editableHtml: "<p>Saved elsewhere</p>" },
+  };
 
   it("reopens edits whose save never reached the engine before a reload", async () => {
     const client = createRevisionCheckingClient();
@@ -705,13 +709,141 @@ describe("a draft kept as its page goes away", () => {
     before.clearLocalReplyDrafts(otherAccount.emailAccountId);
 
     const after = await loadPage(client);
-    expect(
-      (await after.getReplyDraft(otherAccount))?.content?.draft.editableHtml,
-    ).not.toBe("<p>Typed before reload</p>");
+    expect(await after.getReplyDraft(otherAccount)).toBeUndefined();
     expect(
       (await after.getReplyDraft(replyIdentity))?.content?.draft.editableHtml,
     ).toBe("<p>Typed before reload</p>");
   });
+
+  it("does not keep edits whose save lost to a newer version", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const stale = before.createReplyDraftWriter(replyIdentity);
+    await stale.save(content);
+    await before.createReplyDraftWriter(replyIdentity, 1).save(savedElsewhere);
+    await expect(stale.save(lastEdit)).rejects.toThrow("another tab");
+    stale.keepUnsaved(lastEdit);
+
+    const after = await loadPage(client);
+    expect(
+      (await after.getReplyDraft(replyIdentity))?.content?.draft.editableHtml,
+    ).toBe("<p>Saved elsewhere</p>");
+  });
+
+  it("does not bring back a draft deleted from the mailbox", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const writer = before.createReplyDraftWriter(identity);
+    await writer.save({ ...content, requestId: "compose-1" });
+    await before.updateReplyDraftProviderState(
+      identity,
+      "compose-1",
+      "provider-1",
+    );
+    stubMailboxDraftLookup(false);
+    await before.dropReplyDraftDeletedFromMailbox(
+      await before.getReplyDraft(identity),
+    );
+    writer.keepUnsaved({ ...lastEdit, requestId: "compose-1" });
+
+    const after = await loadPage(client);
+    expect((await after.getReplyDraft(identity))?.content ?? null).toBe(null);
+  });
+
+  it("restores into the same mailbox draft and its saved copies", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const writer = before.createReplyDraftWriter(replyIdentity);
+    await writer.save({ ...content, requestId: "compose-1" });
+    await before.updateReplyDraftProviderState(
+      replyIdentity,
+      "compose-1",
+      "provider-1",
+    );
+    await before.rememberProviderDraftMessage(
+      replyIdentity,
+      "compose-1",
+      "provider-message-1",
+    );
+    writer.keepUnsaved({ ...lastEdit, requestId: "compose-1" });
+
+    const after = await loadPage(client);
+    const restored = await after.getReplyDraft(replyIdentity);
+    expect(restored?.content).toMatchObject({
+      draft: { editableHtml: "<p>Typed before reload</p>" },
+      providerDraftId: "provider-1",
+      providerDraftMessageIds: ["provider-message-1"],
+    });
+  });
+
+  it("drops the kept copy when the engine holds a newer draft", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    before.createReplyDraftWriter(replyIdentity).keepUnsaved(lastEdit);
+    // Saved later from another device.
+    await client.saveDraft({
+      key: { draftId: replyIdentity.messageId },
+      expectedRevision: null,
+      content: {
+        subject: "Reply",
+        clientState: JSON.stringify({
+          ...savedElsewhere,
+          updatedAt: Date.now() + 60_000,
+        }),
+      },
+    });
+
+    const after = await loadPage(client);
+    expect(
+      (await after.getReplyDraft(replyIdentity))?.content?.draft.editableHtml,
+    ).toBe("<p>Saved elsewhere</p>");
+    expect(keptDraftKeys()).toEqual([]);
+  });
+
+  it("forgets a kept copy older than a week", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    before.createReplyDraftWriter(replyIdentity).keepUnsaved(lastEdit);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 8 * 86_400_000);
+
+    const after = await loadPage(client);
+    expect(await after.getReplyDraft(replyIdentity)).toBeUndefined();
+    expect(keptDraftKeys()).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("removing an account skips kept entries it cannot read", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    window.localStorage.setItem("cue:unsaved-reply-draft:v1:not-json", "{}");
+    before.createReplyDraftWriter(replyIdentity).keepUnsaved(lastEdit);
+    before.clearLocalReplyDrafts(replyIdentity.emailAccountId);
+
+    const after = await loadPage(client);
+    expect(await after.getReplyDraft(replyIdentity)).toBeUndefined();
+  });
+
+  it("stops other tabs keeping drafts once one tab signs out", async () => {
+    const client = createRevisionCheckingClient();
+    const signingOut = await loadPage(client);
+    const otherTab = await loadPage(client);
+    const writer = otherTab.createReplyDraftWriter(replyIdentity);
+    signingOut.clearLocalReplyDrafts();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    writer.keepUnsaved(lastEdit);
+
+    const after = await loadPage(client);
+    expect(await after.getReplyDraft(replyIdentity)).toBeUndefined();
+  });
+
+  function keptDraftKeys() {
+    const keys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith("cue:unsaved-reply-draft:")) keys.push(key);
+    }
+    return keys;
+  }
 
   async function loadPage(
     client: ReturnType<typeof createRevisionCheckingClient>,

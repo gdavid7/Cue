@@ -81,6 +81,9 @@ const accountEpoch = new Map<string, number>();
 // A draft a composer held when its page was hidden or closed, kept in this
 // browser until the engine has saved it. Only this device reads it.
 const UNSAVED_DRAFT_PREFIX = "cue:unsaved-reply-draft:v1:";
+// Edits left this long were abandoned; they should not outlive that on a
+// shared browser.
+const UNSAVED_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 let unsavedDraftsBlocked = false;
 const channel =
   typeof window !== "undefined" && typeof BroadcastChannel !== "undefined"
@@ -168,6 +171,11 @@ export function getLatestDraftMessageId(
 
 channel?.addEventListener("message", (event) => {
   const scope = event.data;
+  if (scope?.type === "signed-out") {
+    // This tab's composers would otherwise keep drafts as they close.
+    unsavedDraftsBlocked = true;
+    return;
+  }
   if (
     typeof scope?.emailAccountId !== "string" ||
     typeof scope?.threadId !== "string"
@@ -434,10 +442,13 @@ export function createReplyDraftWriter(
      * so a save started now may never land.
      */
     keepUnsaved(content: ReplyDraftContent) {
+      // A composer behind the stored draft (saved elsewhere, or deleted from
+      // the mailbox) holds edits that must not come back over it.
       if (
         stopped ||
         unsavedDraftsBlocked ||
-        currentEpoch(identity.emailAccountId) !== epoch
+        currentEpoch(identity.emailAccountId) !== epoch ||
+        (drafts.get(draftKey(identity))?.revision ?? 0) !== revision
       )
         return;
       writeUnsavedReplyDraft(identity, content);
@@ -536,6 +547,7 @@ export function clearLocalReplyDrafts(emailAccountId?: string) {
     // Signing out leaves the page, and its composers would keep their drafts
     // again on the way out. The next page load starts unblocked.
     unsavedDraftsBlocked = true;
+    channel?.postMessage({ type: "signed-out" });
     drafts.clear();
     engineRevisions.clear();
     draftSessionMessageIds.clear();
@@ -785,22 +797,12 @@ async function restoreUnsavedReplyDraft(
     forgetUnsavedReplyDraft(identity);
     return;
   }
-  // A composer may have saved while the engine was read.
-  const current = drafts.get(draftKey(identity));
-  if (current && current !== stored) return current;
-  const restored: StoredReplyDraft = {
-    ...identity,
-    content: unsaved.content,
-    revision: stored?.revision ?? 0,
-    updatedAt: unsaved.updatedAt,
-  };
-  drafts.set(draftKey(identity), restored);
-  const persisted = await persistEngineReplyDraft(
-    identity,
-    unsaved.content,
-  ).catch(() => false);
-  if (persisted) forgetUnsavedReplyDraft(identity, unsaved.updatedAt);
-  return restored;
+  // Saved like any edit, so it keeps the mailbox draft it belongs to, and
+  // loses to a composer that saved while the engine was read.
+  await createReplyDraftWriter(identity, stored?.revision ?? 0)
+    .save(unsaved.content)
+    .catch(() => {});
+  return drafts.get(draftKey(identity));
 }
 
 function writeUnsavedReplyDraft(
@@ -832,6 +834,10 @@ function readUnsavedReplyDraft(
       !parsed.content.values
     )
       return;
+    if (Date.now() - parsed.updatedAt > UNSAVED_DRAFT_MAX_AGE_MS) {
+      window.localStorage.removeItem(UNSAVED_DRAFT_PREFIX + draftKey(identity));
+      return;
+    }
     return parsed;
   } catch {
     return;
@@ -857,12 +863,17 @@ function forgetUnsavedReplyDrafts(emailAccountId?: string) {
     for (let index = 0; index < storage.length; index += 1) {
       const key = storage.key(index);
       if (!key?.startsWith(UNSAVED_DRAFT_PREFIX)) continue;
-      if (
-        !emailAccountId ||
-        JSON.parse(key.slice(UNSAVED_DRAFT_PREFIX.length))[0] === emailAccountId
-      )
+      if (!emailAccountId || unsavedDraftAccountId(key) === emailAccountId)
         keys.push(key);
     }
     for (const key of keys) storage.removeItem(key);
   } catch {}
+}
+
+function unsavedDraftAccountId(key: string) {
+  try {
+    return JSON.parse(key.slice(UNSAVED_DRAFT_PREFIX.length))[0];
+  } catch {
+    return;
+  }
 }
