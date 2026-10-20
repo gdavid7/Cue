@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo } from "react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
-import type { MailPredicate } from "@inboxzero/mail-core/queries";
+import {
+  MAX_MESSAGE_PREDICATE_IDS,
+  type MailPredicate,
+} from "@inboxzero/mail-core/queries";
 import useSWR from "swr";
 import { useSWRConfig } from "swr";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
@@ -16,11 +19,11 @@ import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import { searchQueryForAccounts } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
 import {
-  threadsQueryToPredicate,
-  withoutHiddenDrafts,
-} from "@/utils/mail-engine/threads-query";
-import { useAllAccountsHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
+  type HiddenDrafts,
+  useAllAccountsHiddenDraftMessageIds,
+} from "@/hooks/useHiddenDraftMessageIds";
 
 const EMPTY_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
 const MAX_MAIL_PREDICATE_CHILDREN = 32;
@@ -56,17 +59,14 @@ export function useCombinedMailThreads({
   );
   const labelsByAccount = useLabelsByAccount(enabled ? accountIds : []);
   const isDrafts = !searchQuery && mailboxType === "draft";
-  const hiddenDraftMessageIds = useAllAccountsHiddenDraftMessageIds(
+  const hiddenDrafts = useAllAccountsHiddenDraftMessageIds(
     enabled && isDrafts ? accounts : undefined,
   );
   const predicate = useMemo(() => {
     // A conversation stays in Drafts only through drafts that aren't hidden.
     if (isDrafts)
-      return hiddenDraftMessageIds.length
-        ? withoutHiddenDrafts(
-            threadsQueryToPredicate({ type: "draft" }),
-            hiddenDraftMessageIds,
-          )
+      return hiddenDrafts.length
+        ? withoutAccountsHiddenDrafts(hiddenDrafts)
         : undefined;
     if (mailboxType) return;
     return labelNames?.length
@@ -78,7 +78,7 @@ export function useCombinedMailThreads({
       : undefined;
   }, [
     accountIds,
-    hiddenDraftMessageIds,
+    hiddenDrafts,
     isDrafts,
     labelNames,
     labelsByAccount,
@@ -254,6 +254,30 @@ export function labelNamesToAccountScopedPredicate({
   return {
     kind: "all",
     predicates: [{ kind: "role", role: "inbox" }, anyPredicate(predicates)],
+  };
+}
+
+/**
+ * Drafts, leaving out each account's drafts that a send stands in for. Ids are
+ * matched within their own account, as another account's message could share
+ * one.
+ */
+function withoutAccountsHiddenDrafts(hidden: HiddenDrafts[]): MailPredicate {
+  return {
+    kind: "all",
+    predicates: [
+      threadsQueryToPredicate({ type: "draft" }),
+      {
+        kind: "not",
+        predicate: anyPredicate(
+          hidden.map(({ emailAccountId, messageIds }) => ({
+            kind: "message",
+            accountId: emailAccountId,
+            ids: messageIds.slice(-MAX_MESSAGE_PREDICATE_IDS),
+          })),
+        ),
+      },
+    ],
   };
 }
 

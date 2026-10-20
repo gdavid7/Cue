@@ -233,7 +233,16 @@ describe("useCombinedMailThreads merged mailboxes", () => {
               { kind: "mailbox", mailbox: "drafts" },
               {
                 kind: "not",
-                predicate: { kind: "message", ids: ["outlook-draft"] },
+                predicate: {
+                  kind: "any",
+                  predicates: [
+                    {
+                      kind: "message",
+                      accountId: "outlook",
+                      ids: ["outlook-draft"],
+                    },
+                  ],
+                },
               },
             ],
           },

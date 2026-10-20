@@ -1,21 +1,34 @@
 "use client";
 
 import { useMemo, useSyncExternalStore } from "react";
-import useSWR from "swr";
+import useSWR, { type ScopedMutator } from "swr";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
-import { useAllAccountsList } from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import { useAllAccountsList } from "@/hooks/useAllAccountsList";
 
-type HiddenDrafts = { emailAccountId: string; messageIds: string[] };
+export type HiddenDrafts = { emailAccountId: string; messageIds: string[] };
 
 const NO_HIDDEN_DRAFTS: HiddenDrafts[] = [];
-const NO_MESSAGE_IDS: string[] = [];
+const NO_HIDDEN_BY_ACCOUNT: HiddenDrafts[] = [];
 let sendingDrafts = NO_HIDDEN_DRAFTS;
 const listeners = new Set<() => void>();
 
 const SCHEDULED_EMAILS_PATH = "/api/user/scheduled-emails";
 
-export function upcomingScheduledEmailsKey(emailAccountId: string) {
-  return [SCHEDULED_EMAILS_PATH, emailAccountId];
+/**
+ * Re-reads an account's sends waiting to go out wherever they are read: alone,
+ * or among All inboxes' accounts, which hide drafts by them too. A failed
+ * read is stale data, not a failed action, so it never rejects.
+ */
+export async function refreshUpcomingScheduledEmails(
+  mutate: ScopedMutator,
+  emailAccountId: string,
+) {
+  await mutate(
+    (key) =>
+      Array.isArray(key) &&
+      key[0] === SCHEDULED_EMAILS_PATH &&
+      key.includes(emailAccountId),
+  ).catch(() => {});
 }
 
 /**
@@ -84,10 +97,14 @@ export function useHiddenDraftMessageIds(emailAccountId: string) {
   );
 }
 
-/** The same, for every account All inboxes merges. No accounts reads nothing. */
+/**
+ * The same, for every account All inboxes merges, each account's apart: a
+ * message id names a message only within its own account. No accounts reads
+ * nothing.
+ */
 export function useAllAccountsHiddenDraftMessageIds(
   accounts: { id: string }[] | undefined,
-) {
+): HiddenDrafts[] {
   const { data } = useAllAccountsUpcomingScheduledEmails(accounts);
   const sending = useSyncExternalStore(
     subscribe,
@@ -96,17 +113,20 @@ export function useAllAccountsHiddenDraftMessageIds(
   );
   const accountKey = accounts?.map((account) => account.id).join("\n");
   return useMemo(() => {
-    if (accountKey === undefined) return NO_MESSAGE_IDS;
-    const accountIds = new Set(accountKey.split("\n"));
-    const ids = [
-      ...getScheduledDraftMessageIds(
-        data?.byAccount.flatMap(({ data }) => data.scheduledEmails) ?? [],
-      ),
-      ...sending
-        .filter((entry) => accountIds.has(entry.emailAccountId))
-        .flatMap((entry) => entry.messageIds),
-    ];
-    return ids.length ? ids : NO_MESSAGE_IDS;
+    if (accountKey === undefined) return NO_HIDDEN_BY_ACCOUNT;
+    const hidden = accountKey.split("\n").flatMap((emailAccountId) => {
+      const scheduled =
+        data?.byAccount.find((entry) => entry.accountId === emailAccountId)
+          ?.data.scheduledEmails ?? [];
+      const messageIds = [
+        ...getScheduledDraftMessageIds(scheduled),
+        ...sending
+          .filter((entry) => entry.emailAccountId === emailAccountId)
+          .flatMap((entry) => entry.messageIds),
+      ];
+      return messageIds.length ? [{ emailAccountId, messageIds }] : [];
+    });
+    return hidden.length ? hidden : NO_HIDDEN_BY_ACCOUNT;
   }, [accountKey, data, sending]);
 }
 
@@ -149,4 +169,8 @@ function subscribe(listener: () => void) {
 
 function notify() {
   for (const listener of listeners) listener();
+}
+
+function upcomingScheduledEmailsKey(emailAccountId: string) {
+  return [SCHEDULED_EMAILS_PATH, emailAccountId];
 }

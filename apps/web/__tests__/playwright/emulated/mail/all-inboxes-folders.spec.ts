@@ -134,6 +134,30 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       expect(savedAs).toContain(second.id);
       expect(savedAs).not.toContain(emailAccountId);
     }
+
+    // Scheduling it takes it out of the merged Drafts at once, so it can't be
+    // opened and sent a second time; the other account's copy stays.
+    await page.getByRole("button", { name: "Send later", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Send later" })
+      .getByRole("button", { name: /Tomorrow morning/ })
+      .click();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await mailboxes
+      .getByRole("link", { name: "Drafts", exact: true })
+      .first()
+      .click();
+    await expect(
+      draftRows.filter({ has: accountMarker(page, second.email) }),
+    ).toHaveCount(0, { timeout: 30_000 });
+    await expect(
+      draftRows.filter({ has: accountMarker(page, primaryEmail) }),
+    ).toHaveCount(1);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "all-inboxes-draft-scheduled",
+    );
   } finally {
     await unstarSentMessage(page).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
