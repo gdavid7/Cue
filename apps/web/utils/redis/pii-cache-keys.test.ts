@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { hashAddressForKey } from "@/utils/redis/address-key";
+import { fakeCleanupRedis as fakeRedis } from "@/__tests__/redis/fake-cleanup-redis";
 import {
-  type CleanupRedis,
   deletePiiCacheKeys,
   hashedClaimKey,
-  PII_KEY_PATTERNS,
   runPiiCleanupStep,
 } from "./pii-cache-keys";
 
@@ -103,9 +102,10 @@ describe("deletePiiCacheKeys", () => {
     expect(Object.fromEntries(redis.store)).toEqual({
       [`processing-message:${hashAddressForKey("me@example.com")}:m1`]:
         "processed",
-      // The newer claim under the hashed key wins.
+      // A live lock under the hashed key: the old claim waits to expire.
       [`processing-message:${hashAddressForKey("me@example.com")}:m2`]:
         "lock-token",
+      "processing-message:me@example.com:m2": "processed",
       "processing-message:me@example.com:m3": "live-lock-token",
     });
   });
@@ -192,10 +192,10 @@ describe("runPiiCleanupStep", () => {
       "usage:email-account:a1": { cost: 1 },
       "decoy:me@example.com": "keep",
     });
-    const scanned = new Set<string>();
+    const matches: string[] = [];
     const scan = redis.client.scan;
     redis.client.scan = (cursor, options) => {
-      scanned.add(options.match);
+      matches.push(options.match);
       return scan(cursor, options);
     };
 
@@ -208,12 +208,8 @@ describe("runPiiCleanupStep", () => {
       "summary-limit:a1",
       "usage:email-account:a1",
     ]);
-    const listed = new Set([
-      ...PII_KEY_PATTERNS.map((pattern) => pattern.match),
-      "processing-message:*@*",
-      "usage-migration:weekly-usage-cost-user:*:done",
-    ]);
-    expect(scanned).toEqual(listed);
+    // One pass over the keyspace, not a scan per pattern.
+    expect(new Set(matches)).toEqual(new Set(["*"]));
   });
 
   it("stops at the time budget with a cursor, and resumes to finish", async () => {
@@ -242,7 +238,7 @@ describe("runPiiCleanupStep", () => {
         totals[match] = (totals[match] ?? 0) + count;
       cursor = step.nextCursor;
       calls++;
-      if (cursor) expect(cursor).toMatch(/^\d+:\d+$/);
+      if (cursor) expect(cursor).toMatch(/^[1-9]\d*$/);
     } while (cursor);
 
     expect(calls).toBeGreaterThan(1);
@@ -252,7 +248,7 @@ describe("runPiiCleanupStep", () => {
   });
 
   it("makes progress even with a zero budget", async () => {
-    const redis = fakeRedis({ "summary:1": "x" });
+    const redis = fakeRedis({ "summary:1": "x", "summary:2": "x" }, 1);
 
     const first = await runPiiCleanupStep({
       redis: redis.client,
@@ -261,14 +257,83 @@ describe("runPiiCleanupStep", () => {
     });
 
     expect(first.nextCursor).not.toBeNull();
-    expect(first.nextCursor).not.toBe("0:0");
+    expect(redis.store.size).toBe(1);
+  });
+
+  it("keeps hashed jira-cloud-id and meeting-news keys and drops the rest", async () => {
+    const redis = fakeRedis({
+      "jira-cloud-id:acme.atlassian.net": "cloud-1",
+      [`jira-cloud-id:${HASH}`]: "cloud-1",
+      "meeting-news:acme.com": [],
+      [`meeting-news:${HASH}`]: [],
+    });
+
+    await runPiiCleanupStep({ redis: redis.client, dryRun: false });
+
+    expect([...redis.store.keys()].sort()).toEqual([
+      `jira-cloud-id:${HASH}`,
+      `meeting-news:${HASH}`,
+    ]);
+  });
+
+  it("drops the old claim when the hashed one is settled too", async () => {
+    const hashed = `processing-message:${hashAddressForKey("me@example.com")}:m1`;
+    const redis = fakeRedis({
+      "processing-message:me@example.com:m1": "processed",
+      [hashed]: "retry:1",
+    });
+
+    await runPiiCleanupStep({ redis: redis.client, dryRun: false });
+
+    expect(Object.fromEntries(redis.store)).toEqual({ [hashed]: "retry:1" });
+  });
+
+  it("treats a claim that expired mid-run as already gone", async () => {
+    const redis = fakeRedis({
+      "processing-message:me@example.com:m1": "processed",
+    });
+    const get = redis.client.get;
+    redis.client.get = async (key) => {
+      const value = await get(key);
+      // Expires between the read and the rename.
+      redis.store.delete(key);
+      return value;
+    };
+
+    const { counts } = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+    });
+
+    expect(counts["processing-message:*@*"]).toBe(1);
+  });
+
+  it("surfaces a Redis failure without the command the client quotes", async () => {
+    const redis = fakeRedis({ "usage:me@example.com": { cost: 4 } });
+    redis.client.unlink = async (...keys) => {
+      throw new Error(
+        `ERR timeout, command was: ${JSON.stringify(["UNLINK", ...keys])}`,
+      );
+    };
+
+    const failure = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+    }).catch((error: Error) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      "Redis command failed during PII cleanup",
+    );
+    expect((failure as Error).cause).toBeUndefined();
+    expect(JSON.stringify(failure)).not.toContain("me@example.com");
   });
 
   it("rejects a cursor it did not hand out", async () => {
     const redis = fakeRedis({});
 
     await expect(
-      runPiiCleanupStep({ redis: redis.client, dryRun: true, cursor: "99:0" }),
+      runPiiCleanupStep({ redis: redis.client, dryRun: true, cursor: "1:0" }),
     ).rejects.toThrow("Invalid cleanup cursor");
   });
 });
@@ -281,52 +346,3 @@ describe("hashedClaimKey", () => {
     expect(hashedClaimKey(`processing-message:${HASH}:m1`)).toBeNull();
   });
 });
-
-function fakeRedis(initial: Record<string, unknown>, pageSize = 1000) {
-  const store = new Map(Object.entries(initial));
-  // Like Redis, a scan returns every key present from its start to its end,
-  // even while keys are deleted along the way.
-  const snapshots = new Map<string, string[]>();
-  let scans = 0;
-  const client: CleanupRedis = {
-    async scan(cursor, { match }) {
-      scans++;
-      const pattern = new RegExp(
-        `^${match.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`,
-      );
-      if (Number(cursor) === 0)
-        snapshots.set(
-          match,
-          [...store.keys()].filter((key) => pattern.test(key)).sort(),
-        );
-      const all = snapshots.get(match) ?? [];
-      const start = Number(cursor);
-      const page = all.slice(start, start + pageSize);
-      const next = start + pageSize >= all.length ? 0 : start + pageSize;
-      return [String(next), page];
-    },
-    async get(key) {
-      return store.get(key) ?? null;
-    },
-    async set(key, value) {
-      store.set(key, value);
-      return "OK";
-    },
-    async unlink(...keys) {
-      return keys.filter((key) => store.delete(key)).length;
-    },
-    async renamenx(source, destination) {
-      if (store.has(destination) || !store.has(source)) return 0;
-      store.set(destination, store.get(source));
-      store.delete(source);
-      return 1;
-    },
-  };
-  return {
-    client,
-    store,
-    get scans() {
-      return scans;
-    },
-  };
-}

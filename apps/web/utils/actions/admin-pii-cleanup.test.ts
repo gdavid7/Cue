@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureException } from "@/__tests__/mocks/sentry-nextjs.mock";
 import { adminPiiCleanupAction } from "./admin";
 
-const { mockAuth, store, snapshots } = vi.hoisted(() => ({
+const { mockAuth, fake, spies } = vi.hoisted(() => ({
   mockAuth: vi.fn(),
-  store: new Map<string, unknown>(),
-  // Like Redis, a scan keeps its place while keys are deleted along the way.
-  snapshots: new Map<string, string[]>(),
+  fake: {} as {
+    current: ReturnType<
+      typeof import("@/__tests__/redis/fake-cleanup-redis").fakeCleanupRedis
+    >;
+  },
+  spies: {} as Record<string, ReturnType<typeof vi.fn>>,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -19,44 +23,27 @@ vi.mock("@/env", () => ({
     NODE_ENV: "test",
   },
 }));
-vi.mock("@/utils/redis", () => ({
-  redis: {
-    scan: vi.fn(async (cursor: string | number, { match, count }) => {
-      const pattern = new RegExp(
-        `^${String(match)
-          .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*/g, ".*")}$`,
-      );
-      if (Number(cursor) === 0)
-        snapshots.set(
-          match,
-          [...store.keys()].filter((key) => pattern.test(key)).sort(),
-        );
-      const all = snapshots.get(match) ?? [];
-      const start = Number(cursor);
-      const next = start + count >= all.length ? 0 : start + count;
-      return [String(next), all.slice(start, start + count)];
-    }),
-    get: vi.fn(async (key: string) => store.get(key) ?? null),
-    set: vi.fn(async (key: string, value: unknown) => {
-      store.set(key, value);
-      return "OK";
-    }),
-    unlink: vi.fn(
-      async (...keys: string[]) =>
-        keys.filter((key) => store.delete(key)).length,
-    ),
-    renamenx: vi.fn(async () => 0),
-  },
-}));
+vi.mock("@/utils/redis", async () => {
+  const { fakeCleanupRedis } = await import(
+    "@/__tests__/redis/fake-cleanup-redis"
+  );
+  fake.current = fakeCleanupRedis();
+  const client = fake.current.client;
+  for (const command of ["scan", "get", "mget", "set", "unlink", "renamenx"])
+    spies[command] = vi.fn((...args: unknown[]) =>
+      (client as Record<string, (...a: unknown[]) => unknown>)[command](
+        ...args,
+      ),
+    );
+  return { redis: spies };
+});
 
 describe("adminPiiCleanupAction", () => {
   let output: string[];
 
   beforeEach(() => {
     vi.clearAllMocks();
-    store.clear();
-    snapshots.clear();
+    fake.current.reset();
     output = [];
     for (const method of ["log", "info", "warn", "error"] as const)
       vi.spyOn(console, method).mockImplementation((...args) => {
@@ -76,45 +63,43 @@ describe("adminPiiCleanupAction", () => {
     ["a non-admin", { user: { id: "u2", email: "friend@example.com" } }],
   ])("rejects %s and touches nothing", async (_label, session) => {
     mockAuth.mockResolvedValue(session);
-    store.set("reply:a1:m1", "Happy to meet");
-    const { redis } = await import("@/utils/redis");
+    fake.current.store.set("reply:a1:m1", "Happy to meet");
 
     const result = await adminPiiCleanupAction({ mode: "delete" });
 
     expect(result?.data).toBeUndefined();
     expect(result?.serverError).toBeDefined();
-    expect(redis.scan).not.toHaveBeenCalled();
-    expect(redis.unlink).not.toHaveBeenCalled();
-    expect(store.size).toBe(1);
+    expect(spies.scan).not.toHaveBeenCalled();
+    expect(spies.unlink).not.toHaveBeenCalled();
+    expect(fake.current.store.size).toBe(1);
   });
 
   it("counts per pattern on a dry run and deletes nothing", async () => {
+    const { store } = fake.current;
     store.set("reply:a1:m1", "Happy to meet");
     store.set("usage:me@example.com", { cost: 4 });
     store.set("decoy:me@example.com", "keep");
-    const { redis } = await import("@/utils/redis");
 
     const result = await adminPiiCleanupAction({ mode: "dry-run" });
 
     expect(result?.data?.nextCursor).toBeNull();
     expect(result?.data?.counts["reply:*"]).toBe(1);
     expect(result?.data?.counts["usage:*@*"]).toBe(1);
-    expect(redis.unlink).not.toHaveBeenCalled();
+    expect(spies.unlink).not.toHaveBeenCalled();
     expect(store.size).toBe(3);
   });
 
   it("deletes the listed patterns only, and resumes from the cursor", async () => {
+    const { store } = fake.current;
     for (let i = 0; i < 700; i++) store.set(`linked-page:${i}`, "page");
     store.set("decoy:me@example.com", "keep");
-    const { redis } = await import("@/utils/redis");
     // Each scan batch takes longer than the budget, so one call does one batch.
-    const dateNow = vi.spyOn(Date, "now");
     let clock = 0;
-    dateNow.mockImplementation(() => (clock += 60_000));
+    vi.spyOn(Date, "now").mockImplementation(() => (clock += 60_000));
 
     const first = await adminPiiCleanupAction({ mode: "delete" });
-    expect(first?.data?.nextCursor).toMatch(/^\d+:\d+$/);
-    expect(store.size).toBe(701);
+    expect(first?.data?.nextCursor).toMatch(/^[1-9]\d*$/);
+    expect(store.size).toBeGreaterThan(300);
 
     let cursor = first?.data?.nextCursor;
     let deleted = first?.data?.counts["linked-page:*"] ?? 0;
@@ -126,13 +111,13 @@ describe("adminPiiCleanupAction", () => {
       calls++;
     }
 
-    expect(calls).toBeGreaterThan(3);
+    expect(calls).toBeGreaterThan(1);
     expect(deleted).toBe(700);
     expect([...store.keys()]).toEqual(["decoy:me@example.com"]);
-    expect(redis.unlink).toHaveBeenCalled();
   });
 
   it("logs counts and patterns, never an address or a value", async () => {
+    const { store } = fake.current;
     store.set("usage:me@example.com", { cost: 4, note: "secret-value" });
     store.set("processing-message:me@example.com:m1", "processed");
     store.set("reply:a1:m1", "secret-reply-text");
@@ -146,5 +131,35 @@ describe("adminPiiCleanupAction", () => {
     expect(logged).not.toContain("secret-reply-text");
     // The only "@" is the wildcard in a pattern such as usage:*@*.
     expect(logged.replace(/\*@\*/g, "")).not.toContain("@");
+  });
+
+  it("keeps the key a failing Redis command quotes out of logs and Sentry", async () => {
+    const { store } = fake.current;
+    store.set("usage:me@example.com", { cost: 4, note: "secret-value" });
+    spies.unlink.mockImplementationOnce(async (...keys: string[]) => {
+      throw new Error(
+        `ERR timeout, command was: ${JSON.stringify(["UNLINK", ...keys])}`,
+      );
+    });
+
+    const result = await adminPiiCleanupAction({ mode: "delete" });
+
+    expect(result?.serverError).toBeDefined();
+    const leaked = [
+      output.join("\n"),
+      JSON.stringify(
+        captureException.mock.calls.map(([error, context]) => [
+          error instanceof Error ? error.message : String(error),
+          error instanceof Error ? String(error.cause ?? "") : "",
+          context,
+        ]),
+      ),
+      JSON.stringify(result),
+    ].join("\n");
+    expect(leaked).not.toContain("me@example.com");
+    expect(leaked).not.toContain("secret-value");
+    expect(output.join("\n")).toContain(
+      "Redis command failed during PII cleanup",
+    );
   });
 });

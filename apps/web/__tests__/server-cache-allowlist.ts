@@ -524,6 +524,32 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/actions/admin.ts": {
+    writes: 1,
+    keys: [
+      {
+        key: "the keys the PII cleanup rewrites (usage-migration:weekly-usage-cost-user:{userId}:done)",
+        holds:
+          "per-day cost totals; the cleanup only removes the address-keyed form",
+        ttl: "none",
+      },
+    ],
+  },
+  "utils/redis/pii-cache-keys.ts": {
+    writes: 2,
+    keys: [
+      {
+        key: "usage-migration:weekly-usage-cost-user:{userId}:done (rewrite)",
+        holds: "per-day cost totals, without addresses",
+        ttl: "none",
+      },
+      {
+        key: "processing-message:{sha256(mailbox address)}:{messageId} (rename)",
+        holds: "a settled processing flag, moved from the address-keyed key",
+        ttl: "kept from the renamed key",
+      },
+    ],
+  },
   "utils/redis/usage.ts": {
     writes: 14,
     keys: [

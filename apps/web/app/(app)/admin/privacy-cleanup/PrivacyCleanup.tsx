@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useAction } from "next-safe-action/hooks";
 import { adminPiiCleanupAction } from "@/utils/actions/admin";
 import { Button } from "@/components/ui/button";
@@ -28,17 +28,23 @@ import { getActionErrorMessage } from "@/utils/error";
 
 type Counts = Record<string, number>;
 
-export function PrivacyCleanup() {
+export function PrivacyCleanup({
+  chatSdkRedis,
+}: {
+  chatSdkRedis: "same" | "different" | "unknown";
+}) {
   const [planned, setPlanned] = useState<Counts | null>(null);
   const [deleted, setDeleted] = useState<Counts>({});
   const [resumeCursor, setResumeCursor] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [counting, setCounting] = useState(false);
+  const [running, setRunning] = useState(false);
+  const stopRequested = useRef(false);
 
-  const { executeAsync, isExecuting } = useAction(adminPiiCleanupAction);
+  const { executeAsync } = useAction(adminPiiCleanupAction);
 
-  const deleting = isExecuting && !counting;
+  const deleting = running;
   const deleteStarted = resumeCursor !== null || finished;
 
   async function countLeftoverKeys() {
@@ -71,23 +77,30 @@ export function PrivacyCleanup() {
 
   async function deleteThem() {
     setConfirming(false);
-    const result = await executeAsync({
-      mode: "delete",
-      cursor: resumeCursor,
-    });
-    if (!result?.data) {
-      toastError({
-        title: "The cleanup stopped",
-        description: getActionErrorMessage({
-          serverError: result?.serverError,
-        }),
-      });
-      return;
-    }
-    const { counts, nextCursor } = result.data;
-    setDeleted((previous) => addCounts(previous, counts));
-    setResumeCursor(nextCursor);
-    if (!nextCursor) {
+    stopRequested.current = false;
+    setRunning(true);
+
+    let cursor = resumeCursor;
+    do {
+      const result = await executeAsync({ mode: "delete", cursor });
+      if (!result?.data) {
+        toastError({
+          title: "The cleanup stopped",
+          description: getActionErrorMessage({
+            serverError: result?.serverError,
+          }),
+        });
+        setRunning(false);
+        return;
+      }
+      const { counts, nextCursor } = result.data;
+      setDeleted((previous) => addCounts(previous, counts));
+      setResumeCursor(nextCursor);
+      cursor = nextCursor;
+    } while (cursor && !stopRequested.current);
+
+    setRunning(false);
+    if (!cursor) {
       setFinished(true);
       toastSuccess({ description: "Cleanup finished" });
     }
@@ -95,6 +108,15 @@ export function PrivacyCleanup() {
 
   return (
     <div className="mt-4 max-w-3xl space-y-6">
+      <p className="text-sm text-muted-foreground">
+        {chatSdkRedis === "same"
+          ? "The Chat SDK keys (REDIS_URL) and this cleanup (REDIS_HTTP_URL) point at the same host."
+          : `The Chat SDK keys live on REDIS_URL; this cleanup only reaches the REDIS_HTTP_URL database. ${
+              chatSdkRedis === "different"
+                ? "They point at different hosts, so run the script against REDIS_URL too."
+                : "Could not tell whether they are the same database; if they are not, run the script against REDIS_URL too."
+            }`}
+      </p>
       <Card>
         <CardHeader>
           <CardTitle>1. Count leftover keys</CardTitle>
@@ -127,17 +149,30 @@ export function PrivacyCleanup() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Deletes the keys counted above. Each click works for up to 45
-            seconds; if keys remain, click again to continue.
+            Deletes the keys counted above, batch after batch, until it is done
+            or you press Stop. After a stop or an error, click again to
+            continue.
           </p>
-          <Button
-            variant="destructive"
-            onClick={() => setConfirming(true)}
-            loading={deleting}
-            disabled={!planned || counting || finished}
-          >
-            {resumeCursor ? "Run again to continue" : "Delete them"}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="destructive"
+              onClick={() => setConfirming(true)}
+              loading={deleting}
+              disabled={!planned || counting || finished}
+            >
+              {resumeCursor ? "Run again to continue" : "Delete them"}
+            </Button>
+            {deleting && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  stopRequested.current = true;
+                }}
+              >
+                Stop
+              </Button>
+            )}
+          </div>
           {deleteStarted && (
             <p className="text-sm">
               {finished

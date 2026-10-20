@@ -31,6 +31,7 @@ deletePiiCacheKeys({
   redis: {
     scan: (cursor, options) => redis.scan(cursor, options),
     get: (key) => redis.get(key),
+    mget: (...keys) => redis.mget(...keys),
     set: (key, value) => redis.set(key, value),
     unlink: (...keys) => redis.unlink(...keys),
     renamenx: (source, destination) => redis.renamenx(source, destination),

@@ -59,7 +59,7 @@ export const piiCleanupBody = z.object({
   mode: z.enum(["dry-run", "delete"]),
   cursor: z
     .string()
-    .regex(/^\d+:\d+$/)
+    .regex(/^[1-9]\d*$/)
     .nullish(),
 });
 export type PiiCleanupBody = z.infer<typeof piiCleanupBody>;

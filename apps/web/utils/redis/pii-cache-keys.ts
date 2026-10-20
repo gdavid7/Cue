@@ -107,6 +107,7 @@ export type CleanupRedis = {
     options: { match: string; count: number },
   ): Promise<[string | number, string[]]>;
   get(key: string): Promise<unknown>;
+  mget(...keys: string[]): Promise<unknown[]>;
   set(key: string, value: string): Promise<unknown>;
   unlink(...keys: string[]): Promise<number>;
   renamenx(source: string, destination: string): Promise<number>;
@@ -114,24 +115,28 @@ export type CleanupRedis = {
 
 const SCAN_COUNT = 300;
 const UNLINK_CHUNK = 100;
+const REDIS_FAILURE = "Redis command failed during PII cleanup";
 
 type Phase = {
   match: string;
-  /** Handles one SCAN batch and returns how many keys it counted. */
-  process: (keys: string[]) => Promise<number>;
-  verb: { dryRun: string; done: string };
+  matches: RegExp;
   holds: string;
+  verb: { dryRun: string; done: string };
+  /** Handles this pattern's keys from one SCAN batch; returns how many it counted. */
+  process: (keys: string[]) => Promise<number>;
 };
 
 /**
  * Runs the cleanup from `cursor` (null to start) until it finishes or
- * `budgetMs` has passed, always completing at least one SCAN batch. Returns
+ * `budgetMs` has passed, always completing at least one SCAN batch. One SCAN
+ * over the whole keyspace; each key is sorted into its pattern here. Returns
  * the counts for this call only, per pattern, and the cursor to continue
- * from, or null when every pattern is done. Names no key and reads no value
- * into its result.
+ * from, or null when the keyspace has been covered. Names no key and carries
+ * no value in its result. A Redis failure surfaces as a fixed message,
+ * because the client's own errors quote the command, keys and values.
  */
 export async function runPiiCleanupStep({
-  redis,
+  redis: rawRedis,
   dryRun,
   cursor = null,
   budgetMs = Number.POSITIVE_INFINITY,
@@ -143,23 +148,33 @@ export async function runPiiCleanupStep({
   budgetMs?: number;
   now?: () => number;
 }) {
+  if (cursor !== null && (!/^\d+$/.test(cursor) || cursor === "0"))
+    throw new Error("Invalid cleanup cursor");
+
+  const redis = withoutCommandDetails(rawRedis);
   const phases = buildPhases(redis, dryRun);
-  const position = parseCursor(cursor, phases.length);
   const counts = Object.fromEntries(phases.map((phase) => [phase.match, 0]));
   const startedAt = now();
-  let { phase, scan } = position;
+  let scan = cursor ?? "0";
 
-  while (phase < phases.length) {
+  do {
     const [next, keys] = await redis.scan(scan, {
-      match: phases[phase].match,
+      match: "*",
       count: SCAN_COUNT,
     });
-    counts[phases[phase].match] += await phases[phase].process(keys);
     scan = String(next);
-    if (scan === "0") phase++;
-    if (phase < phases.length && now() - startedAt >= budgetMs)
-      return { counts, nextCursor: `${phase}:${scan}` };
-  }
+
+    const byPhase = new Map<Phase, string[]>();
+    for (const key of keys) {
+      const phase = phases.find((candidate) => candidate.matches.test(key));
+      if (phase) byPhase.set(phase, [...(byPhase.get(phase) ?? []), key]);
+    }
+    for (const [phase, phaseKeys] of byPhase)
+      counts[phase.match] += await phase.process(phaseKeys);
+
+    if (scan !== "0" && now() - startedAt >= budgetMs)
+      return { counts, nextCursor: scan };
+  } while (scan !== "0");
 
   return { counts, nextCursor: null };
 }
@@ -195,13 +210,14 @@ function buildPhases(redis: CleanupRedis, dryRun: boolean): Phase[] {
   const deletePhases = PII_KEY_PATTERNS.map(
     (pattern): Phase => ({
       match: pattern.match,
+      matches: globToRegExp(pattern.match),
       holds: pattern.holds,
       verb: { dryRun: "would delete", done: "deleted" },
       process: async (batch) => {
         let keys = batch.filter((key) => !pattern.keep?.(key));
-        if (pattern.holdsPii) {
+        if (pattern.holdsPii && keys.length) {
           const holdsPii = pattern.holdsPii;
-          const values = await Promise.all(keys.map((key) => redis.get(key)));
+          const values = await redis.mget(...keys);
           keys = keys.filter((_, index) => holdsPii(values[index]));
         }
         if (!dryRun)
@@ -214,6 +230,7 @@ function buildPhases(redis: CleanupRedis, dryRun: boolean): Phase[] {
 
   const claimPhase: Phase = {
     match: LEGACY_CLAIM_PATTERN,
+    matches: globToRegExp(LEGACY_CLAIM_PATTERN),
     holds: "to hashed keys",
     verb: { dryRun: "would rename", done: "renamed" },
     process: async (keys) => {
@@ -223,8 +240,12 @@ function buildPhases(redis: CleanupRedis, dryRun: boolean): Phase[] {
         if (!destination || !isSettledClaim(await redis.get(key))) continue;
         renamed++;
         if (dryRun) continue;
-        // The hashed key wins when both exist: it is the newer claim.
-        if (!(await redis.renamenx(key, destination))) await redis.unlink(key);
+        if (await redis.renamenx(key, destination)) continue;
+        // The hashed key is the newer claim. The legacy one goes only when
+        // that is settled too; a live lock keeps the old key until it
+        // expires, so the message is not taken twice.
+        if (isSettledClaim(await redis.get(destination)))
+          await redis.unlink(key);
       }
       return renamed;
     },
@@ -232,6 +253,7 @@ function buildPhases(redis: CleanupRedis, dryRun: boolean): Phase[] {
 
   const migrationPhase: Phase = {
     match: WEEKLY_MIGRATION_PATTERN,
+    matches: globToRegExp(WEEKLY_MIGRATION_PATTERN),
     holds: "by day",
     verb: { dryRun: "would rewrite", done: "rewrote" },
     process: async (keys) => {
@@ -255,12 +277,45 @@ function buildPhases(redis: CleanupRedis, dryRun: boolean): Phase[] {
   return [...deletePhases, claimPhase, migrationPhase];
 }
 
-function parseCursor(cursor: string | null, phaseCount: number) {
-  if (cursor === null) return { phase: 0, scan: "0" };
-  const [phase, scan] = cursor.split(":");
-  if (!/^\d+$/.test(phase) || !/^\d+$/.test(scan ?? "") || +phase >= phaseCount)
-    throw new Error("Invalid cleanup cursor");
-  return { phase: +phase, scan };
+/**
+ * Every command fails with a fixed message and no cause: the Upstash client
+ * puts the command, with its keys and values, in the error text. A RENAMENX
+ * whose source expired meanwhile counts as done.
+ */
+function withoutCommandDetails(redis: CleanupRedis): CleanupRedis {
+  const guard =
+    <A extends unknown[], R>(command: (...args: A) => Promise<R>) =>
+    async (...args: A) => {
+      try {
+        return await command(...args);
+      } catch {
+        throw new Error(REDIS_FAILURE);
+      }
+    };
+
+  return {
+    scan: guard((cursor, options) => redis.scan(cursor, options)),
+    get: guard((key) => redis.get(key)),
+    mget: guard((...keys) => redis.mget(...keys)),
+    set: guard((key, value) => redis.set(key, value)),
+    unlink: guard((...keys) => redis.unlink(...keys)),
+    renamenx: guard(async (source, destination) => {
+      try {
+        return await redis.renamenx(source, destination);
+      } catch (error) {
+        if (/no such key/i.test(String((error as Error)?.message))) return 1;
+        throw error;
+      }
+    }),
+  };
+}
+
+function globToRegExp(glob: string) {
+  const source = glob
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[\\s\\S]*");
+  return new RegExp(`^${source}$`);
 }
 
 /** A handled or retry-later claim; a live lock token is left alone. */

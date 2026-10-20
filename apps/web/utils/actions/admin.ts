@@ -52,6 +52,7 @@ export const adminPiiCleanupAction = adminActionClient
       redis: {
         scan: (scanCursor, options) => redis.scan(scanCursor, options),
         get: (key) => redis.get(key),
+        mget: (...keys) => redis.mget(...keys),
         set: (key, value) => redis.set(key, value),
         unlink: (...keys) => redis.unlink(...keys),
         renamenx: (source, destination) => redis.renamenx(source, destination),
