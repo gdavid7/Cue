@@ -40,10 +40,12 @@ type Input = {
 
 export class LocalMailSyncPausedError extends Error {
   readonly retryAfterMs: number;
-  constructor(retryAfterMs = 60_000) {
+  readonly reason: string;
+  constructor(retryAfterMs = 60_000, reason = "unspecified") {
     super("Local mail synchronization is paused");
     this.name = "LocalMailSyncPausedError";
     this.retryAfterMs = Math.max(1000, retryAfterMs);
+    this.reason = reason;
   }
 }
 
@@ -54,6 +56,7 @@ local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local cost = tonumber(ARGV[1])
 local wait = 0
+local reason = ''
 local buckets = {}
 local recovery = 1
 if redis.call('EXISTS', KEYS[8]) == 1 then recovery = 0.5 end
@@ -65,18 +68,30 @@ for i = 1, 4 do
     local at = tonumber(stored[2]) or now
     tokens = math.min(capacity, tokens + math.max(0, now - at) * capacity * recovery / 60000)
     buckets[i] = tokens
-    if tokens < cost then wait = math.max(wait, math.ceil((cost - tokens) * 60000 / (capacity * recovery))) end
+    if tokens < cost then
+      local needed = math.ceil((cost - tokens) * 60000 / (capacity * recovery))
+      if needed > wait then
+        wait = needed
+        reason = ({'account_budget', 'app_budget', 'account_backfill_budget', 'app_backfill_budget'})[i]
+      end
+    end
   end
 end
 local cooldown = tonumber(redis.call('GET', KEYS[7])) or 0
-wait = math.max(wait, cooldown - now)
+if cooldown - now > wait then
+  wait = cooldown - now
+  reason = 'account_cooldown'
+end
 for i = 5, 6 do
   redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', now)
   local maximum = 1
   if i == 6 then maximum = 8 end
-  if redis.call('ZCARD', KEYS[i]) >= maximum then wait = math.max(wait, 1000) end
+  if redis.call('ZCARD', KEYS[i]) >= maximum and wait < 1000 then
+    wait = 1000
+    reason = i == 5 and 'account_concurrency' or 'app_concurrency'
+  end
 end
-if wait > 0 then return wait end
+if wait > 0 then return {wait, reason} end
 for i = 1, 4 do
   if buckets[i] then
     redis.call('HSET', KEYS[i], 'tokens', buckets[i] - cost, 'at', now)
@@ -216,26 +231,34 @@ export async function withLocalMailSyncBudget<T>(
   const background = input.priority === "backfill";
   try {
     if (!isEmailProviderRateLimitRedisConfigured())
-      throw new LocalMailSyncPausedError();
+      throw new LocalMailSyncPausedError(undefined, "redis_not_configured");
     const cooldown = await getEmailProviderRateLimitStateFromRedis(input);
     if (cooldown)
       throw new LocalMailSyncPausedError(
         cooldown.retryAt.getTime() - Date.now(),
+        "provider_rate_limit_mode",
       );
-    const wait = await redis.eval<string[], number>(admitScript, keys, [
-      String(input.cost),
-      String(policy.account),
-      String(policy.app),
-      String(background ? policy.account / 2 : 0),
-      String(background ? policy.app / 2 : 0),
-      owner,
-    ]);
+    const admission = await redis.eval<string[], number | [number, string]>(
+      admitScript,
+      keys,
+      [
+        String(input.cost),
+        String(policy.account),
+        String(policy.app),
+        String(background ? policy.account / 2 : 0),
+        String(background ? policy.app / 2 : 0),
+        owner,
+      ],
+    );
+    const [wait, gate] = Array.isArray(admission)
+      ? admission
+      : [admission, "unspecified"];
     if (typeof wait !== "number" || !Number.isFinite(wait) || wait < 0)
-      throw new LocalMailSyncPausedError();
-    if (wait > 0) throw new LocalMailSyncPausedError(wait);
+      throw new LocalMailSyncPausedError(undefined, "invalid_store_reply");
+    if (wait > 0) throw new LocalMailSyncPausedError(wait, String(gate));
   } catch (error) {
     if (error instanceof LocalMailSyncPausedError) throw error;
-    throw new LocalMailSyncPausedError();
+    throw new LocalMailSyncPausedError(undefined, "store_error");
   }
   const controller = new AbortController();
   const requestCount =
@@ -244,7 +267,7 @@ export async function withLocalMailSyncBudget<T>(
       : 1;
   let pauseError: LocalMailSyncPausedError | undefined;
   const pause = () => {
-    pauseError ??= new LocalMailSyncPausedError();
+    pauseError ??= new LocalMailSyncPausedError(undefined, "lease_lost");
     controller.abort();
   };
   const timeout = setTimeout(pause, requestCount * 30_000);
@@ -305,7 +328,10 @@ export async function withLocalMailSyncBudget<T>(
         if (input.priority === "current")
           forgetEmailProviderRateLimitState(input.emailAccountId);
       } catch {
-        throw new LocalMailSyncPausedError(Math.max(60_000, delay));
+        throw new LocalMailSyncPausedError(
+          Math.max(60_000, delay),
+          "cooldown_write_failed",
+        );
       }
     }
     throw error;

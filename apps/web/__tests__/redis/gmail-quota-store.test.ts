@@ -237,6 +237,27 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       });
     });
 
+    it("says which gate held a call", async () => {
+      await gmailQuotaStore.block({ key: keys.pause, ms: 90_000 });
+      expect(
+        (
+          await admit({
+            cost: 10,
+            floor: 500,
+            blockers: [{ key: "gmail-quota:test:other" }, { key: keys.pause }],
+          })
+        ).held,
+      ).toMatchObject({ gate: "blocker", blocker: 2 });
+      await gmailQuotaStore.clear(keys.pause);
+
+      // 1000 capacity with a floor of 500 leaves room for one 500 call only.
+      await admit({ cost: 500, floor: 500 });
+      expect((await admit({ cost: 100, floor: 500 })).held).toMatchObject({
+        gate: "bucket",
+        neededUnits: 600,
+      });
+    });
+
     it("holds any one second to the pace cap and records the busiest second", async () => {
       expect(await take({ cost: 60, floor: 200, paceCap: 120 })).toBe(0);
       expect(await take({ cost: 60, floor: 200, paceCap: 120 })).toBe(0);

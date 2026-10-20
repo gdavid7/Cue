@@ -1,4 +1,5 @@
 import type { Logger } from "@/utils/logger";
+import { timeRequestDependency } from "@/utils/request-metrics";
 
 const LOG_INTERVAL_MS = 5 * 60_000;
 
@@ -42,10 +43,12 @@ export function createRedisUsageMeter() {
               count(property, key);
               return result;
             }
-            return result.then((resolved: unknown) => {
-              count(property, key, sizeOf(resolved));
-              return resolved;
-            });
+            return timeRequestDependency("redis", () => result).then(
+              (resolved: unknown) => {
+                count(property, key, sizeOf(resolved));
+                return resolved;
+              },
+            );
           };
         },
       });
@@ -93,7 +96,9 @@ function meterBatch<T extends object>(
         return value;
       if (property === "exec")
         return async (...args: unknown[]) => {
-          const results: unknown = await value.apply(target, args);
+          const results: unknown = await timeRequestDependency("redis", () =>
+            value.apply(target, args),
+          );
           queued.forEach(({ command, key }, index) => {
             count(
               command,

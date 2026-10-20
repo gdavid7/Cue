@@ -40,6 +40,7 @@ const ACCOUNT = "account-1";
 // The gate remembers marks per process, so this scan gets its own account.
 const BACKFILL_ACCOUNT = "account-backfill";
 const JOBS_ACCOUNT = "account-jobs";
+const REASON_ACCOUNT = "account-reason";
 const PACE_ACCOUNT = "account-pace";
 const YIELD_ACCOUNT = "account-yield";
 const LARGE_ACCOUNT = "account-large";
@@ -550,6 +551,42 @@ describe("Gmail quota gate", () => {
     expect(job).toBeInstanceOf(GmailCallDeferredError);
     expect(job.retryAfterMs).toBeGreaterThan(60_000);
     expect(job.retryAfterMs).toBeLessThanOrEqual(80_000);
+  });
+
+  it("names the gate that held a deferred call", async () => {
+    await setGmailInitialSync(REASON_ACCOUNT, true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const deferral = () =>
+      runWithGmailQuota(
+        { caller: "automation-jobs/execute", priority: "background" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: REASON_ACCOUNT, cost: 20 },
+            async () => "x",
+          ),
+      ).catch((error: unknown) => error as GmailCallDeferredError);
+    expect((await deferral()).reason).toBe("initial_sync_scan");
+  });
+
+  it("names the bucket when the per-minute budget cannot pay", async () => {
+    const spend = (cost: number) =>
+      runWithGmailQuota(
+        { caller: "mail/v1/enumeration", priority: "sync", maxTotalWaitMs: 0 },
+        () =>
+          meterGmailCall(
+            { emailAccountId: "account-reason-bucket", cost },
+            async () => "x",
+          ),
+      ).catch((error: unknown) => error as GmailCallDeferredError);
+    let outcome: unknown = "x";
+    for (let i = 0; i < 20 && outcome === "x"; i++) {
+      outcome = await spend(500);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(outcome).toBeInstanceOf(GmailCallDeferredError);
+    expect((outcome as GmailCallDeferredError).reason).toBe(
+      "per_minute_budget",
+    );
   });
 
   it("pauses sync and background after a refusal but keeps admitting what a person is waiting on", async () => {

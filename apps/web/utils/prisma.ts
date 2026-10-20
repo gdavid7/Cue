@@ -3,6 +3,7 @@ import { env } from "@/env";
 import { PrismaClient } from "@/generated/prisma/client";
 import { encryptedTokens } from "@/utils/prisma-extensions";
 import { auditPrismaQueries } from "@/utils/audit/prisma-extension";
+import { timeRequestDependency } from "@/utils/request-metrics";
 
 declare global {
   var prisma: PrismaClient | undefined;
@@ -17,7 +18,21 @@ const _prisma =
     }),
   })
     .$extends(encryptedTokens)
-    .$extends(auditPrismaQueries) as unknown as PrismaClient);
+    .$extends(auditPrismaQueries)
+    .$extends({
+      name: "timePrismaQueries",
+      query: {
+        async $allOperations({
+          args,
+          query,
+        }: {
+          args: unknown;
+          query: (args: unknown) => Promise<unknown>;
+        }) {
+          return timeRequestDependency("db", () => query(args));
+        },
+      } as never,
+    }) as unknown as PrismaClient);
 
 if (env.NODE_ENV === "development") global.prisma = _prisma;
 

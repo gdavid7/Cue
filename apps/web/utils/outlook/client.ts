@@ -236,6 +236,11 @@ export const getOutlookClientWithRefresh = async ({
     if (!response.ok) {
       const errorMessage =
         tokens.error_description || "Failed to refresh token";
+      const providerFailure = {
+        providerError: tokens.error,
+        providerErrorCodes: tokens.error_codes,
+        httpStatus: response.status,
+      };
 
       // AADSTS7000215 = Invalid client secret
       // Happens when Azure AD client secret rotates or refresh token expires
@@ -285,6 +290,7 @@ export const getOutlookClientWithRefresh = async ({
           {
             emailAccountId,
             errorMessage,
+            ...providerFailure,
           },
         );
 
@@ -305,6 +311,11 @@ export const getOutlookClientWithRefresh = async ({
         );
       }
 
+      logger.warn("Microsoft token refresh failed", {
+        emailAccountId,
+        errorMessage,
+        ...providerFailure,
+      });
       throw new Error(errorMessage);
     }
 

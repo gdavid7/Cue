@@ -33,6 +33,12 @@ import {
 } from "@/utils/email/local-mail-sync-budget";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
 import type { Logger } from "@/utils/logger";
+import { randomUUID } from "node:crypto";
+import { getAuditContext } from "@/utils/audit/context";
+import {
+  getFastRequestSampleRate,
+  isFastRequestSampled,
+} from "@/utils/request-sampling";
 import { isInvalidGrantError } from "@/utils/error";
 import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
 import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
@@ -653,20 +659,48 @@ export function createEmailProviderMailboxSource(input: {
     }).catch(() => undefined);
   }
 
+  // Pauses are frequent, so only a sample gets a line; sampleRate lets counts
+  // be re-weighted.
+  function logPaused(fields: {
+    source: string;
+    reason: string;
+    retryAfterMs: number;
+    [key: string]: unknown;
+  }) {
+    const { requestId, source: scope } = getAuditContext();
+    const sampleRate = getFastRequestSampleRate(scope);
+    if (isFastRequestSampled(requestId ?? randomUUID(), sampleRate))
+      logger.info("Mail sync paused", { ...fields, sampled: true, sampleRate });
+    else logger.trace("Mail sync paused", fields);
+  }
+
   async function mapProviderError(
     error: unknown,
     { recordRateLimit = true }: { recordRateLimit?: boolean } = {},
   ) {
     if (error instanceof LocalMailSyncPausedError) {
+      logPaused({
+        source: "local_budget",
+        reason: error.reason,
+        retryAfterMs: error.retryAfterMs,
+      });
       return throttled(error.retryAfterMs);
     }
+    // The quota gate logs its own deferrals with the reason, in "Gmail call
+    // deferred".
     const deferred = getGmailCallDeferredError(error);
     if (deferred) return throttled(deferred.retryAfterMs);
     if (isProviderRateLimitModeError(error)) {
       const retryAtMs = error.retryAt ? Date.parse(error.retryAt) : Number.NaN;
-      return throttled(
-        Number.isNaN(retryAtMs) ? 15_000 : retryAtMs - Date.now(),
-      );
+      const retryAfterMs = Number.isNaN(retryAtMs)
+        ? 15_000
+        : retryAtMs - Date.now();
+      logPaused({
+        source: "provider_rate_limit_mode",
+        reason: "rate_limit_mode",
+        retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
+      });
+      return throttled(retryAfterMs);
     }
     const rateLimitProvider = isGmail ? "google" : "microsoft";
     const providerError = normalizeThrottleHeaders(error);
@@ -692,7 +726,18 @@ export function createEmailProviderMailboxSource(input: {
         });
       }
     }
-    if (rateLimitDelayMs !== null) return throttled(rateLimitDelayMs);
+    if (rateLimitDelayMs !== null) {
+      const providerStatus =
+        extractGmailErrorInfo(error).status ??
+        extractOutlookErrorInfo(error).status;
+      logPaused({
+        source: "provider_rate_limit",
+        reason: "provider_throttled",
+        retryAfterMs: Math.max(1000, Math.ceil(rateLimitDelayMs)),
+        providerStatus,
+      });
+      return throttled(rateLimitDelayMs);
+    }
     const message = error instanceof Error ? error.message : "";
     const lowered = message.toLowerCase();
     if (
@@ -706,6 +751,15 @@ export function createEmailProviderMailboxSource(input: {
     ) {
       return { status: "blocked_auth" as const };
     }
+    logPaused({
+      source: "provider_error",
+      reason: "unavailable",
+      retryAfterMs: 1000,
+      errorName: error instanceof Error ? error.name : typeof error,
+      providerStatus:
+        extractGmailErrorInfo(error).status ??
+        extractOutlookErrorInfo(error).status,
+    });
     return {
       status: "paused" as const,
       retryAfterMs: 1000,
