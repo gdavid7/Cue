@@ -18,6 +18,7 @@ import {
   recordAccessRequest,
 } from "@/utils/access/policy";
 import { ACCESS_APPROVAL_EMAIL_DELIVERY } from "@/utils/access/config";
+import { notifyAdminsOfAccessRequest } from "@/utils/access/notify-admins";
 import { getApprovalEmail } from "@/utils/access/approval-email";
 import { createEmailProvider } from "@/utils/email/provider";
 import {
@@ -68,6 +69,11 @@ export const requestAccessAction = publicActionClient
         ONBOARDING_ANALYTICS_EVENTS.accessRequested,
         { source: "form" },
       );
+      await notifyAdminsOfAccessRequest({
+        requestId: request.id,
+        email: normalizedEmail,
+        logger,
+      });
     }
 
     return { ok: true };

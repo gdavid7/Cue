@@ -10,6 +10,10 @@ import {
   isListedInAuthAllowlist,
 } from "@/utils/auth-signup-policy";
 import { GMAIL_DOMAINS } from "@/utils/access/config";
+import { notifyAdminsOfAccessRequest } from "@/utils/access/notify-admins";
+import { createScopedLogger } from "@/utils/logger";
+
+const logger = createScopedLogger("access/policy");
 
 /**
  * Sign-in providers whose email claim proves the person owns the address.
@@ -75,6 +79,11 @@ export async function assertSignUpAllowed(
       ONBOARDING_ANALYTICS_EVENTS.accessRequested,
       { source: "google_sign_in" },
     );
+    await notifyAdminsOfAccessRequest({
+      requestId: request.id,
+      email: normalizeAccessEmail(email),
+      logger,
+    });
   }
   throw createSignupNotAllowedError();
 }
