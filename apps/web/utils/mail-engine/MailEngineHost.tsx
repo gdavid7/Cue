@@ -241,6 +241,13 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     [],
   );
 
+  // A page that will not start the engine lets go of its early worker, which
+  // may hold the owner lock and an open mailbox. One still loading its
+  // accounts can yet start.
+  useEffect(() => {
+    if (!canStart && !isLoading) releasePrewarmedMailEngineWorker();
+  }, [canStart, isLoading]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: startAttempt is how Retry starts the engine again, and desktopAccountKey how the desktop client follows the viewed account
   useEffect(() => {
     const { accountId: emailAccountId, mailProvider: viewedProvider } =
@@ -259,6 +266,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       opfs: browserMailEngineCapabilities().opfs,
     });
     if (mode === "unavailable") {
+      releasePrewarmedMailEngineWorker();
       setUnavailable(true);
       return;
     }
@@ -397,7 +405,13 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       const releaseEarlyLock = claim instanceof Promise ? await claim : claim;
       if (releaseEarlyLock) {
         try {
-          if (!abort.signal.aborted) await hold(create);
+          if (abort.signal.aborted) {
+            // Its early worker may hold an open mailbox, which must not
+            // outlive the lock that keeps other tabs off its files.
+            releasePrewarmedMailEngineWorker();
+          } else {
+            await hold(create);
+          }
         } finally {
           releaseEarlyLock();
         }

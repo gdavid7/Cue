@@ -3,7 +3,9 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { closeActiveMailEngine } from "./active-client";
 import { MailCoverageGate, MailEngineRuntime } from "./MailEngineHost";
+import { MAIL_ENGINE_TAB_CHANNEL } from "./tab-channel";
 
 const runtime = vi.hoisted(() => ({
   account: {
@@ -19,7 +21,8 @@ const runtime = vi.hoisted(() => ({
     close: ReturnType<typeof vi.fn>;
   }>,
   emailAccounts: [] as unknown[],
-  earlyOwnerLock: null as (() => void) | null,
+  earlyOwnerLock: null as (() => void) | null | Promise<(() => void) | null>,
+  order: [] as string[],
   firstMailList: new Set<() => void>(),
 }));
 
@@ -53,13 +56,16 @@ vi.mock("@/utils/mail-engine/poll-mail-versions", () => ({
 }));
 vi.mock("@/utils/mail-engine/create-browser-engine", () => ({
   prewarmMailEngineWorker: () => undefined,
-  releasePrewarmedMailEngineWorker: () => undefined,
+  releasePrewarmedMailEngineWorker: () => {
+    runtime.order.push("release worker");
+  },
   claimEarlyMailEngineOwnerLock: () => {
     const release = runtime.earlyOwnerLock;
     runtime.earlyOwnerLock = null;
     return release;
   },
   createBrowserMailEngine: async (start: { accountId: string }) => {
+    runtime.order.push("create");
     const engine = {
       start,
       ensureAccount: vi.fn(async () => undefined),
@@ -107,8 +113,14 @@ afterEach(() => {
   runtime.engines.length = 0;
   runtime.emailAccounts = [];
   runtime.earlyOwnerLock = null;
+  runtime.order.length = 0;
   runtime.firstMailList.clear();
-  runtime.account = { ...runtime.account, emailAccountId: "account-a" };
+  runtime.account = {
+    ...runtime.account,
+    emailAccountId: "account-a",
+    provider: "google",
+    isLoading: false,
+  };
 });
 
 describe("MailEngineRuntime", () => {
@@ -161,6 +173,103 @@ describe("MailEngineRuntime", () => {
     unmount();
     await vi.waitFor(() => expect(releaseEarlyLock).toHaveBeenCalledTimes(1));
     expect(runtime.engines[0]?.close).toHaveBeenCalled();
+  });
+
+  it("lets go of the early worker before its lock when the page leaves while the claim is pending", async () => {
+    let answerClaim: (release: () => void) => void = () => undefined;
+    runtime.earlyOwnerLock = new Promise((resolve) => {
+      answerClaim = resolve;
+    });
+    const { unmount } = await renderRuntime([]);
+
+    unmount();
+    await act(async () => {
+      answerClaim(() => runtime.order.push("release lock"));
+    });
+
+    // The early worker may hold an open mailbox, which must not outlive the
+    // lock that keeps every other tab off its files.
+    await vi.waitFor(() =>
+      expect(runtime.order).toEqual(["release worker", "release lock"]),
+    );
+    expect(runtime.engines).toHaveLength(0);
+  });
+
+  it("closes the engine and lets go of the early lock on sign-out", async () => {
+    const releaseEarlyLock = vi.fn();
+    runtime.earlyOwnerLock = releaseEarlyLock;
+    const seen: unknown[] = [];
+    await renderRuntime(seen);
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(runtime.engines[0]));
+
+    await act(async () => {
+      await closeActiveMailEngine();
+    });
+
+    expect(runtime.order).toContain("release worker");
+    expect(runtime.engines[0]?.close).toHaveBeenCalled();
+    await vi.waitFor(() => expect(releaseEarlyLock).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets go of the early worker when another tab owns the engine", async () => {
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      storage: { getDirectory: async () => ({}) },
+      // The other tab holds the owner lock.
+      locks: { request: () => new Promise(() => undefined) },
+    });
+    const seen: unknown[] = [];
+    await renderRuntime(seen);
+    const otherTab = new BroadcastChannel(MAIL_ENGINE_TAB_CHANNEL);
+
+    otherTab.postMessage({ type: "owner", accountId: "account-a" });
+
+    await vi.waitFor(() => expect(runtime.order).toEqual(["release worker"]));
+    await vi.waitFor(() => expect(seen.at(-1)).toBeTruthy());
+    expect(runtime.engines).toHaveLength(0);
+    otherTab.close();
+  });
+
+  it("lets go of the early worker on a page that will not start the engine", async () => {
+    runtime.account = { ...runtime.account, emailAccountId: "" };
+
+    await renderRuntime([]);
+
+    expect(runtime.order).toEqual(["release worker"]);
+  });
+
+  it("lets go of the early worker once accounts load without one to start on", async () => {
+    runtime.account = { ...runtime.account, provider: "", isLoading: true };
+    const { rerender } = await renderRuntime([]);
+    expect(runtime.order).toEqual([]);
+
+    runtime.account = {
+      ...runtime.account,
+      emailAccountId: "",
+      isLoading: false,
+    };
+    await act(async () => {
+      rerender(<Runtime seen={[]} />);
+    });
+
+    expect(runtime.order).toEqual(["release worker"]);
+  });
+
+  it("keeps the early worker while the accounts are still loading", async () => {
+    runtime.account = { ...runtime.account, provider: "", isLoading: true };
+    const { rerender } = await renderRuntime([]);
+    expect(runtime.order).toEqual([]);
+
+    runtime.account = {
+      ...runtime.account,
+      provider: "google",
+      isLoading: false,
+    };
+    await act(async () => {
+      rerender(<Runtime seen={[]} />);
+    });
+
+    await vi.waitFor(() => expect(runtime.order).toEqual(["create"]));
   });
 
   it("registers every other connected account only after the first mail list", async () => {
