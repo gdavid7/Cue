@@ -11,6 +11,7 @@ import {
 } from "@/utils/auth-signup-policy";
 import { GMAIL_DOMAINS } from "@/utils/access/config";
 import { notifyAdminsOfAccessRequest } from "@/utils/access/notify-admins";
+import { deferCallbackStep } from "@/utils/oauth/callback-timings";
 import { createScopedLogger } from "@/utils/logger";
 
 const logger = createScopedLogger("access/policy");
@@ -79,11 +80,18 @@ export async function assertSignUpAllowed(
       ONBOARDING_ANALYTICS_EVENTS.accessRequested,
       { source: "google_sign_in" },
     );
-    await notifyAdminsOfAccessRequest({
-      requestId: request.id,
-      email: normalizeAccessEmail(email),
+    const requestId = request.id;
+    // Sign-in is waiting on this check, so the email can't hold it up.
+    deferCallbackStep(
+      "access.notifyAdmins",
+      () =>
+        notifyAdminsOfAccessRequest({
+          requestId,
+          email: normalizeAccessEmail(email),
+          logger,
+        }),
       logger,
-    });
+    );
   }
   throw createSignupNotAllowedError();
 }

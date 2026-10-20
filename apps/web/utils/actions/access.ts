@@ -1,6 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
+import { after } from "next/server";
 import { env } from "@/env";
 import prisma from "@/utils/prisma";
 import {
@@ -69,11 +70,14 @@ export const requestAccessAction = publicActionClient
         ONBOARDING_ANALYTICS_EVENTS.accessRequested,
         { source: "form" },
       );
-      await notifyAdminsOfAccessRequest({
-        requestId: request.id,
-        email: normalizedEmail,
-        logger,
-      });
+      const requestId = request.id;
+      after(() =>
+        notifyAdminsOfAccessRequest({
+          requestId,
+          email: normalizedEmail,
+          logger,
+        }),
+      );
     }
 
     return { ok: true };

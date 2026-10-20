@@ -11,6 +11,11 @@ import {
 const { mockNotifyAdmins } = vi.hoisted(() => ({ mockNotifyAdmins: vi.fn() }));
 
 vi.mock("@/utils/prisma");
+vi.mock("next/server", () => ({
+  after: (callback: () => unknown) => {
+    callback();
+  },
+}));
 vi.mock("@/utils/posthog", () => ({ posthogCaptureEvent: vi.fn() }));
 vi.mock("@/utils/access/notify-admins", () => ({
   notifyAdminsOfAccessRequest: mockNotifyAdmins,
@@ -217,6 +222,18 @@ describe("assertSignUpAllowed", () => {
       },
       select: { id: true },
     });
+  });
+
+  it("rejects promptly even if the admin notification never finishes", async () => {
+    prisma.accessRequest.findFirst.mockResolvedValue(null);
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r1" } as never);
+    mockNotifyAdmins.mockReturnValue(new Promise(() => {}));
+
+    await expect(
+      assertSignUpAllowed({ email: "stranger@gmail.com", ...google }, closed),
+    ).rejects.toThrow("signup_not_allowed");
+    expect(mockNotifyAdmins).toHaveBeenCalledTimes(1);
   });
 
   it("does not notify the admins again when the person already asked", async () => {

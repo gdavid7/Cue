@@ -22,6 +22,11 @@ vi.mock("@/utils/auth", () => ({ auth: mockAuth }));
 vi.mock("@inboxzero/transactional-email/src/delivery", () => ({
   deliverTransactionalEmail: mockDeliver,
 }));
+vi.mock("next/server", () => ({
+  after: (callback: () => unknown) => {
+    callback();
+  },
+}));
 vi.mock("@/utils/posthog", () => ({ posthogCaptureEvent: vi.fn() }));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.7" }),
@@ -183,7 +188,7 @@ describe("requestAccessAction", () => {
 
     await requestAccessAction({ email: "New@gmail.com" });
 
-    expect(mockDeliver).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(mockDeliver).toHaveBeenCalledTimes(1));
     const [message, options] = mockDeliver.mock.calls[0];
     expect(message.to).toEqual(["founder@example.com"]);
     expect(message.subject).toBe("New Cue access request");
@@ -204,6 +209,16 @@ describe("requestAccessAction", () => {
     await requestAccessAction({ email: "friend@gmail.com" });
 
     expect(mockDeliver).not.toHaveBeenCalled();
+  });
+
+  it("answers without waiting for the notification email", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r6" } as never);
+    mockDeliver.mockReturnValue(new Promise(() => {}));
+
+    const result = await requestAccessAction({ email: "slow@gmail.com" });
+
+    expect(result?.data).toEqual({ ok: true });
   });
 
   it("still records the request when the notification email fails", async () => {

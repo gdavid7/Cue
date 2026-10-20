@@ -1,7 +1,10 @@
 import { deliverTransactionalEmail } from "@inboxzero/transactional-email/src/delivery";
 import { env } from "@/env";
 import { BRAND_NAME } from "@/utils/branding";
+import { checkRateLimit, createRateLimitKey } from "@/utils/rate-limit";
 import type { Logger } from "@/utils/logger";
+
+const NOTIFY_RATE_LIMIT = { limit: 20, windowSeconds: 60 * 60 } as const;
 
 /**
  * Tells the admins a new person asked for access. Never throws: the person's
@@ -18,6 +21,21 @@ export async function notifyAdminsOfAccessRequest({
 }) {
   const admins = env.ADMINS ?? [];
   if (!admins.length) return;
+
+  // A flood of requests must not become a flood of founder email.
+  const rateLimit = await checkRateLimit({
+    rule: {
+      key: createRateLimitKey(["access-request-notify"]),
+      ...NOTIFY_RATE_LIMIT,
+    },
+    logger,
+  });
+  if (rateLimit.limited) {
+    logger.warn("Access request notification skipped: hourly cap reached", {
+      limit: rateLimit.limit,
+    });
+    return;
+  }
 
   const lines = [
     "A new access request is waiting.",
