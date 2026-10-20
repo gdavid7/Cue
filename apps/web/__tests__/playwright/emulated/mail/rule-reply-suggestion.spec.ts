@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { renderEmailTextWithSafeLinks } from "@/utils/email/render-safe-links";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
@@ -138,6 +139,67 @@ test("sends the suggestion as it is without a draft", async ({
     .toContain("Thursday at 10 works for me");
   expect(await countDrafts(page, threadId)).toBe(0);
   await capturePlaywrightCheckpoint(page, testInfo, "rule-suggestion-sent");
+});
+
+// DR-6: the rule stores its reply as the mailbox's HTML, punctuation escaped.
+// It must show, and reach the recipient, as written: never "I&#x27;m".
+test("shows and sends the rule's punctuation as written", async ({
+  page,
+}, testInfo) => {
+  const written = `I'm checking "Q3" & the <draft> numbers. I'll reply by 5.`;
+  const emailAccountId = await getEmailAccountId(page);
+  const subject = `Numbers check ${testInfo.retry}-${Date.now()}`;
+  const { threadId, messageId } = await insertMessage(page, subject);
+  await seedSuggestion({
+    emailAccountId,
+    threadId,
+    messageId,
+    content: renderEmailTextWithSafeLinks(written, { allowHiddenLinks: false }),
+  });
+
+  await openThread(page, emailAccountId, threadId, subject);
+  const reader = page.getByTestId("thread-reader");
+  const editor = reader.locator("[data-email-editor-content]");
+  await expect(editor).toContainText(written, { timeout: 60_000 });
+  await expect(editor).not.toContainText("&#x27;");
+  await expect(editor).not.toContainText("&amp;");
+  await capturePlaywrightCheckpoint(
+    page,
+    testInfo,
+    "rule-suggestion-punctuation",
+  );
+
+  await reader.getByRole("button", { name: "Send", exact: true }).click();
+  await expect
+    .poll(
+      () =>
+        readLatestMailMutation(page, {
+          emailAccountId,
+          kind: "reply",
+          threadId,
+        }),
+      { timeout: UNDO_WINDOW_SEND_TIMEOUT_MS },
+    )
+    .toMatchObject({ status: "succeeded" });
+
+  let sentHtml = "";
+  await expect
+    .poll(
+      async () => {
+        sentHtml = await sentReplyHtml(page, threadId);
+        return sentHtml.length > 0;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  // What the recipient's mail app shows.
+  const seen = await page.evaluate(
+    (html) =>
+      new DOMParser().parseFromString(html, "text/html").body.textContent ?? "",
+    sentHtml,
+  );
+  expect(seen).toContain(written);
+  expect(seen).not.toContain("&#x27;");
 });
 
 // D-084: a rule can write to someone other than the sender. It opens
@@ -366,11 +428,13 @@ async function seedSuggestion({
   threadId,
   messageId,
   to,
+  content = SUGGESTION,
 }: {
   emailAccountId: string;
   threadId: string;
   messageId: string;
   to?: string;
+  content?: string;
 }) {
   const executedRuleId = `pw_rule_run_${messageId}`;
   const executedActionId = `pw_suggestion_${messageId}`;
@@ -397,7 +461,7 @@ async function seedSuggestion({
        VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'DRAFT_EMAIL', $2, $3,
                $4, 'PENDING', 'SUCCEEDED')
        ON CONFLICT (id) DO NOTHING`,
-      [executedActionId, executedRuleId, SUGGESTION, to ?? null],
+      [executedActionId, executedRuleId, content, to ?? null],
     );
   });
   return executedActionId;
@@ -472,6 +536,30 @@ async function sentReplyText(page: Page, threadId: string) {
     .filter((message) => message.labelIds?.includes("SENT"))
     .map((message) => message.snippet ?? "")
     .join("\n");
+}
+
+/** The HTML body of the thread's sent reply, once the mailbox has it. */
+async function sentReplyHtml(page: Page, threadId: string) {
+  const response = await page.request.get(
+    `${gmailBaseUrl()}/gmail/v1/users/me/threads/${threadId}`,
+    { headers: await gmailHeaders(), params: { format: "full" } },
+  );
+  if (!response.ok()) return "";
+  type Part = {
+    mimeType?: string;
+    body?: { data?: string };
+    parts?: Part[];
+  };
+  const { messages } = (await response.json()) as {
+    messages?: { labelIds?: string[]; payload?: Part }[];
+  };
+  const sent = messages?.find((message) => message.labelIds?.includes("SENT"));
+  const findHtml = (part?: Part): string | undefined =>
+    part?.mimeType === "text/html" && part.body?.data
+      ? part.body.data
+      : part?.parts?.map(findHtml).find(Boolean);
+  const data = findHtml(sent?.payload);
+  return data ? Buffer.from(data, "base64url").toString("utf8") : "";
 }
 
 /** Who the thread's sent reply went to, once the mailbox has it. */

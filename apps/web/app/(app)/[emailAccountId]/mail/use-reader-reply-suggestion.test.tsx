@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { renderEmailTextWithSafeLinks } from "@/utils/email/render-safe-links";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
 
 const mocks = vi.hoisted(() => ({
@@ -99,6 +100,25 @@ describe("useReaderReplySuggestion", () => {
     });
     expect(lastEnabled()).toBe(false);
     expect(result.current.reply.offer).toBe(false);
+  });
+
+  // The rule stores its reply as the HTML body the mailbox would get; the
+  // composer takes plain text and escapes it once itself.
+  it("offers the rule's reply as the text it wrote, not its stored HTML", () => {
+    const text = `I'm going to look at "Q3" & check <the> numbers.\n\nI'll reply by 5.`;
+    mocks.plans = [
+      ruleSuggestionPlan("ask", {
+        content: renderEmailTextWithSafeLinks(text, {
+          allowHiddenLinks: false,
+        }),
+      }),
+    ];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist?.reply).toBe(text);
   });
 
   it.each([
@@ -521,6 +541,7 @@ function incoming(id: string, labelIds: string[]) {
 function ruleSuggestionPlan(
   messageId: string,
   action: {
+    content?: string;
     draftStatus?: string;
     draftId?: string | null;
     createdAt?: string;
@@ -538,7 +559,7 @@ function ruleSuggestionPlan(
       {
         id: "suggestion-1",
         type: "DRAFT_EMAIL",
-        content: "Thursday works for me.",
+        content: action.content ?? "Thursday works for me.",
         draftId: action.draftId ?? null,
         draftStatus: action.draftStatus ?? "PENDING",
         createdAt: action.createdAt ?? new Date().toISOString(),

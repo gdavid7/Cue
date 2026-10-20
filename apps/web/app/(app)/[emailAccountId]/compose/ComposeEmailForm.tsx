@@ -47,7 +47,10 @@ import { ButtonLoader } from "@/components/Loading";
 import { LoadingContent } from "@/components/LoadingContent";
 import { Tooltip } from "@/components/Tooltip";
 import { threadScheduledEmailsKey } from "@/components/email-list/ThreadDeliveryStatus";
-import { isUneditedSuggestion } from "@/components/email-list/reply-assist";
+import {
+  isUneditedSuggestion,
+  withSuggestionEscapesRepaired,
+} from "@/components/email-list/reply-assist";
 import { useFirstSuggestedReplySent } from "@/app/(app)/[emailAccountId]/compose/use-first-suggested-reply-sent";
 import {
   hideSendingDraftMessages,
@@ -433,7 +436,13 @@ function ComposeEmailFormContent({
 }) {
   // A draft moved here from another account starts from what it carried.
   const [isMovedDraft] = useState(Boolean(movedDraft));
-  const storedDraft = isMovedDraft ? undefined : savedDraft;
+  const storedDraft = useMemo(
+    () =>
+      isMovedDraft || !savedDraft
+        ? undefined
+        : withSuggestionEscapesRepaired(savedDraft),
+    [isMovedDraft, savedDraft],
+  );
   const ownEmails = useOwnEmailAddresses();
   const isComposeWindow = layout === "window";
   const isInlineReply = Boolean(draftKeyMessageId && replyingToEmail?.threadId);
