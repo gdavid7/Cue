@@ -2,7 +2,10 @@ import type { gmail_v1 } from "@googleapis/gmail";
 import PostalMime from "postal-mime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
-import { buildDraftReplyBody } from "@/utils/email/reply-body";
+import {
+  buildDraftReplyBody,
+  withoutDraftReplySignature,
+} from "@/utils/email/reply-body";
 import { draftEmail } from "@/utils/gmail/mail";
 
 vi.mock("@/utils/prisma");
@@ -82,3 +85,37 @@ async function saveDraft(modelText: string) {
   const email = await PostalMime.parse(Buffer.from(raw, "base64url"));
   return { html: email.html ?? "", text: email.text ?? "" };
 }
+
+describe("withoutDraftReplySignature", () => {
+  const SIGNATURE = '<div dir="ltr">Sam<br>Acme</div>';
+
+  it("takes off the signature the body was built with", () => {
+    expect(withoutDraftReplySignature(`Yes.\n\n${SIGNATURE}`, SIGNATURE)).toBe(
+      "Yes.",
+    );
+  });
+
+  it("matches across trailing newlines and CRLF line endings", () => {
+    expect(
+      withoutDraftReplySignature(`Yes.\n\n${SIGNATURE}\n`, `${SIGNATURE}  `),
+    ).toBe("Yes.");
+    expect(
+      withoutDraftReplySignature(
+        "Yes.\r\n\r\n<div>Sam\r\nAcme</div>\r\n",
+        "<div>Sam\nAcme</div>",
+      ),
+    ).toBe("Yes.");
+  });
+
+  it("leaves a body without that signature, or with none known, as it is", () => {
+    expect(
+      withoutDraftReplySignature("Yes.\n\n<div>Old</div>", SIGNATURE),
+    ).toBe("Yes.\n\n<div>Old</div>");
+    expect(withoutDraftReplySignature(`Yes.\n\n${SIGNATURE}`, null)).toBe(
+      `Yes.\n\n${SIGNATURE}`,
+    );
+    expect(withoutDraftReplySignature(`Yes.\n\n${SIGNATURE}`, "  ")).toBe(
+      `Yes.\n\n${SIGNATURE}`,
+    );
+  });
+});
