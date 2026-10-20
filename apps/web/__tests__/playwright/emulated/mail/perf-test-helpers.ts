@@ -324,6 +324,57 @@ export async function readVitals(page: Page) {
   });
 }
 
+/**
+ * The mail engine's startup marks from the page and its worker, in
+ * milliseconds since the page's navigation started, so a slow first list can
+ * be broken down into the phase that held it up.
+ */
+export async function readEngineTimeline(page: Page) {
+  const read = () => ({
+    timeOrigin: performance.timeOrigin,
+    marks: performance
+      .getEntriesByType("mark")
+      .filter((entry) => entry.name.startsWith("mail-engine:"))
+      .map((entry) => ({ name: entry.name, at: entry.startTime })),
+    // The engine's own requests, such as its first sync, by path.
+    fetches: (
+      performance.getEntriesByType("resource") as PerformanceResourceTiming[]
+    )
+      .filter((entry) => entry.initiatorType === "fetch")
+      .map((entry) => ({
+        path: new URL(entry.name).pathname,
+        start: entry.startTime,
+        end: entry.responseEnd,
+      })),
+    isWorker: typeof document === "undefined",
+  });
+  const pageTimeline = await page.evaluate(read);
+  const workerTimelines = await Promise.all(
+    page.workers().map((worker) => worker.evaluate(read).catch(() => null)),
+  );
+  const phases: Record<string, number> = {};
+  for (const timeline of [pageTimeline, ...workerTimelines]) {
+    if (!timeline) continue;
+    const offset = timeline.timeOrigin - pageTimeline.timeOrigin;
+    for (const { name, at } of timeline.marks) {
+      // A page can start more than one worker; the first mark wins.
+      const key = name.slice("mail-engine:".length);
+      phases[key] = Math.min(
+        phases[key] ?? Number.POSITIVE_INFINITY,
+        at + offset,
+      );
+    }
+    if (!timeline.isWorker) continue;
+    for (const { path: requestPath, start, end } of timeline.fetches) {
+      const key = `fetch${requestPath.replace(/\/[^/]*\d[^/]*/g, "/:id")}`;
+      if (phases[`${key}:start`] !== undefined) continue;
+      phases[`${key}:start`] = start + offset;
+      phases[`${key}:end`] = end + offset;
+    }
+  }
+  return phases;
+}
+
 type PerfVitals = {
   lcp: number;
   cls: number;

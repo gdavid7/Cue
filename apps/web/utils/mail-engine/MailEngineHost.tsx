@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
+  claimEarlyMailEngineOwnerLock,
   createBrowserMailEngine,
   prewarmMailEngineWorker,
   releasePrewarmedMailEngineWorker,
@@ -86,7 +87,8 @@ type MailEngineInspectTransport = "browser" | "desktop-ipc";
 const ENGINE_START_PREFETCH_HOLD_MS = 10_000;
 
 // On a page that starts the engine, its worker and SQLite load while the page
-// hydrates instead of after; the worker opens nothing until the engine starts.
+// hydrates instead of after, and the worker opens the mailbox once the page
+// holds the engine's owner lock.
 if (
   typeof window !== "undefined" &&
   !hasDesktopMailEngineIpc() &&
@@ -387,6 +389,20 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         }
         await publishClient(engine, "owner", "browser");
       };
+      // Taken while the page hydrated, it is already this page's, and its
+      // early worker may have opened the mailbox under it. Awaited only while
+      // unanswered, so the start reaches the worker in this task rather than
+      // after the rest of the page's effects and renders.
+      const claim = claimEarlyMailEngineOwnerLock();
+      const releaseEarlyLock = claim instanceof Promise ? await claim : claim;
+      if (releaseEarlyLock) {
+        try {
+          if (!abort.signal.aborted) await hold(create);
+        } finally {
+          releaseEarlyLock();
+        }
+        return;
+      }
       if (typeof navigator !== "undefined" && navigator.locks?.request) {
         await navigator.locks.request(
           MAIL_ENGINE_OWNER_LOCK,

@@ -67,7 +67,8 @@ export function observeByKind(
 
 /**
  * Opens the mailbox before the engine starts, while the page still hydrates.
- * Only sent while no tab owns the engine, so no other tab needs the files.
+ * Only sent while the page holds the engine's owner lock, so no other tab
+ * can need the files.
  */
 export type WorkerPreopenRequest = {
   type: "preopen";

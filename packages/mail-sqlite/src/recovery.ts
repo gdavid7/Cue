@@ -133,13 +133,13 @@ export async function openMailStoreWithRecovery(input: {
   } catch (error) {
     failure = error;
   }
+  if (!opened && classifyMailboxError(failure) !== "corrupt") {
+    await driver?.close().catch(() => undefined);
+    throw failure;
+  }
   let carried =
     stashed && ownedWork(stashed, await input.ownedAccountIds, drops);
   if (!opened) {
-    if (classifyMailboxError(failure) !== "corrupt") {
-      await driver?.close().catch(() => undefined);
-      throw failure;
-    }
     // A stash that could not be read may hold earlier work that the write
     // below would replace.
     if (stashReadFailed) {

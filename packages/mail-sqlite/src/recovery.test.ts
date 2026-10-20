@@ -241,6 +241,27 @@ describe("openMailStoreWithRecovery", () => {
     await store.close();
   });
 
+  it("lets go of a mailbox held elsewhere at once, before the signed-in accounts are known", async () => {
+    // A mailbox opened early keeps its files until it settles, so a held one
+    // must not wait for an engine start that may never come.
+    const stash = memoryStash();
+    await stash.write(await pendingWorkFrom(await seededMailbox()));
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: async () =>
+          failingWrites(
+            createNodeSqliteDriver(await mailboxPath()),
+            Object.assign(new Error("database is locked"), { errcode: 5 }),
+          ),
+        wipe: async () => undefined,
+        stash,
+        ownedAccountIds: new Promise(() => undefined),
+      }),
+    ).rejects.toThrow("database is locked");
+    expect(await stash.read()).not.toBeNull();
+  });
+
   it("reports carried rows it could not restore, without their content", async () => {
     const work = await pendingWorkFrom(await seededMailbox());
     const draft = work.drafts[0];

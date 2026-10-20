@@ -19,6 +19,7 @@ const runtime = vi.hoisted(() => ({
     close: ReturnType<typeof vi.fn>;
   }>,
   emailAccounts: [] as unknown[],
+  earlyOwnerLock: null as (() => void) | null,
   firstMailList: new Set<() => void>(),
 }));
 
@@ -52,6 +53,12 @@ vi.mock("@/utils/mail-engine/poll-mail-versions", () => ({
 }));
 vi.mock("@/utils/mail-engine/create-browser-engine", () => ({
   prewarmMailEngineWorker: () => undefined,
+  releasePrewarmedMailEngineWorker: () => undefined,
+  claimEarlyMailEngineOwnerLock: () => {
+    const release = runtime.earlyOwnerLock;
+    runtime.earlyOwnerLock = null;
+    return release;
+  },
   createBrowserMailEngine: async (start: { accountId: string }) => {
     const engine = {
       start,
@@ -99,6 +106,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   runtime.engines.length = 0;
   runtime.emailAccounts = [];
+  runtime.earlyOwnerLock = null;
   runtime.firstMailList.clear();
   runtime.account = { ...runtime.account, emailAccountId: "account-a" };
 });
@@ -131,6 +139,28 @@ describe("MailEngineRuntime", () => {
     expect(runtime.engines).toHaveLength(1);
     expect(engine?.close).not.toHaveBeenCalled();
     expect(seen.at(-1)).toBe(engine);
+  });
+
+  it("starts the engine under the owner lock the page took while it hydrated, until it unmounts", async () => {
+    const request = vi.fn();
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      storage: { getDirectory: async () => ({}) },
+      locks: { request },
+    });
+    const releaseEarlyLock = vi.fn();
+    runtime.earlyOwnerLock = releaseEarlyLock;
+    const seen: unknown[] = [];
+    const { unmount } = await renderRuntime(seen);
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(runtime.engines[0]));
+
+    // The lock is already this page's; asking again would wait on itself.
+    expect(request).not.toHaveBeenCalled();
+    expect(releaseEarlyLock).not.toHaveBeenCalled();
+
+    unmount();
+    await vi.waitFor(() => expect(releaseEarlyLock).toHaveBeenCalledTimes(1));
+    expect(runtime.engines[0]?.close).toHaveBeenCalled();
   });
 
   it("registers every other connected account only after the first mail list", async () => {

@@ -16,6 +16,7 @@ import {
   pageShowsText,
   perfProfile,
   perfRuns,
+  readEngineTimeline,
   readVitals,
   readerShowsText,
   rowWithSubjectGone,
@@ -94,6 +95,11 @@ test("inbox paints its rows quickly on a cold and a warm load", async ({
         "warm-engine-rows",
         await timeSinceNavigation(warm, firstEngineRowVisible, undefined),
       );
+      for (const [phase, at] of Object.entries(
+        await readEngineTimeline(warm),
+      )) {
+        recorder.add(`warm-engine-${phase}`, at);
+      }
       const warmVitals = await readVitals(warm);
       recorder.add("warm-lcp", warmVitals.lcp);
       recorder.add("warm-ttfb", warmVitals.ttfb);
@@ -400,8 +406,14 @@ test("inbox paints quickly right after sign-in", async ({
             180_000,
           ),
         );
+        for (const [phase, at] of Object.entries(
+          await readEngineTimeline(page),
+        )) {
+          recorder.add(`signin-engine-${phase}`, at);
+        }
         const vitals = await readVitals(page);
         recorder.add("signin-ttfb", vitals.ttfb);
+        recorder.add("signin-fcp", vitals.fcp);
         recorder.add("signin-cls-x1000", vitals.cls * 1000);
         await waitForEngineIdle(page);
       } finally {
