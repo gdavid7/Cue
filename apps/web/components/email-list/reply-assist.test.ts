@@ -220,17 +220,27 @@ describe("draftHtmlToReplyText", () => {
 });
 
 describe("withSuggestionEscapesRepaired", () => {
+  const BEFORE_DR6 = Date.parse("2026-10-20T09:00:00Z");
+  // A tab still running the old code can save one just after DR-6 shipped.
+  const JUST_AFTER_DR6 = Date.parse("2026-10-20T20:00:00Z");
+  const WELL_AFTER_DR6 = Date.parse("2026-10-23T09:00:00Z");
+
   // Opened before DR-6: the stored HTML went through the composer's escape
   // as if it were text.
   const OLD_REPLY = renderEmailTextWithSafeLinks(`I'm sure "Q3" & <Q4> work.`, {
     allowHiddenLinks: false,
   });
-  function stored(editableHtml: string, executedActionId = "action-1") {
+  function stored(
+    editableHtml: string,
+    updatedAt = BEFORE_DR6,
+    reply = OLD_REPLY,
+  ) {
     return {
       revision: 1,
+      updatedAt,
       content: {
         draft: { editableHtml, mode: "original" as const },
-        startedFrom: { reply: OLD_REPLY, executedActionId },
+        startedFrom: { reply, executedActionId: "action-1" },
       },
     };
   }
@@ -268,6 +278,7 @@ describe("withSuggestionEscapesRepaired", () => {
   it("opens an untouched one from the decoded reply, markup and all", () => {
     const reply = `Sure &amp; see <a href="https://example.com/doc">the doc</a>.\n\n<div>Sam</div>`;
     const repaired = withSuggestionEscapesRepaired({
+      updatedAt: BEFORE_DR6,
       content: {
         draft: { editableHtml: textToHtmlParagraphs(reply) },
         startedFrom: { reply, executedActionId: "action-1" },
@@ -287,6 +298,7 @@ describe("withSuggestionEscapesRepaired", () => {
   it("opens one whose stored reply had only markup without its tags", () => {
     const reply = `Yes.\n\n<div dir="ltr">Sam<br>Acme</div>`;
     const repaired = withSuggestionEscapesRepaired({
+      updatedAt: BEFORE_DR6,
       content: {
         draft: { editableHtml: textToHtmlParagraphs(reply) },
         startedFrom: { reply, executedActionId: "action-1" },
@@ -321,6 +333,7 @@ describe("withSuggestionEscapesRepaired", () => {
       allowHiddenLinks: false,
     });
     const once = withSuggestionEscapesRepaired({
+      updatedAt: BEFORE_DR6,
       content: {
         draft: { editableHtml: textToHtmlParagraphs(reply) },
         startedFrom: { reply, executedActionId: "action-1" },
@@ -329,6 +342,54 @@ describe("withSuggestionEscapesRepaired", () => {
 
     expect(once.content.startedFrom.reply).toBe("Type &amp; for &.");
     expect(withSuggestionEscapesRepaired(once)).toBe(once);
+  });
+
+  it("repairs a stored-HTML draft a tab running the old code saved after DR-6", () => {
+    const repaired = withSuggestionEscapesRepaired(
+      stored(textToHtmlParagraphs(OLD_REPLY), JUST_AFTER_DR6),
+    );
+
+    expect(repaired.content.startedFrom).toMatchObject({
+      reply: `I'm sure "Q3" & <Q4> work.`,
+      decoded: true,
+    });
+  });
+
+  // Saved since DR-6 shipped but before drafts were marked: plain text.
+  it.each([
+    ["just after", JUST_AFTER_DR6],
+    ["well after", WELL_AFTER_DR6],
+  ])("leaves an unmarked plain draft saved %s DR-6 as it is", (_, updatedAt) => {
+    const reply =
+      "Write to Tom <tom@acme.com> today. In HTML write &amp; for &.";
+    const draft = stored(textToHtmlParagraphs(reply), updatedAt, reply);
+
+    expect(withSuggestionEscapesRepaired(draft)).toBe(draft);
+  });
+
+  it("leaves an unmarked plain draft with an apostrophe and an entity alone", () => {
+    const reply = "I'll write &amp; there.";
+    const draft = stored(textToHtmlParagraphs(reply), JUST_AFTER_DR6, reply);
+
+    expect(withSuggestionEscapesRepaired(draft)).toBe(draft);
+  });
+
+  it("leaves even stored HTML alone once old tabs are long gone", () => {
+    const draft = stored(textToHtmlParagraphs(OLD_REPLY), WELL_AFTER_DR6);
+
+    expect(withSuggestionEscapesRepaired(draft)).toBe(draft);
+  });
+
+  it("rebuilds an intact opening and keeps what the user added after it", () => {
+    const repaired = withSuggestionEscapesRepaired(
+      stored(
+        `${textToHtmlParagraphs(OLD_REPLY)}<p>Also: R&amp;D &lt;3 &amp;amp;</p>`,
+      ),
+    );
+
+    expect(repaired.content.draft.editableHtml).toBe(
+      `${textToHtmlParagraphs(`I'm sure "Q3" & <Q4> work.`)}<p>Also: R&amp;D &lt;3 &amp;amp;</p>`,
+    );
   });
 
   it("repairs a draft once", () => {
@@ -346,6 +407,7 @@ describe("withSuggestionEscapesRepaired", () => {
       editableHtml = textToHtmlParagraphs(reply),
     ) => ({
       revision: 1,
+      updatedAt: Date.parse("2026-10-21T09:00:00Z"),
       content: {
         draft: { editableHtml },
         startedFrom: { reply, executedActionId: "action-1", decoded: true },
@@ -364,6 +426,7 @@ describe("withSuggestionEscapesRepaired", () => {
     );
     const own = {
       revision: 1,
+      updatedAt: BEFORE_DR6,
       content: { draft: { editableHtml: "<p>&amp;amp; is how</p>" } },
     };
 

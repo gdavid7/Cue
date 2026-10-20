@@ -92,10 +92,13 @@ export function draftHtmlToReplyText(html: string) {
  * draft has no `decoded` mark. One still untouched opens again from the
  * decoded reply; an edited one gets its opening rebuilt when it is still
  * there, or else only the second escape undone. Then it is marked, so it is
- * repaired once, and a draft opened since is never touched.
+ * repaired once, and a draft opened since is never touched: one saved after
+ * DR-6 shipped carries the mark, or is plain text saved without it.
  */
 export function withSuggestionEscapesRepaired<
   T extends {
+    /** When the draft was last saved, in ms; 0 when unknown. */
+    updatedAt: number;
     content: {
       draft: { editableHtml: string };
       startedFrom?: {
@@ -109,7 +112,14 @@ export function withSuggestionEscapesRepaired<
   const content = stored.content;
   const html = content?.draft.editableHtml;
   const origin = content?.startedFrom;
+  if (typeof DOMParser === "undefined") return stored;
   if (!content || !html || !origin?.executedActionId || origin.decoded)
+    return stored;
+  // Drafts saved since DR-6 shipped hold plain text without the mark. Only
+  // a tab still running the old code saves stored HTML, and only for a while.
+  if (stored.updatedAt >= DR6_IN_PRODUCTION + LEGACY_TAB_GRACE_MS)
+    return stored;
+  if (stored.updatedAt >= DR6_IN_PRODUCTION && !looksStoredHtml(origin.reply))
     return stored;
   const reply = draftHtmlToReplyText(origin.reply);
   const opening = textToHtmlParagraphs(reply);
@@ -176,11 +186,24 @@ function bodyText(bodyHtml: string) {
   return doc.body.textContent ?? "";
 }
 
+// Stored HTML escapes the reply's text, so outside its tags it has entities
+// but no quote marks or bare "&"; a plain-text reply has those as written.
+function looksStoredHtml(reply: string) {
+  if (!STORED_HTML.test(reply)) return false;
+  const text = reply.replace(/<\/?[a-z][^>]*>/gi, "");
+  return !/["']|&(?![a-z]+;|#\d+;|#x[0-9a-f]+;)/i.test(text);
+}
+
 function withoutSpace(text: string) {
   return text.replace(/[\s ]+/g, "");
 }
 
-// What `he.escape` writes, escaped a second time.
+// When the reader started decoding a rule's reply (DR-6) in production.
+const DR6_IN_PRODUCTION = Date.parse("2026-10-20T18:05:38Z");
+const LEGACY_TAB_GRACE_MS = 48 * 60 * 60 * 1000;
+
+// What `he.escape` writes, and the same escaped a second time.
+const STORED_HTML = /&(#x27|#x60|quot|amp|lt|gt);/;
 const DOUBLE_ESCAPED_ALL = /&amp;(#x27|#x60|quot|amp|lt|gt);/g;
 
 const UNSHOWN_ELEMENTS = new Set([
