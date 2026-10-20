@@ -4,7 +4,10 @@ import type {
   EmailEditorAssistContext,
   EmailEditorHandle,
 } from "@inboxzero/email-editor/web";
-import { markdownToEmailHtml } from "@inboxzero/email-editor/markdown";
+import {
+  markdownToEmailHtml,
+  markdownToPlainText,
+} from "@inboxzero/email-editor/markdown";
 import {
   type RefObject,
   useCallback,
@@ -17,13 +20,18 @@ import {
   COMPOSE_ASSIST_LIMITS,
   type ComposeAssistBody,
 } from "@/app/api/ai/compose-assist/validation";
+import { recordComposeAssistOutcomeAction } from "@/utils/actions/compose-assist";
+import type { ComposeAssistOutcome } from "@/utils/actions/compose-assist.validation";
 import { ComposeAssistPanel } from "./ComposeAssistPanel";
 import {
   type AssistRequest,
+  type AssistState,
   assistReducer,
   refineRequest,
 } from "./compose-assist-state";
 import { streamComposeAssist } from "./compose-assist-stream";
+
+type Suggestion = Extract<AssistState, { status: "streaming" | "ready" }>;
 
 const DRAFT_CHANGED_MESSAGE =
   "Your draft changed while Cue was writing. Select the text and try again.";
@@ -47,12 +55,16 @@ export function useComposeAssist({
   editorRef,
   emailAccountId,
   threadId,
+  replyToMessageId,
   getEnvelope,
   formRef,
 }: {
   editorRef: RefObject<EmailEditorHandle | null>;
   emailAccountId: string;
   threadId?: string;
+  // The message a reply answers. What the user does with Cue's suggestions
+  // in a reply teaches Cue, once the reply is sent.
+  replyToMessageId?: string;
   getEnvelope: () => { to?: string; subject?: string };
   // The composer Cue works in. Escape inside it closes Cue first.
   formRef: RefObject<HTMLElement | null>;
@@ -65,8 +77,33 @@ export function useComposeAssist({
   const [container, setContainer] = useState<HTMLElement | null>(null);
   // Outlives the panel, so the outcome of accepting is still announced.
   const [announcement, setAnnouncement] = useState("");
-  const contextRef = useRef({ emailAccountId, threadId, getEnvelope });
-  contextRef.current = { emailAccountId, threadId, getEnvelope };
+  const contextRef = useRef({
+    emailAccountId,
+    threadId,
+    replyToMessageId,
+    getEnvelope,
+  });
+  contextRef.current = {
+    emailAccountId,
+    threadId,
+    replyToMessageId,
+    getEnvelope,
+  };
+
+  const recordOutcome = useCallback(
+    (outcome: ComposeAssistOutcome["outcome"], suggestion: Suggestion) => {
+      const { emailAccountId, threadId, replyToMessageId } = contextRef.current;
+      if (!threadId || !replyToMessageId) return;
+      recordComposeAssistOutcomeAction(emailAccountId, {
+        threadId,
+        messageId: replyToMessageId,
+        outcome: toOutcome(outcome, suggestion),
+      }).catch(() => {
+        // Only learning from this suggestion is lost.
+      });
+    },
+    [],
+  );
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -75,12 +112,14 @@ export function useComposeAssist({
 
   const close = useCallback(
     ({ refocus = true }: { refocus?: boolean } = {}) => {
+      const current = stateRef.current;
+      if (current.status === "ready") recordOutcome("discarded", current);
       stop();
       editorRef.current?.endAssist();
       dispatch({ type: "close" });
       if (refocus) editorRef.current?.focus();
     },
-    [editorRef, stop],
+    [editorRef, recordOutcome, stop],
   );
 
   const begin = useCallback(
@@ -158,9 +197,10 @@ export function useComposeAssist({
       dispatch({ type: "fail", message: DRAFT_CHANGED_MESSAGE });
       return;
     }
+    recordOutcome("accepted", current);
     dispatch({ type: "close" });
     setAnnouncement(ACCEPTED_MESSAGE);
-  }, [editorRef]);
+  }, [editorRef, recordOutcome]);
 
   const retry = useCallback(() => {
     const current = stateRef.current;
@@ -337,6 +377,21 @@ function toRequestBody(
   if (request.mode === "rewrite")
     return { ...fields, before, text: context.text, after };
   return { ...fields, before, after };
+}
+
+function toOutcome(
+  outcome: ComposeAssistOutcome["outcome"],
+  { request, context, output }: Suggestion,
+): ComposeAssistOutcome {
+  const replacesText =
+    request.mode === "rewrite" || request.mode === "expand-notes";
+  return {
+    outcome,
+    request: (request.label || request.mode).slice(0, 2000),
+    refinements: request.refinements,
+    original: replacesText ? context.text.slice(0, 10_000) : "",
+    suggestion: markdownToPlainText(output.trim()).slice(0, 10_000),
+  };
 }
 
 function focusPanel(panel: HTMLElement | null) {

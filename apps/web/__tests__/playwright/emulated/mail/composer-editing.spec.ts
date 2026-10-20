@@ -6,12 +6,14 @@ import {
   deleteSecondEmailAccount,
 } from "./account-test-helpers";
 import {
+  clearWorkflowMailboxDrafts,
   conversationWithSubject,
   grantAiAccess,
   openMail,
   openMailboxFromSidebar,
   setSentWithFooter,
   waitForComposeOutboxSend,
+  withClient,
 } from "./mail-test-helpers";
 
 // These specs edit the signature, and the opt-in "Sent with" footer gives
@@ -934,6 +936,61 @@ test.describe("Cue writing partner", () => {
     await expect(dialog).toBeHidden();
   });
 
+  test("remembers what the user accepts in a reply, so the sent reply can teach Cue", async ({
+    page,
+  }, testInfo) => {
+    await scriptLlmReply(
+      "pls confirm thursday",
+      "Could you confirm that **Thursday** works?",
+    );
+    const startedAt = new Date();
+    const { emailAccountId } = await openMail(page);
+    await page.goto(`/${emailAccountId}/mail?thread-id=thr_playwright_reply`);
+    const sourceMessage = page.locator(
+      '[data-thread-message-id="msg_playwright_reply"]',
+    );
+    await expect(sourceMessage).toBeVisible({ timeout: 60_000 });
+    await sourceMessage
+      .getByRole("button", { name: "Reply", exact: true })
+      .click();
+    const editor = sourceMessage.getByRole("textbox", {
+      name: "Email message",
+    });
+    await editor.pressSequentially("pls confirm thursday");
+
+    await selectEditorText(editor, "pls confirm thursday");
+    await page.keyboard.press("ControlOrMeta+j");
+    await page.keyboard.press("i");
+    const suggestion = page.getByRole("group", { name: "Suggested text" });
+    await expect(suggestion).toContainText("Could you confirm that");
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-reply-suggestion");
+
+    await page.keyboard.press("Enter");
+    await expect(editor).toContainText(
+      "Could you confirm that Thursday works?",
+    );
+    await expect
+      .poll(() => readComposeAssistOutcomes(emailAccountId, startedAt))
+      .toEqual([
+        {
+          outcome: "accepted",
+          request: "Improve",
+          refinements: [],
+          original: "pls confirm thursday",
+          suggestion: "Could you confirm that Thursday works?",
+        },
+      ]);
+    await capturePlaywrightCheckpoint(page, testInfo, "cue-reply-accepted");
+
+    await clearWorkflowMailboxDrafts(page);
+    await withClient((client) =>
+      client.query(
+        `DELETE FROM "ComposeAssistReply" WHERE "emailAccountId" = $1 AND "createdAt" >= $2`,
+        [emailAccountId, startedAt],
+      ),
+    );
+  });
+
   test("offers Ask Cue at the top of the slash menu", async ({ page }) => {
     await openMail(page);
     await page.getByRole("button", { name: /^Compose/ }).click();
@@ -1017,6 +1074,18 @@ async function scriptLlmReply(match: string, text: string) {
 }
 
 const TABLE_SIGNATURE_HTML = `<table cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse"><tbody><tr><td valign="top" style="padding-right:12px"><img src="https://assets.example.com/logo.png" width="48" height="48" alt="Example Company"></td><td valign="top" style="font-family:Arial,sans-serif;font-size:13px;color:#333333"><b>Example Person</b><br>Head of Examples<br><a href="https://example.com">example.com</a></td></tr></tbody></table>`;
+
+async function readComposeAssistOutcomes(emailAccountId: string, since: Date) {
+  return withClient(async (client) => {
+    const result = await client.query<{ outcomes: unknown }>(
+      `SELECT outcomes FROM "ComposeAssistReply"
+       WHERE "emailAccountId" = $1 AND "createdAt" >= $2
+       ORDER BY "updatedAt" DESC LIMIT 1`,
+      [emailAccountId, since],
+    );
+    return result.rows[0]?.outcomes ?? null;
+  });
+}
 
 async function selectEditorText(editor: Locator, text: string) {
   await editor.evaluate((element, selectedText) => {

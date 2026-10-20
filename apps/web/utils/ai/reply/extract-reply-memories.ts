@@ -4,6 +4,7 @@ import {
   ReplyMemoryScopeType,
 } from "@/generated/prisma/enums";
 import type { ReplyMemory } from "@/generated/prisma/client";
+import type { ComposeAssistOutcome } from "@/utils/actions/compose-assist.validation";
 import { getUserInfoPrompt } from "@/utils/ai/helpers";
 import { extractDomainFromEmail, isPublicEmailDomain } from "@/utils/email";
 import { createGenerateObject } from "@/utils/llms";
@@ -43,6 +44,7 @@ const replyMemorySchema = z.object({
 export async function aiExtractReplyMemoriesFromDraftEdit({
   incomingEmailContent,
   draftText,
+  composeAssistOutcomes,
   sentText,
   senderEmail,
   existingMemories,
@@ -52,6 +54,12 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
 }: {
   incomingEmailContent: string;
   draftText: string;
+  /**
+   * Set when the reply was written with Cue in the composer: what the user
+   * did with each suggestion. The memories then come from those outcomes
+   * rather than from editing one whole draft.
+   */
+  composeAssistOutcomes?: ComposeAssistOutcome[];
   sentText: string;
   senderEmail: string;
   existingMemories: Pick<
@@ -68,10 +76,13 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
   const normalizedSenderEmail = senderEmail.trim().toLowerCase();
 
   if (!normalizedSenderEmail) return [];
-  if (!normalizedDraftText || !normalizedSentText) return [];
-  if (
+  if (!normalizedSentText) return [];
+  if (composeAssistOutcomes) {
+    if (!composeAssistOutcomes.length) return [];
+  } else if (
+    !normalizedDraftText ||
     normalizeMemoryText(normalizedDraftText) ===
-    normalizeMemoryText(normalizedSentText)
+      normalizeMemoryText(normalizedSentText)
   ) {
     return [];
   }
@@ -83,6 +94,7 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
     senderDomain,
     incomingEmailContent: normalizedIncomingEmailContent,
     draftText: normalizedDraftText,
+    composeAssistOutcomes,
     sentText: normalizedSentText,
     existingMemories,
     writingStyle,
@@ -104,7 +116,12 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
   const result = await generateObject({
     ...modelOptions,
     instructions: appendOllamaOnlySystemGuidance(
-      { instructions: getSystemPrompt({ allowDomainScope }) },
+      {
+        instructions: getSystemPrompt({
+          allowDomainScope,
+          fromComposeAssist: !!composeAssistOutcomes,
+        }),
+      },
       modelOptions,
       getOllamaReplyMemoryGuidance({ allowDomainScope }),
     ).instructions,
@@ -167,6 +184,7 @@ function getPrompt({
   senderDomain,
   incomingEmailContent,
   draftText,
+  composeAssistOutcomes,
   sentText,
   existingMemories,
   writingStyle,
@@ -177,6 +195,7 @@ function getPrompt({
   senderDomain: string;
   incomingEmailContent: string;
   draftText: string;
+  composeAssistOutcomes?: ComposeAssistOutcome[];
   sentText: string;
   existingMemories: Pick<
     ReplyMemory,
@@ -209,9 +228,13 @@ ${trimmedLearnedWritingStyle}
 ${incomingEmailContent}
 </incoming_email>
 
-<ai_draft>
+${
+  composeAssistOutcomes
+    ? formatComposeAssistOutcomes(composeAssistOutcomes)
+    : `<ai_draft>
 ${draftText}
-</ai_draft>
+</ai_draft>`
+}
 
 <user_sent>
 ${sentText}
@@ -227,7 +250,33 @@ ${learnedWritingStylePrompt}
 
 ${getUserInfoPrompt({ emailAccount })}
 
-Extract reusable reply memories from this draft edit.`;
+${
+  composeAssistOutcomes
+    ? "Extract reusable reply memories from how the user handled these suggestions."
+    : "Extract reusable reply memories from this draft edit."
+}`;
+}
+
+function formatComposeAssistOutcomes(outcomes: ComposeAssistOutcome[]) {
+  return `<cue_suggestions>
+${outcomes
+  .map(
+    (outcome) => `<suggestion outcome="${outcome.outcome}">
+<request>${outcome.request}</request>
+${outcome.refinements.map((text) => `<follow_up>${text}</follow_up>\n`).join("")}${
+  outcome.original
+    ? `<replaced_text>
+${outcome.original}
+</replaced_text>
+`
+    : ""
+}<suggested_text>
+${outcome.suggestion}
+</suggested_text>
+</suggestion>`,
+  )
+  .join("\n")}
+</cue_suggestions>`;
 }
 
 export function formatReplyMemoryPromptLine(
@@ -269,7 +318,13 @@ function isValidTopicScopeValue(value: string) {
   return /^[\p{L}\p{N}][\p{L}\p{N} /&+-]*$/u.test(normalizedTopic);
 }
 
-function getSystemPrompt({ allowDomainScope }: { allowDomainScope: boolean }) {
+function getSystemPrompt({
+  allowDomainScope,
+  fromComposeAssist,
+}: {
+  allowDomainScope: boolean;
+  fromComposeAssist: boolean;
+}) {
   const domainScopeLine = allowDomainScope
     ? "- DOMAIN: applies to one sender domain\n"
     : "";
@@ -277,7 +332,18 @@ function getSystemPrompt({ allowDomainScope }: { allowDomainScope: boolean }) {
     ? "- For DOMAIN scope, use the exact sender domain from the context.\n"
     : "- DOMAIN scope is unavailable because the sender domain is a public email provider. Use SENDER for sender-specific rules, GLOBAL for broad account rules, or TOPIC for reusable topics.\n";
 
-  return `You analyze how a user edits AI-generated email reply drafts and turn durable patterns into reusable drafting memories.
+  const intro = fromComposeAssist
+    ? "You analyze how a user handles Cue's writing suggestions while writing an email reply and turn durable patterns into reusable drafting memories."
+    : "You analyze how a user edits AI-generated email reply drafts and turn durable patterns into reusable drafting memories.";
+  const sourceRuleLines = fromComposeAssist
+    ? `- Each suggestion shows what the user asked Cue for, any follow-up requests they typed after seeing it, the text it replaced (if any), what Cue suggested, and whether the user accepted or discarded it. The sent reply is what the user finally sent.
+- Learn from what the user did with the suggestions: their follow-up requests, the changes they made to accepted text before sending, and suggestions they discarded and wrote differently. Text the user accepted and sent unchanged teaches nothing on its own.
+- A request is about one passage of this reply. Do not turn a single request, such as translating or shortening a passage, into a memory unless the follow-ups or the sent reply show a lasting preference.
+- A discarded suggestion is weak evidence on its own. Learn from it only when the sent reply shows what the user wanted instead.
+`
+    : "- Learn from the user's substantive edit, not from content that was already present in the AI draft.\n";
+
+  return `${intro}
 
 Return only memories that are likely to help with future drafts.
 
@@ -293,8 +359,7 @@ ${domainScopeLine}- TOPIC: applies to a reusable topic or subject area
 
 Rules:
 - Return at most ${MAX_MEMORIES_PER_EDIT} memories.
-- Learn from the user's substantive edit, not from content that was already present in the AI draft.
-- Before creating a memory, apply this durability test: would following it in a future unrelated thread be correct without the original context? If not, return no memory for that idea.
+${sourceRuleLines}- Before creating a memory, apply this durability test: would following it in a future unrelated thread be correct without the original context? If not, return no memory for that idea.
 - Skip one-off logistics, temporary states, completed actions, current documents or attachments, and ad hoc or explicitly one-time exceptions unless the edit explicitly reveals a stable policy, preference, fact, or repeatable process.
 - For current documents, attachments, or completed actions, do not create memories that simply say to send, share, attach, confirm, or complete the item. Only store a stable rule for how that class of request should be handled in the future.
 - Prefer concise, direct drafting instructions.

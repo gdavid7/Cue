@@ -96,6 +96,8 @@ Temporary retention is acceptable, and the current system:
 - `preference` memories are account-level and feed learned writing style
 - learned writing style is stored separately on `EmailAccount`
 - raw evidence lives on `ReplyMemorySource` and keeps draft/send examples for short-term analysis
+- a `DraftSendLog` compares the sent reply against exactly one source: a rule's draft (`ExecutedAction`), a saved suggested reply (`SuggestedReplyDraft`), or Cue's suggestions in the composer (`ComposeAssistReply`)
+- `ComposeAssistReply` holds what the user did with each composer suggestion in a reply (accepted or discarded, with follow-up requests). Sending the reply logs it alongside any other source, and extraction reads the outcomes with its own prompt variant. Sends that used every suggestion as written skip the model call, and unsent rows are deleted after the evidence retention window
 
 ## Future Notes
 

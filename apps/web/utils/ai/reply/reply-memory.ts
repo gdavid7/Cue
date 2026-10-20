@@ -5,6 +5,11 @@ import {
 import type { Prisma, ReplyMemory } from "@/generated/prisma/client";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import {
+  type ComposeAssistOutcome,
+  getAcceptedSuggestionsText,
+  parseComposeAssistOutcomes,
+} from "@/utils/actions/compose-assist.validation";
+import {
   extractDomainFromEmail,
   extractEmailAddress,
   isPublicEmailDomain,
@@ -62,20 +67,28 @@ export async function syncReplyMemoriesFromDraftSendLogs({
   provider: EmailProvider;
   logger: Logger;
 }) {
-  const retentionCutoff = new Date(
-    Date.now() - REPLY_MEMORY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-  );
+  const retentionCutoff = getReplyMemoryRetentionCutoff();
 
-  await prisma.draftSendLog.updateMany({
-    where: {
-      createdAt: { lte: retentionCutoff },
-      replyMemorySentText: { not: null },
-      OR: draftSendLogAccountFilter(emailAccountId),
-    },
-    data: {
-      replyMemorySentText: null,
-    },
-  });
+  await Promise.all([
+    prisma.draftSendLog.updateMany({
+      where: {
+        createdAt: { lte: retentionCutoff },
+        replyMemorySentText: { not: null },
+        OR: draftSendLogAccountFilter(emailAccountId),
+      },
+      data: {
+        replyMemorySentText: null,
+      },
+    }),
+    // Cue's suggestions in a reply that was never sent teach nothing.
+    prisma.composeAssistReply.deleteMany({
+      where: {
+        emailAccountId,
+        updatedAt: { lte: retentionCutoff },
+        draftSendLog: null,
+      },
+    }),
+  ]);
 
   const emailAccount = await getEmailAccountWithAi({ emailAccountId });
   if (!emailAccount) return;
@@ -128,6 +141,12 @@ export async function syncReplyMemoriesFromDraftSendLogs({
       emailAccountId,
     });
   }
+}
+
+export function getReplyMemoryRetentionCutoff() {
+  return new Date(
+    Date.now() - REPLY_MEMORY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  );
 }
 
 export async function getReplyMemoriesForPrompt({
@@ -302,7 +321,8 @@ async function processReplyMemoryDraftSendLog({
     await markDraftSendLogReplyMemoryProcessed(draftSendLog.id);
     return;
   }
-  const { sourceMessageId, emailAccountId, draftText } = draft;
+  const { sourceMessageId, emailAccountId, draftText, composeAssistOutcomes } =
+    draft;
   const sentText = stripForwardedContent(
     draftSendLog.replyMemorySentText ?? "",
   );
@@ -431,6 +451,7 @@ async function processReplyMemoryDraftSendLog({
         }).content
       : "",
     draftText,
+    composeAssistOutcomes,
     sentText,
     senderEmail: normalizedSenderEmail,
     existingMemories,
@@ -820,6 +841,14 @@ const draftSendLogReplyMemoryInclude = {
       emailAccountId: true,
     },
   },
+  composeAssistReply: {
+    select: {
+      id: true,
+      outcomes: true,
+      messageId: true,
+      emailAccountId: true,
+    },
+  },
 } satisfies Prisma.DraftSendLogInclude;
 
 type DraftSendLogReplyMemoryPayload = Prisma.DraftSendLogGetPayload<{
@@ -843,6 +872,11 @@ const preferenceWritingEvidenceInclude = {
       suggestedReplyDraft: {
         select: {
           content: true,
+        },
+      },
+      composeAssistReply: {
+        select: {
+          outcomes: true,
         },
       },
     },
@@ -911,11 +945,15 @@ function formatPreferenceMemoryEvidence(
 ) {
   return preferenceEvidence
     .map((evidence, index) => {
+      const { executedAction, suggestedReplyDraft, composeAssistReply } =
+        evidence.draftSendLog;
       const draftText =
-        (
-          evidence.draftSendLog.executedAction ??
-          evidence.draftSendLog.suggestedReplyDraft
-        )?.content ?? "";
+        (executedAction ?? suggestedReplyDraft)?.content ??
+        (composeAssistReply
+          ? getAcceptedSuggestionsText(
+              parseComposeAssistOutcomes(composeAssistReply.outcomes),
+            )
+          : "");
       const sentText = evidence.draftSendLog.replyMemorySentText ?? "";
 
       return `${index + 1}. ${evidence.replyMemory.content}
@@ -933,18 +971,26 @@ function truncatePreferenceEvidenceText(value: string) {
     : normalized;
 }
 
-// A send log compares against either a rule's draft or a saved suggested reply.
+// A send log compares against a rule's draft, a saved suggested reply, or
+// Cue's suggestions in the composer.
 function draftSendLogAccountFilter(
   emailAccountId: string,
 ): Prisma.DraftSendLogWhereInput[] {
   return [
     { executedAction: { executedRule: { emailAccountId } } },
     { suggestedReplyDraft: { emailAccountId } },
+    { composeAssistReply: { emailAccountId } },
   ];
 }
 
-function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload) {
-  const { executedAction, suggestedReplyDraft } = draftSendLog;
+function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload): {
+  sourceMessageId: string;
+  emailAccountId: string;
+  draftText: string;
+  composeAssistOutcomes?: ComposeAssistOutcome[];
+} | null {
+  const { executedAction, suggestedReplyDraft, composeAssistReply } =
+    draftSendLog;
   if (executedAction) {
     return {
       sourceMessageId: executedAction.executedRule.messageId,
@@ -957,6 +1003,16 @@ function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload) {
       sourceMessageId: suggestedReplyDraft.messageId,
       emailAccountId: suggestedReplyDraft.emailAccountId,
       draftText: suggestedReplyDraft.content,
+    };
+  }
+  if (composeAssistReply) {
+    const outcomes = parseComposeAssistOutcomes(composeAssistReply.outcomes);
+    if (!outcomes.length) return null;
+    return {
+      sourceMessageId: composeAssistReply.messageId,
+      emailAccountId: composeAssistReply.emailAccountId,
+      draftText: getAcceptedSuggestionsText(outcomes),
+      composeAssistOutcomes: outcomes,
     };
   }
   return null;

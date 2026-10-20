@@ -572,6 +572,84 @@ describe("reply-memory", () => {
     });
   });
 
+  it("learns from how the user handled Cue's suggestions in the composer", async () => {
+    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
+      count: 0,
+    });
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      {
+        ...createDraftSendLog({
+          sourceMessageId: "source-3",
+          replyMemorySentText: "Thanks for the quick reply. Friday works.",
+        }),
+        executedAction: null,
+        suggestedReplyDraft: null,
+        composeAssistReply: {
+          id: "compose-assist-reply-1",
+          messageId: "source-3",
+          emailAccountId: "account-1",
+          outcomes: [
+            {
+              outcome: "accepted",
+              request: "Shorter",
+              refinements: ["drop the exclamation marks"],
+              original: "Thank you so much for getting back to me so quickly!!",
+              suggestion: "Thanks for the quick reply!",
+            },
+          ],
+        },
+      },
+    ] as any);
+    vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.replyMemory.upsert).mockResolvedValue(
+      createReplyMemory({}) as any,
+    );
+    vi.mocked(prisma.draftSendLog.update).mockResolvedValue({} as any);
+    mockGenerateObject.mockResolvedValue({
+      object: {
+        memories: [
+          newReplyMemoryDecision({
+            content: "Avoid exclamation marks.",
+            kind: ReplyMemoryKind.PREFERENCE,
+            scopeType: ReplyMemoryScopeType.GLOBAL,
+            scopeValue: "",
+          }),
+        ],
+      },
+    });
+
+    const provider = createReplyMemoryProvider();
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: provider as any,
+      logger,
+    });
+
+    expect(prisma.composeAssistReply.deleteMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        emailAccountId: "account-1",
+        draftSendLog: null,
+      }),
+    });
+    expect(provider.getMessage).toHaveBeenCalledWith("source-3");
+    const { instructions, prompt } = mockGenerateObject.mock.calls[0][0];
+    expect(instructions).toContain("Cue's writing suggestions");
+    expect(prompt).toContain('<suggestion outcome="accepted">');
+    expect(prompt).toContain(
+      "<follow_up>drop the exclamation marks</follow_up>",
+    );
+    expect(prompt).not.toContain("<ai_draft>");
+    expect(prisma.replyMemorySource.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: {
+          replyMemoryId: "GLOBAL::memory",
+          draftSendLogId: "draft-send-log-1",
+        },
+      }),
+    );
+  });
+
   it("skips queued draft learning when the sent message did not reply to the source sender", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
       count: 0,

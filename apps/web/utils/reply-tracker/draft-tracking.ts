@@ -8,10 +8,16 @@ import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
 import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import {
+  getReplyMemoryRetentionCutoff,
   isMeaningfulDraftEdit,
   saveDraftSendLogReplyMemory,
   syncReplyMemoriesFromDraftSendLogs,
 } from "@/utils/ai/reply/reply-memory";
+import {
+  type ComposeAssistOutcome,
+  getAcceptedSuggestionsText,
+  parseComposeAssistOutcomes,
+} from "@/utils/actions/compose-assist.validation";
 import { stripProviderSignatureFromParsedMessage } from "@/utils/email/signature-normalization";
 import {
   replaceMessagingDraftNotificationsWithDraftSentState,
@@ -50,6 +56,22 @@ export async function trackSentDraftStatus({
   if (!sentMessageId) {
     logger.warn("Sent message missing ID, cannot track draft status");
     return;
+  }
+
+  // Cue's help in the composer is its own source, alongside any rule draft
+  // or suggested reply the user started from.
+  try {
+    await trackSentComposeAssistReply({
+      emailAccountId,
+      sentMessageId,
+      message,
+      provider,
+      logger,
+    });
+  } catch (error) {
+    logger.error("Failed to track Cue's suggestions in a sent reply", {
+      error,
+    });
   }
 
   const [executedAction, suggestedReplyDraft] = await Promise.all([
@@ -557,6 +579,28 @@ function queueReplyMemoryLearning({
     return;
   }
 
+  learnReplyMemoriesAfterResponse({
+    emailAccountId,
+    draftSendLogId,
+    replyMemorySentText,
+    provider,
+    logger,
+  });
+}
+
+function learnReplyMemoriesAfterResponse({
+  emailAccountId,
+  draftSendLogId,
+  replyMemorySentText,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  draftSendLogId: string;
+  replyMemorySentText: string;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
   after(async () => {
     try {
       await saveDraftSendLogReplyMemory({
@@ -574,6 +618,83 @@ function queueReplyMemoryLearning({
         draftSendLogId,
       });
     }
+  });
+}
+
+/**
+ * A reply written with Cue's suggestions in the composer. What the user
+ * accepted, changed or discarded, set against what they sent, teaches reply
+ * memories.
+ */
+async function trackSentComposeAssistReply({
+  emailAccountId,
+  sentMessageId,
+  message,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  sentMessageId: string;
+  message: ParsedMessage;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
+  const composeAssistReply = await prisma.composeAssistReply.findFirst({
+    where: {
+      emailAccountId,
+      threadId: message.threadId,
+      draftSendLog: null,
+      updatedAt: { gt: getReplyMemoryRetentionCutoff() },
+    },
+    orderBy: { updatedAt: "desc" },
+    select: {
+      id: true,
+      messageId: true,
+      outcomes: true,
+      emailAccount: { select: { signature: true } },
+    },
+  });
+  if (!composeAssistReply) return;
+  const outcomes = parseComposeAssistOutcomes(composeAssistReply.outcomes);
+  if (!outcomes.length) return;
+
+  const { sentMessageRepliesToSource, sentText, draftSendLogData } =
+    await compareSentReplyWithDraft({
+      draftId: null,
+      draftText: getAcceptedSuggestionsText(outcomes),
+      sourceMessageId: composeAssistReply.messageId,
+      accountSignature: composeAssistReply.emailAccount.signature,
+      sentMessageId,
+      message,
+      provider,
+      logger,
+    });
+  const draftSendLog = await withPrismaRetry(
+    () =>
+      prisma.draftSendLog.create({
+        data: {
+          composeAssistReplyId: composeAssistReply.id,
+          ...draftSendLogData,
+        },
+      }),
+    { logger },
+  );
+  logger.info("Created draft send log for Cue's suggestions in a reply", {
+    composeAssistReplyId: composeAssistReply.id,
+    outcomeCount: outcomes.length,
+    sentMessageRepliesToSource,
+  });
+
+  if (sentMessageRepliesToSource === false || !sentText) return;
+  const replyMemorySentText = sentText.slice(0, 4000);
+  if (!hasLearnableComposeAssistOutcome(outcomes, replyMemorySentText)) return;
+
+  learnReplyMemoriesAfterResponse({
+    emailAccountId,
+    draftSendLogId: draftSendLog.id,
+    replyMemorySentText,
+    provider,
+    logger,
   });
 }
 
@@ -928,4 +1049,27 @@ function getDraftCleanupStatusData({
 
 function normalizedLength(text: string | null) {
   return (text ?? "").replace(/\s+/g, "").length;
+}
+
+/**
+ * Whether the user did anything with Cue's suggestions that a memory could
+ * learn from: asked for changes, turned one down, or changed accepted text
+ * before sending. Suggestions sent exactly as Cue wrote them teach nothing,
+ * and skip the model call.
+ */
+export function hasLearnableComposeAssistOutcome(
+  outcomes: ComposeAssistOutcome[],
+  sentText: string,
+) {
+  const sent = normalizeForContainment(sentText);
+  return outcomes.some(
+    (outcome) =>
+      outcome.outcome === "discarded" ||
+      outcome.refinements.length > 0 ||
+      !sent.includes(normalizeForContainment(outcome.suggestion)),
+  );
+}
+
+function normalizeForContainment(text: string) {
+  return text.toLowerCase().replace(/\s+/gu, " ").trim();
 }
