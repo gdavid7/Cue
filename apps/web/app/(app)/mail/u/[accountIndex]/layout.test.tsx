@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     filters: { kind: string; value: string }[];
   }[],
   dismissedHints: [] as string[],
+  findUser: vi.fn(),
   getMailSettings: vi.fn(),
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
@@ -24,7 +25,7 @@ vi.mock("@/utils/auth", () => ({ auth: () => mocks.auth() }));
 vi.mock("@/utils/prisma", () => ({
   default: {
     user: {
-      findUnique: async () => ({ dismissedHints: mocks.dismissedHints }),
+      findUnique: (input: unknown) => mocks.findUser(input),
     },
   },
 }));
@@ -98,6 +99,9 @@ describe("MailRouteLayout", () => {
     mocks.lastAccountCookie = undefined;
     mocks.splits = [{ id: "all", filters: [] }];
     mocks.dismissedHints = ["inbox-style:acc_a", "inbox-style:acc_b"];
+    mocks.findUser.mockImplementation(async () => ({
+      dismissedHints: mocks.dismissedHints,
+    }));
     mocks.getMailSettings.mockImplementation(async () => ({
       splits: mocks.splits,
     }));
@@ -197,6 +201,40 @@ describe("MailRouteLayout", () => {
         readAhead: ["INBOX", "CATEGORY_PERSONAL"],
       }),
     );
+  });
+
+  it("still fetches the inbox, reading nothing ahead, when the style choice can't be read", async () => {
+    mocks.findUser.mockRejectedValue(new Error("database down"));
+
+    await renderAt("0");
+
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_a",
+        provider: "google",
+      }),
+    );
+  });
+
+  it("reads the style choice only where it can add a read-ahead", async () => {
+    // Outlook reads nothing ahead.
+    await renderAt("1");
+    await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());
+    // An inbox already on a tab reads that tab.
+    mocks.splits = [
+      { id: "all", filters: [] },
+      {
+        id: "primary",
+        matchAll: true,
+        filters: [{ kind: "CATEGORY", value: "CATEGORY_PERSONAL" }],
+      },
+    ];
+    await renderAt("0");
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledTimes(2),
+    );
+
+    expect(mocks.findUser).not.toHaveBeenCalled();
   });
 
   it("reads nothing ahead once the inbox style is chosen", async () => {

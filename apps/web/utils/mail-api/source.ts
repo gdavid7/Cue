@@ -56,7 +56,7 @@ const CHANGES_BATCH_CONCURRENCY = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Gmail's first scan covers only recent mail so the inbox fills and live
 // catch-up starts within seconds; older mail backfills in its own scope.
-const GMAIL_RECENT_WINDOW_MS = 3 * DAY_MS;
+export const GMAIL_RECENT_WINDOW_MS = 3 * DAY_MS;
 const GMAIL_HISTORY_SCOPE_ID = "history";
 // A first sync's backfill lists the whole inbox, starred mail and drafts
 // (lists with no older-mail fallback) but only the last 30 days of

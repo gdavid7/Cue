@@ -105,11 +105,12 @@ describe("loadInboxPreview", () => {
 
   it("reads ahead the tab a new mailbox is about to open, for the mail engine only", async () => {
     passPlansThrough();
+    const now = Date.now();
     mocks.getMessagesWithPagination.mockImplementation(
       async ({ labelIds }: { labelIds?: string[] }) => ({
         messages: labelIds
-          ? [message("m2", "t2", 2000), message("m1", "t1", 1000)]
-          : [message("m3", "t3", 3000), message("m2", "t2", 2000)],
+          ? [message("m2", "t2", now - 2000), message("m1", "t1", now - 3000)]
+          : [message("m3", "t3", now - 1000), message("m2", "t2", now - 2000)],
       }),
     );
 
@@ -131,6 +132,95 @@ describe("loadInboxPreview", () => {
         (change) => change.kind === "message_patch" && change.key.messageId,
       ),
     ).toEqual(["m3", "m2", "m1"]);
+  });
+
+  it("still shows the inbox when reading ahead fails", async () => {
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockImplementation(
+      async ({ labelIds }: { labelIds?: string[] }) => {
+        if (labelIds) throw new GmailCallDeferredError(1000, "interactive");
+        return { messages: [message("m1", "t1", Date.now())] };
+      },
+    );
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      readAhead: ["INBOX", "CATEGORY_PERSONAL"],
+    });
+
+    expect(preview?.threads.map((thread) => thread.id)).toEqual(["t1"]);
+    // A deferral of the guess is not waited out for another try.
+    expect(mocks.getMessagesWithPagination).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not read ahead again when the rows wait out a quota deferral", async () => {
+    vi.useFakeTimers();
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockImplementation(
+      async ({ labelIds }: { labelIds?: string[] }) => {
+        if (labelIds) return { messages: [] };
+        if (mocks.getMessagesWithPagination.mock.calls.length <= 2)
+          throw new GmailCallDeferredError(1000, "interactive");
+        return { messages: [message("m1", "t1", Date.now())] };
+      },
+    );
+
+    const preview = loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      readAhead: ["INBOX", "CATEGORY_PERSONAL"],
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(preview).resolves.toMatchObject({
+      threads: [expect.objectContaining({ id: "t1" })],
+    });
+    const readAheads = mocks.getMessagesWithPagination.mock.calls.filter(
+      ([options]) => options.labelIds,
+    );
+    expect(readAheads).toHaveLength(1);
+  });
+
+  it("hands the engine a tab's mail only from the window its first sync covers", async () => {
+    passPlansThrough();
+    const now = Date.now();
+    const weeksAgo = now - 21 * 24 * 60 * 60 * 1000;
+    mocks.getMessagesWithPagination.mockImplementation(
+      async ({ labelIds }: { labelIds?: string[] }) => ({
+        messages: labelIds
+          ? [
+              message("recent", "t1", now - 1000),
+              message("old", "t2", weeksAgo),
+            ]
+          : [message("inbox", "t3", now - 500)],
+      }),
+    );
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      readAhead: ["INBOX", "CATEGORY_PERSONAL"],
+    });
+    const tabPreview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      tab: { splitId: "primary", labelIds: ["INBOX", "CATEGORY_PERSONAL"] },
+    });
+
+    // Older mail arrives with the engine's backfill, next to the mail around
+    // it, and only if it is still where it was.
+    const handedOver = (loaded: typeof preview) =>
+      loaded?.changes.map(
+        (change) => change.kind === "message_patch" && change.key.messageId,
+      );
+    expect(handedOver(preview)).toEqual(["inbox", "recent"]);
+    expect(handedOver(tabPreview)).toEqual(["recent"]);
+    // The tab still shows its newest rows while the engine syncs.
+    expect(tabPreview?.threads.map((thread) => thread.id)).toEqual([
+      "t1",
+      "t2",
+    ]);
   });
 
   it("lists each conversation once, newest first, its messages oldest first", async () => {

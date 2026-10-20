@@ -131,18 +131,15 @@ async function loadLandingInboxPreview(
   account: { id: string; provider: string },
   userId: string,
 ) {
-  const [settings, user] = await Promise.all([
-    getMailSettings({ emailAccountId: account.id }).catch((error: unknown) => {
-      logger.warn("Could not read the inbox's tabs for its preview", {
-        emailAccountId: account.id,
-        error,
-      });
-      return null;
-    }),
-    prisma.user
-      .findUnique({ where: { id: userId }, select: { dismissedHints: true } })
-      .catch(() => null),
-  ]);
+  const settings = await getMailSettings({
+    emailAccountId: account.id,
+  }).catch((error: unknown) => {
+    logger.warn("Could not read the inbox's tabs for its preview", {
+      emailAccountId: account.id,
+      error,
+    });
+    return null;
+  });
   if (!settings) return null;
   const landing = findLandingSplit(settings.splits);
   if (landing?.filters.length) {
@@ -157,6 +154,17 @@ async function loadLandingInboxPreview(
   // A new mailbox opens on All until its inbox style is chosen, which for
   // Gmail opens on Primary from then on, so Primary's newest mail is read
   // ahead for the mail engine rather than waiting on its first sync.
+  const user = isGoogleProvider(account.provider)
+    ? await prisma.user
+        .findUnique({ where: { id: userId }, select: { dismissedHints: true } })
+        .catch((error: unknown) => {
+          logger.warn("Could not read the inbox style choice for its preview", {
+            emailAccountId: account.id,
+            error,
+          });
+          return null;
+        })
+    : null;
   const styleCardPending =
     !!user &&
     isInboxStyleCardPending({

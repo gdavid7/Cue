@@ -8,6 +8,7 @@ import {
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
+import { GMAIL_RECENT_WINDOW_MS } from "@/utils/mail-api/source";
 import { parsedMessagePatch } from "@/utils/mail-api/observations";
 import { sleep } from "@/utils/sleep";
 import { attachThreadPlans, toListThreads } from "@/utils/threads/load";
@@ -73,7 +74,7 @@ export async function loadInboxPreview({
       resolve(null);
     }, PREVIEW_TIMEOUT_MS);
   });
-  const load = () =>
+  const load = ({ withReadAhead }: { withReadAhead: boolean }) =>
     runWithGmailQuota(
       {
         caller: "mail/inbox-preview",
@@ -97,7 +98,15 @@ export async function loadInboxPreview({
             .then((page) => page.messages);
         const [messages, readAheadMessages] = await Promise.all([
           readNewest(tab?.labelIds),
-          readAhead ? readNewest(readAhead) : [],
+          // A guess at what opens next: it never costs the rows shown now.
+          readAhead && withReadAhead
+            ? readNewest(readAhead).catch((error: unknown) => {
+                log.warn("Could not read ahead for the inbox preview", {
+                  error,
+                });
+                return [];
+              })
+            : [],
         ]);
         const list = toListThreads(
           await attachThreadPlans({
@@ -106,6 +115,18 @@ export async function loadInboxPreview({
           }),
         );
         const shown = new Set(messages.map((message) => message.id));
+        // A tab's newest mail can be weeks old. The engine gets only what its
+        // first sync covers too: older mail would sit apart from the mail
+        // around it in All, and one archived elsewhere since could come back.
+        const firstSyncFromMs = Date.now() - GMAIL_RECENT_WINDOW_MS;
+        const inFirstSync = (message: ParsedMessage) =>
+          Number(message.internalDate) >= firstSyncFromMs;
+        const handedOver = [
+          ...(tab ? messages.filter(inFirstSync) : messages),
+          ...readAheadMessages.filter(
+            (message) => !shown.has(message.id) && inFirstSync(message),
+          ),
+        ];
         // Outlook's engine reads its mail by folder, which these rows
         // were not read by, so only Gmail's are handed over.
         return {
@@ -113,17 +134,14 @@ export async function loadInboxPreview({
           splitId: tab?.splitId ?? null,
           changes:
             emailProvider.name === "google"
-              ? [
-                  ...messages,
-                  ...readAheadMessages.filter(
-                    (message) => !shown.has(message.id),
-                  ),
-                ].map((message) => metadataPatch(emailAccountId, message))
+              ? handedOver.map((message) =>
+                  metadataPatch(emailAccountId, message),
+                )
               : [],
         };
       },
     );
-  const loaded = load()
+  const loaded = load({ withReadAhead: true })
     .catch(async (error: unknown) => {
       const deferred = getGmailCallDeferredError(error);
       if (!deferred || deferred.retryAfterMs > MAX_DEFERRAL_WAIT_MS)
@@ -134,7 +152,8 @@ export async function loadInboxPreview({
       await sleep(deferred.retryAfterMs);
       // Nobody is waiting for rows any more; leave the quota to the engine.
       if (timedOut) return null;
-      return load();
+      // The retry is for the rows shown now; reading ahead can wait for the engine.
+      return load({ withReadAhead: false });
     })
     .catch((error: unknown) => {
       log.warn("Could not load the inbox preview", { error });
