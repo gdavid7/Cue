@@ -617,6 +617,95 @@ describe("local reply drafts", () => {
   });
 });
 
+describe("a draft kept as its page goes away", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal("window", { localStorage: createMemoryStorage() });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const lastEdit: ReplyDraftContent = {
+    ...content,
+    draft: { ...content.draft, editableHtml: "<p>Typed before reload</p>" },
+  };
+
+  it("reopens edits whose save never reached the engine before a reload", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const writer = before.createReplyDraftWriter(replyIdentity);
+    await writer.save(content);
+    // The worker stops with the page, so this save never lands.
+    client.saveDraft.mockImplementationOnce(() => new Promise(() => {}));
+    writer.save(lastEdit).catch(() => {});
+    writer.keepUnsaved(lastEdit);
+
+    const after = await loadPage(client);
+    const restored = await after.getReplyDraft(replyIdentity);
+
+    expect(restored?.content?.draft.editableHtml).toBe(
+      "<p>Typed before reload</p>",
+    );
+    expect(
+      (
+        await client.readDraft({
+          accountId: "account",
+          draftId: replyIdentity.messageId,
+        })
+      ).content?.editableHtml,
+    ).toBe("<p>Typed before reload</p>");
+    // Saved now, so the next page reads the engine and not the kept copy.
+    const writerAfter = after.createReplyDraftWriter(
+      replyIdentity,
+      restored?.revision,
+    );
+    await writerAfter.save({
+      ...lastEdit,
+      draft: { ...lastEdit.draft, editableHtml: "<p>Edited later</p>" },
+    });
+    const next = await loadPage(client);
+    expect(
+      (await next.getReplyDraft(replyIdentity))?.content?.draft.editableHtml,
+    ).toBe("<p>Edited later</p>");
+    expect(client.conflicts).toBe(0);
+  });
+
+  it("does not bring back a draft discarded before the reload", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const writer = before.createReplyDraftWriter(replyIdentity);
+    writer.keepUnsaved(lastEdit);
+    await writer.clear();
+
+    const after = await loadPage(client);
+    expect((await after.getReplyDraft(replyIdentity))?.content ?? null).toBe(
+      null,
+    );
+  });
+
+  it("keeps nothing once sign-out has cleared the drafts", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const writer = before.createReplyDraftWriter(replyIdentity);
+    writer.keepUnsaved(lastEdit);
+    before.clearLocalReplyDrafts();
+    // Leaving the page after sign-out hides the composer once more.
+    writer.keepUnsaved(lastEdit);
+
+    const after = await loadPage(client);
+    expect(await after.getReplyDraft(replyIdentity)).toBeUndefined();
+  });
+
+  async function loadPage(
+    client: ReturnType<typeof createRevisionCheckingClient>,
+  ) {
+    vi.resetModules();
+    const drafts = await import("./reply-drafts");
+    const { setActiveMailClient: setClient } = await import("./active-client");
+    setClient(client as never);
+    return drafts;
+  }
+});
+
 describe("drafts deleted from the mailbox", () => {
   beforeEach(() => {
     clearLocalReplyDrafts();
@@ -905,4 +994,21 @@ function createRevisionCheckingClient() {
     },
   };
   return client;
+}
+
+function createMemoryStorage() {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (index: number) => [...items.keys()][index] ?? null,
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      items.set(key, value);
+    },
+    removeItem: (key: string) => {
+      items.delete(key);
+    },
+  };
 }

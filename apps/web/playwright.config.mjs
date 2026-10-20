@@ -260,7 +260,13 @@ export default defineConfig({
         todoistEnabled
           ? "node --import ./__tests__/playwright/todoist-preload.mjs node_modules/next/dist/bin/next"
           : "pnpm exec next"
-      } ${production ? "start" : "dev --turbopack"} --port ${basePort}`,
+      } ${
+        // Node closes a keep-alive socket idle for 5s (plus a 1s buffer) while
+        // a spec's request client may be sending on it: read ECONNRESET. No
+        // socket outlives the request context of a test, so outlast the test
+        // timeout instead.
+        production ? "start --keepAliveTimeout 300000" : "dev --turbopack"
+      } --port ${basePort}`,
       cwd: process.cwd(),
       url: `${baseURL}/api/auth/ok`,
       timeout: 240_000,

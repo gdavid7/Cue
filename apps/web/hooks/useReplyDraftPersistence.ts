@@ -41,6 +41,7 @@ export function useReplyDraftPersistence({
   const latest = useRef<ReplyDraftContent | undefined>(undefined);
   const queuedSnapshot = useRef<string | undefined>(undefined);
   const queuedSave = useRef<Promise<boolean> | undefined>(undefined);
+  const savedSnapshot = useRef<string | undefined>(undefined);
   const mounted = useRef(true);
   const getContentRef = useRef(getContent);
   getContentRef.current = getContent;
@@ -67,6 +68,7 @@ export function useReplyDraftPersistence({
     queuedSnapshot.current = snapshot;
     const save = writer.save(content).then(
       () => {
+        savedSnapshot.current = snapshot;
         if (
           mounted.current &&
           !stopped.current &&
@@ -131,17 +133,30 @@ export function useReplyDraftPersistence({
   useLayoutEffect(() => () => readPendingContent(), [readPendingContent]);
 
   useEffect(() => {
-    const flushWhenHidden = () => {
-      if (document.visibilityState === "hidden") flush().catch(() => {});
+    // A save started as the page goes away may not finish before the browser
+    // stops it, so the latest unsaved edits are also kept synchronously.
+    const flushAndKeep = () => {
+      flush().catch(() => {});
+      const content = latest.current;
+      if (
+        writer &&
+        content &&
+        !stopped.current &&
+        JSON.stringify(content) !== savedSnapshot.current
+      )
+        writer.keepUnsaved(content);
     };
-    window.addEventListener("pagehide", flush);
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushAndKeep();
+    };
+    window.addEventListener("pagehide", flushAndKeep);
     document.addEventListener("visibilitychange", flushWhenHidden);
     return () => {
-      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("pagehide", flushAndKeep);
       document.removeEventListener("visibilitychange", flushWhenHidden);
       flush().catch(() => {});
     };
-  }, [flush]);
+  }, [flush, writer]);
 
   useEffect(
     () => () => {
