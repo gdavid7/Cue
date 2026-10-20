@@ -133,6 +133,15 @@ export async function processHistoryForUser(
   const validation = await validateWebhookAccount(emailAccount, logger);
 
   if (!validation.success) {
+    // The new default sorting sorts the latest inbox mail in the background.
+    // Replaying the history the mailbox built up without rules would sort
+    // far older mail too, at sync priority, so the cursor moves to this push.
+    if (validation.defaultSortingApplied && emailAccount) {
+      await updateLastSyncedHistoryId({
+        emailAccountId: emailAccount.id,
+        lastSyncedHistoryId: historyId,
+      });
+    }
     return validation.response;
   }
 

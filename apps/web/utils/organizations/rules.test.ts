@@ -7,6 +7,7 @@ import {
   assertOrganizationRuleActionsSupported,
   assertRuleIsNotOrgManaged,
   computeMemberRuleEnabled,
+  deleteMemberOrganizationRuleCopies,
   deleteOrganizationRuleAndMemberCopies,
   setMemberOrganizationRuleEnabled,
   setOrganizationRuleEnabled,
@@ -451,6 +452,22 @@ describe("deleteOrganizationRuleAndMemberCopies", () => {
 
     expect(prisma.organizationRule.deleteMany).toHaveBeenCalledWith({
       where: { id: "org-rule-1", organizationId: "org-1" },
+    });
+  });
+});
+
+describe("deleteMemberOrganizationRuleCopies", () => {
+  it("keeps Cue from adding default sorting where the org's rules were", async () => {
+    prisma.rule.deleteMany.mockResolvedValue({ count: 2 } as never);
+
+    await deleteMemberOrganizationRuleCopies({
+      emailAccountId: "account-1",
+      organizationId: "org-1",
+    });
+
+    expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: "account-1", defaultSortingCheckedAt: null },
+      data: { defaultSortingCheckedAt: expect.any(Date) },
     });
   });
 });

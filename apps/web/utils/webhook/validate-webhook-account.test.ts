@@ -20,6 +20,9 @@ vi.mock("@/utils/email-account-client", () => ({
   getGmailClientForEmail: vi.fn(),
   getOutlookClientForEmail: vi.fn(),
 }));
+vi.mock("@/utils/split-inbox/default-sorting.server", () => ({
+  ensureDefaultCueSorting: vi.fn(),
+}));
 vi.mock("@/utils/log-error-with-dedupe", () => ({
   logErrorWithDedupe: vi.fn(),
 }));
@@ -29,6 +32,7 @@ import { unwatchEmails } from "@/utils/email/watch-manager";
 import { createEmailProvider } from "@/utils/email/provider";
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { getGmailClientForEmail } from "@/utils/email-account-client";
+import { ensureDefaultCueSorting } from "@/utils/split-inbox/default-sorting.server";
 
 describe("validateWebhookAccount", () => {
   const mockEmailProvider = { type: "google" as const };
@@ -38,6 +42,7 @@ describe("validateWebhookAccount", () => {
     vi.mocked(createEmailProvider).mockResolvedValue(mockEmailProvider as any);
     vi.mocked(unwatchEmails).mockResolvedValue(undefined);
     vi.mocked(getGmailClientForEmail).mockResolvedValue({} as any);
+    vi.mocked(ensureDefaultCueSorting).mockResolvedValue(false);
   });
 
   function createMockEmailAccount(
@@ -49,6 +54,7 @@ describe("validateWebhookAccount", () => {
       userId: "user-id",
       about: "Test account",
       lastSyncedHistoryId: null,
+      defaultSortingCheckedAt: null,
       autoCategorizeSenders: false,
       watchEmailsSubscriptionId: "subscription-id",
       multiRuleSelectionEnabled: false,
@@ -238,6 +244,60 @@ describe("validateWebhookAccount", () => {
 
       expect(result.success).toBe(false);
       expect(unwatchEmails).not.toHaveBeenCalled();
+      if (!result.success) {
+        expect(await result.response.json()).toEqual({ ok: true });
+      }
+    });
+
+    it("gives a mailbox Cue never checked its default sorting, then skips this push", async () => {
+      vi.mocked(isPremiumRecord).mockReturnValue(true);
+      vi.mocked(hasAiAccess).mockReturnValue(true);
+      vi.mocked(ensureDefaultCueSorting).mockResolvedValue(true);
+
+      const result = await validateWebhookAccount(
+        createMockEmailAccount({ rules: [] }),
+        logger,
+      );
+
+      expect(ensureDefaultCueSorting).toHaveBeenCalledWith({
+        emailAccountId: "account-id",
+        provider: "google",
+        logger,
+      });
+      expect(result).toMatchObject({
+        success: false,
+        defaultSortingApplied: true,
+      });
+    });
+
+    it("does not check again once the mailbox was checked", async () => {
+      vi.mocked(isPremiumRecord).mockReturnValue(true);
+      vi.mocked(hasAiAccess).mockReturnValue(true);
+
+      const result = await validateWebhookAccount(
+        createMockEmailAccount({
+          rules: [],
+          defaultSortingCheckedAt: new Date(),
+        }),
+        logger,
+      );
+
+      expect(ensureDefaultCueSorting).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result).not.toHaveProperty("defaultSortingApplied", true);
+    });
+
+    it("still answers the push when adding the defaults fails", async () => {
+      vi.mocked(isPremiumRecord).mockReturnValue(true);
+      vi.mocked(hasAiAccess).mockReturnValue(true);
+      vi.mocked(ensureDefaultCueSorting).mockRejectedValue(new Error("db"));
+
+      const result = await validateWebhookAccount(
+        createMockEmailAccount({ rules: [] }),
+        logger,
+      );
+
+      expect(result.success).toBe(false);
       if (!result.success) {
         expect(await result.response.json()).toEqual({ ok: true });
       }

@@ -139,6 +139,29 @@ describe("deleteRule", () => {
   });
 });
 
+describe("deleteRule keeps the person's choice", () => {
+  beforeEach(resetRuleMocks);
+
+  it.each([
+    ["a rule", null],
+    ["a group's rules", GROUP_ID],
+  ])("stops Cue re-adding default sorting after deleting %s", async (_, groupId) => {
+    prisma.group.deleteMany.mockResolvedValue({ count: 1 });
+    prisma.rule.delete.mockResolvedValue({ id: RULE_ID } as any);
+
+    await deleteRule({
+      emailAccountId: EMAIL_ACCOUNT_ID,
+      ruleId: RULE_ID,
+      groupId,
+    });
+
+    expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: EMAIL_ACCOUNT_ID, defaultSortingCheckedAt: null },
+      data: { defaultSortingCheckedAt: expect.any(Date) },
+    });
+  });
+});
+
 describe("outbound action guardrails", () => {
   beforeEach(resetRuleMocks);
 

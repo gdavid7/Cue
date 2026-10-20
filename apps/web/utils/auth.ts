@@ -905,6 +905,7 @@ export async function handleLinkAccount(
                     })),
                   },
                   rules: { create: INITIAL_REPLY_TRACKING_RULES },
+                  defaultSortingCheckedAt: new Date(),
                 },
                 select: { id: true },
               }),

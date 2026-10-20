@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { bulkProcessInboxEmails } from "@/utils/ai/choose-rule/bulk-process-emails";
+import { GMAIL_QUOTA_PRIORITIES } from "@/utils/gmail/quota";
 import { withError } from "@/utils/middleware";
 import { withQstashOrInternal } from "@/utils/qstash";
 import { getEmailAccountForRuleExecution } from "@/utils/user/get";
@@ -13,6 +14,7 @@ const bodySchema = z.object({
   maxEmails: z.number().int().positive(),
   skipArchive: z.boolean(),
   ruleIds: z.array(z.string().min(1)).optional(),
+  priority: z.enum(GMAIL_QUOTA_PRIORITIES).optional(),
   startedAt: z.number().int().positive(),
   processedTotal: z.number().int().nonnegative(),
   deferrals: z.number().int().nonnegative(),

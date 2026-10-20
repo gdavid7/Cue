@@ -205,6 +205,13 @@ model EmailAccount {
   filingPrompt                String?
   filingConfirmationSendEmail Boolean @default(true)
 
+  // When Cue decided, once, whether this mailbox gets its default sorting: set
+  // when the defaults are added or when the person has already made a choice.
+  defaultSortingCheckedAt DateTime?
+  // When Cue added those defaults itself, so a style picked while their sort
+  // of the latest mail still waits doesn't sort the same mail again.
+  defaultSortingAppliedAt DateTime?
+
   followUpAwaitingReplyDays Float?
   followUpNeedsReplyDays    Float?
   followUpAutoDraftEnabled  Boolean @default(true)

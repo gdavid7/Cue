@@ -8,7 +8,10 @@ import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import prisma from "@/utils/__mocks__/prisma";
 import { runRules } from "@/utils/ai/choose-rule/run-rules";
 import { createEmailProvider } from "@/utils/email/provider";
-import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  GmailCallDeferredError,
+} from "@/utils/gmail/quota";
 import { publishToQstashAt } from "@/utils/upstash";
 import {
   BULK_PROCESS_INBOX_PATH,
@@ -109,6 +112,19 @@ describe("bulkProcessInboxEmails", () => {
       before,
     );
     expect(notBefore.getTime()).toBeGreaterThanOrEqual(before + 45_000);
+  });
+
+  it("keeps a background job at background priority, resumes included", async () => {
+    const priorities: string[] = [];
+    getInboxMessages.mockImplementation(async () => {
+      priorities.push(currentGmailQuotaContext().priority);
+      throw new GmailCallDeferredError(45_000, "background");
+    });
+
+    await bulkProcessInboxEmails({ ...job, priority: "background" });
+
+    expect(priorities).toEqual(["background"]);
+    expect(lastResumeBody()).toMatchObject({ priority: "background" });
   });
 
   it("sorts every message on a first run, even ones earlier pushes skipped", async () => {

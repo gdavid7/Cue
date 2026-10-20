@@ -41,6 +41,7 @@ import {
 import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import { assertNoSenderOnlyOverlap } from "@/utils/rule/sender-scope-overlap";
 import { isIntegrationActionEnabledForEmailAccountId } from "@/utils/integration-action.server";
+import { markSortingChoice } from "@/utils/split-inbox/default-sorting.server";
 
 export type RuleActionCreateData = Omit<
   Prisma.ActionCreateManyRuleInput,
@@ -661,10 +662,11 @@ export async function deleteRule({
       where: { id: groupId, emailAccountId },
     });
 
-    if (deletedGroups.count > 0) return;
+    if (deletedGroups.count > 0) return markSortingChoice(emailAccountId);
   }
 
   await prisma.rule.delete({ where: { id: ruleId, emailAccountId } });
+  await markSortingChoice(emailAccountId);
 }
 
 type RuleScopeKey =

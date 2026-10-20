@@ -314,6 +314,33 @@ describe("setUpCueSorting", () => {
     );
   });
 
+  it("leaves mail the default sorting is already sorting to it", async () => {
+    // Cue gave the mailbox its defaults; their sort may still wait on quota.
+    prisma.executedRule.findFirst.mockResolvedValue(null);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      defaultSortingAppliedAt: new Date(),
+    } as never);
+    prisma.rule.findMany.mockResolvedValue(
+      REPLY_TRACKING_RULES.map((systemType) =>
+        existingRule(systemType),
+      ) as never,
+    );
+
+    await setUpCueSorting(WITHOUT_TABS);
+    expect(afterCallbacks).toHaveLength(0);
+
+    await setUpCueSorting(WITH_TABS);
+    for (const callback of afterCallbacks) await callback();
+    expect(bulkProcessInboxEmails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ruleIds: [
+          `new-${SystemType.NEWSLETTER}`,
+          `new-${SystemType.MARKETING}`,
+        ],
+      }),
+    );
+  });
+
   it("doesn't sort again a mailbox Cue has already sorted", async () => {
     prisma.rule.findMany.mockResolvedValue(
       REPLY_TRACKING_RULES.map((systemType) =>

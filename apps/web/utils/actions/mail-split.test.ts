@@ -84,6 +84,18 @@ describe("mail split actions", () => {
     );
   });
 
+  it("records the style choice so Cue never adds its default sorting over it", async () => {
+    await applyInboxStyleAction(EMAIL_ACCOUNT_ID, {
+      style: "one-inbox",
+      addCueTabs: false,
+    });
+
+    expect(prisma.emailAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: EMAIL_ACCOUNT_ID, defaultSortingCheckedAt: null },
+      data: { defaultSortingCheckedAt: expect.any(Date) },
+    });
+  });
+
   it("rejects duplicate split IDs before attempting a reorder", async () => {
     const result = await reorderMailSplitsAction(EMAIL_ACCOUNT_ID, {
       ids: ["split-1", "split-1"],

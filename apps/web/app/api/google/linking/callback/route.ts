@@ -298,6 +298,7 @@ async function handleGoogleLinkingCallback(request: RequestWithLogger) {
                 name: payload.name || null,
                 image: payload.picture,
                 rules: { create: INITIAL_REPLY_TRACKING_RULES },
+                defaultSortingCheckedAt: new Date(),
               },
             },
           },

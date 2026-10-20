@@ -17,6 +17,7 @@ import {
 } from "@/utils/reply-tracker/conversation-status-config";
 import { replyTrackingRuleData } from "@/utils/reply-tracker/initial-rules";
 import { getRuleConfig } from "@/utils/rule/consts";
+import type { GmailQuotaPriority } from "@/utils/gmail/quota";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
 import {
   createMailSplit,
@@ -58,11 +59,14 @@ export async function setUpCueSorting({
   emailAccountId,
   provider,
   addTabs,
+  backfillPriority,
   logger,
 }: {
   emailAccountId: string;
   provider: string;
   addTabs: boolean;
+  /** Quota priority for sorting the latest inbox mail afterwards. */
+  backfillPriority?: GmailQuotaPriority;
   logger: Logger;
 }) {
   const systemTypes = addTabs
@@ -157,11 +161,20 @@ export async function setUpCueSorting({
   // fills them now, without re-running the person's other rules on old mail.
   // A mailbox Cue has never sorted also gets the reply tracking rules it was
   // created with, as long as they are on and only draft (a suggestion kept in
-  // Cue), so the sort changes nothing in the mailbox.
-  const neverSorted = !(await prisma.executedRule.findFirst({
-    where: { emailAccountId, status: { not: ExecutedRuleStatus.ERROR } },
-    select: { id: true },
-  }));
+  // Cue), so the sort changes nothing in the mailbox. Not when Cue added them
+  // as its default sorting: that already sorts the same mail, maybe still
+  // waiting on quota.
+  const [sorted, account] = await Promise.all([
+    prisma.executedRule.findFirst({
+      where: { emailAccountId, status: { not: ExecutedRuleStatus.ERROR } },
+      select: { id: true },
+    }),
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { defaultSortingAppliedAt: true },
+    }),
+  ]);
+  const neverSorted = !sorted && !account?.defaultSortingAppliedAt;
   const ruleIds = [
     ...(neverSorted
       ? existingRules
@@ -189,6 +202,7 @@ export async function setUpCueSorting({
         maxEmails: ONBOARDING_PROCESS_EMAILS_COUNT,
         skipArchive: true,
         ruleIds,
+        priority: backfillPriority,
         logger,
       });
     });

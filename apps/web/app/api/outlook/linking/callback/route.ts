@@ -380,6 +380,7 @@ async function handleMicrosoftLinkingCallback(request: RequestWithLogger) {
                   null,
                 image: profileImage,
                 rules: { create: INITIAL_REPLY_TRACKING_RULES },
+                defaultSortingCheckedAt: new Date(),
               },
             },
           },

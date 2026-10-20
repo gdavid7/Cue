@@ -2,30 +2,29 @@ import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import { runRules } from "@/utils/ai/choose-rule/run-rules";
 import { resumeAfterGmailDeferral } from "@/utils/gmail/deferred-resume";
-import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import {
+  type GmailQuotaPriority,
+  getGmailCallDeferredError,
+  runWithGmailQuota,
+} from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 import type { EmailAccountForDrafting } from "@/utils/ai/choose-rule/choose-args";
 import type { ParsedMessage } from "@/utils/types";
 
 export const BULK_PROCESS_INBOX_PATH = "/api/ai/bulk-process-inbox";
 
-export async function bulkProcessInboxEmails({
-  emailAccount,
-  provider,
-  maxEmails,
-  skipArchive,
-  ruleIds,
-  logger: log,
-  startedAt: resumedStartedAt,
-  processedTotal = 0,
-  deferrals = 0,
-}: {
+type BulkProcessInboxJob = {
   emailAccount: EmailAccountForDrafting;
   provider: string;
   maxEmails: number;
   skipArchive: boolean;
   /** Sort with only these rules, such as ones just added. Defaults to every enabled rule. */
   ruleIds?: string[];
+  /**
+   * Charges the job's Gmail calls at this priority, resumes included. Without
+   * it they take the caller's.
+   */
+  priority?: GmailQuotaPriority;
   logger: Logger;
   /** When the first run of this job started; set on resumes. */
   startedAt?: number;
@@ -33,7 +32,26 @@ export async function bulkProcessInboxEmails({
   processedTotal?: number;
   /** Deferrals in a row without progress; set on resumes. */
   deferrals?: number;
-}) {
+};
+
+export async function bulkProcessInboxEmails(job: BulkProcessInboxJob) {
+  const { priority } = job;
+  if (!priority) return processInboxEmails(job);
+  return runWithGmailQuota({ priority }, () => processInboxEmails(job));
+}
+
+async function processInboxEmails({
+  emailAccount,
+  provider,
+  maxEmails,
+  skipArchive,
+  ruleIds,
+  priority,
+  logger: log,
+  startedAt: resumedStartedAt,
+  processedTotal = 0,
+  deferrals = 0,
+}: BulkProcessInboxJob) {
   const isResume = resumedStartedAt !== undefined;
   const startedAt = resumedStartedAt ?? Date.now();
   const logger = log.with({ module: "bulk-process-emails", deferrals });
@@ -156,6 +174,7 @@ export async function bulkProcessInboxEmails({
         maxEmails,
         skipArchive,
         ruleIds,
+        priority,
         startedAt,
         processedTotal: nextProcessedTotal,
       },
