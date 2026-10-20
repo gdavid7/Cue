@@ -14,8 +14,8 @@ import { setUpCueSorting } from "@/utils/split-inbox/cue-tabs.server";
  * Picking an inbox style or deleting a rule marks it too. An inbox style
  * picked before every answer added reply tracking is no such choice, so it
  * gets the defaults. The marker is claimed before anything is created, so
- * concurrent syncs add the defaults once, and released if setting up fails so
- * the next sync tries again.
+ * concurrent syncs add the defaults once, and released if setting up fails
+ * before any rule exists, so the next sync tries again.
  *
  * Returns whether the defaults were added.
  */
@@ -35,12 +35,27 @@ export async function ensureDefaultCueSorting({
   });
   if (!claim.count) return false;
 
+  const release = () =>
+    prisma.emailAccount.updateMany({
+      where: { id: emailAccountId, defaultSortingCheckedAt: checkedAt },
+      data: { defaultSortingCheckedAt: null, defaultSortingAppliedAt: null },
+    });
+
   try {
     if (await hasSortingChoice(emailAccountId)) {
       logger.info("Kept the mailbox's own sorting choice");
       return false;
     }
+    await prisma.emailAccount.updateMany({
+      where: { id: emailAccountId, defaultSortingCheckedAt: checkedAt },
+      data: { defaultSortingAppliedAt: checkedAt },
+    });
+  } catch (error) {
+    await release();
+    throw error;
+  }
 
+  try {
     await setUpCueSorting({
       emailAccountId,
       provider,
@@ -49,11 +64,20 @@ export async function ensureDefaultCueSorting({
       logger,
     });
   } catch (error) {
-    await prisma.emailAccount.updateMany({
-      where: { id: emailAccountId, defaultSortingCheckedAt: checkedAt },
-      data: { defaultSortingCheckedAt: null },
+    // Once rules exist the mailbox is sorted from the next push on; only the
+    // sort of its latest mail is lost. Trying again would also leave the old
+    // history cursor in place, replaying the whole backlog at sync priority.
+    const created = await prisma.rule.findFirst({
+      where: { emailAccountId },
+      select: { id: true },
     });
-    throw error;
+    if (!created) {
+      await release();
+      throw error;
+    }
+    logger.error("Added default Cue sorting but could not sort recent mail", {
+      error,
+    });
   }
 
   logger.info("Added default Cue sorting to a mailbox with no rules");

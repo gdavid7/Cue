@@ -148,11 +148,19 @@ export async function setUpCueSorting({
   // fills them now, without re-running the person's other rules on old mail.
   // A mailbox Cue has never sorted also gets the reply tracking rules it was
   // created with, as long as they are on and have no actions, so the sort
-  // changes nothing in the mailbox.
-  const neverSorted = !(await prisma.executedRule.findFirst({
-    where: { emailAccountId, status: { not: ExecutedRuleStatus.ERROR } },
-    select: { id: true },
-  }));
+  // changes nothing in the mailbox. Not when Cue added them as its default
+  // sorting: that already sorts the same mail, maybe still waiting on quota.
+  const [sorted, account] = await Promise.all([
+    prisma.executedRule.findFirst({
+      where: { emailAccountId, status: { not: ExecutedRuleStatus.ERROR } },
+      select: { id: true },
+    }),
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { defaultSortingAppliedAt: true },
+    }),
+  ]);
+  const neverSorted = !sorted && !account?.defaultSortingAppliedAt;
   const ruleIds = [
     ...(neverSorted
       ? existingRules

@@ -287,8 +287,16 @@ export async function validateWebhookAccount(
           emailAccountId: emailAccount.id,
           provider: emailAccount.account?.provider ?? "",
           logger,
-        }).catch((error) => {
-          logger.error("Failed to add default Cue sorting", { error });
+        }).catch(async (error) => {
+          await logErrorWithDedupe({
+            logger,
+            message: "Failed to add default Cue sorting",
+            error,
+            dedupeKeyParts: {
+              scope: "webhook/default-sorting",
+              emailAccountId: emailAccount.id,
+            },
+          });
           return false;
         });
     return {

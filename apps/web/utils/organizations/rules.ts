@@ -14,6 +14,7 @@ import {
   ORGANIZATION_RULE_ACTION_DISABLED_MESSAGE,
   ORGANIZATION_RULE_ACTION_TYPES,
 } from "@/utils/organizations/rule-action-types";
+import { markSortingChoice } from "@/utils/split-inbox/default-sorting.server";
 
 export const RULE_MANAGED_BY_ORGANIZATION_ERROR =
   "This rule is managed by your organization and can't be edited here. Ask an organization admin to change it.";
@@ -242,6 +243,7 @@ export async function deleteMemberOrganizationRuleCopies({
   await prisma.rule.deleteMany({
     where: { emailAccountId, organizationRule: { organizationId } },
   });
+  await markSortingChoice(emailAccountId);
 }
 
 export async function setOrganizationRuleEnabled({

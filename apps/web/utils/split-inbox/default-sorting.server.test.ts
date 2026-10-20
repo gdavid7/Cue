@@ -41,8 +41,9 @@ const REPLY_TRACKING_RULES = [
   SystemType.ACTIONED,
 ];
 
-// The mailbox row's marker, with the conditional update Postgres applies to it.
-let checkedAt: Date | null;
+type MarkerField = "defaultSortingCheckedAt" | "defaultSortingAppliedAt";
+// The mailbox row's markers, with the conditional updates Postgres applies.
+let markers: Record<MarkerField, Date | null>;
 // Rules in the database, so a second sync sees what the first one created.
 let ruleRows: { id: string; systemType: SystemType; name: string }[];
 
@@ -50,20 +51,26 @@ describe("ensureDefaultCueSorting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     afterCallbacks.length = 0;
-    checkedAt = null;
+    markers = { defaultSortingCheckedAt: null, defaultSortingAppliedAt: null };
     ruleRows = [];
 
     prisma.emailAccount.updateMany.mockImplementation((async (args: {
-      where: { defaultSortingCheckedAt?: null | { not: null } };
-      data: { defaultSortingCheckedAt: Date | null };
+      where: { id: string } & Partial<Record<MarkerField, Date | null>>;
+      data: Partial<Record<MarkerField, Date | null>>;
     }) => {
-      const { where, data } = args;
-      if (where.defaultSortingCheckedAt === null && checkedAt) {
-        return { count: 0 };
-      }
-      checkedAt = data.defaultSortingCheckedAt;
+      const { id: _, ...conditions } = args.where;
+      const matches = Object.entries(conditions).every(
+        ([field, value]) =>
+          (markers[field as MarkerField]?.getTime() ?? null) ===
+          (value?.getTime() ?? null),
+      );
+      if (!matches) return { count: 0 };
+      Object.assign(markers, args.data);
       return { count: 1 };
     }) as never);
+    prisma.emailAccount.findUnique.mockImplementation((async () => ({
+      ...markers,
+    })) as never);
     prisma.rule.findFirst.mockImplementation(
       (async () => ruleRows[0] ?? null) as never,
     );
@@ -99,7 +106,8 @@ describe("ensureDefaultCueSorting", () => {
       expect(rule.enabled).toBe(true);
       expect(rule.emailAccountId).toBe("account");
     }
-    expect(checkedAt).toBeInstanceOf(Date);
+    expect(markers.defaultSortingCheckedAt).toBeInstanceOf(Date);
+    expect(markers.defaultSortingAppliedAt).toBeInstanceOf(Date);
   });
 
   it("sorts only recent inbox mail, in the background", async () => {
@@ -173,7 +181,7 @@ describe("ensureDefaultCueSorting", () => {
     });
 
     it("leaves a mailbox the person already chose for alone", async () => {
-      checkedAt = new Date();
+      markers.defaultSortingCheckedAt = new Date();
 
       expect(await ensureDefaultCueSorting(MAILBOX)).toBe(false);
       expect(prisma.rule.findFirst).not.toHaveBeenCalled();
@@ -205,9 +213,22 @@ describe("ensureDefaultCueSorting", () => {
     prisma.rule.createManyAndReturn.mockRejectedValueOnce(new Error("db down"));
 
     await expect(ensureDefaultCueSorting(MAILBOX)).rejects.toThrow("db down");
-    expect(checkedAt).toBeNull();
+    expect(markers).toEqual({
+      defaultSortingCheckedAt: null,
+      defaultSortingAppliedAt: null,
+    });
 
     expect(await ensureDefaultCueSorting(MAILBOX)).toBe(true);
+  });
+
+  it("counts the defaults as added once the rules exist, even if sorting can't be scheduled", async () => {
+    // setUpCueSorting reads the account after creating the rules.
+    prisma.emailAccount.findUnique.mockRejectedValueOnce(new Error("db blip"));
+
+    expect(await ensureDefaultCueSorting(MAILBOX)).toBe(true);
+    expect(ruleRows).toHaveLength(REPLY_TRACKING_RULES.length);
+    expect(markers.defaultSortingCheckedAt).toBeInstanceOf(Date);
+    expect(markers.defaultSortingAppliedAt).toBeInstanceOf(Date);
   });
 });
 
