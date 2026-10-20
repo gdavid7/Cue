@@ -372,9 +372,16 @@ export async function getAutomationSettingsState(emailAccountId: string) {
       [emailAccountId],
     );
 
+    const toReplyRule = await client.query<{ enabled: boolean }>(
+      `SELECT enabled FROM "Rule"
+       WHERE "emailAccountId" = $1 AND "systemType" = 'TO_REPLY'`,
+      [emailAccountId],
+    );
+
     return {
       ...accountResult.rows[0],
       draftActionTypes: draftActions.rows.map((row) => row.type),
+      toReplyRuleEnabled: toReplyRule.rows[0]?.enabled ?? null,
     };
   });
 }
