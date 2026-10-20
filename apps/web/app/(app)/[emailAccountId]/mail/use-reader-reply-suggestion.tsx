@@ -9,7 +9,10 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
 import { getReaderReplyGate } from "@/app/(app)/[emailAccountId]/mail/reader-reply-gate";
 import type { ThreadMessage } from "@/components/email-list/types";
-import type { ReplyAssist } from "@/components/email-list/reply-assist";
+import {
+  draftHtmlToReplyText,
+  type ReplyAssist,
+} from "@/components/email-list/reply-assist";
 import {
   abstentionLine,
   CheckedAgainst,
@@ -438,10 +441,11 @@ function findRuleSuggestion(
         item.draftStatus === DraftEmailStatus.PENDING &&
         item.content?.trim(),
     );
-    if (!action?.content) continue;
+    const reply = action?.content ? draftHtmlToReplyText(action.content) : "";
+    if (!action || !reply) continue;
     return {
       executedActionId: action.id,
-      reply: action.content.trim(),
+      reply,
       createdAt: action.createdAt,
       recipients: {
         to: action.to || undefined,
