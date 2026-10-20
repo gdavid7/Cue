@@ -47,6 +47,11 @@ export type ReplySuggestionOrigin = {
   reply: string;
   /** Set for a rule's suggestion, which waits in Cue. */
   executedActionId?: string;
+  /**
+   * The reply is plain text. A rule's reply opened before DR-6 holds the
+   * stored HTML instead, and is repaired once when the draft is read.
+   */
+  decoded?: true;
   /** The recipients and subject it opened with. */
   values?: { to?: string; cc?: string; bcc?: string; subject?: string };
   /** The rule's files, which go on the draft or the send with it. */
