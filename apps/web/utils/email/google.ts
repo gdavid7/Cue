@@ -1482,6 +1482,7 @@ export class GmailProvider implements EmailProvider {
     inboxOnly?: boolean;
     unreadOnly?: boolean;
     includeDrafts?: boolean;
+    labelIds?: string[];
     format?: "metadata";
     allowPartial?: boolean;
   }): Promise<{
@@ -1515,6 +1516,7 @@ export class GmailProvider implements EmailProvider {
       query: query.trim() || undefined,
       maxResults: options.maxResults || 20,
       pageToken: options.pageToken || undefined,
+      labelIds: options.labelIds,
     });
 
     return {

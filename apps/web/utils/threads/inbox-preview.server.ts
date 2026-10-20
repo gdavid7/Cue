@@ -20,6 +20,8 @@ const logger = createScopedLogger("mail/inbox-preview");
 // batches that fit Gmail's per-second pace. Whole threads cost 40 units each,
 // 410 for ten, more than two seconds of that pace before anything else on
 // the account is counted. The mail engine fills in the rest as it syncs.
+// Reading a tab ahead, for a new mailbox only, is a second such list, read
+// alongside the first.
 const PREVIEW_MESSAGES = 10;
 // The page's shell is sent before this settles; only the stream stays open
 // for the rows. Past these, the list waits for the mail engine instead.
@@ -33,6 +35,8 @@ const PREVIEW_TIMEOUT_MS = 5000 + MAX_DEFERRAL_WAIT_MS;
 export type InboxPreview = ThreadsListResponse & {
   /** The same messages as the mail engine records them, to hand it. */
   changes: ProviderChange[];
+  /** The tab the rows are the newest of, or null for the whole inbox. */
+  splitId: string | null;
 };
 
 /**
@@ -46,9 +50,18 @@ export type InboxPreview = ThreadsListResponse & {
 export async function loadInboxPreview({
   emailAccountId,
   provider,
+  tab,
+  readAhead,
 }: {
   emailAccountId: string;
   provider: string;
+  /**
+   * The Gmail tab the inbox opens on, such as Primary, by its labels. Its own
+   * newest mail, since the whole inbox's newest is mostly other tabs'.
+   */
+  tab?: { splitId: string; labelIds: string[] };
+  /** Labels of a Gmail tab the inbox may open on next, read for the engine only. */
+  readAhead?: string[];
 }): Promise<InboxPreview | null> {
   const log = logger.with({ emailAccountId });
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -73,27 +86,39 @@ export async function loadInboxPreview({
           provider,
           logger: log,
         });
-        const { messages } = await emailProvider.getMessagesWithPagination({
-          inboxOnly: true,
-          maxResults: PREVIEW_MESSAGES,
-          format: "metadata",
-          allowPartial: true,
-        });
+        const readNewest = (labelIds?: string[]) =>
+          emailProvider
+            .getMessagesWithPagination({
+              ...(labelIds ? { labelIds } : { inboxOnly: true }),
+              maxResults: PREVIEW_MESSAGES,
+              format: "metadata",
+              allowPartial: true,
+            })
+            .then((page) => page.messages);
+        const [messages, readAheadMessages] = await Promise.all([
+          readNewest(tab?.labelIds),
+          readAhead ? readNewest(readAhead) : [],
+        ]);
         const list = toListThreads(
           await attachThreadPlans({
             emailAccountId,
             threads: groupByThread(messages),
           }),
         );
+        const shown = new Set(messages.map((message) => message.id));
         // Outlook's engine reads its mail by folder, which these rows
         // were not read by, so only Gmail's are handed over.
         return {
           ...list,
+          splitId: tab?.splitId ?? null,
           changes:
             emailProvider.name === "google"
-              ? messages.map((message) =>
-                  metadataPatch(emailAccountId, message),
-                )
+              ? [
+                  ...messages,
+                  ...readAheadMessages.filter(
+                    (message) => !shown.has(message.id),
+                  ),
+                ].map((message) => metadataPatch(emailAccountId, message))
               : [],
         };
       },

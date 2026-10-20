@@ -65,6 +65,74 @@ describe("loadInboxPreview", () => {
     ]);
   });
 
+  it("reads the tab the inbox opens on, such as Gmail's Primary, by its labels", async () => {
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockResolvedValue({
+      messages: [message("m1", "t1", 1000)],
+    });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      tab: { splitId: "primary", labelIds: ["INBOX", "CATEGORY_PERSONAL"] },
+    });
+
+    // The newest of the tab itself, not of the whole inbox, whose newest
+    // mail is mostly other tabs'.
+    expect(mocks.getMessagesWithPagination).toHaveBeenCalledWith({
+      labelIds: ["INBOX", "CATEGORY_PERSONAL"],
+      maxResults: 10,
+      format: "metadata",
+      allowPartial: true,
+    });
+    expect(preview).toMatchObject({
+      splitId: "primary",
+      threads: [expect.objectContaining({ id: "t1" })],
+    });
+  });
+
+  it("marks rows read from the whole inbox as no tab's", async () => {
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockResolvedValue({ messages: [] });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+    });
+
+    expect(preview?.splitId).toBeNull();
+  });
+
+  it("reads ahead the tab a new mailbox is about to open, for the mail engine only", async () => {
+    passPlansThrough();
+    mocks.getMessagesWithPagination.mockImplementation(
+      async ({ labelIds }: { labelIds?: string[] }) => ({
+        messages: labelIds
+          ? [message("m2", "t2", 2000), message("m1", "t1", 1000)]
+          : [message("m3", "t3", 3000), message("m2", "t2", 2000)],
+      }),
+    );
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      readAhead: ["INBOX", "CATEGORY_PERSONAL"],
+    });
+
+    expect(mocks.getMessagesWithPagination).toHaveBeenCalledWith(
+      expect.objectContaining({ labelIds: ["INBOX", "CATEGORY_PERSONAL"] }),
+    );
+    // The rows are still the whole inbox the page shows...
+    expect(preview?.threads.map((thread) => thread.id)).toEqual(["t3", "t2"]);
+    // ...and the engine gets each message once, so Primary already has mail
+    // when the person picks it.
+    expect(
+      preview?.changes.map(
+        (change) => change.kind === "message_patch" && change.key.messageId,
+      ),
+    ).toEqual(["m3", "m2", "m1"]);
+  });
+
   it("lists each conversation once, newest first, its messages oldest first", async () => {
     passPlansThrough();
     mocks.getMessagesWithPagination.mockResolvedValue({

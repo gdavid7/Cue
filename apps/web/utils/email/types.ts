@@ -376,6 +376,8 @@ export interface EmailProvider {
     inboxOnly?: boolean;
     unreadOnly?: boolean;
     includeDrafts?: boolean;
+    /** Gmail only: labels, such as a category, that every message carries. */
+    labelIds?: string[];
     /** Headers only, where the provider can leave bodies out. */
     format?: "metadata";
     /**

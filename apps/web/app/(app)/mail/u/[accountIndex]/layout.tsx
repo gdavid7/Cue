@@ -20,7 +20,18 @@ import {
 } from "@/utils/mail-url";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { buildLoginRedirectUrl } from "@/utils/redirect";
-import { findLandingSplit } from "@/utils/split-inbox/inbox-styles";
+import { isGoogleProvider } from "@/utils/email/provider-types";
+import prisma from "@/utils/prisma";
+import {
+  findLandingSplit,
+  getDefaultInboxStyle,
+  getInboxStyleSplits,
+  isInboxStyleCardPending,
+} from "@/utils/split-inbox/inbox-styles";
+import {
+  type MailSplit,
+  mailSplitToThreadsQuery,
+} from "@/utils/split-inbox/split-query";
 import { getMailSettings } from "@/utils/split-inbox/settings.server";
 import { loadInboxPreview } from "@/utils/threads/inbox-preview.server";
 import { createScopedLogger } from "@/utils/logger";
@@ -68,7 +79,7 @@ export default async function MailRouteLayout({
     redirect(buildMailPath({ accountIndex: Math.max(lastIndex, 0) }));
   }
 
-  const { preview } = await startInboxPreview(account);
+  const { preview } = await startInboxPreview(account, session.user.id);
   return (
     <MailScreenLayout>
       {/* Always here, so the mail screen keeps its place in the tree. */}
@@ -87,7 +98,10 @@ export default async function MailRouteLayout({
  * awaited, so they stream to the page with its first response. Wrapped, as an
  * async function's returned promise would otherwise be awaited with it.
  */
-async function startInboxPreview(account: { id: string; provider: string }) {
+async function startInboxPreview(
+  account: { id: string; provider: string },
+  userId: string,
+) {
   const [headerStore, cookieStore] = await Promise.all([headers(), cookies()]);
   const [pathname, search] = (headerStore.get(MAIL_PATH_HEADER) ?? "").split(
     "?",
@@ -106,29 +120,74 @@ async function startInboxPreview(account: { id: string; provider: string }) {
     return { preview: null };
   if (hasLocalMailbox(cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value, account.id))
     return { preview: null };
-  return { preview: loadLandingInboxPreview(account) };
+  return { preview: loadLandingInboxPreview(account, userId) };
 }
 
-// An inbox that opens on a tab, such as Gmail's Primary, would show its other
-// tabs' mail and then swap to the tab. Checked with the rows, not before the
-// page is sent, so the page never waits on it.
-async function loadLandingInboxPreview(account: {
-  id: string;
-  provider: string;
-}) {
-  const settings = await getMailSettings({ emailAccountId: account.id }).catch(
-    (error: unknown) => {
+// The rows are the newest of whatever `/inbox` opens on: the whole inbox's
+// newest is mostly other tabs' mail, so an inbox that opens on Gmail's Primary
+// is read by Primary's labels. Checked with the rows, not before the page is
+// sent, so the page never waits on it.
+async function loadLandingInboxPreview(
+  account: { id: string; provider: string },
+  userId: string,
+) {
+  const [settings, user] = await Promise.all([
+    getMailSettings({ emailAccountId: account.id }).catch((error: unknown) => {
       logger.warn("Could not read the inbox's tabs for its preview", {
         emailAccountId: account.id,
         error,
       });
       return null;
-    },
-  );
-  if (!settings || findLandingSplit(settings.splits)?.filters.length)
-    return null;
+    }),
+    prisma.user
+      .findUnique({ where: { id: userId }, select: { dismissedHints: true } })
+      .catch(() => null),
+  ]);
+  if (!settings) return null;
+  const landing = findLandingSplit(settings.splits);
+  if (landing?.filters.length) {
+    const labelIds = gmailTabLabelIds(account.provider, landing);
+    if (!labelIds) return null;
+    return loadInboxPreview({
+      emailAccountId: account.id,
+      provider: account.provider,
+      tab: { splitId: landing.id, labelIds },
+    });
+  }
+  // A new mailbox opens on All until its inbox style is chosen, which for
+  // Gmail opens on Primary from then on, so Primary's newest mail is read
+  // ahead for the mail engine rather than waiting on its first sync.
+  const styleCardPending =
+    !!user &&
+    isInboxStyleCardPending({
+      provider: account.provider,
+      emailAccountId: account.id,
+      dismissedHints: user.dismissedHints,
+    });
+  const defaultLanding = getInboxStyleSplits(
+    getDefaultInboxStyle(account.provider),
+  )[0];
+  const readAhead =
+    styleCardPending && defaultLanding
+      ? gmailTabLabelIds(account.provider, {
+          matchAll: true,
+          filters: defaultLanding.filters,
+        })
+      : null;
   return loadInboxPreview({
     emailAccountId: account.id,
     provider: account.provider,
+    ...(readAhead && { readAhead }),
   });
+}
+
+/** A tab Gmail can list by labels alone, as its categories are, or null. */
+function gmailTabLabelIds(
+  provider: string,
+  split: Pick<MailSplit, "matchAll" | "filters">,
+) {
+  if (!isGoogleProvider(provider)) return null;
+  const query = mailSplitToThreadsQuery(split);
+  const onlyLabels = Object.keys(query).every((key) => key === "labelIds");
+  return onlyLabels && query.labelIds?.length ? query.labelIds : null;
 }
