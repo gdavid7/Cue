@@ -3,14 +3,18 @@ import {
   getListThreadKey,
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import type { GetSearchIntentResponse } from "@/app/api/user/search-intent/route";
-import { widenSearch } from "@/utils/mail-search/natural-language-search";
+import {
+  WIDENING_TIERS,
+  type WideningTier,
+  widenSearchByTier,
+} from "@/utils/mail-search/natural-language-search";
 
 /**
  * How long the AI path of a search may take, from commit: reading the search
- * and the one widening step. Past it Cue stops waiting and shows what it has.
+ * and widening it. Past it Cue stops waiting and shows what it has.
  */
 export const CUE_SEARCH_BUDGET_MS = 4000;
-/** Fewer matches than this and Cue widens the search, once. */
+/** Fewer matches than this and Cue widens the search, tier by tier. */
 export const WIDEN_BELOW_RESULTS = 2;
 /** The Cue found rows shown before "Show all". */
 export const CUE_FOUND_VISIBLE_ROWS = 3;
@@ -54,38 +58,63 @@ export function getCueSearchStage({
   return "done";
 }
 
+/** One tier of widening, and the searches Cue runs for it, all at once. */
+export type WideningStep = { tier: WideningTier; searches: string[] };
+
 /**
- * Whether to widen now: the searches have all answered with too little, a
- * wider search exists, and the budget isn't spent. The caller latches the
- * answer, so a search widens at most once.
+ * The tiers a search widens through, in order, each with the wider searches
+ * of every one of Cue's searches. A search already run is never run again,
+ * and a tier with nothing new is left out, so widening reads the local mail
+ * at most once per tier.
  */
-export function shouldWidenCueSearch({
-  stage,
-  primary,
-  widerSearches,
-  expired,
-}: {
-  stage: CueSearchStage;
-  primary: WindowState;
-  widerSearches: string[];
-  expired: boolean;
-}): boolean {
-  return (
-    stage === "done" &&
-    !expired &&
-    primary.settled &&
-    primary.count < WIDEN_BELOW_RESULTS &&
-    widerSearches.length > 0
-  );
+export function getWideningLadder(
+  searches: string[],
+  context: Parameters<typeof widenSearchByTier>[1],
+): WideningStep[] {
+  const ran = new Set(searches);
+  const byTier = searches.map((search) => widenSearchByTier(search, context));
+  return WIDENING_TIERS.flatMap((tier) => {
+    const tierSearches = [
+      ...new Set(byTier.flatMap((tiers) => tiers[tier])),
+    ].filter((search) => !ran.has(search));
+    for (const search of tierSearches) ran.add(search);
+    return tierSearches.length ? [{ tier, searches: tierSearches }] : [];
+  });
 }
 
-/** One wider version of each search, without repeats of the originals. */
-export function getWiderSearches(searches: string[]): string[] {
-  const wider = searches.flatMap((search) => {
-    const widened = widenSearch(search);
-    return widened && !searches.includes(widened) ? [widened] : [];
-  });
-  return [...new Set(wider)];
+/**
+ * The ladder step Cue should be on: none until the searches have all
+ * answered with too little, then the first tier, and each next tier while
+ * the current one has answered with no mail the earlier searches didn't
+ * find. It stops at the first tier that finds some, at the top of the
+ * ladder, and once the budget is spent.
+ */
+export function getWideningStep({
+  step,
+  primary,
+  widened,
+  ladderLength,
+  expired,
+}: {
+  /** The current step, null before widening. */
+  step: number | null;
+  primary: WindowState;
+  /** The current step's search; `count` is the mail new to it. */
+  widened: WindowState;
+  ladderLength: number;
+  expired: boolean;
+}): number | null {
+  if (expired) return step;
+  if (step === null) {
+    return primary.settled &&
+      primary.count < WIDEN_BELOW_RESULTS &&
+      ladderLength > 0
+      ? 0
+      : null;
+  }
+  return widened.settled && widened.count === 0 && step + 1 < ladderLength
+    ? step + 1
+    : step;
 }
 
 export type SearchAnswerRequest = { query: string; searches?: string[] };

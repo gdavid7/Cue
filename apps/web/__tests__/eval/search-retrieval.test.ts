@@ -24,9 +24,12 @@ import {
   type RetrievalQueryType,
 } from "@/__tests__/eval/search-retrieval.scenarios";
 import {
-  getWiderSearches,
-  shouldWidenCueSearch,
+  getWideningLadder,
+  getWideningStep,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import { rankCueFoundThreads } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
+import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import {
   aiInterpretSearch,
   buildSearchIntentPrompt,
@@ -177,13 +180,13 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
               })
             : null;
           const searches = intent?.searches ?? [];
-          const { ranked, widenedSearches } = await runCueSearch(
-            store,
-            searches,
-          );
+          const { ranked, widenedSearches, wideningTier, queries } =
+            await runCueSearch(store, searches);
           const result = await score(model.label, query, ranked, {
             searches,
             widenedSearches,
+            wideningTier,
+            queries,
             natural,
             latencyMs,
             isQuestion: intent?.isQuestion,
@@ -216,6 +219,10 @@ type QueryScore = Metrics & {
   query: RetrievalQuery;
   searches: string[];
   widenedSearches: string[];
+  /** The ladder tier that answered, when Cue widened. */
+  wideningTier?: string;
+  /** Local reads Cue made, the first search's included. */
+  queries?: number;
   natural?: boolean;
   latencyMs?: number;
   isQuestion?: boolean;
@@ -223,6 +230,11 @@ type QueryScore = Metrics & {
 
 /** Conversation ids matching any of the searches, newest first. */
 async function runSearches(store: MailStore, searches: string[]) {
+  return (await readSearches(store, searches)).map((thread) => thread.id);
+}
+
+/** The list rows for mail matching any of the searches, newest first. */
+async function readSearches(store: MailStore, searches: string[]) {
   // As the Cue found section builds its predicate from Cue's searches.
   const predicates = searches.map((q) =>
     threadsQueryToPredicate({ q }, undefined, SEARCH_CONTEXT),
@@ -237,29 +249,62 @@ async function runSearches(store: MailStore, searches: string[]) {
     pageSize: PAGE_SIZE,
     after: null,
   });
-  return view.conversations.map(
-    (conversation) => conversation.key.conversationId,
+  return view.conversations.map((conversation) =>
+    conversationSummaryToListThread(conversation),
   );
 }
 
 /**
- * Cue's searches, then its one widening step when they find too little; the
- * wider search's matches go after the first ones, as on screen.
+ * Cue's searches, ranked, then the widening ladder's tiers when they find
+ * too little, up to the first tier that finds more; its matches go after
+ * the first ones, ranked among themselves, as on screen.
  */
 async function runCueSearch(store: MailStore, searches: string[]) {
-  const primary = await runSearches(store, searches);
-  const widerSearches = getWiderSearches(searches);
-  const widen = shouldWidenCueSearch({
-    stage: "done",
+  const ranking = {
+    searches,
+    labels: LABELS,
+    now: NOW,
+    timeZone: TIMEZONE,
+    provider: "google" as const,
+  };
+  const primary = await readSearches(store, searches);
+  const ranked = rankCueFoundThreads(primary, ranking).map(
+    (thread) => thread.id,
+  );
+  const ladder = getWideningLadder(searches, ranking);
+  let step = getWideningStep({
+    step: null,
     primary: { settled: true, count: primary.length },
-    widerSearches,
+    widened: { settled: false, count: 0 },
+    ladderLength: ladder.length,
     expired: false,
   });
-  if (!widen) return { ranked: primary, widenedSearches: [] };
-  const wider = await runSearches(store, widerSearches);
+  let wider: ListThread[] = [];
+  let queries = 1;
+  while (step !== null) {
+    queries += 1;
+    wider = (await readSearches(store, ladder[step].searches)).filter(
+      (thread) => !ranked.includes(thread.id),
+    );
+    const next = getWideningStep({
+      step,
+      primary: { settled: true, count: primary.length },
+      widened: { settled: true, count: wider.length },
+      ladderLength: ladder.length,
+      expired: false,
+    });
+    if (next === step) break;
+    step = next;
+  }
+  const widening = step === null ? null : ladder[step];
   return {
-    ranked: [...primary, ...wider.filter((id) => !primary.includes(id))],
-    widenedSearches: widerSearches,
+    ranked: [
+      ...ranked,
+      ...rankCueFoundThreads(wider, ranking).map((thread) => thread.id),
+    ],
+    widenedSearches: widening?.searches ?? [],
+    wideningTier: widening?.tier,
+    queries,
   };
 }
 
@@ -411,7 +456,8 @@ function printRetrievalReport(scores: QueryScore[]) {
     lines.push(
       `- Reading slower than the ${INTERPRET_SEARCH_TIMEOUT_MS} ms production timeout: ${slow.length} (${slow.map((row) => row.query.id).join(", ") || "none"})`,
       `- Not read as a sentence, so no AI path: ${offPath.length} (${offPath.map((row) => row.query.id).join(", ") || "none"})`,
-      `- Widened: ${cueRows.filter((row) => row.widenedSearches.length).length}`,
+      `- Widened: ${cueRows.filter((row) => row.widenedSearches.length).length} (${wideningSummary(cueRows)})`,
+      `- Local reads per search: at most ${Math.max(...cueRows.map((row) => row.queries ?? 1))}`,
     );
 
     lines.push(
@@ -428,7 +474,7 @@ function printRetrievalReport(scores: QueryScore[]) {
         ),
       );
       lines.push(
-        `| ${cell(row.query.query)} | ${row.query.type} | ${pair(typed)} | ${pair(expert)} | ${pair(row)} | ${cell(row.searches.join(" ∥ ") || "(none)")} | ${cell(row.widenedSearches.join(" ∥ ") || "")} | ${cell(row.top.slice(0, 3).join(", "))} |`,
+        `| ${cell(row.query.query)} | ${row.query.type} | ${pair(typed)} | ${pair(expert)} | ${pair(row)} | ${cell(row.searches.join(" ∥ ") || "(none)")} | ${cell(row.wideningTier ? `${row.wideningTier}: ${row.widenedSearches.join(" ∥ ")}` : "")} | ${cell(row.top.slice(0, 3).join(", "))} |`,
       );
     }
   }
@@ -443,6 +489,17 @@ function printRetrievalReport(scores: QueryScore[]) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${report}\n`);
   }
+}
+
+function wideningSummary(rows: QueryScore[]) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (row.wideningTier)
+      counts.set(row.wideningTier, (counts.get(row.wideningTier) ?? 0) + 1);
+  }
+  return (
+    [...counts].map(([tier, count]) => `${tier} ${count}`).join(", ") || "none"
+  );
 }
 
 function compare(a: Metrics, b: Metrics) {

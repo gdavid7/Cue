@@ -2476,7 +2476,7 @@ export function MailShell() {
                   totalCount={cueFoundThreads.length}
                   userEmail={userEmail}
                   userLabels={userLabels}
-                  widerSearches={cueSearch.widerSearches}
+                  widening={cueSearch.widening}
                 />
               ) : null}
               {showCueFound && threads.length ? (

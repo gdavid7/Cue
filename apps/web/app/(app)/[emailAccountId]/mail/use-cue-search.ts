@@ -8,10 +8,14 @@ import {
   type CueSearchIntent,
   getCueSearchStage,
   getSearchAnswerRequest,
-  getWiderSearches,
+  getWideningLadder,
+  getWideningStep,
   keepFrozenRows,
-  shouldWidenCueSearch,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import {
+  type CueRankingContext,
+  rankCueFoundThreads,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import {
   getListThreadKey,
   type ListThread,
@@ -44,8 +48,10 @@ type Budget = {
 
 /**
  * The AI path of a committed search typed as a sentence: Cue reads it into a
- * search, runs it on the local mail with the provider as fallback, and widens
- * once when it finds too little. The plain results never wait on it.
+ * search, runs it on the local mail with the provider as fallback, and when
+ * it finds too little climbs a ladder of wider local searches to the first
+ * that finds more. What it finds is ranked by how well it fits the search.
+ * The plain results never wait on it, and keep their own order.
  */
 export function useCueSearch({
   emailAccountId,
@@ -126,55 +132,91 @@ export function useCueSearch({
   if (answered && !current?.readingLate) intent = data ?? null;
 
   const searches = intent?.searches ?? NO_SEARCHES;
-  const widerSearches = useMemo(() => getWiderSearches(searches), [searches]);
+  const timeZone = intent?.timeZone;
+  const { provider } = useAccount();
+  // Once per reading, so a wider window's searches, and recency, hold still.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new reading is a new now
+  const now = useMemo(() => new Date(), [searches]);
+  const ranking = useMemo<CueRankingContext>(
+    () => ({
+      searches,
+      labels: userLabels,
+      now,
+      timeZone,
+      provider: searchProvider(provider),
+    }),
+    [searches, userLabels, now, timeZone, provider],
+  );
+  const ladder = useMemo(
+    () => getWideningLadder(searches, ranking),
+    [searches, ranking],
+  );
   const primary = useCueFoundThreads({
     emailAccountId,
     searches,
-    timeZone: intent?.timeZone,
+    timeZone,
     unreadOnly: Boolean(intent?.unreadOnly),
+    providerSearch: true,
     enabled: natural && searches.length > 0,
   });
 
-  const [widenedFor, setWidenedFor] = useState<string | null>(null);
-  const widening = widenedFor === query;
-  // Widening drops narrowing conditions, unread among them.
+  const [widenedTo, setWidenedTo] = useState<{
+    query: string;
+    step: number;
+  } | null>(null);
+  const step = widenedTo?.query === query ? widenedTo.step : null;
+  const widening = step === null ? null : (ladder[step] ?? null);
+  // Each tier reads the local mail alone, so climbing the ladder stays fast;
+  // the first search already asked the provider. Unread is a narrowing
+  // condition, which widening drops.
   const wider = useCueFoundThreads({
     emailAccountId,
-    searches: widerSearches,
-    timeZone: intent?.timeZone,
+    searches: widening?.searches ?? NO_SEARCHES,
+    timeZone,
     unreadOnly: false,
-    enabled: widening,
+    providerSearch: false,
+    enabled: Boolean(widening),
   });
+  const primaryKeys = useMemo(
+    () => new Set(primary.threads.map(getListThreadKey)),
+    [primary.threads],
+  );
+  const widerNew = useMemo(
+    () =>
+      wider.threads.filter(
+        (thread) => !primaryKeys.has(getListThreadKey(thread)),
+      ),
+    [wider.threads, primaryKeys],
+  );
 
   const stage = getCueSearchStage({
     natural,
     intent,
     expired,
     primary: primary.window,
-    widening,
+    widening: Boolean(widening),
     widened: wider.window,
   });
-  if (
-    !widening &&
-    query &&
-    shouldWidenCueSearch({
-      stage,
-      primary: primary.window,
-      widerSearches,
-      expired,
-    })
-  )
-    setWidenedFor(query);
+  const nextStep =
+    stage === "done" || stage === "widening"
+      ? getWideningStep({
+          step,
+          primary: primary.window,
+          widened: { settled: wider.window.settled, count: widerNew.length },
+          ladderLength: ladder.length,
+          expired,
+        })
+      : step;
+  if (query && nextStep !== null && nextStep !== step)
+    setWidenedTo({ query, step: nextStep });
 
-  // The first search's matches lead; the wider search only adds to them.
+  // The first search's matches lead, best first; a wider tier only adds
+  // what it found beyond them, ranked among themselves.
   const liveThreads = useMemo(() => {
-    if (!widening) return primary.threads;
-    const seen = new Set(primary.threads.map(getListThreadKey));
-    return [
-      ...primary.threads,
-      ...wider.threads.filter((thread) => !seen.has(getListThreadKey(thread))),
-    ];
-  }, [widening, primary.threads, wider.threads]);
+    const first = rankCueFoundThreads(primary.threads, ranking);
+    if (!widening) return first;
+    return [...first, ...rankCueFoundThreads(widerNew, ranking)];
+  }, [widening, primary.threads, widerNew, ranking]);
   useEffect(() => {
     rowKeysRef.current = liveThreads.map(getListThreadKey);
   }, [liveThreads]);
@@ -193,8 +235,8 @@ export function useCueSearch({
     threads,
     /** Cue's searches have all answered, and found nothing. */
     foundNothing: stage === "done" && settled && !liveThreads.length,
-    /** The wider searches Cue ran after the first found too little. */
-    widerSearches: widening ? widerSearches : NO_SEARCHES,
+    /** The tier Cue widened to after the first searches found too little. */
+    widening,
     answerRequest: getSearchAnswerRequest({ query, natural, intent, stage }),
   };
 }
@@ -205,6 +247,7 @@ function useCueFoundThreads({
   searches,
   timeZone,
   unreadOnly,
+  providerSearch,
   enabled,
 }: {
   emailAccountId: string;
@@ -213,6 +256,8 @@ function useCueFoundThreads({
   timeZone: string | undefined;
   /** Keeps only unread mail, for a provider whose search can't. */
   unreadOnly: boolean;
+  /** False reads the local mail alone. */
+  providerSearch: boolean;
   enabled: boolean;
 }): { threads: ListThread[]; window: { settled: boolean; count: number } } {
   const { userLabels } = useLabels();
@@ -239,6 +284,7 @@ function useCueFoundThreads({
     emailAccountId,
     query: PREDICATE_ONLY_QUERY,
     predicate,
+    providerSearch,
     enabled: enabled && !!predicate,
   });
   const settled =

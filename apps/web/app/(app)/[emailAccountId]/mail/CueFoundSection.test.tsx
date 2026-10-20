@@ -53,7 +53,7 @@ function renderSection(props: Partial<ComponentProps<typeof CueFoundSection>>) {
       totalCount={0}
       userEmail="david@example.com"
       userLabels={{}}
-      widerSearches={[]}
+      widening={null}
       {...props}
     />,
   );
@@ -69,14 +69,21 @@ describe("CueFoundSection", () => {
   it("opens the searches Cue ran from its reading, to edit one", () => {
     const { onEditSearch } = renderSection({
       stage: "done",
-      widerSearches: ["from:sarah lease OR contract after:1788393600"],
+      widening: {
+        tier: "fewer_words",
+        searches: ["from:sarah lease OR contract after:1788393600"],
+      },
     });
 
     const reading = screen.getByRole("button", {
       name: /Mail from Sarah with attachments in September/,
     });
-    expect(reading.textContent).toContain("searched more widely");
+    expect(reading.textContent).toContain("searched with fewer words");
     fireEvent.click(reading);
+    // The searches the tier ran sit under a line naming the tier.
+    expect(
+      screen.getByText(/found too little, so Cue searched with fewer words/),
+    ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", {
         name: "from:sarah lease OR contract after Sep 3, 2026",

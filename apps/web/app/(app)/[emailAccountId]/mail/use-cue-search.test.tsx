@@ -3,7 +3,10 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TZDate } from "@date-fns/tz";
-import { CUE_SEARCH_BUDGET_MS } from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import {
+  CUE_SEARCH_BUDGET_MS,
+  getWideningLadder,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search";
 
 const state = vi.hoisted(() => ({
   swrKeys: [] as unknown[],
@@ -14,6 +17,7 @@ const state = vi.hoisted(() => ({
   /** Results by the joined searches each window runs. */
   results: new Map<string, { settled: boolean; ids: string[] }>(),
   enabledWindows: [] as string[],
+  localOnlyWindows: [] as string[],
   enabledPredicates: [] as unknown[],
   provider: "google",
 }));
@@ -37,13 +41,16 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   useEngineMailThreads: ({
     predicate,
+    providerSearch,
     enabled,
   }: {
     predicate?: unknown;
+    providerSearch?: boolean;
     enabled: boolean;
   }) => {
     const key = searchesOf(predicate).join(" | ");
     if (enabled) state.enabledWindows.push(key);
+    if (enabled && providerSearch === false) state.localOnlyWindows.push(key);
     if (enabled) state.enabledPredicates.push(predicate);
     const result = enabled ? state.results.get(key) : undefined;
     return {
@@ -60,7 +67,6 @@ import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 const SENTENCE = "the lease contract Sarah sent last month";
 const SEARCH =
   "from:sarah has:attachment after:2026/09/01 before:2026/10/01 lease OR contract";
-const WIDER = "from:sarah (lease OR contract)";
 
 function render(query: string | null, enabled = true) {
   return renderHook(
@@ -80,6 +86,7 @@ beforeEach(() => {
   };
   state.results = new Map();
   state.enabledWindows = [];
+  state.localOnlyWindows = [];
   state.enabledPredicates = [];
   state.provider = "google";
   state.labels = [];
@@ -139,24 +146,51 @@ describe("useCueSearch", () => {
 
     expect(result.current.stage).toBe("done");
     expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b", "c"]);
-    expect(result.current.widerSearches).toEqual([]);
-    expect(state.enabledWindows).not.toContain(WIDER);
+    expect(result.current.widening).toBeNull();
+    expect(new Set(state.enabledWindows)).toEqual(new Set([SEARCH]));
   });
 
-  it("widens once when the searches find too little, keeping what they found first", () => {
+  it("climbs the ladder past tiers that find nothing new, stopping at the first that does", () => {
+    const [fewer, sender, dates] = ladderKeys();
     state.results.set(SEARCH, { settled: true, ids: ["a"] });
-    state.results.set(WIDER, { settled: true, ids: ["b", "a", "c"] });
-    const { result, rerender } = render(SENTENCE);
+    state.results.set(fewer, { settled: true, ids: ["a"] });
+    state.results.set(sender, { settled: true, ids: ["b", "a", "c"] });
+    state.results.set(dates, { settled: true, ids: ["d"] });
+    const { result } = render(SENTENCE);
 
-    expect(result.current.widerSearches).toEqual([WIDER]);
+    expect(result.current.widening?.tier).toBe("sender_and_dates");
     expect(result.current.stage).toBe("done");
+    // What the first search found leads; the tier adds only what's new.
     expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(state.enabledWindows).not.toContain(dates);
+    // Every tier reads the local mail alone.
+    expect(state.localOnlyWindows).toEqual(
+      expect.arrayContaining([fewer, sender]),
+    );
+    expect(state.localOnlyWindows).not.toContain(SEARCH);
+  });
 
-    // The wider search finding nothing new doesn't widen again.
-    state.results.set(WIDER, { settled: true, ids: [] });
-    rerender({ q: SENTENCE });
-    expect(result.current.widerSearches).toEqual([WIDER]);
-    expect(new Set(state.enabledWindows)).toEqual(new Set([SEARCH, WIDER]));
+  it("waits on a tier before climbing past it", () => {
+    const [fewer, sender] = ladderKeys();
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    state.results.set(fewer, { settled: false, ids: [] });
+    const { result } = render(SENTENCE);
+
+    expect(result.current.stage).toBe("widening");
+    expect(result.current.widening?.tier).toBe("fewer_words");
+    expect(state.enabledWindows).not.toContain(sender);
+  });
+
+  it("ends at the top of the ladder when no tier finds anything", () => {
+    for (const key of ladderKeys()) {
+      state.results.set(key, { settled: true, ids: [] });
+    }
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    const { result } = render(SENTENCE);
+
+    expect(result.current.widening?.tier).toBe("wider_dates");
+    expect(result.current.stage).toBe("done");
+    expect(result.current.foundNothing).toBe(true);
   });
 
   it("stops waiting at the budget and doesn't widen after it", () => {
@@ -171,7 +205,7 @@ describe("useCueSearch", () => {
 
     state.results.set(SEARCH, { settled: true, ids: [] });
     rerender({ q: SENTENCE });
-    expect(result.current.widerSearches).toEqual([]);
+    expect(result.current.widening).toBeNull();
   });
 
   it("keeps out mail its searches find after the budget", () => {
@@ -285,6 +319,20 @@ describe("useCueSearch", () => {
     });
   });
 });
+
+/** The window key of each tier of SEARCH's ladder, in order. */
+function ladderKeys() {
+  const ladder = getWideningLadder([SEARCH], {
+    now: new Date(),
+    provider: "google",
+  });
+  expect(ladder.map((step) => step.tier)).toEqual([
+    "fewer_words",
+    "sender_and_dates",
+    "wider_dates",
+  ]);
+  return ladder.map((step) => step.searches.join(" | "));
+}
 
 function searchesOf(predicate: unknown): string[] {
   if (!predicate || typeof predicate !== "object") return [];
