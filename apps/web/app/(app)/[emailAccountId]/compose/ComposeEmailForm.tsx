@@ -1576,6 +1576,7 @@ function ComposeEmailFormContent({
             emailAccountId: selectedEmailAccountId,
             holdUntil: outcome.holdUntil,
             restoreComposer: () => onRestore?.(),
+            replyThreadId: replyingToEmail?.threadId?.trim() || undefined,
           });
           waitForReaderEmailSettlement({
             client,

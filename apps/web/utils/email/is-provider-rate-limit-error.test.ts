@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
+import { SafeError } from "@/utils/error";
 import { isEmailProviderRateLimitError } from "./is-provider-rate-limit-error";
 
 describe("isEmailProviderRateLimitError", () => {
@@ -40,5 +41,13 @@ describe("isEmailProviderRateLimitError", () => {
         provider: "google",
       }),
     ).toBe(false);
+  });
+
+  it.each([
+    "google",
+    "microsoft",
+  ])("does not count the app's own 429 as %s's", (provider) => {
+    const error = new SafeError("Try again in a few minutes.", 429);
+    expect(isEmailProviderRateLimitError({ error, provider })).toBe(false);
   });
 });

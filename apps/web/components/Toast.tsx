@@ -136,6 +136,28 @@ export function toastSendUndone(id: string) {
   });
 }
 
+/**
+ * For a send undone after the page it was written on was left. Edit is
+ * offered only when this device still has the draft.
+ */
+export function toastSendUndoneElsewhere(options: {
+  id: string;
+  onEdit?: () => void;
+}) {
+  releaseUndo(options.id);
+  const { onEdit } = options;
+  return toast.success(
+    onEdit ? "Send undone. Saved as a draft." : "Send undone.",
+    {
+      id: options.id,
+      icon: null,
+      description: undefined,
+      duration: onEdit ? 8000 : 4000,
+      action: onEdit ? { label: "Edit", onClick: onEdit } : undefined,
+    },
+  );
+}
+
 export function toastSendFailed(options: { id: string; onRetry: () => void }) {
   releaseUndo(options.id);
   return toast.error("Couldn't send", {

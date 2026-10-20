@@ -1,9 +1,11 @@
 import { toast } from "sonner";
+import { z } from "zod";
 import {
   toastError,
   toastSendFailed,
   toastSending,
   toastSendUndone,
+  toastSendUndoneElsewhere,
   toastSent,
 } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
@@ -11,12 +13,21 @@ import { cancelHeldSendAction } from "@/utils/actions/scheduled-email";
 import {
   getActiveMailClient,
   observeOperationOnActiveEngine,
+  subscribeActiveMailClient,
+  subscribeMailEngineLogout,
 } from "@/utils/mail-engine/active-client";
+import { redirectToSafeUrl } from "@/utils/redirect";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { OperationStatus } from "@inboxzero/mail-core/operations";
 
 export const UNDO_SEND_DELAY_MS = 10_000;
 const UNDO_SEND_TOAST_ID = "undo-send";
+// Switching account reloads the page, so the held send's ids are kept for the
+// next page in this tab to take the undo back up. Ids only, never content.
+const HELD_SEND_STORAGE_KEY = "cue:undo-send";
+const REOPEN_COMPOSER_STORAGE_KEY = "cue:undo-send-reopen";
+// Long enough for the redirect to land and the engine to start.
+const REOPEN_COMPOSER_TTL_MS = 60_000;
 // How long "Sending…" waits after the hold for the send to settle before the
 // toast steps aside; the thread's delivery status carries on from there.
 const SEND_SETTLE_TIMEOUT_MS = 60_000;
@@ -33,6 +44,20 @@ const UNDOABLE_STATUSES = new Set<OperationStatus>([
   "retry_wait",
 ]);
 
+const heldSendSchema = z.object({
+  operationId: z.string().min(1),
+  emailAccountId: z.string().min(1),
+  holdUntil: z.number(),
+  /** The thread a reply was written in; absent for a new message. */
+  replyThreadId: z.string().min(1).optional(),
+});
+type HeldSend = z.infer<typeof heldSendSchema>;
+
+const reopenComposerSchema = z.object({
+  emailAccountId: z.string().min(1),
+  at: z.number(),
+});
+
 /** One send's toast, from the hold until the send settles. */
 type TrackedSend = {
   /** The engine the send is watched on, which follows a replaced engine. */
@@ -40,6 +65,11 @@ type TrackedSend = {
   operationId: string;
   emailAccountId: string;
   restoreComposer: () => void;
+  /**
+   * Set when the send was written on an earlier page, whose composer is gone:
+   * the draft is opened again where it was written instead.
+   */
+  reopenDraft?: () => void;
   toastId: string;
   /** Undo is offered only while the send is held. */
   holding: boolean;
@@ -55,20 +85,90 @@ export function getUndoSendHoldUntil(online: boolean, now = Date.now()) {
 
 export function beginUndoSend({
   client,
-  operationId,
-  emailAccountId,
   restoreComposer,
-  holdUntil,
+  ...held
+}: HeldSend & {
+  client: MailClient;
+  restoreComposer: () => void;
+}) {
+  if (held.holdUntil <= Date.now()) return;
+  trackSend({ client, held, restoreComposer });
+}
+
+/**
+ * Takes up the undo of a send held on the page before this one in the tab,
+ * once this page's engine is running. Returns a function that stops waiting.
+ */
+export function resumeUndoSend() {
+  // Signing out leaves nothing for the next user of the tab to take up.
+  const stopLogout = subscribeMailEngineLogout(() => {
+    stopTracking({ dismiss: true });
+    removeSession(HELD_SEND_STORAGE_KEY);
+    removeSession(REOPEN_COMPOSER_STORAGE_KEY);
+  });
+  const stopWaiting = whenMailEngineRuns((client) => {
+    const held = readHeldSend();
+    if (!held || tracked) return;
+    if (held.holdUntil <= Date.now()) {
+      removeSession(HELD_SEND_STORAGE_KEY);
+      return;
+    }
+    trackSend({
+      client,
+      held,
+      restoreComposer: () => {},
+      reopenDraft: () => reopenDraft(held),
+    });
+  });
+  return () => {
+    stopWaiting();
+    stopLogout();
+  };
+}
+
+/**
+ * Opens the composer when an undone send asked for this account's new
+ * message to reopen, once the engine that holds its draft is running.
+ * Returns a function that stops waiting.
+ */
+export function reopenUndoneComposer(
+  emailAccountId: string,
+  openComposer: () => void,
+) {
+  return whenMailEngineRuns(() => {
+    const raw = readSession(REOPEN_COMPOSER_STORAGE_KEY);
+    if (!raw) return;
+    // One read either way: a request for another account, or one left
+    // behind by a redirect that never landed, is not acted on later.
+    removeSession(REOPEN_COMPOSER_STORAGE_KEY);
+    const request = parseStored(reopenComposerSchema, raw);
+    if (
+      request?.emailAccountId === emailAccountId &&
+      Date.now() - request.at < REOPEN_COMPOSER_TTL_MS
+    )
+      openComposer();
+  });
+}
+
+function trackSend({
+  client,
+  held,
+  restoreComposer,
+  reopenDraft,
 }: {
   client: MailClient;
-  operationId: string;
-  emailAccountId: string;
+  held: HeldSend;
   restoreComposer: () => void;
-  holdUntil: number;
+  reopenDraft?: () => void;
 }) {
+  const { operationId, emailAccountId, holdUntil } = held;
   const duration = holdUntil - Date.now();
-  if (duration <= 0) return;
   stopTracking({ dismiss: true });
+  // Before the first look at the send, which may already have settled it.
+  // Parsed so only the known ids are stored.
+  const stored = heldSendSchema.safeParse(held);
+  if (stored.success)
+    writeSession(HELD_SEND_STORAGE_KEY, JSON.stringify(stored.data));
   const handle = observeOperationOnActiveEngine(client, {
     accountId: emailAccountId,
     operationId,
@@ -80,6 +180,7 @@ export function beginUndoSend({
     operationId,
     emailAccountId,
     restoreComposer,
+    reopenDraft,
     toastId,
     holding: true,
     undoing: false,
@@ -97,7 +198,7 @@ export function beginUndoSend({
   };
   const holdTimeout = setTimeout(() => {
     if (tracked !== current || current.undoing) return;
-    current.holding = false;
+    stopHolding(current);
     toastSending({ id: toastId });
   }, duration);
   const settleTimeout = setTimeout(
@@ -111,7 +212,17 @@ export function beginUndoSend({
     if (!status || UNDOABLE_STATUSES.has(status)) return;
     if (status === "succeeded") settle(() => toastSent(toastId));
     else if (status === "failed" || status === "needs_attention")
-      settle(() => toastSendFailed({ id: toastId, onRetry: restoreComposer }));
+      settle(() =>
+        toastSendFailed({
+          id: toastId,
+          onRetry: reopenDraft ?? restoreComposer,
+        }),
+      );
+    // An undo that landed as the page before this one left.
+    else if (status === "cancelled" && reopenDraft)
+      settle(() => {
+        reportUndoneElsewhere(current, reopenDraft);
+      });
     // Cancelled, uncertain and blocked sends are reported by the composer.
     else settle(() => toast.dismiss(toastId));
   };
@@ -137,6 +248,11 @@ export async function undoPendingSend() {
   current.undoing = true;
   const status = await cancelSend(current);
   current.undoing = false;
+  if (status === "cancelled" && current.reopenDraft) {
+    if (tracked === current) stopTracking({ dismiss: false });
+    await reportUndoneElsewhere(current, current.reopenDraft);
+    return true;
+  }
   if (status === "unavailable") {
     // The send is still held, so the user can try again within the window.
     toastError({
@@ -151,7 +267,7 @@ export async function undoPendingSend() {
     return true;
   }
   // Too late means the send is on its way, so the toast keeps reporting it.
-  current.holding = false;
+  stopHolding(current);
   if (status === "too_late") {
     if (tracked === current) toastSending({ id: current.toastId });
   } else if (tracked === current) {
@@ -184,13 +300,18 @@ async function cancelSend(current: TrackedSend) {
       active.cancelOperation(key),
       ENGINE_CANCEL_TIMEOUT_MS,
     ).catch(() => null);
-    if (local && local.status !== "unavailable") return local.status;
+    // An engine with no record of the send (a page that never opened this
+    // mailbox) leaves it to the server, which holds it either way.
+    if (local && local.status !== "unavailable" && local.status !== "not_found")
+      return local.status;
   }
   const status = await cancelOnServer(current);
-  if (status === "cancelled" && active && active !== current.watch.client) {
-    // The engine now running owns the queued copy; without this it would
-    // dispatch it and record the server's refusal as a failed send.
-    active.cancelOperation(key).catch(() => undefined);
+  if (status === "cancelled") {
+    // The engine running holds a copy of the send; without this it would
+    // dispatch it, or record the server's refusal as a failed delivery.
+    getActiveMailClient()
+      ?.cancelOperation(key)
+      .catch(() => undefined);
   }
   return status;
 }
@@ -200,6 +321,10 @@ async function cancelOnServer(current: TrackedSend) {
     const result = await cancelHeldSendAction(current.emailAccountId, {
       operationId: current.operationId,
     });
+    // The server answered and refused (signed out, not allowed, invalid):
+    // trying again would not help.
+    if (result?.serverError !== undefined || result?.validationErrors)
+      return "rejected";
     return result?.data?.status ?? "unavailable";
   } catch {
     return "unavailable";
@@ -221,7 +346,99 @@ function stopTracking({ dismiss }: { dismiss: boolean }) {
   if (!previous) return;
   tracked = null;
   previous.release();
+  removeSession(HELD_SEND_STORAGE_KEY);
   if (dismiss) toast.dismiss(previous.toastId);
+}
+
+/** Undo is offered, and kept for the next page, only while the send is held. */
+function stopHolding(current: TrackedSend) {
+  current.holding = false;
+  if (tracked === current) removeSession(HELD_SEND_STORAGE_KEY);
+}
+
+/**
+ * The draft is offered only when this device still has it: a page that never
+ * opened the mailbox can undo on the server alone, with nothing to edit here.
+ */
+async function reportUndoneElsewhere(current: TrackedSend, reopen: () => void) {
+  const client = getActiveMailClient() ?? current.watch.client;
+  const draft = await client
+    .readDraft({
+      accountId: current.emailAccountId,
+      draftId: current.operationId,
+    })
+    .catch(() => null);
+  toastSendUndoneElsewhere(
+    draft?.status === "found"
+      ? { id: current.toastId, onEdit: reopen }
+      : { id: current.toastId },
+  );
+}
+
+function whenMailEngineRuns(run: (client: MailClient) => void) {
+  let stop = () => {};
+  const check = () => {
+    const client = getActiveMailClient();
+    if (!client) return;
+    stop();
+    run(client);
+  };
+  stop = subscribeActiveMailClient(check);
+  check();
+  return () => stop();
+}
+
+function reopenDraft(held: HeldSend) {
+  if (held.replyThreadId) {
+    // The thread opens its saved reply drafts by itself.
+    const query = new URLSearchParams({ "thread-id": held.replyThreadId });
+    redirectToSafeUrl(`/${held.emailAccountId}/mail?${query}`);
+    return;
+  }
+  writeSession(
+    REOPEN_COMPOSER_STORAGE_KEY,
+    JSON.stringify({ emailAccountId: held.emailAccountId, at: Date.now() }),
+  );
+  redirectToSafeUrl(`/${held.emailAccountId}/mail`);
+}
+
+function readHeldSend() {
+  const raw = readSession(HELD_SEND_STORAGE_KEY);
+  if (!raw) return null;
+  const held = parseStored(heldSendSchema, raw);
+  if (!held) removeSession(HELD_SEND_STORAGE_KEY);
+  return held;
+}
+
+function parseStored<T>(schema: z.ZodType<T>, raw: string) {
+  try {
+    const parsed = schema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function readSession(key: string) {
+  try {
+    return globalThis.sessionStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSession(key: string, value: string) {
+  try {
+    globalThis.sessionStorage?.setItem(key, value);
+  } catch {
+    // Undo still works on this page; it just won't outlive a reload.
+  }
+}
+
+function removeSession(key: string) {
+  try {
+    globalThis.sessionStorage?.removeItem(key);
+  } catch {}
 }
 
 function undoSendToastId(operationId: string) {

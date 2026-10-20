@@ -124,6 +124,77 @@ test("undoes a composed message before it is delivered", async ({
   ).toHaveCount(0);
 });
 
+test("keeps undo for a message sent just before switching account", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const second = await createSecondEmailAccount(emailAccountId);
+  const subject = `Playwright Undo After Switch ${testInfo.retry}-${Date.now()}`;
+  const body = `Undo this after switching. ${testInfo.retry}`;
+  try {
+    // The switcher lists the new account only once the page loads it.
+    await page.reload();
+    await page.getByRole("button", { name: /^Compose/ }).click();
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    await dialog
+      .getByRole("combobox", { name: "To" })
+      .fill("recipient@example.com");
+    await dialog.getByPlaceholder("Subject").fill(subject);
+    await dialog.locator("[contenteditable='true']").pressSequentially(body);
+    await dialog.getByRole("button", { exact: true, name: "Send" }).click();
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() => readHeldReply(emailAccountId, body), { timeout: 20_000 })
+      .toMatchObject({ status: "PENDING" });
+    // Cancelling clears the held message, so the row is found by id after.
+    const held = await readHeldReply(emailAccountId, body);
+
+    // Switching account reloads the page inside the undo window.
+    await page
+      .getByRole("button", { name: /playwright-test\+|Playwright Secondary/i })
+      .last()
+      .click();
+    await page
+      .getByRole("menuitem")
+      .filter({ hasText: second.email })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/\/mail\/u\/1(\/|$|\?)/, {
+      timeout: 30_000,
+    });
+    const notifications = page.getByRole("region", {
+      name: "Notifications alt+T",
+    });
+    const undo = notifications.getByRole("button", { name: /^Undo/ });
+    await expect(undo).toBeVisible({ timeout: 20_000 });
+    await capturePlaywrightCheckpoint(page, testInfo, "undo-after-switch");
+    await undo.click();
+
+    await expect(
+      notifications.getByText("Send undone. Saved as a draft."),
+    ).toBeVisible();
+    await expect
+      .poll(() => readScheduledEmailStatus(held.id))
+      .toBe("CANCELLED");
+    await notifications.getByRole("button", { name: "Edit" }).click();
+
+    const restored = page.getByRole("dialog", { name: "New Message" });
+    await expect(restored).toBeVisible({ timeout: 60_000 });
+    await expect(restored.getByPlaceholder("Subject")).toHaveValue(subject);
+    await expect(
+      restored.getByRole("textbox", { name: "Email message" }),
+    ).toContainText(body);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "undo-after-switch-restored",
+    );
+  } finally {
+    await deleteSecondEmailAccount(second.accountId);
+  }
+});
+
 test("selects the sender when composing from all accounts", async ({
   page,
 }) => {
@@ -746,6 +817,16 @@ test("keeps reply and forward drafts in separate composer sessions", async ({
     0,
   );
 });
+
+async function readScheduledEmailStatus(id: string) {
+  return withClient(async (client) => {
+    const result = await client.query<{ status: string }>(
+      `SELECT status FROM "ScheduledEmail" WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0]?.status;
+  });
+}
 
 async function readHeldReply(emailAccountId: string, replyBody: string) {
   return withClient(async (client) => {

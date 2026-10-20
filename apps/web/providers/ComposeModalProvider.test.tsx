@@ -60,6 +60,9 @@ vi.mock("@/utils/actions/email-account-cookie", () => ({
 }));
 
 vi.mock("@/utils/actions/mail", () => ({ deleteDraftAction: vi.fn() }));
+vi.mock("@/utils/actions/scheduled-email", () => ({
+  cancelHeldSendAction: vi.fn(),
+}));
 
 vi.mock("@/utils/analytics/rum-actions", () => ({
   beginRumAction: vi.fn(),
