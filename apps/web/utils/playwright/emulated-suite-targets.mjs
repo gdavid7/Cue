@@ -143,6 +143,44 @@ const featureGroups = [
     ],
   },
   {
+    name: "mail-today",
+    specs: [
+      "mail/today.spec.ts",
+      "mail/today-all-accounts.spec.ts",
+      "mail/today-inbox-switch.spec.ts",
+      "mail/all-inboxes-context.spec.ts",
+    ],
+  },
+  {
+    name: "mail-accounts",
+    specs: [
+      "mail/account-removal-routing.spec.ts",
+      "mail/compose-from-switch.spec.ts",
+      "mail/reply-from-owning-account.spec.ts",
+      "mail/team-comments.spec.ts",
+      "mail/team-comments-access.spec.ts",
+    ],
+  },
+  {
+    name: "mail-appearance",
+    specs: [
+      "mail/assistant-panel-resize.spec.ts",
+      "mail/cue-strip.spec.ts",
+      "mail/dark-emails.spec.ts",
+    ],
+  },
+  {
+    name: "mail-runtime",
+    specs: [
+      "mail/compose-attachment-send.spec.ts",
+      "mail/gmail-shortcuts.spec.ts",
+      "mail/hydration.spec.ts",
+      "mail/offline-actions.spec.ts",
+      "mail/perf-budgets.spec.ts",
+      "mail/phone-flows.spec.ts",
+    ],
+  },
+  {
     name: "account-features",
     specs: [
       "billing/upgrade-to-paid.spec.ts",

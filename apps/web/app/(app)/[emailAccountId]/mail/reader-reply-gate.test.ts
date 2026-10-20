@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { getReaderReplyGate } from "@/app/(app)/[emailAccountId]/mail/reader-reply-gate";
+import { getDraftRepliesSetting } from "@/utils/rule/draft-replies-enabled";
 
 vi.mock("@/env", () => ({ env: { NEXT_PUBLIC_AUTO_DRAFT_DISABLED: false } }));
 
@@ -19,13 +20,15 @@ describe("getReaderReplyGate", () => {
     });
   });
 
-  // The founder-reported gap: a mailbox that never turned drafting on must
-  // still get a working "Draft a reply", without drafting on its own.
-  it("lets a mailbox that never chose ask for a draft", () => {
-    expect(getReaderReplyGate({ ...incoming, setting: "unset" })).toEqual({
+  // DR-5: a mailbox that never chose (To Reply on, no draft action) drafts
+  // unasked like one that turned drafting on.
+  it("drafts unasked for a mailbox that never chose", () => {
+    const setting = getDraftRepliesSetting({ enabled: true, actions: [] });
+
+    expect(getReaderReplyGate({ ...incoming, setting })).toEqual({
       canRequest: true,
       writesReplies: true,
-      autoEligible: false,
+      autoEligible: true,
     });
   });
 
@@ -39,7 +42,7 @@ describe("getReaderReplyGate", () => {
   it("waits for the setting before drafting unasked", () => {
     const gate = getReaderReplyGate({
       ...incoming,
-      setting: "unset",
+      setting: "on",
       settingLoading: true,
     });
 

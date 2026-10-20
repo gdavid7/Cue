@@ -53,7 +53,7 @@ function renderSection(props: Partial<ComponentProps<typeof CueFoundSection>>) {
       totalCount={0}
       userEmail="david@example.com"
       userLabels={{}}
-      widerSearches={[]}
+      widening={null}
       {...props}
     />,
   );
@@ -69,14 +69,22 @@ describe("CueFoundSection", () => {
   it("opens the searches Cue ran from its reading, to edit one", () => {
     const { onEditSearch } = renderSection({
       stage: "done",
-      widerSearches: ["from:sarah lease OR contract after:1788393600"],
+      widening: {
+        tier: "fewer_words",
+        onProvider: false,
+        searches: ["from:sarah lease OR contract after:1788393600"],
+      },
     });
 
     const reading = screen.getByRole("button", {
       name: /Mail from Sarah with attachments in September/,
     });
-    expect(reading.textContent).toContain("searched more widely");
+    expect(reading.textContent).toContain("searched with fewer words");
     fireEvent.click(reading);
+    // The searches the tier ran sit under a line naming the tier.
+    expect(
+      screen.getByText(/found too little, so Cue searched with fewer words/),
+    ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", {
         name: "from:sarah lease OR contract after Sep 3, 2026",
@@ -94,6 +102,25 @@ describe("CueFoundSection", () => {
       }),
     );
     expect(onEditSearch).toHaveBeenLastCalledWith(INTENT.editableSearches[0]);
+  });
+
+  it("says when Cue also ran the last tier on the server", () => {
+    renderSection({
+      stage: "done",
+      widening: {
+        tier: "wider_dates",
+        onProvider: true,
+        searches: ["from:sarah lease after:1780000000"],
+      },
+    });
+    const reading = screen.getByRole("button", {
+      name: /Mail from Sarah with attachments in September/,
+    });
+    expect(reading.textContent).toContain(
+      "searched a wider date range, then on the server",
+    );
+    fireEvent.click(reading);
+    expect(screen.getByText(/also ran these on the server/)).toBeTruthy();
   });
 
   it("says its searches found nothing only when told they all answered", () => {

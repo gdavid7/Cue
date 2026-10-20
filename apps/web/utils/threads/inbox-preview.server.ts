@@ -24,6 +24,9 @@ const logger = createScopedLogger("mail/inbox-preview");
 // Reading a tab ahead, for a new mailbox only, is a second such list, read
 // alongside the first.
 const PREVIEW_MESSAGES = 10;
+// A mailbox days behind has a screen of new mail, not a handful: 20
+// messages are about 405 units, inside one second of interactive pace.
+const CATCH_UP_PREVIEW_MESSAGES = 20;
 // The page's shell is sent before this settles; only the stream stays open
 // for the rows. Past these, the list waits for the mail engine instead.
 const MAX_QUOTA_WAIT_MS = 4000;
@@ -53,6 +56,7 @@ export async function loadInboxPreview({
   provider,
   tab,
   readAhead,
+  catchUp = false,
 }: {
   emailAccountId: string;
   provider: string;
@@ -63,6 +67,8 @@ export async function loadInboxPreview({
   tab?: { splitId: string; labelIds: string[] };
   /** Labels of a Gmail tab the inbox may open on next, read for the engine only. */
   readAhead?: string[];
+  /** For a local mailbox that has fallen behind, rather than none. */
+  catchUp?: boolean;
 }): Promise<InboxPreview | null> {
   const log = logger.with({ emailAccountId });
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -91,7 +97,9 @@ export async function loadInboxPreview({
           emailProvider
             .getMessagesWithPagination({
               ...(labelIds ? { labelIds } : { inboxOnly: true }),
-              maxResults: PREVIEW_MESSAGES,
+              maxResults: catchUp
+                ? CATCH_UP_PREVIEW_MESSAGES
+                : PREVIEW_MESSAGES,
               format: "metadata",
               allowPartial: true,
             })

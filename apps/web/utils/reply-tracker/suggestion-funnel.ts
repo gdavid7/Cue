@@ -16,6 +16,13 @@ export const REPLY_SUGGESTION_STAGES = [
 ] as const;
 type ReplySuggestionStage = (typeof REPLY_SUGGESTION_STAGES)[number];
 
+/**
+ * Who wrote a suggestion: the To Reply rule's draft action, or Cue ahead of
+ * time for mail that needs a reply (a pre-draft).
+ */
+export const REPLY_SUGGESTION_SOURCES = ["rule", "predraft"] as const;
+type ReplySuggestionSource = (typeof REPLY_SUGGESTION_SOURCES)[number];
+
 export const SIMILARITY_BUCKETS = ["unchanged", "light", "heavy"] as const;
 type SimilarityBucket = (typeof SIMILARITY_BUCKETS)[number];
 
@@ -33,11 +40,14 @@ export function logReplySuggestionStage({
   logger,
   stage,
   executedActionId,
+  source,
   similarityScore,
 }: {
   logger: Logger;
   stage: ReplySuggestionStage;
   executedActionId: string;
+  /** For "generated": who wrote it, a rule's draft action or a pre-draft. */
+  source?: ReplySuggestionSource;
   /** For "sent": how close the sent reply was to the suggestion, 0 to 1. */
   similarityScore?: number;
 }) {
@@ -45,6 +55,7 @@ export function logReplySuggestionStage({
     funnel: "reply-suggestion",
     stage,
     executedActionId,
+    ...(source ? { source } : {}),
     ...(similarityScore === undefined
       ? {}
       : {
@@ -84,6 +95,7 @@ export async function getReplySuggestionFunnel(now = new Date()) {
       draftStatus: true,
       replySuggestionShownAt: true,
       replySuggestionOpenedAt: true,
+      replySuggestionPredrafted: true,
       draftSendLog: { select: { similarityScore: true } },
       suggestedReplyDraft: {
         select: { draftSendLog: { select: { similarityScore: true } } },
@@ -109,6 +121,7 @@ type FunnelRow = {
   draftStatus: DraftEmailStatus | null;
   replySuggestionShownAt: Date | null;
   replySuggestionOpenedAt: Date | null;
+  replySuggestionPredrafted: boolean;
   draftSendLog: { similarityScore: number } | null;
   suggestedReplyDraft: {
     draftSendLog: { similarityScore: number } | null;
@@ -116,6 +129,20 @@ type FunnelRow = {
 };
 
 export function summarizeFunnelWindow(rows: FunnelRow[], days: number) {
+  const bySource = Object.fromEntries(
+    REPLY_SUGGESTION_SOURCES.map((source) => [
+      source,
+      countStages(
+        rows.filter(
+          (row) => row.replySuggestionPredrafted === (source === "predraft"),
+        ),
+      ).counts,
+    ]),
+  ) as Record<ReplySuggestionSource, Record<ReplySuggestionStage, number>>;
+  return { days, ...countStages(rows), bySource };
+}
+
+function countStages(rows: FunnelRow[]) {
   const counts: Record<ReplySuggestionStage, number> = {
     generated: rows.length,
     shown: 0,
@@ -142,5 +169,5 @@ export function summarizeFunnelWindow(rows: FunnelRow[], days: number) {
       if (log) sentBySimilarity[getSimilarityBucket(log.similarityScore)]++;
     }
   }
-  return { days, counts, sentBySimilarity };
+  return { counts, sentBySimilarity };
 }

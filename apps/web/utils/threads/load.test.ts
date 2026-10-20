@@ -160,6 +160,61 @@ describe("loadThreads", () => {
     expect(plans.map((plan) => plan.id)).toEqual(["latest", "earlier-message"]);
   });
 
+  // DR-6b: a drafted reply's stored body ends with the account's signature,
+  // and the reader's composer adds that signature itself.
+  it("hands the reader a drafted reply without the signature its composer adds", async () => {
+    const signature = '<div dir="ltr">Sam<br>Acme</div>';
+    prisma.emailAccount.findUnique.mockResolvedValue({ signature } as never);
+    prisma.executedRule.findMany.mockResolvedValue([
+      {
+        ...executedRule("run", new Date("2026-08-15T10:00:00Z")),
+        actionItems: [
+          {
+            id: "draft",
+            type: "DRAFT_EMAIL",
+            content: `I&#x27;ll call.\n\n${signature}`,
+          },
+          { id: "label", type: "LABEL", content: null },
+        ],
+      },
+    ] as never);
+
+    const [plan] = await loadThreadPlans({
+      emailAccountId: "account-1",
+      threadId: "thread-1",
+    });
+
+    expect(plan.actionItems.map((item) => item.content)).toEqual([
+      "I&#x27;ll call.",
+      null,
+    ]);
+  });
+
+  it("leaves a drafted reply whose signature has since changed as it is", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      signature: "<div>New</div>",
+    } as never);
+    prisma.executedRule.findMany.mockResolvedValue([
+      {
+        ...executedRule("run", new Date("2026-08-15T10:00:00Z")),
+        actionItems: [
+          {
+            id: "draft",
+            type: "DRAFT_EMAIL",
+            content: "Yes.\n\n<div>Old</div>",
+          },
+        ],
+      },
+    ] as never);
+
+    const [plan] = await loadThreadPlans({
+      emailAccountId: "account-1",
+      threadId: "thread-1",
+    });
+
+    expect(plan.actionItems[0].content).toBe("Yes.\n\n<div>Old</div>");
+  });
+
   it("keeps every provider message ID when ignored messages are hidden", async () => {
     const emailProvider = {
       getThreadsWithQuery: vi.fn().mockResolvedValue({

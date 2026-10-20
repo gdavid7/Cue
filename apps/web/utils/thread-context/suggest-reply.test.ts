@@ -5,11 +5,13 @@ import { getMockMessage } from "@/__tests__/helpers";
 import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import { createScopedLogger } from "@/utils/logger";
 import type { EmailProvider } from "@/utils/email/types";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import {
   checkSuggestion,
   contextSources,
   renderSource,
   type Source,
+  suggestReaderReply,
   suggestReply,
   vouchedLinkMessageIds,
   webSearchQuery,
@@ -18,13 +20,19 @@ import {
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
-const { collectThreadContext, getEmailAccountWithAi, generateObject, exa } =
-  vi.hoisted(() => ({
-    collectThreadContext: vi.fn(),
-    getEmailAccountWithAi: vi.fn(),
-    generateObject: vi.fn(),
-    exa: { enabled: true, search: vi.fn() },
-  }));
+const {
+  collectThreadContext,
+  getEmailAccountWithAi,
+  generateObject,
+  getModelForUseCase,
+  exa,
+} = vi.hoisted(() => ({
+  collectThreadContext: vi.fn(),
+  getEmailAccountWithAi: vi.fn(),
+  generateObject: vi.fn(),
+  getModelForUseCase: vi.fn(() => ({})),
+  exa: { enabled: true, search: vi.fn() },
+}));
 vi.mock("@/utils/redis", async () => ({
   redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
     .client,
@@ -33,8 +41,8 @@ vi.mock("@/utils/llms", () => ({
   createGenerateObject: () => generateObject,
 }));
 vi.mock("@/utils/llms/use-cases", () => ({
-  getModelForUseCase: () => ({}),
-  LlmUseCase: { DraftReply: "draft-reply" },
+  getModelForUseCase,
+  LlmUseCase: { DraftReply: "draft-reply", PredraftReply: "predraft-reply" },
 }));
 vi.mock("@/utils/premium/limits", () => ({
   assertHasAiAccess: async () => {},
@@ -519,8 +527,8 @@ describe("suggestReply when auto draft replies are off", () => {
     expect(getEmailAccountWithAi).not.toHaveBeenCalled();
   });
 
-  // Mailboxes from before drafting was the default never chose: the reader
-  // only asks for these when the user presses "Draft a reply".
+  // DR-5: mailboxes from before drafting was the default never chose, which
+  // counts as on.
   it("answers a mailbox that never chose", async () => {
     const latest = getMockMessage({
       id: "m4",
@@ -563,6 +571,52 @@ describe("suggestReply when auto draft replies are off", () => {
 
     expect(result).toMatchObject({ status: "insufficient" });
     expect(getEmailAccountWithAi).toHaveBeenCalled();
+  });
+
+  // Written unasked for incoming mail, so it runs on the cheap tier.
+  it("writes a pre-draft on its own model tier", async () => {
+    const latest = getMockMessage({
+      id: "m5",
+      threadId: "t5",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t5", messages: [latest], snippet: "" },
+      items: [],
+    });
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: false,
+        missing: "Which Friday.",
+        webQuery: "",
+        reply: "",
+        claims: [],
+      },
+    });
+    getModelForUseCase.mockClear();
+
+    await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t5",
+      emailProvider: {} as EmailProvider,
+      logger,
+      settings: { draftReplies: "on", webLookupEnabled: false },
+      source: "predraft",
+    });
+
+    expect(getModelForUseCase).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      "predraft-reply",
+    );
   });
 
   it("suggests nothing when the To Reply rule is turned off", async () => {
@@ -695,5 +749,149 @@ describe("suggestReply and the server cache", () => {
       suggest({ searchWeb: true, webQuery: "venue opening hours" }),
     ).resolves.toMatchObject({ status: "insufficient" });
     expect(exa.search).not.toHaveBeenCalled();
+  });
+});
+
+// DR-5: one line per reader suggestion says how it ended, by ID and fixed
+// reason only, so "never seen" can be told apart from "Cue chose not to".
+describe("suggestReaderReply outcome log", () => {
+  const logger = createScopedLogger("suggest-reply-test");
+  const subject = "Venue booking for the Acme offsite";
+  const sender = "sarah.chen@example.com";
+  const on = { draftReplies: "on" as const, webLookupEnabled: false };
+  const LOG_FIELDS = ["outcome", "reason", "threadId", "webPass"];
+
+  beforeEach(() => {
+    generateObject.mockReset();
+    collectThreadContext.mockReset();
+    collectThreadContext.mockResolvedValue({
+      thread: {
+        id: "t5",
+        messages: [
+          getMockMessage({
+            id: "m5",
+            threadId: "t5",
+            from: sender,
+            subject,
+            textPlain: "When does the venue open on Friday?",
+          }),
+        ],
+        snippet: "",
+      },
+      items: [],
+    });
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+  });
+
+  async function outcomeOf(
+    settings: Parameters<typeof suggestReaderReply>[0]["settings"] = on,
+  ) {
+    const info = vi.spyOn(logger, "info");
+    await suggestReaderReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t5",
+      emailProvider: {} as EmailProvider,
+      logger,
+      settings,
+    }).catch(() => undefined);
+    const calls = info.mock.calls.filter(
+      ([message]) => message === "Reply suggestion outcome",
+    );
+    info.mockRestore();
+    expect(calls).toHaveLength(1);
+    const fields = calls[0]![1] as Record<string, unknown>;
+    // IDs and fixed values only: nothing from the mail or the reply.
+    for (const key of Object.keys(fields)) expect(LOG_FIELDS).toContain(key);
+    const logged = JSON.stringify(fields);
+    for (const text of [subject, sender, "venue", "9 AM", "opening hours"]) {
+      expect(logged).not.toContain(text);
+    }
+    return fields;
+  }
+
+  it("logs a suggestion", async () => {
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: true,
+        missing: "",
+        webQuery: "",
+        reply: "The venue opens at 9 AM on Friday.",
+        claims: [],
+      },
+    });
+
+    expect(await outcomeOf()).toEqual({
+      outcome: "suggested",
+      threadId: "t5",
+      webPass: false,
+    });
+  });
+
+  it("logs the model abstaining as declined", async () => {
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: false,
+        missing: "The venue's opening hours.",
+        webQuery: "venue opening hours",
+        reply: "",
+        claims: [],
+      },
+    });
+
+    expect(await outcomeOf()).toMatchObject({
+      outcome: "declined",
+      reason: "insufficient-evidence",
+    });
+  });
+
+  it("logs drafting turned off as gated", async () => {
+    expect(
+      await outcomeOf({ draftReplies: "off", webLookupEnabled: false }),
+    ).toMatchObject({ outcome: "gated", reason: "drafting-off" });
+    expect(generateObject).not.toHaveBeenCalled();
+  });
+
+  it("logs a thread the user answered last as gated", async () => {
+    collectThreadContext.mockResolvedValue({
+      thread: {
+        id: "t5",
+        messages: [getMockMessage({ id: "m6", from: "me@example.com" })],
+        snippet: "",
+      },
+      items: [],
+    });
+
+    expect(await outcomeOf()).toMatchObject({
+      outcome: "gated",
+      reason: "already-replied",
+    });
+  });
+
+  it("logs a Gmail quota deferral as unavailable and still fails", async () => {
+    collectThreadContext.mockRejectedValue(
+      new GmailCallDeferredError(5000, "interactive"),
+    );
+
+    expect(await outcomeOf()).toMatchObject({
+      outcome: "unavailable",
+      reason: "quota",
+    });
+  });
+
+  it("logs a model failure as unavailable", async () => {
+    generateObject.mockRejectedValue(new Error("model overloaded"));
+
+    expect(await outcomeOf()).toMatchObject({
+      outcome: "unavailable",
+      reason: "error",
+    });
   });
 });

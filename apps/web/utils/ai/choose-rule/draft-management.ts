@@ -156,6 +156,7 @@ export async function markReplySuggestionPending({
       logger,
       stage: "generated",
       executedActionId: actionId,
+      source: "rule",
     });
   } catch (error) {
     logger.error("Failed to mark reply suggestion pending", {

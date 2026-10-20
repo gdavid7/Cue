@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { formatShortDate } from "@/utils/date";
+import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
 
 vi.mock("@/env", () => ({ env: {} }));
 vi.mock("@/components/Tooltip", () => ({
@@ -46,6 +47,21 @@ describe("ThreadRow", () => {
     expect(screen.getByText(formatShortDate(RECEIVED))).toBeTruthy();
     expect(screen.queryByText(formatShortDate(DRAFTED))).toBeNull();
     expect(screen.getByText("Draft")).toBeTruthy();
+  });
+
+  // Part of the option's own text, so a screen reader hears it with the row
+  // and it adds no tab stop.
+  it("says Cue drafted a reply when one is waiting", () => {
+    renderRow({
+      insightData: { insight: null, meeting: null, reply: "drafted" },
+    });
+
+    expect(
+      screen.getByRole("option", { name: /Cue drafted a reply/ }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("thread-insight").querySelector("button")).toBe(
+      null,
+    );
   });
 
   it("keeps the select checkbox out of the tab order", () => {
@@ -191,16 +207,19 @@ function renderRow({
   onOpen = vi.fn(),
   onToggleSelect = vi.fn(),
   unread = false,
+  insightData,
 }: {
   onOpen?: (index: number) => void;
   onToggleSelect?: (index: number) => void;
   unread?: boolean;
+  insightData?: ThreadInsightData;
 } = {}) {
   const base = thread();
   return render(
     <ThreadRow
       hasAnySelection={false}
       index={0}
+      insightData={insightData}
       isFocused={false}
       isSelected={false}
       layout="list"

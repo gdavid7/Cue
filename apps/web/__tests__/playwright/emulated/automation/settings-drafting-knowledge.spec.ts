@@ -23,7 +23,7 @@ test.afterEach(async () => {
   settingsCleanup = undefined;
 });
 
-test("enables drafting and manages persisted draft knowledge", async ({
+test("toggles drafting and manages persisted draft knowledge", async ({
   page,
 }) => {
   test.setTimeout(360_000);
@@ -54,17 +54,41 @@ test("enables drafting and manages persisted draft knowledge", async ({
   const autoDraftItem = getAutomationSettingsCard(page, "Auto draft replies");
   const autoDraftSwitch = autoDraftItem.getByRole("switch");
   await expectVisibleAfterTransientFetch(page, autoDraftSwitch);
-  await expect(autoDraftSwitch).not.toBeChecked();
+  // The seed leaves an enabled To Reply rule with no draft action: a mailbox
+  // that never chose, which counts as on.
+  await expect(autoDraftSwitch).toBeChecked();
+
   await autoDraftSwitch.click();
   await expect
     .poll(
       async () => {
         const state = await getAutomationSettingsState(emailAccountId);
-        return state.draftActionTypes;
+        return {
+          drafts: state.draftActionTypes.includes("DRAFT_EMAIL"),
+          toReplyRuleEnabled: state.toReplyRuleEnabled,
+        };
       },
       { timeout: SERVER_ACTION_TIMEOUT_MS },
     )
-    .toContain("DRAFT_EMAIL");
+    .toEqual({ drafts: false, toReplyRuleEnabled: false });
+
+  await page.reload();
+  await expectVisibleAfterTransientFetch(page, autoDraftSwitch);
+  await expect(autoDraftSwitch).not.toBeChecked();
+
+  await autoDraftSwitch.click();
+  await expect
+    .poll(
+      async () => {
+        const state = await getAutomationSettingsState(emailAccountId);
+        return {
+          drafts: state.draftActionTypes.includes("DRAFT_EMAIL"),
+          toReplyRuleEnabled: state.toReplyRuleEnabled,
+        };
+      },
+      { timeout: SERVER_ACTION_TIMEOUT_MS },
+    )
+    .toEqual({ drafts: true, toReplyRuleEnabled: true });
 
   await page.reload();
   await expectVisibleAfterTransientFetch(page, autoDraftSwitch);

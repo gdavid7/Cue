@@ -3,10 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { GetThreadPlansResponse } from "@/app/api/user/thread-plans/route";
 import { useDraftReplies } from "@/app/(app)/[emailAccountId]/assistant/settings/DraftReplies";
-import { getThreadCategories } from "@/app/(app)/[emailAccountId]/mail/cue-strip";
+import {
+  getThreadCategories,
+  isFromPerson,
+} from "@/app/(app)/[emailAccountId]/mail/cue-strip";
 import { getReaderReplyGate } from "@/app/(app)/[emailAccountId]/mail/reader-reply-gate";
 import type { ThreadMessage } from "@/components/email-list/types";
-import type { ReplyAssist } from "@/components/email-list/reply-assist";
+import {
+  draftHtmlToReplyText,
+  type ReplyAssist,
+} from "@/components/email-list/reply-assist";
 import {
   abstentionLine,
   CheckedAgainst,
@@ -19,7 +25,11 @@ import {
   DraftEmailStatus,
   SystemType,
 } from "@/generated/prisma/enums";
-import { threadInsightItem, useInboxInsights } from "@/hooks/useInboxInsights";
+import {
+  refreshInboxInsights,
+  threadInsightItem,
+  useInboxInsights,
+} from "@/hooks/useInboxInsights";
 import { useReplySuggestion } from "@/hooks/useReplySuggestion";
 import { useSuggestedReply } from "@/hooks/useSuggestedReply";
 import { useThreadPlans } from "@/hooks/useThreadPlans";
@@ -32,6 +42,11 @@ import {
   splitRecipientList,
 } from "@/utils/email";
 import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
+import {
+  beginRumAction,
+  cancelRumAction,
+  completeRumAction,
+} from "@/utils/analytics/rum-actions";
 import { GmailLabel } from "@/utils/gmail/label";
 import {
   dismissReplySuggestionAction,
@@ -39,6 +54,9 @@ import {
 } from "@/utils/actions/thread-assist";
 
 const NO_PLANS: never[] = [];
+// How long the reader waits on a reply before it says it couldn't write one
+// and offers to try again, rather than spinning for as long as Gmail is busy.
+export const REPLY_WAIT_LIMIT_MS = 15_000;
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -139,13 +157,22 @@ export function useReaderReplySuggestion({
       emailAccountId,
     ],
   );
-  const { data: insights, isLoading: insightLoading } =
-    useInboxInsights(insightItems);
+  const {
+    data: insights,
+    isLoading: insightLoading,
+    error: insightError,
+  } = useInboxInsights(insightItems);
   const insight = threadId ? insights?.[threadId] : undefined;
+  // Cue's note on the email couldn't be read, as when Gmail keeps deferring
+  // it: a person writing to the user is taken to be waiting, so the reply
+  // never hangs on that read (DR-4).
+  const insightFailed =
+    insightItems.length > 0 && !insight && Boolean(insightError);
   const needsReply =
     filedToReply ||
     insight?.insight?.action === "reply" ||
-    Boolean(insight?.reply);
+    Boolean(insight?.reply) ||
+    (insightFailed && Boolean(latest) && isFromPerson(latest!.headers));
   // Kept once its edit made a draft, so the reply still credits Cue.
   const ruleSuggestion =
     latest && !latestIsFromUser && gate.writesReplies
@@ -161,7 +188,10 @@ export function useReaderReplySuggestion({
   ) {
     setDecision({ ...current, run: true });
   }
-  const dismissRuleSuggestion = (executedActionId: string) => {
+  const dismissRuleSuggestion = (
+    executedActionId: string,
+    dismissedFor: string,
+  ) => {
     mutatePlans(
       (data) =>
         data && { plans: withoutSuggestion(data.plans, executedActionId) },
@@ -170,6 +200,10 @@ export function useReaderReplySuggestion({
     dismissReplySuggestionAction(emailAccountId, { executedActionId })
       .then((result) => {
         if (result?.serverError) throw new Error(result.serverError);
+        // The inbox row stops saying "Cue drafted a reply".
+        refreshInboxInsights(emailAccountId, {
+          withoutDraftFor: dismissedFor,
+        });
       })
       .catch(() => {
         mutatePlans();
@@ -178,6 +212,9 @@ export function useReaderReplySuggestion({
   };
 
   const run = Boolean(current?.run);
+  // Each try has its own clock, so "Try again" waits the full limit again.
+  const [attempt, setAttempt] = useState(0);
+  const [gaveUpOn, setGaveUpOn] = useState<string>();
   // Opened on its own only while the conversation is in the inbox and the
   // reply is recent; otherwise it waits for "Draft a reply".
   const showRuleSuggestion = Boolean(
@@ -191,7 +228,11 @@ export function useReaderReplySuggestion({
   // reply at all; the server enforces it too.
   const { canRequest: canRequestReply, writesReplies } = gate;
   const requestReply = () => {
-    if (!latest || !canRequestReply || !writesReplies || run) return;
+    if (!latest || !canRequestReply || !writesReplies) return;
+    if (run) {
+      if (failed) retry();
+      return;
+    }
     setDecision({ id: latest.id, eligible: true, run: true });
   };
   // The same context the reader shows, handed to the suggestion so the server
@@ -209,11 +250,53 @@ export function useReaderReplySuggestion({
     context: contextWithText(context.data),
   });
   const { suggestion } = replySuggestion;
+  const suggestionAsked = run && Boolean(latestId);
+  useEffect(() => {
+    if (suggestionAsked) beginRumAction("reply_suggestion", { key: latestId });
+    return () => cancelRumAction("reply_suggestion", latestId);
+  }, [suggestionAsked, latestId]);
+  const suggestionError = Boolean(replySuggestion.error);
+  useEffect(() => {
+    if (suggestionError) {
+      completeRumAction("reply_suggestion", {
+        key: latestId,
+        outcome: "error",
+      });
+    } else if (suggestion) {
+      completeRumAction("reply_suggestion", {
+        key: latestId,
+        outcome: suggestion.status === "suggested" ? "ok" : "empty",
+      });
+    }
+  }, [suggestion, suggestionError, latestId]);
   // Gathering the context is the first part of checking the user's mail.
   const phase =
     enabled && run && !ruleSuggestion && !contextSettled
       ? "checking-mail"
       : replySuggestion.phase;
+  const checking = phase === "checking-mail" || phase === "checking-web";
+  // Still checking, or between the bounded retries of a failed check.
+  const waiting =
+    enabled &&
+    run &&
+    !ruleSuggestion &&
+    !suggestion &&
+    (checking || Boolean(replySuggestion.error));
+  const attemptKey = latestId ? `${latestId}:${attempt}` : undefined;
+  useEffect(() => {
+    if (!waiting || !attemptKey) return;
+    const timer = setTimeout(
+      () => setGaveUpOn(attemptKey),
+      REPLY_WAIT_LIMIT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [waiting, attemptKey]);
+  const failed = waiting && gaveUpOn === attemptKey;
+  const retry = () => {
+    setAttempt((value) => value + 1);
+    if (!context.data) context.mutate?.();
+    replySuggestion.retry();
+  };
 
   // Reopened with a draft: the suggestion this browser kept for this message,
   // if any, so a draft that is still Cue's text keeps saying so.
@@ -258,7 +341,7 @@ export function useReaderReplySuggestion({
       reply: ruleSuggestion.reply,
       evidence: null,
       executedActionId,
-      dismiss: () => dismissRuleSuggestion(executedActionId),
+      dismiss: () => dismissRuleSuggestion(executedActionId, latest.id),
       recipients,
       files,
       toSomeoneElse,
@@ -279,7 +362,20 @@ export function useReaderReplySuggestion({
   }, [emailAccountId, shownSuggestionId]);
 
   let replyStatus: React.ReactNode = null;
-  if (latest && (phase === "checking-mail" || phase === "checking-web")) {
+  if (latest && failed) {
+    replyStatus = (
+      <p className="text-muted-foreground text-xs" role="status">
+        Couldn't draft a reply right now.{" "}
+        <button
+          className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={retry}
+          type="button"
+        >
+          Try again
+        </button>
+      </p>
+    );
+  } else if (latest && checking) {
     replyStatus = (
       <p className="text-muted-foreground text-xs" role="status">
         {suggestionPhaseLabel(phase)}
@@ -311,6 +407,8 @@ export function useReaderReplySuggestion({
         !showRuleSuggestion &&
         !(current?.eligible && (!plansSettled || insightLoading)),
       request: requestReply,
+      /** Cue gave up waiting on this reply; `request` tries again. */
+      failed,
       /**
        * The newest message once there's nothing to wait for: its suggestion
        * settled either way, or Cue doesn't write replies for this account.
@@ -326,8 +424,9 @@ export function useReaderReplySuggestion({
 type ThreadPlan = GetThreadPlansResponse["plans"][number];
 
 /**
- * The reply a rule wrote for the message, waiting in Cue: drafted, not yet
- * used, dismissed or superseded, and never put in the mailbox.
+ * The reply a rule wrote for the message, or Cue pre-drafted for it, waiting
+ * in Cue: drafted, not yet used, dismissed or superseded, and never put in
+ * the mailbox.
  */
 function findRuleSuggestion(
   plans: ThreadPlan[] | undefined,
@@ -342,10 +441,11 @@ function findRuleSuggestion(
         item.draftStatus === DraftEmailStatus.PENDING &&
         item.content?.trim(),
     );
-    if (!action?.content) continue;
+    const reply = action?.content ? draftHtmlToReplyText(action.content) : "";
+    if (!action || !reply) continue;
     return {
       executedActionId: action.id,
-      reply: action.content.trim(),
+      reply,
       createdAt: action.createdAt,
       recipients: {
         to: action.to || undefined,

@@ -3,7 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   afterFirstMailList,
+  afterMailCaughtUp,
   markFirstMailListShown,
+  markMailCaughtUp,
   resetFirstMailListForTesting,
 } from "./first-mail-list";
 
@@ -90,5 +92,42 @@ describe("afterFirstMailList", () => {
     await vi.advanceTimersByTimeAsync(20_000);
 
     expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe("afterMailCaughtUp", () => {
+  it("waits for the first list and the engine's catch-up", async () => {
+    const callback = vi.fn();
+    afterMailCaughtUp(callback, { capMs: 60_000 });
+    markFirstMailListShown();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(callback).not.toHaveBeenCalled();
+
+    markMailCaughtUp();
+
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs at once after the first list when the engine already caught up", async () => {
+    const callback = vi.fn();
+    markMailCaughtUp();
+    afterMailCaughtUp(callback);
+    markFirstMailListShown();
+    await vi.advanceTimersByTimeAsync(4000);
+
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting for a long catch-up after its cap", async () => {
+    const callback = vi.fn();
+    afterMailCaughtUp(callback, { capMs: 30_000 });
+    markFirstMailListShown();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(callback).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    markMailCaughtUp();
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 });

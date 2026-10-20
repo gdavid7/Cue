@@ -8,9 +8,13 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useReaderReplySuggestion } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
+import {
+  REPLY_WAIT_LIMIT_MS,
+  useReaderReplySuggestion,
+} from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { renderEmailTextWithSafeLinks } from "@/utils/email/render-safe-links";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
 
 const mocks = vi.hoisted(() => ({
@@ -18,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   useSuggestedReply: vi.fn(),
   useThreadContext: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
+  insightError: undefined as unknown,
+  refreshInsights: vi.fn(),
   draftReplies: drafting("on"),
   plans: [] as Record<string, unknown>[],
   mutatePlans: vi.fn(),
@@ -47,7 +53,11 @@ vi.mock("@/hooks/useThreadPlans", () => ({
 }));
 vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useInboxInsights")>()),
-  useInboxInsights: () => ({ data: mocks.insights }),
+  useInboxInsights: () => ({
+    data: mocks.insights,
+    error: mocks.insightError,
+  }),
+  refreshInboxInsights: mocks.refreshInsights,
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({ userEmail: "user@example.com" }),
@@ -74,6 +84,7 @@ describe("useReaderReplySuggestion", () => {
     mocks.useSuggestedReply.mockReturnValue({ data: undefined });
     mocks.useThreadContext.mockReturnValue({ data: { items: [] } });
     mocks.insights = undefined;
+    mocks.insightError = undefined;
     mocks.draftReplies = drafting("on");
     mocks.plans = [];
     mocks.mutatePlans.mockReset();
@@ -99,6 +110,47 @@ describe("useReaderReplySuggestion", () => {
     });
     expect(lastEnabled()).toBe(false);
     expect(result.current.reply.offer).toBe(false);
+  });
+
+  // Written ahead of time for mail filed To Reply: the row said so, and the
+  // reader opens that reply at once, gathering nothing to write another.
+  it("opens the reply Cue pre-drafted as it was stored", () => {
+    mocks.plans = [ruleSuggestionPlan("ask", { predrafted: true })];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist).toMatchObject({
+      messageId: "ask",
+      reply: "Thursday works for me.",
+      executedActionId: "suggestion-1",
+      toSomeoneElse: false,
+    });
+    expect(lastEnabled()).toBe(false);
+    expect(mocks.useThreadContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: null }),
+    );
+    expect(result.current.reply.settledFor).toBe("ask");
+  });
+
+  // The rule stores its reply as the HTML body the mailbox would get; the
+  // composer takes plain text and escapes it once itself.
+  it("offers the rule's reply as the text it wrote, not its stored HTML", () => {
+    const text = `I'm going to look at "Q3" & check <the> numbers.\n\nI'll reply by 5.`;
+    mocks.plans = [
+      ruleSuggestionPlan("ask", {
+        content: renderEmailTextWithSafeLinks(text, {
+          allowHiddenLinks: false,
+        }),
+      }),
+    ];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist?.reply).toBe(text);
   });
 
   it.each([
@@ -241,6 +293,10 @@ describe("useReaderReplySuggestion", () => {
       update({ plans: mocks.plans }).plans[0].actionItems[0].draftStatus,
     ).toBe("DISMISSED");
     expect(mocks.toastError).not.toHaveBeenCalled();
+    // The inbox row stops saying "Cue drafted a reply".
+    expect(mocks.refreshInsights).toHaveBeenCalledWith("account-1", {
+      withoutDraftFor: "ask",
+    });
   });
 
   it("brings the rule's reply back when dismissing fails", async () => {
@@ -394,25 +450,8 @@ describe("useReaderReplySuggestion", () => {
     expect(lastEnabled()).toBe(false);
   });
 
-  // Never turned on isn't turned off: nothing drafts unasked, but "Draft a
-  // reply" is offered and works.
-  it("offers a draft without writing one unasked when drafting was never chosen", () => {
-    mocks.draftReplies = drafting("unset");
-    const { result } = renderSuggestion([
-      incoming("ask", ["INBOX", "Label_to_reply"]),
-    ]);
-
-    expect(lastEnabled()).toBe(false);
-    expect(result.current.reply.offer).toBe(true);
-
-    act(() => result.current.reply.request());
-
-    expect(lastEnabled()).toBe(true);
-    expect(result.current.reply.offer).toBe(false);
-  });
-
   it("waits for the Auto draft replies setting before deciding", () => {
-    mocks.draftReplies = drafting("unset", true);
+    mocks.draftReplies = drafting("on", true);
     const { rerender } = renderSuggestion([
       incoming("ask", ["INBOX", "Label_to_reply"]),
     ]);
@@ -422,6 +461,109 @@ describe("useReaderReplySuggestion", () => {
     rerender();
 
     expect(lastEnabled()).toBe(true);
+  });
+
+  // DR-4: Cue's note decides whether a reply is written unasked; when Gmail
+  // defers reading it, a person's email still gets one.
+  it("writes a reply to a person's email when Cue's note on it can't be read", () => {
+    mocks.insightError = Object.assign(new Error("Gmail is busy"), {
+      status: 503,
+      retryAfterMs: 5000,
+    });
+
+    renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(lastEnabled()).toBe(true);
+  });
+
+  it("waits for Cue's note rather than guessing while it is still coming", () => {
+    renderSuggestion([incoming("ask", ["INBOX"])]);
+
+    expect(lastEnabled()).toBe(false);
+  });
+
+  describe("when a reply takes too long", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stops spinning and offers to try again once the wait limit passes", () => {
+      const retry = vi.fn();
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "checking-mail" : "idle",
+        suggestion: undefined,
+        retry,
+      }));
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX", "Label_to_reply"]),
+      ]);
+      expect(result.current.reply.failed).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(REPLY_WAIT_LIMIT_MS - 1);
+      });
+      expect(result.current.reply.failed).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(result.current.reply.failed).toBe(true);
+      render(<div>{result.current.replyStatus}</div>);
+      expect(screen.getByRole("status").textContent).toContain(
+        "Couldn't draft a reply right now.",
+      );
+
+      act(() => {
+        screen.getByRole("button", { name: "Try again" }).click();
+      });
+      expect(retry).toHaveBeenCalledTimes(1);
+      // A new try gets the full wait again.
+      expect(result.current.reply.failed).toBe(false);
+    });
+
+    it("gives up on a reply whose requests keep failing between retries", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: undefined,
+        error: enabled
+          ? Object.assign(new Error("busy"), { status: 503 })
+          : undefined,
+        retry: vi.fn(),
+      }));
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX", "Label_to_reply"]),
+      ]);
+      expect(result.current.reply.failed).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(REPLY_WAIT_LIMIT_MS);
+      });
+
+      expect(result.current.reply.failed).toBe(true);
+    });
+
+    it("never shows the failure once the reply arrives", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: enabled
+          ? { status: "suggested", reply: "Thursday works.", citations: [] }
+          : undefined,
+        retry: vi.fn(),
+      }));
+      const { result } = renderSuggestion([
+        incoming("ask", ["INBOX", "Label_to_reply"]),
+      ]);
+
+      act(() => {
+        vi.advanceTimersByTime(REPLY_WAIT_LIMIT_MS * 2);
+      });
+
+      expect(result.current.reply.failed).toBe(false);
+      expect(result.current.assist?.reply).toBe("Thursday works.");
+    });
   });
 
   describe("asked for with Draft a reply", () => {
@@ -496,7 +638,7 @@ function renderSuggestion(messages: ThreadMessage[]) {
   );
 }
 
-function drafting(setting: "on" | "off" | "unset", loading = false) {
+function drafting(setting: "on" | "off", loading = false) {
   return { enabled: setting === "on", setting, loading };
 }
 
@@ -521,6 +663,7 @@ function incoming(id: string, labelIds: string[]) {
 function ruleSuggestionPlan(
   messageId: string,
   action: {
+    content?: string;
     draftStatus?: string;
     draftId?: string | null;
     createdAt?: string;
@@ -528,6 +671,7 @@ function ruleSuggestionPlan(
     subject?: string | null;
     staticAttachments?: unknown;
     selectedAttachments?: unknown;
+    predrafted?: boolean;
   } = {},
 ) {
   return {
@@ -538,7 +682,7 @@ function ruleSuggestionPlan(
       {
         id: "suggestion-1",
         type: "DRAFT_EMAIL",
-        content: "Thursday works for me.",
+        content: action.content ?? "Thursday works for me.",
         draftId: action.draftId ?? null,
         draftStatus: action.draftStatus ?? "PENDING",
         createdAt: action.createdAt ?? new Date().toISOString(),
@@ -548,6 +692,7 @@ function ruleSuggestionPlan(
         subject: action.subject ?? null,
         staticAttachments: action.staticAttachments ?? null,
         selectedAttachments: action.selectedAttachments ?? null,
+        replySuggestionPredrafted: action.predrafted ?? false,
       },
     ],
   };

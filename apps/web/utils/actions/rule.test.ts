@@ -120,6 +120,25 @@ describe("enableDraftRepliesAction", () => {
     );
   });
 
+  // DR-5: no To Reply rule reads as on, so off has to be saved as a To Reply
+  // rule that is turned off, or the toggle would snap back on.
+  it("saves off for a mailbox without To Reply as a disabled rule", async () => {
+    mockAccount();
+    prisma.rule.findUnique.mockResolvedValue(null);
+    prisma.rule.create.mockResolvedValue({ id: "rule-new" } as never);
+
+    await enableDraftRepliesAction("ea_1" as never, { enable: false } as never);
+
+    const { data } = prisma.rule.create.mock.calls[0][0];
+    expect(data).toMatchObject({
+      emailAccountId: "ea_1",
+      systemType: SystemType.TO_REPLY,
+      enabled: false,
+    });
+    expect(data).not.toHaveProperty("actions");
+    expect(prisma.action.create).not.toHaveBeenCalled();
+  });
+
   it("reports a rule of the user's own that already has the To Reply name", async () => {
     mockAccount();
     prisma.rule.findUnique.mockResolvedValue(null);

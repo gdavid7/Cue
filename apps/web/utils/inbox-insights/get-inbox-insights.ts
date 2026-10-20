@@ -24,6 +24,7 @@ import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import { canWriteRequestedReplies } from "@/utils/rule/draft-replies-enabled";
+import { getReadySuggestionMessageIds } from "@/utils/reply-tracker/ready-suggestions";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
@@ -56,8 +57,12 @@ export type InboxInsightExtraction = {
 export type ThreadInsightData = {
   insight: EmailInsight | null;
   meeting: ThreadMeeting | null;
-  /** The evidence-checked reply for the latest message, once Cue has tried one. */
-  reply: "ready" | "needs-info" | null;
+  /**
+   * The reply for the latest message: "drafted" when Cue wrote one ahead of
+   * time, waiting in Cue; otherwise the evidence-checked one this browser
+   * kept, once Cue has tried one.
+   */
+  reply: "drafted" | "ready" | "needs-info" | null;
 };
 
 /**
@@ -92,6 +97,8 @@ export async function getInboxInsights({
   insights: Record<string, InboxInsightExtraction>;
   events: InsightEvent[];
   draftRepliesEnabled: boolean;
+  /** Of the items' messages, those with a reply Cue wrote waiting in Cue. */
+  draftedMessageIds: string[];
 }> {
   const knownIds = new Set(known);
   const missing = items
@@ -126,6 +133,14 @@ export async function getInboxInsights({
     needsEvents ? upcomingEvents({ emailAccountId, now, logger }) : [],
     getSuggestedReplySettings(emailAccountId),
   ]);
+  // Read on every request, not only for new emails: a reply Cue writes
+  // after the row first loaded shows the next time the rows are asked for.
+  const drafted = await getReadySuggestionMessageIds({
+    emailAccountId,
+    messageIds: items.map((item) => item.messageId),
+    draftReplies: settings.draftReplies,
+    now,
+  });
 
   return {
     insights: Object.fromEntries(
@@ -138,6 +153,7 @@ export async function getInboxInsights({
     // A suggestion this browser kept shows as "Draft ready" only while
     // drafting is on.
     draftRepliesEnabled: canWriteRequestedReplies(settings.draftReplies),
+    draftedMessageIds: [...drafted],
   };
 }
 

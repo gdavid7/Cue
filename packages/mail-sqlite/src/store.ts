@@ -2834,6 +2834,17 @@ async function clearStaleBootstrapScopeMembership(
 async function applyChange(tx: SqlTransaction, change: ProviderChange) {
   if (change.kind === "message_patch") {
     const current = await loadConfirmed(tx, change.key);
+    // Any provider read made before a change landed, such as a star whose
+    // result already recorded the provider's newer copy, would undo it until
+    // the next sync.
+    if (
+      current?.version &&
+      change.reference.version &&
+      compareProviderVersions(change.reference.version, current.version) ===
+        "older"
+    ) {
+      return;
+    }
     const base: MessageMetadata = current ?? {
       subject: "",
       preview: "",

@@ -372,6 +372,36 @@ describe("getHomeData", () => {
     }
   });
 
+  it("marks a conversation whose reply Cue already wrote", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      webLookupEnabled: false,
+      user: { aiApiKey: null, premium: null },
+      rules: [{ enabled: true, actions: [{ type: "DRAFT_EMAIL" }] }],
+    } as never);
+    prisma.executedAction.findMany.mockImplementation((async (args: {
+      where: { executedRule: { messageId?: { in: string[] } } };
+    }) =>
+      args.where.executedRule.messageId
+        ? [{ executedRule: { messageId: "msg1" } }]
+        : []) as never);
+    const provider = mockProvider({
+      NEEDS_REPLY: [
+        thread("sarah", {
+          from: "Sarah Chen <sarah@acme.com>",
+          subject: "Renewal",
+          labels: ["INBOX", "Label_To Reply"],
+        }),
+      ],
+    });
+
+    const home = await run(provider);
+
+    expect(home.needsYou[0]).toMatchObject({
+      threadId: "sarah",
+      cueDrafted: true,
+    });
+  });
+
   it("lists pending AI drafts as work in progress", async () => {
     prisma.executedAction.findMany.mockResolvedValue([
       {

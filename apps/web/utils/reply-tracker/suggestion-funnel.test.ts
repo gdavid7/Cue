@@ -43,7 +43,7 @@ describe("getReplySuggestionFunnel", () => {
 
     const funnel = await getReplySuggestionFunnel(NOW);
 
-    expect(funnel.windows).toEqual([
+    expect(funnel.windows).toMatchObject([
       {
         days: 7,
         counts: {
@@ -70,6 +70,32 @@ describe("getReplySuggestionFunnel", () => {
       },
     ]);
     expect(funnel.truncated).toBe(false);
+  });
+
+  it("tells pre-drafts from the replies rules wrote", async () => {
+    prisma.executedAction.findMany.mockResolvedValue([
+      row({ createdAt: daysAgo(1), shown: true, draftStatus: "PENDING" }),
+      row({
+        createdAt: daysAgo(1),
+        shown: true,
+        opened: true,
+        draftStatus: "LIKELY_SENT",
+        sentSimilarity: 1,
+        predrafted: true,
+      }),
+      row({ createdAt: daysAgo(2), draftStatus: "PENDING", predrafted: true }),
+    ] as never);
+
+    const [week] = (await getReplySuggestionFunnel(NOW)).windows;
+
+    expect(week?.counts.generated).toBe(3);
+    expect(week?.bySource.rule).toMatchObject({ generated: 1, shown: 1 });
+    expect(week?.bySource.predraft).toMatchObject({
+      generated: 2,
+      shown: 1,
+      opened: 1,
+      sent: 1,
+    });
   });
 
   // Rule replies from before suggestions were mailbox drafts, and runs whose
@@ -122,6 +148,7 @@ function row({
   draftStatus,
   sentSimilarity,
   editedDraftSimilarity,
+  predrafted = false,
 }: {
   createdAt: Date;
   shown?: boolean;
@@ -129,12 +156,14 @@ function row({
   draftStatus: string;
   sentSimilarity?: number;
   editedDraftSimilarity?: number;
+  predrafted?: boolean;
 }) {
   return {
     createdAt,
     draftStatus,
     replySuggestionShownAt: shown ? createdAt : null,
     replySuggestionOpenedAt: opened ? createdAt : null,
+    replySuggestionPredrafted: predrafted,
     draftSendLog:
       sentSimilarity === undefined ? null : { similarityScore: sentSimilarity },
     suggestedReplyDraft:

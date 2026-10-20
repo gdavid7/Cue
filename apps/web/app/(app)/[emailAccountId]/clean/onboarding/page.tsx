@@ -10,9 +10,14 @@ import { getUnhandledCount } from "@/utils/assess";
 import { CleanStep } from "@/app/(app)/[emailAccountId]/clean/types";
 import { CleanAction } from "@/generated/prisma/enums";
 import { createEmailProvider } from "@/utils/email/provider";
+import { runWithGmailQuota } from "@/utils/gmail/quota";
 import { checkUserOwnsEmailAccount } from "@/utils/email-account";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
+
+// The page waits on the count, so it defers after a few seconds of Gmail
+// quota rather than holding the page.
+const CLEAN_COUNT_WAIT_MS = 5000;
 
 export default async function CleanPage(props: {
   params: Promise<{ emailAccountId: string }>;
@@ -49,7 +54,15 @@ export default async function CleanPage(props: {
     provider: emailAccount.account.provider,
     logger: createScopedLogger("clean-onboarding").with({ emailAccountId }),
   });
-  const { unhandledCount } = await getUnhandledCount(emailProvider);
+  // The page someone opened waits on this count (D-086).
+  const { unhandledCount } = await runWithGmailQuota(
+    {
+      caller: "clean/onboarding",
+      priority: "interactive",
+      maxTotalWaitMs: CLEAN_COUNT_WAIT_MS,
+    },
+    () => getUnhandledCount(emailProvider),
+  );
 
   const step = Number.parseInt(searchParams.step || "") || CleanStep.INTRO;
 

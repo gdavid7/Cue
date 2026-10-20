@@ -15,6 +15,7 @@ import {
   CONVERSATION_STATUS_TYPES,
   isConversationStatusType,
 } from "@/utils/reply-tracker/conversation-status-config";
+import { replyTrackingRuleData } from "@/utils/reply-tracker/initial-rules";
 import { getRuleConfig } from "@/utils/rule/consts";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
 import {
@@ -46,10 +47,12 @@ const CUE_TABS = [
  * is on. The opt-in "Needs reply" and "Reading" tabs, and the reading rules
  * behind them, only come with `addTabs`.
  *
- * Only missing rules are created, with no actions: nothing is labelled,
- * archived, moved or drafted in the mailbox. Rules the account already has are
- * never changed, so one the person turned off stays off, and a rule of their
- * own that already uses a system rule's name is left alone.
+ * Only missing rules are created, and nothing is labelled, archived or moved
+ * in the mailbox. To Reply comes with its draft, as in a new mailbox, so "Auto
+ * draft replies" is saved as on; its suggestions stay in Cue until the person
+ * edits one. Rules the account already has are never
+ * changed, so one the person turned off stays off, and a rule of their own
+ * that already uses a system rule's name is left alone.
  */
 export async function setUpCueSorting({
   emailAccountId,
@@ -112,9 +115,19 @@ export async function setUpCueSorting({
           enabled: true,
         })),
         skipDuplicates: true,
-        select: { id: true },
+        select: { id: true, systemType: true },
       })
     : [];
+  const draftActions = created.flatMap((rule) =>
+    rule.systemType
+      ? (replyTrackingRuleData(rule.systemType).actions?.create ?? []).map(
+          (action) => ({ ...action, ruleId: rule.id, emailAccountId }),
+        )
+      : [],
+  );
+  if (draftActions.length) {
+    await prisma.action.createMany({ data: draftActions });
+  }
 
   if (addTabs) {
     for (const tab of CUE_TABS) {
@@ -143,8 +156,8 @@ export async function setUpCueSorting({
   // empty until then. Sorting the latest inbox mail with just the new rules
   // fills them now, without re-running the person's other rules on old mail.
   // A mailbox Cue has never sorted also gets the reply tracking rules it was
-  // created with, as long as they are on and have no actions, so the sort
-  // changes nothing in the mailbox.
+  // created with, as long as they are on and only draft (a suggestion kept in
+  // Cue), so the sort changes nothing in the mailbox.
   const neverSorted = !(await prisma.executedRule.findFirst({
     where: { emailAccountId, status: { not: ExecutedRuleStatus.ERROR } },
     select: { id: true },
@@ -156,7 +169,9 @@ export async function setUpCueSorting({
             (rule) =>
               isConversationStatusType(rule.systemType) &&
               rule.enabled &&
-              !rule.actions.length,
+              rule.actions.every(
+                (action) => action.type === ActionType.DRAFT_EMAIL,
+              ),
           )
           .map((rule) => rule.id)
       : []),

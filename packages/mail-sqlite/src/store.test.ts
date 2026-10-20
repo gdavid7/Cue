@@ -4008,6 +4008,83 @@ describe("per-target outcomes, dependencies, pagination, and stale hydration", (
     await store.close();
   });
 
+  it.each([
+    { name: "an older version", stored: "20", incoming: "10", applied: false },
+    { name: "the same version", stored: "20", incoming: "20", applied: true },
+    { name: "a newer version", stored: "20", incoming: "30", applied: true },
+    { name: "no stored version", stored: null, incoming: "10", applied: true },
+    {
+      name: "no incoming version",
+      stored: "20",
+      incoming: null,
+      applied: true,
+    },
+    {
+      name: "opaque Microsoft versions",
+      stored: 'W/"b"',
+      incoming: 'W/"a"',
+      applied: true,
+      provider: "microsoft" as const,
+    },
+    {
+      name: "an older version above 2^53",
+      stored: "9007199254740994",
+      incoming: "9007199254740993",
+      applied: false,
+    },
+  ])("applies a later provider read with $name: $applied", async ({
+    stored,
+    incoming,
+    applied,
+    provider = "google" as "google" | "microsoft",
+  }) => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider,
+      generation: "g1",
+    });
+    const starred = versionedPatch(provider, stored);
+    await applyPrimaryPage(store, null, "1", [
+      { ...starred, fields: { ...starred.fields, starred: true } },
+    ]);
+    await applyPrimaryPage(store, "1", "2", [
+      versionedPatch(provider, incoming),
+    ]);
+
+    const conversation = await store.readConversation(
+      { accountId: "acc-1", conversationId: "c1" },
+      { after: null, pageSize: 10 },
+    );
+    expect(conversation.view.messages[0]?.metadata.starred).toBe(!applied);
+    await store.close();
+  });
+
+  it("still applies a deletion after skipping an older copy of the message", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    await applyPrimaryPage(store, null, "1", [versionedPatch("google", "20")]);
+    await applyPrimaryPage(store, "1", "2", [
+      versionedPatch("google", "10"),
+      {
+        kind: "message_deleted",
+        key: { accountId: "acc-1", messageId: "m1" },
+        evidence: "deleted",
+      },
+    ]);
+
+    const conversation = await store.readConversation(
+      { accountId: "acc-1", conversationId: "c1" },
+      { after: null, pageSize: 10 },
+    );
+    expect(conversation.view.messages).toHaveLength(0);
+    await store.close();
+  });
+
   it("rejects hydration when an opaque provider version differs from current metadata", async () => {
     const store = await createSqliteMailStore(createNodeSqliteDriver());
     await store.ensureAccount({
@@ -5193,4 +5270,36 @@ function fixtureSource(messages: Map<string, ProviderChange>): MailboxSource {
       return { status: "paused", retryAfterMs: 0, reason: "unavailable" };
     },
   };
+}
+
+function versionedPatch(
+  provider: "google" | "microsoft",
+  version: string | null,
+): Extract<ProviderChange, { kind: "message_patch" }> {
+  const patch = messagePatch("m1", "c1", 1000, ["inbox"], { provider });
+  return { ...patch, reference: { ...patch.reference, version } };
+}
+
+async function applyPrimaryPage(
+  store: MailStore,
+  fromCheckpoint: string | null,
+  toCheckpoint: string,
+  changes: ProviderChange[],
+) {
+  await store.applySyncPage({
+    ownerId: "owner",
+    page: {
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: `page-${toCheckpoint}`,
+      from: {
+        streamId: "primary",
+        generation: "g1",
+        checkpoint: fromCheckpoint,
+      },
+      to: { streamId: "primary", generation: "g1", checkpoint: toCheckpoint },
+      changes,
+      requiredHydration: [],
+      roundComplete: true,
+    },
+  });
 }

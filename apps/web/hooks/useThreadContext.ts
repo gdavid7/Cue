@@ -44,6 +44,7 @@ export function useThreadContext({
       revalidateOnMount: !kept,
       revalidateIfStale: !kept,
       revalidateOnFocus: false,
+      errorRetryCount: 2,
       onSuccess: (data) => {
         if (threadId && emailAccountId)
           contexts.set(emailAccountId, threadId, shown(data));

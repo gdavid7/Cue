@@ -11,6 +11,7 @@ import { getFilableAttachments } from "@/utils/drive/filing-engine";
 import { processAttachmentsForFiling } from "@/utils/drive/process-filing-attachments";
 import { handleOutboundMessage } from "@/utils/reply-tracker/handle-outbound";
 import { cleanupThreadAIDrafts } from "@/utils/reply-tracker/draft-tracking";
+import { predraftReply } from "@/utils/reply-tracker/predraft-reply";
 import { clearFollowUpLabel } from "@/utils/follow-up/labels";
 import { NewsletterStatus } from "@/generated/prisma/enums";
 import type { EmailAccount } from "@/generated/prisma/client";
@@ -266,6 +267,24 @@ export async function processHistoryItem(
           logger,
         });
       }
+
+      // A reply ready before the user opens the mail, written after the
+      // response so it never holds up processing.
+      after(() =>
+        runWithBackgroundLoggerFlush({
+          logger,
+          task: async () => {
+            await predraftReply({
+              emailAccount,
+              message: parsedMessage,
+              results,
+              provider,
+              logger,
+            });
+          },
+          extra: { operation: "predraft-reply" },
+        }),
+      );
     }
 
     scheduleWebPush();

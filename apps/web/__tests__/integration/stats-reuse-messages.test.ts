@@ -14,6 +14,7 @@ import { describe, test, expect, beforeAll, afterAll, vi } from "vitest";
 import { createGmailTestHarness, type GmailTestHarness } from "./helpers";
 import type { GmailProvider } from "@/utils/email/google";
 import { saveBatch } from "@/utils/actions/stats-loading";
+import { runWithGmailQuota } from "@/utils/gmail/quota";
 import { createTestLogger } from "@/__tests__/helpers";
 
 // Mock Prisma — saveBatch writes to emailMessage table
@@ -138,22 +139,30 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
       expect(rawCall).toContain("true");
     });
 
-    test("fetches the page's messages once, with no second batch", async () => {
+    test("fetches each of the page's messages once, with no second read", async () => {
       fetchSpy.mockClear();
 
       const logger = createTestLogger();
 
-      await saveBatch({
-        emailAccountId: "test-account-id",
-        emailProvider: provider,
-        logger,
-        nextPageToken: undefined,
-        before: undefined,
-        after: undefined,
-      });
+      // As every caller of the stats load runs it (loadEmailStats, the
+      // stats/load route, bulk categorization): at background priority, whose
+      // requests carry at most 125 units, so the page's three full reads
+      // (60 units each) go as two batches.
+      await runWithGmailQuota(
+        { caller: "loadEmailStats", priority: "background" },
+        () =>
+          saveBatch({
+            emailAccountId: "test-account-id",
+            emailProvider: provider,
+            logger,
+            nextPageToken: undefined,
+            before: undefined,
+            after: undefined,
+          }),
+      );
 
-      // Pagination hydrates its listed IDs in one batch request (up to 100
-      // per batch); saveBatch must reuse those messages, not fetch them again.
+      // Pagination hydrates its listed IDs in batch requests; saveBatch must
+      // reuse those messages, not fetch any of them again.
       // Extract URL string from any input type (string, URL, or Request)
       const batchCalls = fetchSpy.mock.calls.filter((call) => {
         const input = call[0];
@@ -167,7 +176,16 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
                 : "";
         return url.includes("/batch/gmail/");
       });
-      expect(batchCalls).toHaveLength(1);
+      const fetchedIds = batchCalls.flatMap((call) =>
+        [
+          ...String((call[1] as RequestInit | undefined)?.body ?? "").matchAll(
+            /GET \/gmail\/v1\/users\/me\/messages\/([^\s?]+)/g,
+          ),
+        ].map((match) => match[1]),
+      );
+      expect(fetchedIds.toSorted()).toEqual(["msg_1", "msg_2", "msg_3"]);
+      // Two full reads per background request: no more batches than that needs.
+      expect(batchCalls).toHaveLength(2);
     });
   },
 );

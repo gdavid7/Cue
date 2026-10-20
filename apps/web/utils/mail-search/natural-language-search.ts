@@ -1,7 +1,12 @@
 import {
   parseSearchQuery,
+  type SearchComparator,
   type SearchNode,
 } from "@/utils/mail-search/parse-search-query";
+import {
+  compileSearchNode,
+  type SearchQueryContext,
+} from "@/utils/mail-search/search-query-predicate";
 
 export const MAX_SEARCH_QUERY_LENGTH = 300;
 export const MAX_GENERATED_SEARCHES = 3;
@@ -13,23 +18,43 @@ const MIN_QUESTION_WORDS = 2;
 const QUESTION_MARK = /[?？؟]\s*$|¿/;
 const SEARCH_SYNTAX_CHARACTERS = /["(){}]/;
 
-// What widening drops: conditions that narrow a search beyond who it's
-// with and what it says.
-const NARROWING_OPERATORS = new Set([
+const DAY_MS = 24 * 60 * 60 * 1000;
+// A widened window grows by its own length on each side, and at least this.
+const MIN_DATE_PADDING_MS = 7 * DAY_MS;
+// The searches one tier may run; the caller reads them together, in one query.
+const MAX_TIER_SEARCHES = 6;
+
+const PEOPLE_OPERATORS = new Set(["from", "to", "cc", "bcc"]);
+const DATE_OPERATORS = new Set([
   "after",
   "before",
-  "older_than",
+  "newer",
+  "older",
   "newer_than",
+  "older_than",
   "received",
-  "has",
-  "hasattachment",
-  "hasattachments",
-  "label",
-  "category",
-  "is",
-  "in",
 ]);
-const PEOPLE_OPERATORS = new Set(["from", "to"]);
+const WORD_OPERATORS = new Set(["subject", "body"]);
+
+/**
+ * What a part of a search narrows by: who the mail is with, one thing it
+ * mentions (a word and its alternatives), when it arrived, or a condition
+ * such as an attachment, a label or a folder.
+ */
+export type SearchClauseRole = "person" | "words" | "date" | "condition";
+export type SearchClause = { node: SearchNode; role: SearchClauseRole };
+
+/**
+ * The tiers Cue widens a search through when it finds too little, in order:
+ * the search less one of its word groups or conditions, then only who the
+ * mail is with and when it arrived, then the same search over a wider window.
+ */
+export const WIDENING_TIERS = [
+  "fewer_words",
+  "sender_and_dates",
+  "wider_dates",
+] as const;
+export type WideningTier = (typeof WIDENING_TIERS)[number];
 
 /**
  * Whether a committed search reads as a sentence rather than keywords or
@@ -49,21 +74,57 @@ export function looksLikeNaturalLanguage(query: string): boolean {
 }
 
 /**
- * One wider version of a search that found too little: first drop the
- * dates, attachment, label and folder conditions; if it had none, accept any
- * of its words instead of all of them, or, beside a sender, just the sender.
- * Null when the search can't get wider.
+ * The wider searches, by tier, for a search that found too little.
+ * "fewer_words" is every way of leaving out one word group or condition, so
+ * no part's importance has to be guessed; the ranking puts mail matching
+ * more of the search first. A tier is empty when all it could search is
+ * dates and conditions, or when it would repeat the search.
  */
-export function widenSearch(query: string): string | null {
+export function widenSearchByTier(
+  query: string,
+  context: Pick<SearchQueryContext, "now" | "timeZone" | "provider">,
+): Record<WideningTier, string[]> {
+  const clauses = searchClauses(query);
+  const original = formatClauses(clauses);
+  const fewerWords = clauses.flatMap((clause, index) =>
+    clause.role === "words" || clause.role === "condition"
+      ? [clauses.filter((_, other) => other !== index)]
+      : [],
+  );
+  const senderAndDates = clauses.some((clause) => clause.role === "person")
+    ? [
+        clauses.filter(
+          (clause) => clause.role === "person" || clause.role === "date",
+        ),
+      ]
+    : [];
+  const widerDates = widenDates(clauses, context);
+  const searches = (variants: SearchClause[][]) =>
+    [
+      ...new Set(
+        variants
+          .filter((variant) =>
+            variant.some(
+              (clause) => clause.role === "words" || clause.role === "person",
+            ),
+          )
+          .map(formatClauses),
+      ),
+    ]
+      .filter((search) => search !== original)
+      .slice(0, MAX_TIER_SEARCHES);
+  return {
+    fewer_words: searches(fewerWords),
+    sender_and_dates: searches(senderAndDates),
+    wider_dates: searches(widerDates ? [widerDates] : []),
+  };
+}
+
+/** A search's top-level parts, each with what it narrows by. */
+export function searchClauses(query: string): SearchClause[] {
   const ast = parseSearchQuery(query.trim());
-  const original = formatSearchNode(ast);
-  const stripped = stripNarrowing(ast);
-  if (stripped) {
-    const formatted = formatSearchNode(stripped);
-    if (formatted !== original && hasPositiveTerm(stripped)) return formatted;
-  }
-  const broader = broadenTerms(stripped ?? ast);
-  return broader ? formatSearchNode(broader) : null;
+  const nodes = ast.kind === "and" ? ast.children : [ast];
+  return nodes.map((node) => ({ node, role: clauseRole(node) }));
 }
 
 /** A search tree as query text, in the grammar parseSearchQuery reads. */
@@ -100,62 +161,108 @@ export function formatSearchNode(node: SearchNode): string {
   }
 }
 
-function stripNarrowing(node: SearchNode): SearchNode | null {
+function clauseRole(node: SearchNode): SearchClauseRole {
   switch (node.kind) {
     case "operator":
-      if (NARROWING_OPERATORS.has(node.name)) return null;
-      if (node.name === "subject" || node.name === "body")
-        return { kind: "text", value: node.value, exact: node.quoted };
-      return node;
-    case "not":
-      return null;
-    case "and":
-    case "or": {
-      const children = node.children.flatMap((child) => {
-        const stripped = stripNarrowing(child);
-        return stripped ? [stripped] : [];
-      });
-      if (!children.length) return null;
-      if (children.length === 1) return children[0];
-      return { kind: node.kind, children };
-    }
-    default:
-      return node;
-  }
-}
-
-function broadenTerms(node: SearchNode): SearchNode | null {
-  if (node.kind !== "and") return null;
-  const isPerson = (child: SearchNode) =>
-    child.kind === "operator" && PEOPLE_OPERATORS.has(child.name);
-  // A group of senders is people too, not words to widen into.
-  const people = node.children.filter(
-    (child) =>
-      isPerson(child) ||
-      (child.kind === "or" && child.children.every(isPerson)),
-  );
-  const terms = node.children.filter((child) => !people.includes(child));
-  if (people.length && terms.length)
-    return people.length === 1 ? people[0] : { kind: "and", children: people };
-  if (terms.length < 2) return null;
-  return {
-    kind: "or",
-    children: terms.flatMap((term) =>
-      term.kind === "or" ? term.children : [term],
-    ),
-  };
-}
-
-function hasPositiveTerm(node: SearchNode): boolean {
-  switch (node.kind) {
-    case "not":
-      return false;
-    case "and":
+      if (PEOPLE_OPERATORS.has(node.name)) return "person";
+      if (DATE_OPERATORS.has(node.name)) return "date";
+      if (WORD_OPERATORS.has(node.name)) return "words";
+      return "condition";
     case "or":
-      return node.children.some(hasPositiveTerm);
+      // A group of senders is people too, not words.
+      return node.children.every(
+        (child) =>
+          child.kind === "operator" && PEOPLE_OPERATORS.has(child.name),
+      )
+        ? "person"
+        : "words";
+    case "not":
+      return "condition";
     default:
-      return true;
+      return "words";
   }
+}
+
+/**
+ * The search with its dates replaced by a window grown by its own length on
+ * each side, and ending no later than now. Null when it has no dates.
+ */
+function widenDates(
+  clauses: SearchClause[],
+  context: Pick<SearchQueryContext, "now" | "timeZone" | "provider">,
+): SearchClause[] | null {
+  let afterMs: number | null = null;
+  let beforeMs: number | null = null;
+  for (const clause of clauses) {
+    if (clause.role !== "date") continue;
+    const range = compileSearchNode(clause.node, context);
+    if (range.kind !== "received") continue;
+    if (range.afterMs !== null)
+      afterMs = Math.max(afterMs ?? range.afterMs, range.afterMs);
+    if (range.beforeMs !== null)
+      beforeMs = Math.min(beforeMs ?? range.beforeMs, range.beforeMs);
+  }
+  if (afterMs === null && beforeMs === null) return null;
+  const nowMs = context.now.getTime();
+  const span = afterMs === null ? 0 : (beforeMs ?? nowMs) - afterMs;
+  const padding = Math.max(span, MIN_DATE_PADDING_MS);
+  const widerAfter = afterMs === null ? null : afterMs - padding;
+  const widerBefore =
+    beforeMs === null || beforeMs + padding >= nowMs
+      ? null
+      : beforeMs + padding;
+  return [
+    ...clauses.filter((clause) => clause.role !== "date"),
+    ...dateNodes(widerAfter, widerBefore, context).map((node) => ({
+      node,
+      role: "date" as const,
+    })),
+  ];
+}
+
+/** A window in the syntax Cue's own searches for the provider use. */
+function dateNodes(
+  afterMs: number | null,
+  beforeMs: number | null,
+  { timeZone, provider }: Pick<SearchQueryContext, "timeZone" | "provider">,
+): SearchNode[] {
+  const node = (
+    name: string,
+    comparator: SearchComparator,
+    value: string,
+  ): SearchNode => ({
+    kind: "operator",
+    name,
+    comparator,
+    value,
+    quoted: false,
+  });
+  const nodes: SearchNode[] = [];
+  if (provider === "microsoft") {
+    const day = (ms: number) =>
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: timeZone ?? "UTC",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(ms);
+    if (afterMs !== null) nodes.push(node("received", ">=", day(afterMs)));
+    if (beforeMs !== null) nodes.push(node("received", "<", day(beforeMs)));
+    return nodes;
+  }
+  const seconds = (ms: number) => String(Math.floor(ms / 1000));
+  if (afterMs !== null) nodes.push(node("after", ":", seconds(afterMs)));
+  if (beforeMs !== null) nodes.push(node("before", ":", seconds(beforeMs)));
+  return nodes;
+}
+
+function formatClauses(clauses: SearchClause[]): string {
+  if (!clauses.length) return "";
+  return formatSearchNode(
+    clauses.length === 1
+      ? clauses[0].node
+      : { kind: "and", children: clauses.map((clause) => clause.node) },
+  );
 }
 
 function usesSearchSyntax(node: SearchNode): boolean {
