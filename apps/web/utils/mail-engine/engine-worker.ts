@@ -13,6 +13,7 @@ import {
   type WorkerResponse,
 } from "./worker-protocol";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import { browserStoragePressure } from "./storage-pressure";
 import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
@@ -34,8 +35,9 @@ const runtime = createHostRuntime({
 let preopened:
   | {
       maxPendingOperations: number | undefined;
-      store: Promise<MailStore | null>;
+      opened: Promise<{ store: MailStore } | { error: unknown }>;
       nameOwnedAccounts: (accountIds: string[]) => void;
+      abandon: () => void;
     }
   | undefined;
 let startReceived = false;
@@ -138,34 +140,47 @@ function openStore(input: {
 // for; a rebuild waits for those, so it starts only once the engine does.
 function preopenStore(message: WorkerPreopenRequest) {
   let nameOwnedAccounts: (accountIds: string[]) => void = () => undefined;
-  const ownedAccountIds = new Promise<string[]>((resolve) => {
+  let abandon: () => void = () => undefined;
+  const ownedAccountIds = new Promise<string[]>((resolve, reject) => {
     nameOwnedAccounts = resolve;
+    abandon = () => reject(new Error("early mailbox open abandoned"));
   });
+  // Unawaited by a mailbox with no work to carry.
+  ownedAccountIds.catch(() => undefined);
   preopened = {
     maxPendingOperations: message.maxPendingOperations,
-    store: openStore({
+    opened: openStore({
       maxPendingOperations: message.maxPendingOperations,
       ownedAccountIds,
-    }).catch(() => null),
+    }).then(
+      (store) => ({ store }),
+      (error: unknown) => ({ error }),
+    ),
     nameOwnedAccounts,
+    abandon,
   };
 }
 
-// A start that wants another mailbox than the one opened early, or whose
-// early open failed, opens its own.
+// A start that wants another mailbox than the one opened early opens its
+// own, and the early open, never told the accounts, carries no work into a
+// mailbox the start will not use. One whose early open met files a closing
+// tab still held opens again; any other failure is the start's.
 async function takePreopenedStore(input: BrowserEngineStart) {
   const early = preopened;
   preopened = undefined;
   if (!early) return null;
-  early.nameOwnedAccounts(input.ownedAccountIds);
-  const store = await early.store;
   if (
-    store &&
-    input.persist !== false &&
-    early.maxPendingOperations === input.maxPendingOperations
+    input.persist === false ||
+    early.maxPendingOperations !== input.maxPendingOperations
   ) {
-    return store;
+    early.abandon();
+    const opened = await early.opened;
+    if ("store" in opened) await opened.store.close().catch(() => undefined);
+    return null;
   }
-  await store?.close().catch(() => undefined);
-  return null;
+  early.nameOwnedAccounts(input.ownedAccountIds);
+  const opened = await early.opened;
+  if ("store" in opened) return opened.store;
+  if (classifyMailboxError(opened.error) === "busy") return null;
+  throw opened.error;
 }

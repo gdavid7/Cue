@@ -241,6 +241,39 @@ describe("openMailStoreWithRecovery", () => {
     await store.close();
   });
 
+  it("closes a mailbox opened early when its host abandons it before naming the accounts", async () => {
+    const stash = memoryStash();
+    await stash.write(await pendingWorkFrom(await seededMailbox()));
+    const path = await mailboxPath();
+    const closed = vi.fn();
+    let abandon: (error: Error) => void = () => undefined;
+
+    const opening = openMailStoreWithRecovery({
+      open: async () => {
+        const driver = createNodeSqliteDriver(path);
+        const close = driver.close.bind(driver);
+        return Object.assign(driver, {
+          close: async () => {
+            closed();
+            await close();
+          },
+        });
+      },
+      wipe: async () => undefined,
+      stash,
+      ownedAccountIds: new Promise((_, reject) => {
+        abandon = reject;
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    abandon(new Error("abandoned"));
+
+    await expect(opening).rejects.toThrow("abandoned");
+    expect(closed).toHaveBeenCalledOnce();
+    // Nothing was carried, so the next open still has the work.
+    expect(await stash.read()).not.toBeNull();
+  });
+
   it("lets go of a mailbox held elsewhere at once, before the signed-in accounts are known", async () => {
     // A mailbox opened early keeps its files until it settles, so a held one
     // must not wait for an engine start that may never come.

@@ -109,7 +109,8 @@ export async function openMailStoreWithRecovery(input: {
    * was still running, so work for any other account is dropped, never
    * admitted into this user's mailbox. A host can open the mailbox before it
    * knows them: they are awaited only when there is work to carry, before
-   * any of it is read or `onRebuild` runs.
+   * any of it is read or `onRebuild` runs. A rejection abandons the open and
+   * closes the mailbox.
    */
   ownedAccountIds: readonly string[] | Promise<readonly string[]>;
   options?: SqliteMailStoreOptions;
@@ -137,8 +138,19 @@ export async function openMailStoreWithRecovery(input: {
     await driver?.close().catch(() => undefined);
     throw failure;
   }
+  const readOwnedAccountIds = async () => {
+    try {
+      return await input.ownedAccountIds;
+    } catch (error) {
+      // The host gave up on this open before naming them.
+      await (opened ? opened.store.close() : driver?.close())?.catch(
+        () => undefined,
+      );
+      throw error;
+    }
+  };
   let carried =
-    stashed && ownedWork(stashed, await input.ownedAccountIds, drops);
+    stashed && ownedWork(stashed, await readOwnedAccountIds(), drops);
   if (!opened) {
     // A stash that could not be read may hold earlier work that the write
     // below would replace.
@@ -146,7 +158,7 @@ export async function openMailStoreWithRecovery(input: {
       await driver?.close().catch(() => undefined);
       throw stashReadError ?? new Error("recovery stash could not be read");
     }
-    const ownedAccountIds = await input.ownedAccountIds;
+    const ownedAccountIds = await readOwnedAccountIds();
     input.onRebuild?.();
     if (driver) {
       const damaged = driver;
