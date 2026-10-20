@@ -47,7 +47,9 @@ export type InboxPreview = ThreadsListResponse & {
  * The inbox's newest conversations, as the mail list shows them, for a
  * browser that has no local mailbox for the account yet, and the messages
  * they were read from for its mail engine, so the rows can be acted on as
- * soon as the engine starts rather than after its first sync. Someone is
+ * soon as the engine starts rather than after its first sync. With `catchUp`,
+ * for a local mailbox that fell behind, it reads the inbox's newest twenty
+ * messages and hands over all of them, however old. Someone is
  * waiting on it, so it runs at interactive Gmail priority. Resolves null
  * rather than failing or holding up the page.
  */

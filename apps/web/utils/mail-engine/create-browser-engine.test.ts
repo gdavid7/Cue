@@ -96,6 +96,19 @@ describe("createBrowserMailEngine", () => {
     expect(sqlite.createStore).not.toHaveBeenCalled();
   });
 
+  it("warns, without naming the mailbox, when a sign-out wipe cannot finish", async () => {
+    wipe.isPending.mockReturnValue(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(startEngine()).rejects.toThrow(
+      "The signed-out mailbox could not be wiped",
+    );
+
+    expect(warn).toHaveBeenCalledOnce();
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("account");
+    warn.mockRestore();
+  });
+
   it("starts in a fresh worker when the early one failed to load", async () => {
     prewarmMailEngineWorker();
     // Its script fails before the engine starts and listens for errors.

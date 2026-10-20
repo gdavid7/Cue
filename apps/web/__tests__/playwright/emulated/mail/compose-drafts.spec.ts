@@ -94,7 +94,11 @@ test("saves a closed new message with attachments in Drafts and discards it from
     )
     .toHaveLength(0);
   await page.reload();
-  await expect(conversations).toBeVisible();
+  // Drafts is empty now, so it settles on its empty message rather than on a
+  // list; until the account's first sync ends it is a loading placeholder.
+  await expect(
+    conversations.or(page.getByText("Nothing in Drafts.")),
+  ).toBeVisible();
   // No sync first: the discard removed the draft from the local mailbox, so
   // the reloaded page must not show it while sync is still catching up.
   await expect(
