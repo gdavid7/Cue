@@ -1,6 +1,7 @@
 "use server";
 
 import { headers } from "next/headers";
+import { after } from "next/server";
 import { env } from "@/env";
 import prisma from "@/utils/prisma";
 import {
@@ -18,6 +19,7 @@ import {
   recordAccessRequest,
 } from "@/utils/access/policy";
 import { ACCESS_APPROVAL_EMAIL_DELIVERY } from "@/utils/access/config";
+import { notifyAdminsOfAccessRequest } from "@/utils/access/notify-admins";
 import { getApprovalEmail } from "@/utils/access/approval-email";
 import { createEmailProvider } from "@/utils/email/provider";
 import {
@@ -67,6 +69,14 @@ export const requestAccessAction = publicActionClient
         `access_request:${request.id}`,
         ONBOARDING_ANALYTICS_EVENTS.accessRequested,
         { source: "form" },
+      );
+      const requestId = request.id;
+      after(() =>
+        notifyAdminsOfAccessRequest({
+          requestId,
+          email: normalizedEmail,
+          logger,
+        }),
       );
     }
 

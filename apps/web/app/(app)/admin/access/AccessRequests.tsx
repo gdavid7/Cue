@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import { ExternalLinkIcon } from "lucide-react";
@@ -387,6 +387,7 @@ function ApprovedDialog({
                   <ExternalLinkIcon className="ml-1.5 size-3.5" aria-hidden />
                 </a>
               </Button>
+              <GoogleTestUsersReminder />
             </li>
           )}
           <li>
@@ -490,5 +491,26 @@ function ApprovalEmailRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+/** A reminder only: nothing is stored, and it resets when the dialog closes. */
+export function GoogleTestUsersReminder() {
+  const [added, setAdded] = useState(false);
+  const id = useId();
+
+  return (
+    <div className="mt-3 flex items-start gap-2 text-sm">
+      <Checkbox
+        id={id}
+        checked={added}
+        onCheckedChange={(checked) => setAdded(checked === true)}
+        className="mt-0.5"
+      />
+      <label htmlFor={id}>
+        Added to Google test users? (required while the Google app is in Testing
+        mode)
+      </label>
+    </div>
   );
 }

@@ -9,15 +9,24 @@ import {
   requestAccessAction,
 } from "./access";
 
-const { mockAuth, mockCheckRateLimit } = vi.hoisted(() => ({
+const { mockAuth, mockCheckRateLimit, mockDeliver } = vi.hoisted(() => ({
   mockAuth: vi.fn(),
   mockCheckRateLimit: vi.fn(),
+  mockDeliver: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@sentry/nextjs", () => import("@/__tests__/mocks/sentry-nextjs.mock"));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/auth", () => ({ auth: mockAuth }));
+vi.mock("@inboxzero/transactional-email/src/delivery", () => ({
+  deliverTransactionalEmail: mockDeliver,
+}));
+vi.mock("next/server", () => ({
+  after: (callback: () => unknown) => {
+    callback();
+  },
+}));
 vi.mock("@/utils/posthog", () => ({ posthogCaptureEvent: vi.fn() }));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.7" }),
@@ -170,6 +179,57 @@ describe("requestAccessAction", () => {
     );
     expect(prisma.accessRequest.create).not.toHaveBeenCalled();
     expect(prisma.accessRequest.update).not.toHaveBeenCalled();
+  });
+
+  it("emails the admins once about a new request", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r2" } as never);
+    mockDeliver.mockResolvedValue({ messageId: "m1" });
+
+    await requestAccessAction({ email: "New@gmail.com" });
+
+    await vi.waitFor(() => expect(mockDeliver).toHaveBeenCalledTimes(1));
+    const [message, options] = mockDeliver.mock.calls[0];
+    expect(message.to).toEqual(["founder@example.com"]);
+    expect(message.subject).toBe("New Cue access request");
+    expect(message.subject).not.toContain("new@gmail.com");
+    expect(message.text).toBe(
+      [
+        "A new access request is waiting.",
+        "Requested by: new@gmail.com",
+        "Review it: https://cue.example/admin/access",
+      ].join("\n"),
+    );
+    expect(options).toEqual({ idempotencyKey: "access-request-notify:r2" });
+  });
+
+  it("does not email the admins again for a repeat request", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue({ id: "r1" } as never);
+
+    await requestAccessAction({ email: "friend@gmail.com" });
+
+    expect(mockDeliver).not.toHaveBeenCalled();
+  });
+
+  it("answers without waiting for the notification email", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r6" } as never);
+    mockDeliver.mockReturnValue(new Promise(() => {}));
+
+    const result = await requestAccessAction({ email: "slow@gmail.com" });
+
+    expect(result?.data).toEqual({ ok: true });
+  });
+
+  it("still records the request when the notification email fails", async () => {
+    prisma.accessRequest.findUnique.mockResolvedValue(null);
+    prisma.accessRequest.create.mockResolvedValue({ id: "r5" } as never);
+    mockDeliver.mockRejectedValue(new Error("resend down"));
+
+    const result = await requestAccessAction({ email: "new@gmail.com" });
+
+    expect(result?.data).toEqual({ ok: true });
+    expect(prisma.accessRequest.create).toHaveBeenCalledTimes(1);
   });
 
   it("creates a pending request for a new address", async () => {

@@ -15,7 +15,7 @@ export type TransactionalEmailMessage = {
   subject: string;
   tags?: { name: string; value: string }[];
   text: string;
-  to: string;
+  to: string | string[];
 };
 
 export type TransactionalEmailSendOptions = {
