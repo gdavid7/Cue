@@ -4036,7 +4036,7 @@ describe("per-target outcomes, dependencies, pagination, and stale hydration", (
     stored,
     incoming,
     applied,
-    provider = "google",
+    provider = "google" as "google" | "microsoft",
   }) => {
     const store = await createSqliteMailStore(createNodeSqliteDriver());
     await store.ensureAccount({
