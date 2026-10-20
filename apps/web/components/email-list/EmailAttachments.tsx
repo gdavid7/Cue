@@ -2,6 +2,7 @@
 
 import { useOpenedConversationAttachments } from "./OpenedConversationAttachments";
 import { SaveToDriveMenu } from "./SaveToDriveMenu";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,8 @@ import { useSaveDestinations } from "@/hooks/useSaveDestinations";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
 import {
-  getAttachmentPreview,
+  type AttachmentPreviewTarget,
+  getAttachmentPreviewTarget,
   isPreviewableAttachment,
   isPreviewableImageType,
 } from "@/utils/attachments/image-preview";
@@ -30,6 +32,16 @@ import {
 } from "@/utils/attachments/download";
 
 const PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
+
+// The Office renderers load only when one of those files is opened.
+const DocxAttachmentPreview = dynamic(() => import("./DocxAttachmentPreview"), {
+  ssr: false,
+  loading: PreviewSpinner,
+});
+const XlsxAttachmentPreview = dynamic(() => import("./XlsxAttachmentPreview"), {
+  ssr: false,
+  loading: PreviewSpinner,
+});
 
 export function EmailAttachments({ message }: { message: ThreadMessage }) {
   const { emailAccountId } = useAccount();
@@ -180,6 +192,7 @@ export function EmailAttachments({ message }: { message: ThreadMessage }) {
           <AttachmentPreviewDialogContent
             key={previewUrl}
             filename={previewing.filename}
+            mimeType={previewing.mimeType}
             size={previewing.size}
             url={previewUrl}
             emailAccountId={emailAccountId}
@@ -192,18 +205,20 @@ export function EmailAttachments({ message }: { message: ThreadMessage }) {
 
 function AttachmentPreviewDialogContent({
   filename,
+  mimeType,
   size,
   url,
   emailAccountId,
 }: {
   filename: string;
+  mimeType: string;
   size: number;
   url: string;
   emailAccountId: string;
 }) {
   const tooLarge = size > PREVIEW_MAX_BYTES;
   const [file, setFile] = useState<Blob>();
-  const [preview, setPreview] = useState<{ url: string; type: string }>();
+  const [preview, setPreview] = useState<AttachmentPreview>();
   const [error, setError] = useState<string | undefined>(
     tooLarge ? "This file is too large to preview." : undefined,
   );
@@ -220,15 +235,22 @@ function AttachmentPreviewDialogContent({
       maxBytes: PREVIEW_MAX_BYTES,
     })
       .then(async (blob) => {
-        const typed = await getAttachmentPreview(blob);
+        const target = await getAttachmentPreviewTarget(blob, {
+          mimeType,
+          filename,
+        });
         if (controller.signal.aborted) return;
         setFile(blob);
-        if (!typed) {
+        if (!target) {
           setError("Preview isn't available for this file.");
           return;
         }
-        objectUrl = URL.createObjectURL(typed);
-        setPreview({ url: objectUrl, type: typed.type });
+        if (target.kind !== "file") {
+          setPreview(target);
+          return;
+        }
+        objectUrl = URL.createObjectURL(target.file);
+        setPreview({ kind: "file", url: objectUrl, type: target.file.type });
       })
       .catch(() => {
         if (!controller.signal.aborted)
@@ -239,7 +261,7 @@ function AttachmentPreviewDialogContent({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [url, emailAccountId, tooLarge]);
+  }, [url, emailAccountId, tooLarge, mimeType, filename]);
 
   return (
     <DialogContent className="flex h-[90dvh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
@@ -278,12 +300,17 @@ function AttachmentPreviewBody({
   error,
 }: {
   filename: string;
-  preview?: { url: string; type: string };
+  preview?: AttachmentPreview;
   error?: string;
 }) {
   if (error) return <p className="text-muted-foreground text-sm">{error}</p>;
-  if (!preview)
-    return <Loader2 className="size-6 animate-spin text-muted-foreground" />;
+  if (!preview) return <PreviewSpinner />;
+  if (preview.kind !== "file")
+    return preview.kind === "docx" ? (
+      <DocxAttachmentPreview file={preview.file} filename={filename} />
+    ) : (
+      <XlsxAttachmentPreview file={preview.file} />
+    );
   if (preview.type === "application/pdf")
     return (
       <iframe
@@ -302,6 +329,14 @@ function AttachmentPreviewBody({
       src={preview.url}
     />
   );
+}
+
+type AttachmentPreview =
+  | { kind: "file"; url: string; type: string }
+  | Exclude<AttachmentPreviewTarget, { kind: "file" }>;
+
+function PreviewSpinner() {
+  return <Loader2 className="size-6 animate-spin text-muted-foreground" />;
 }
 
 function AttachmentImagePreview({

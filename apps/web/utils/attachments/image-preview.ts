@@ -5,6 +5,11 @@ const rasterTypes = new Set([
   "image/webp",
   "image/tiff",
 ]);
+const DOCX_MIME_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const XLSX_MIME_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const ZIP_SIGNATURE = [80, 75, 3, 4];
 // Bounds the RGBA buffer a sender can make us allocate (~100 MB).
 const MAX_TIFF_PIXELS = 25_000_000;
 
@@ -23,8 +28,50 @@ export function isPreviewableAttachment({
   return (
     isPreviewableImageType(mimeType) ||
     normalizeMimeType(mimeType) === "application/pdf" ||
-    filename.toLowerCase().endsWith(".pdf")
+    filename.toLowerCase().endsWith(".pdf") ||
+    !!getOfficePreviewKind({ mimeType, filename })
   );
+}
+
+export type OfficePreviewKind = "docx" | "xlsx";
+
+/**
+ * Word and Excel files render in the browser; nothing is uploaded anywhere.
+ * PowerPoint and the legacy binary formats have no renderer, so they stay
+ * download-only.
+ */
+export function getOfficePreviewKind({
+  mimeType,
+  filename,
+}: {
+  mimeType: string;
+  filename: string;
+}): OfficePreviewKind | undefined {
+  const type = normalizeMimeType(mimeType);
+  const name = filename.toLowerCase();
+  if (type === DOCX_MIME_TYPE || name.endsWith(".docx")) return "docx";
+  if (type === XLSX_MIME_TYPE || name.endsWith(".xlsx")) return "xlsx";
+}
+
+export type AttachmentPreviewTarget =
+  /** An image or PDF the browser shows itself, typed by its bytes. */
+  { kind: "file"; file: Blob } | { kind: OfficePreviewKind; file: Blob };
+
+/**
+ * What the preview dialog shows for an attachment. The bytes decide: an image
+ * or PDF renders as one whatever it's called, and an Office name only counts
+ * when the file really is a zip package, as .docx and .xlsx files are.
+ */
+export async function getAttachmentPreviewTarget(
+  blob: Blob,
+  attachment: { mimeType: string; filename: string },
+): Promise<AttachmentPreviewTarget | undefined> {
+  const file = await getAttachmentPreview(blob);
+  if (file) return { kind: "file", file };
+  const office = getOfficePreviewKind(attachment);
+  if (!office) return;
+  const bytes = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+  if (matches(bytes, ZIP_SIGNATURE)) return { kind: office, file: blob };
 }
 
 export async function getAttachmentPreview(

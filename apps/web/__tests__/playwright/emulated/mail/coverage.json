@@ -305,5 +305,16 @@
     "lib/shortcuts/useShortcuts.ts",
     "app/(app)/[emailAccountId]/mail/thread-list-behavior.ts",
     "components/email-list/EmailThread.tsx"
+  ],
+  "swipe-actions.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/ThreadRow.tsx",
+    "app/(app)/[emailAccountId]/mail/use-row-swipe.ts",
+    "app/(app)/[emailAccountId]/mail/row-swipe.ts"
+  ],
+  "office-attachment-previews.spec.ts": [
+    "components/email-list/EmailAttachments.tsx",
+    "components/email-list/DocxAttachmentPreview.tsx",
+    "components/email-list/XlsxAttachmentPreview.tsx",
+    "utils/attachments/image-preview.ts"
   ]
 }

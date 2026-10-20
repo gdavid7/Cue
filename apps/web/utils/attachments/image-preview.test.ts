@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getAttachmentImagePreview,
   getAttachmentPreview,
+  getAttachmentPreviewTarget,
+  isPreviewableAttachment,
   isPreviewableImageType,
 } from "./image-preview";
 
@@ -163,3 +165,58 @@ function stubCanvas() {
   );
   return drawn;
 }
+
+describe("attachment preview routing", () => {
+  const DOCX =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const XLSX =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const PPTX =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  const zip = () => new Blob([new Uint8Array([80, 75, 3, 4, 20, 0, 6, 0])]);
+
+  it.each([
+    [DOCX, "notes", "docx"],
+    ["application/octet-stream", "Notes.DOCX", "docx"],
+    [XLSX, "budget", "xlsx"],
+    ["application/octet-stream", "budget.xlsx", "xlsx"],
+  ] as const)("previews a %s named %s as %s", async (mimeType, filename, kind) => {
+    expect(isPreviewableAttachment({ mimeType, filename })).toBe(true);
+    const target = await getAttachmentPreviewTarget(zip(), {
+      mimeType,
+      filename,
+    });
+    expect(target?.kind).toBe(kind);
+  });
+
+  // No in-browser renderer for these, so they keep the download button only.
+  it.each([
+    [PPTX, "deck.pptx"],
+    ["application/msword", "old.doc"],
+    ["application/vnd.ms-excel", "old.xls"],
+    ["application/zip", "archive.zip"],
+  ])("leaves %s (%s) download-only", async (mimeType, filename) => {
+    expect(isPreviewableAttachment({ mimeType, filename })).toBe(false);
+    expect(
+      await getAttachmentPreviewTarget(zip(), { mimeType, filename }),
+    ).toBeUndefined();
+  });
+
+  it("trusts the bytes over an Office name", async () => {
+    const pdf = new Blob([new TextEncoder().encode("%PDF-1.7\n")]);
+    const target = await getAttachmentPreviewTarget(pdf, {
+      mimeType: DOCX,
+      filename: "report.docx",
+    });
+    expect(target?.kind).toBe("file");
+    expect(target?.file.type).toBe("application/pdf");
+
+    const html = new Blob(["<html><script>alert(1)</script></html>"]);
+    expect(
+      await getAttachmentPreviewTarget(html, {
+        mimeType: XLSX,
+        filename: "budget.xlsx",
+      }),
+    ).toBeUndefined();
+  });
+});
