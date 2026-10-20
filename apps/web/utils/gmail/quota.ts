@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { env } from "@/env";
 import { getAuditContext } from "@/utils/audit/context";
 import {
@@ -11,6 +12,10 @@ import { extractErrorInfo, isRetryableError } from "@/utils/gmail/retry";
 import { createScopedLogger } from "@/utils/logger";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
+import {
+  getFastRequestSampleRate,
+  isFastRequestSampled,
+} from "@/utils/request-sampling";
 import { timeRequestDependency } from "@/utils/request-metrics";
 import { sleep } from "@/utils/sleep";
 
@@ -346,6 +351,8 @@ const gateStats = {
   noteFlushes: 0,
   notesFlushed: 0,
 };
+// Every deferral is counted here; only a sample gets its own log line.
+const deferralCounts = new Map<string, number>();
 let gateStatsSince = Date.now();
 
 export type GmailDeferralReason =
@@ -509,7 +516,7 @@ export async function meterGmailCall<T>(
     priority: priorityOverride,
   });
   try {
-    return await timeRequestDependency("provider", operation);
+    return await timeRequestDependency("gmail", operation);
   } catch (error) {
     if (isGmailQuotaRefusal(error)) await noteGmailQuotaRefusal(ticket, error);
     throw error;
@@ -1055,13 +1062,22 @@ function logDeferral({
   floor: number;
   paceCap: number;
 }) {
-  logger.info("Gmail call deferred", {
+  const deferredBy = heldByStore ? "store_hold" : "wait_budget";
+  const countKey = [error.reason, deferredBy, error.priority, caller].join("|");
+  if (deferralCounts.size < 200 || deferralCounts.has(countKey))
+    deferralCounts.set(countKey, (deferralCounts.get(countKey) ?? 0) + 1);
+  const { requestId, source } = getAuditContext();
+  const sampleRate = getFastRequestSampleRate(source);
+  const sampled = isFastRequestSampled(requestId ?? randomUUID(), sampleRate);
+  (sampled ? logger.info : logger.trace).call(logger, "Gmail call deferred", {
     emailAccountId,
-    requestId: getAuditContext().requestId,
+    requestId,
+    sampled,
+    sampleRate,
     reason: error.reason,
     // "store_hold" is a pause the gate told callers not to wait on; otherwise
     // the wait was longer than the caller could spend.
-    deferredBy: heldByStore ? "store_hold" : "wait_budget",
+    deferredBy,
     priority: error.priority,
     caller,
     retryAfterMs: error.retryAfterMs,
@@ -1580,6 +1596,10 @@ function logGateSummary() {
     logger.info("Gmail quota gate", {
       intervalSeconds: Math.round((now - gateStatsSince) / 1000),
       ...gateStats,
+      deferrals: [...deferralCounts].map(([key, count]) => {
+        const [reason, deferredBy, priority, caller] = key.split("|");
+        return { reason, deferredBy, priority, caller, count };
+      }),
       inflightWaits: inflight.waits,
       inflightWaitMsTotal: inflight.waitMsTotal,
       inflightWaitMsMax: inflight.waitMsMax,
@@ -1587,6 +1607,7 @@ function logGateSummary() {
     });
   for (const key of Object.keys(gateStats) as (keyof typeof gateStats)[])
     gateStats[key] = 0;
+  deferralCounts.clear();
   gateStatsSince = now;
 }
 

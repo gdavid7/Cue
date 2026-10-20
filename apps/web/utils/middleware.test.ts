@@ -3,9 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { permanentRedirect, redirect } from "next/navigation";
 import { ZodError, type ZodIssue } from "zod";
 import {
-  getFastRequestSampleRate,
   getUnauthorizedReason,
-  isFastRequestSampled,
   withError,
   withAuth,
   withAdmin,
@@ -16,6 +14,10 @@ import {
   type RequestWithEmailProvider,
   type NextHandler,
 } from "./middleware";
+import {
+  getFastRequestSampleRate,
+  isFastRequestSampled,
+} from "@/utils/request-sampling";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import prisma from "@/utils/__mocks__/prisma";
 import { auth } from "@/utils/auth";
@@ -1034,7 +1036,7 @@ describe("getUnauthorizedReason", () => {
   it("tells apart the ways a request ends up without a session", () => {
     expect(getUnauthorizedReason(base)).toBe("no_cookies");
     expect(getUnauthorizedReason({ ...base, hasAuthorization: true })).toBe(
-      "bearer_token_rejected",
+      "authorization_header_without_cookie",
     );
     expect(
       getUnauthorizedReason({ ...base, cookieNames: ["theme", "ph_session"] }),

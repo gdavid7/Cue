@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import { type NextRequest, NextResponse, after } from "next/server";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import {
   captureException,
@@ -45,6 +45,10 @@ import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
+import {
+  getFastRequestSampleRate,
+  isFastRequestSampled,
+} from "@/utils/request-sampling";
 import { startRequestTimer } from "@/utils/request-timing";
 import {
   createRequestMetrics,
@@ -62,27 +66,6 @@ const logger = createScopedLogger("middleware");
 const SLOW_MIDDLEWARE_STEP_MS = 2000;
 const SLOW_MIDDLEWARE_TOTAL_MS = 4000;
 const SLOW_REQUEST_MS = 1000;
-// Share of fast, successful requests logged so latency percentiles can be
-// computed from Axiom. Lines carry sampleRate so counts can be re-weighted.
-const FAST_REQUEST_SAMPLE_RATE = 0.08;
-// Background polls and streams fire constantly per open tab, so they sample
-// lower to keep their share of the volume small.
-const POLLING_REQUEST_SAMPLE_RATE = 0.015;
-const POLLING_SCOPES = new Set([
-  "mail-stream",
-  "mail-version",
-  "email-stream",
-  "team-comments/stream",
-  "health",
-  "voice/status",
-  "user/digest-status",
-  "user/ai-automation-status",
-  "mobile-review/status",
-  "mail/v1/enumeration",
-  "user/sent-message-opens",
-  "user/mail-splits/cue-membership",
-  "user/scheduled-emails",
-]);
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -493,7 +476,7 @@ export function getUnauthorizedReason({
 }) {
   if (session && typeof session === "object") return "session_without_user";
   if (hasAuthorization && cookieNames.length === 0)
-    return "bearer_token_rejected";
+    return "authorization_header_without_cookie";
   if (cookieNames.length === 0) return "no_cookies";
   if (!cookieNames.some((name) => name.includes("session_token")))
     return "no_session_cookie";
@@ -965,17 +948,6 @@ function logRequestCompleted(
   } else {
     logger.trace("Request completed", fields);
   }
-}
-
-export function getFastRequestSampleRate(scope: string | undefined) {
-  return scope && POLLING_SCOPES.has(scope)
-    ? POLLING_REQUEST_SAMPLE_RATE
-    : FAST_REQUEST_SAMPLE_RATE;
-}
-
-export function isFastRequestSampled(samplingId: string, rate: number) {
-  const hash = createHash("sha256").update(samplingId).digest().readUInt32BE(0);
-  return hash / 2 ** 32 < rate;
 }
 
 function isRedirectError(error: unknown): error is Error {

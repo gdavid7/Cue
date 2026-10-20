@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  addRequestDependencyTime,
   createRequestMetrics,
   getRequestMetricsFields,
   runWithRequestMetrics,
@@ -31,10 +30,10 @@ describe("request metrics", () => {
     const metrics = createRequestMetrics();
     await expect(
       runWithRequestMetrics(metrics, () =>
-        timeRequestDependency("provider", () => Promise.reject(new Error("x"))),
+        timeRequestDependency("gmail", () => Promise.reject(new Error("x"))),
       ),
     ).rejects.toThrow("x");
-    expect(getRequestMetricsFields(metrics).providerCalls).toBe(1);
+    expect(getRequestMetricsFields(metrics).gmailCalls).toBe(1);
   });
 
   it("does not leak between concurrent requests and ignores calls outside one", async () => {
@@ -47,7 +46,6 @@ describe("request metrics", () => {
       runWithRequestMetrics(second, () => Promise.resolve()),
     ]);
     await timeRequestDependency("db", () => Promise.resolve());
-    addRequestDependencyTime("db", 5);
 
     expect(getRequestMetricsFields(first).dbCalls).toBe(1);
     expect(getRequestMetricsFields(second).dbCalls).toBe(0);

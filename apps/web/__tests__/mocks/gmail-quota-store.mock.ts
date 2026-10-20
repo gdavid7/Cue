@@ -98,7 +98,8 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         "blocker";
       let blocker = 0;
       input.blockers.forEach(({ key, deferMs }, index) => {
-        if (ttl(key) > 0 && (deferMs || ttl(key)) >= wait) blocker = index + 1;
+        if (!blocker && ttl(key) > 0 && (deferMs || ttl(key)) === wait)
+          blocker = index + 1;
       });
       const { budget } = input;
       let current = budgets.get(budget.key);

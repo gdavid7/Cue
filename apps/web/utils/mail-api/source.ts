@@ -33,6 +33,12 @@ import {
 } from "@/utils/email/local-mail-sync-budget";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
 import type { Logger } from "@/utils/logger";
+import { randomUUID } from "node:crypto";
+import { getAuditContext } from "@/utils/audit/context";
+import {
+  getFastRequestSampleRate,
+  isFastRequestSampled,
+} from "@/utils/request-sampling";
 import { isInvalidGrantError } from "@/utils/error";
 import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
 import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
@@ -653,12 +659,27 @@ export function createEmailProviderMailboxSource(input: {
     }).catch(() => undefined);
   }
 
+  // Pauses are frequent, so only a sample gets a line; sampleRate lets counts
+  // be re-weighted.
+  function logPaused(fields: {
+    source: string;
+    reason: string;
+    retryAfterMs: number;
+    [key: string]: unknown;
+  }) {
+    const { requestId, source: scope } = getAuditContext();
+    const sampleRate = getFastRequestSampleRate(scope);
+    if (isFastRequestSampled(requestId ?? randomUUID(), sampleRate))
+      logger.info("Mail sync paused", { ...fields, sampled: true, sampleRate });
+    else logger.trace("Mail sync paused", fields);
+  }
+
   async function mapProviderError(
     error: unknown,
     { recordRateLimit = true }: { recordRateLimit?: boolean } = {},
   ) {
     if (error instanceof LocalMailSyncPausedError) {
-      logger.info("Mail sync paused", {
+      logPaused({
         source: "local_budget",
         reason: error.reason,
         retryAfterMs: error.retryAfterMs,
@@ -674,7 +695,7 @@ export function createEmailProviderMailboxSource(input: {
       const retryAfterMs = Number.isNaN(retryAtMs)
         ? 15_000
         : retryAtMs - Date.now();
-      logger.info("Mail sync paused", {
+      logPaused({
         source: "provider_rate_limit_mode",
         reason: "rate_limit_mode",
         retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
@@ -709,7 +730,7 @@ export function createEmailProviderMailboxSource(input: {
       const providerStatus =
         extractGmailErrorInfo(error).status ??
         extractOutlookErrorInfo(error).status;
-      logger.info("Mail sync paused", {
+      logPaused({
         source: "provider_rate_limit",
         reason: "provider_throttled",
         retryAfterMs: Math.max(1000, Math.ceil(rateLimitDelayMs)),
@@ -730,7 +751,7 @@ export function createEmailProviderMailboxSource(input: {
     ) {
       return { status: "blocked_auth" as const };
     }
-    logger.info("Mail sync paused", {
+    logPaused({
       source: "provider_error",
       reason: "unavailable",
       retryAfterMs: 1000,
