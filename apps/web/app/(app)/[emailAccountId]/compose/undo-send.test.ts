@@ -159,6 +159,45 @@ describe("undo send", () => {
     });
   });
 
+  it("tells the running engine about an undo the server took", async () => {
+    const restoreComposer = vi.fn();
+    const engine = activeClient({ cancelStatus: "unavailable" });
+    beginUndoSend({
+      client: engine.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+
+    await expect(undoPendingSend()).resolves.toBe(true);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledOnce();
+    // Once to ask, once to record the server's cancellation.
+    expect(engine.cancel).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not ask to retry an undo the server refused", async () => {
+    const restoreComposer = vi.fn();
+    beginUndoSend({
+      client: createClient().client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer,
+    });
+    server.cancelHeldSendAction.mockResolvedValue({
+      serverError: "Unauthorized",
+    });
+
+    await expect(undoPendingSend()).resolves.toBe(false);
+    expect(restoreComposer).not.toHaveBeenCalled();
+    expect(notifications.toastError).toHaveBeenCalledWith({
+      description: "Couldn't undo send",
+    });
+    await expect(undoPendingSend()).resolves.toBe(false);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledOnce();
+  });
+
   it("holds online sends for 10 seconds and skips the delay when offline", () => {
     expect(getUndoSendHoldUntil(false, 1000)).toBeUndefined();
     expect(getUndoSendHoldUntil(true, 1000)).toBe(11_000);
@@ -513,6 +552,104 @@ describe("undo send across a page reload", () => {
     });
   });
 
+  it("offers no draft to edit when only the server could undo", async () => {
+    await holdOnFirstPage();
+    const after = await loadPage();
+    // A store that never had this mailbox, as in a memory-only engine.
+    const next = createClient({
+      cancelStatus: "not_found",
+      draft: "not_found",
+    });
+    after.setActiveMailClient(next.client);
+    after.resumeUndoSend()();
+
+    await expect(after.undoPendingSend()).resolves.toBe(true);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledOnce();
+    expect(next.readDraft).toHaveBeenCalledWith({
+      accountId: "account-a",
+      draftId: "mutation",
+    });
+    expect(notifications.toastSendUndoneElsewhere).toHaveBeenCalledWith({
+      id: "undo-send:mutation",
+    });
+  });
+
+  it("does not offer undo after a reload once undo was too late", async () => {
+    const before = await holdOnFirstPage();
+    before.client.cancel.mockResolvedValue({ status: "too_late" });
+    await expect(before.page.undoPendingSend()).resolves.toBe(false);
+    expect(storage.has("cue:undo-send")).toBe(false);
+
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+    expect(notifications.toastSending).not.toHaveBeenCalledWith(
+      expect.objectContaining({ hold: expect.anything() }),
+    );
+  });
+
+  it("forgets the held send once its hold ends on the page", async () => {
+    vi.useFakeTimers();
+    await holdOnFirstPage();
+    expect(storage.has("cue:undo-send")).toBe(true);
+    vi.advanceTimersByTime(UNDO_SEND_DELAY_MS);
+    expect(storage.has("cue:undo-send")).toBe(false);
+  });
+
+  it("forgets the held send and a pending reopen on sign out", async () => {
+    await holdOnFirstPage();
+    const after = await loadPage();
+    storage.set(
+      "cue:undo-send-reopen",
+      JSON.stringify({ emailAccountId: "account-a", at: Date.now() }),
+    );
+    const stop = after.resumeUndoSend();
+    await after.closeActiveMailEngine();
+
+    expect(storage.has("cue:undo-send")).toBe(false);
+    expect(storage.has("cue:undo-send-reopen")).toBe(false);
+    stop();
+  });
+
+  it("drops a reopen request for another account or one left too long", async () => {
+    const page = await loadPage();
+    page.setActiveMailClient(createClient().client);
+    const open = vi.fn();
+    storage.set(
+      "cue:undo-send-reopen",
+      JSON.stringify({ emailAccountId: "account-a", at: Date.now() }),
+    );
+    page.reopenUndoneComposer("account-b", open)();
+    expect(storage.has("cue:undo-send-reopen")).toBe(false);
+    page.reopenUndoneComposer("account-a", open)();
+
+    storage.set(
+      "cue:undo-send-reopen",
+      JSON.stringify({ emailAccountId: "account-a", at: Date.now() - 120_000 }),
+    );
+    page.reopenUndoneComposer("account-a", open)();
+    expect(open).not.toHaveBeenCalled();
+    expect(storage.has("cue:undo-send-reopen")).toBe(false);
+  });
+
+  it("stores only the send's ids", async () => {
+    const page = await loadPage();
+    const client = createClient();
+    page.setActiveMailClient(client.client);
+    page.beginUndoSend({
+      client: client.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer: vi.fn(),
+      subject: "Not for storage",
+    } as Parameters<typeof page.beginUndoSend>[0]);
+
+    expect(
+      Object.keys(JSON.parse(storage.get("cue:undo-send") ?? "{}")).sort(),
+    ).toEqual(["emailAccountId", "holdUntil", "operationId"]);
+  });
+
   it("tells the user an undo that landed as the page left went through", async () => {
     await holdOnFirstPage();
     const after = await loadPage();
@@ -521,10 +658,12 @@ describe("undo send across a page reload", () => {
     after.setActiveMailClient(next.client);
     after.resumeUndoSend()();
 
-    expect(notifications.toastSendUndoneElsewhere).toHaveBeenCalledWith({
-      id: "undo-send:mutation",
-      onEdit: expect.any(Function),
-    });
+    await vi.waitFor(() =>
+      expect(notifications.toastSendUndoneElsewhere).toHaveBeenCalledWith({
+        id: "undo-send:mutation",
+        onEdit: expect.any(Function),
+      }),
+    );
     await expect(after.undoPendingSend()).resolves.toBe(false);
   });
 
@@ -624,16 +763,22 @@ describe("undo send across a page reload", () => {
 
 function createClient(options?: {
   cancelStatus?: "cancelled" | "too_late" | "unavailable" | "not_found";
+  /** Whether this device's store still has the send's draft. */
+  draft?: "found" | "not_found";
 }) {
   const handle = createHandle();
   const cancel = vi
     .fn()
     .mockResolvedValue({ status: options?.cancelStatus ?? "cancelled" });
+  const readDraft = vi
+    .fn()
+    .mockResolvedValue({ status: options?.draft ?? "found" });
   const client = {
     cancelOperation: cancel,
     observeOperation: vi.fn(() => handle),
+    readDraft,
   } as unknown as MailClient;
-  return { client, handle, cancel };
+  return { client, handle, cancel, readDraft };
 }
 
 function activeClient(options?: Parameters<typeof createClient>[0]) {
@@ -687,5 +832,9 @@ async function loadPage() {
   vi.resetModules();
   const undo = await import("./undo-send");
   const active = await import("@/utils/mail-engine/active-client");
-  return { ...undo, setActiveMailClient: active.setActiveMailClient };
+  return {
+    ...undo,
+    setActiveMailClient: active.setActiveMailClient,
+    closeActiveMailEngine: active.closeActiveMailEngine,
+  };
 }
