@@ -34,6 +34,8 @@ vi.mock("@/utils/middleware", async () => {
   );
 });
 
+import { runWithAuditContext } from "@/utils/audit/context";
+import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import { GET } from "./route";
 
 describe("GET /api/user/inbox-insights", () => {
@@ -67,6 +69,37 @@ describe("GET /api/user/inbox-insights", () => {
 
     expect(response.status).toBe(429);
     expect(mocks.getMessage).not.toHaveBeenCalled();
+  });
+
+  // D-086: the conversation on screen is what someone is looking at; the
+  // rows' insights are work nobody asked for yet.
+  it("reads the open conversation at interactive priority and the rows at background", async () => {
+    mocks.rateLimitCount.mockResolvedValue(1);
+    const priorities: string[] = [];
+    mocks.getMessage.mockImplementation(async () => {
+      priorities.push(currentGmailQuotaContext().priority);
+      return {
+        id: "m1",
+        headers: { from: "alice@example.com" },
+        labelIds: ["INBOX"],
+      };
+    });
+
+    await runWithAuditContext({ source: "user/inbox-insights" }, () =>
+      get("&open=1"),
+    );
+    await runWithAuditContext({ source: "user/inbox-insights" }, () => get());
+    // Open only means one conversation; a page of rows can't claim it.
+    await runWithAuditContext({ source: "user/inbox-insights" }, () =>
+      get(",t2:m2&open=1"),
+    );
+
+    expect(priorities).toEqual([
+      "interactive",
+      "background",
+      "background",
+      "background",
+    ]);
   });
 
   // RD-3: the browser keeps what it was given and names those messages.

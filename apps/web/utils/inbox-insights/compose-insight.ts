@@ -6,6 +6,9 @@ import { getRuleLabel } from "@/utils/rule/consts";
 
 const MAX_PARTS = 3;
 
+/** A row whose reply Cue wrote ahead of time, waiting in Cue: inbox and Today. */
+export const CUE_DRAFTED_REPLY = "Cue drafted a reply";
+
 export type InsightLine = {
   /**
    * "ready": a checked reply is waiting. "action": something is on the user.
@@ -64,7 +67,10 @@ export function composeInsight({
   const when = insight?.date ? formatWhen(insight.date, now) : null;
 
   // The reply's state leads, so "ready", "blocked" and "to do" don't look alike.
-  if (data?.reply === "ready") {
+  if (data?.reply === "drafted") {
+    tone = "ready";
+    parts.push(CUE_DRAFTED_REPLY);
+  } else if (data?.reply === "ready") {
     tone = "ready";
     parts.push("Draft ready");
   } else if (data?.reply === "needs-info") {

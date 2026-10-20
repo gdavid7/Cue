@@ -38,13 +38,19 @@ const IGNORE = () => undefined;
 const OPENED_MESSAGES = 10;
 
 type InboxPreview = LoadedInboxPreview | null;
-type Seed = { emailAccountId: string; preview: Promise<InboxPreview> };
+type Seed = {
+  emailAccountId: string;
+  preview: Promise<InboxPreview>;
+  /** For a local mailbox that has fallen behind, rather than none. */
+  catchUp: boolean;
+};
 const previewChangesSchema = z.array(providerChangeSchema);
 // Each page's rows are handed to the engine once, however often it renders.
 const ingestedPreviews = new WeakSet<Promise<InboxPreview>>();
 
 const InboxPreviewSeedContext = createContext<{
   seed: Seed | null;
+  serverClockOffsetMs: number;
   retired: boolean;
   retire: () => void;
   opened: MessageKey[];
@@ -52,6 +58,7 @@ const InboxPreviewSeedContext = createContext<{
   settleOpened: (keys: MessageKey[]) => void;
 }>({
   seed: null,
+  serverClockOffsetMs: 0,
   retired: false,
   retire: IGNORE,
   opened: [],
@@ -68,20 +75,30 @@ const InboxPreviewSeedContext = createContext<{
 export function InboxPreviewSeed({
   emailAccountId,
   preview,
+  catchUp = false,
+  serverNowMs,
   children,
 }: {
   emailAccountId: string;
   preview: Promise<InboxPreview> | null;
+  catchUp?: boolean;
+  /** The server's clock as it rendered the page. */
+  serverNowMs?: number;
   children: ReactNode;
 }) {
+  // Read as the page first renders here; a stream that took a few seconds
+  // only makes the browser's recorded times that much older.
+  const [serverClockOffsetMs] = useState(() =>
+    serverNowMs === undefined ? 0 : serverNowMs - Date.now(),
+  );
   const [seed, setSeed] = useState<Seed | null>(() =>
-    preview ? { emailAccountId, preview } : null,
+    preview ? { emailAccountId, preview, catchUp } : null,
   );
   if (
     preview &&
     (seed?.preview !== preview || seed.emailAccountId !== emailAccountId)
   ) {
-    setSeed({ emailAccountId, preview });
+    setSeed({ emailAccountId, preview, catchUp });
   }
   const [retired, setRetired] = useState(false);
   const retire = useCallback(() => setRetired(true), []);
@@ -96,14 +113,31 @@ export function InboxPreviewSeed({
     [],
   );
   const value = useMemo(
-    () => ({ seed, retired, retire, opened, open, settleOpened }),
-    [seed, retired, retire, opened, open, settleOpened],
+    () => ({
+      seed,
+      serverClockOffsetMs,
+      retired,
+      retire,
+      opened,
+      open,
+      settleOpened,
+    }),
+    [seed, serverClockOffsetMs, retired, retire, opened, open, settleOpened],
   );
   return (
     <InboxPreviewSeedContext.Provider value={value}>
       {children}
     </InboxPreviewSeedContext.Provider>
   );
+}
+
+/**
+ * How far the server's clock is ahead of this browser's, so a time the
+ * browser records for the server to compare (the local mailbox's last sync)
+ * is on the server's clock, whatever this browser's clock says.
+ */
+export function useServerClockOffset() {
+  return useContext(InboxPreviewSeedContext).serverClockOffsetMs;
 }
 
 /**
@@ -136,8 +170,11 @@ export function useFetchOpenedPreviewThreads() {
  * Hands the messages behind the server's rows to the mail engine as soon as
  * it runs, so the inbox shows them from the engine, where they open and
  * triage like any other row, rather than after its first sync reads them
- * again. The engine only adds messages it doesn't have, and nothing is
- * handed over once the engine has shown this account's mail.
+ * again. The engine only adds messages it doesn't have, so nothing it holds,
+ * such as a message just archived, changes. After a sign-in nothing is
+ * handed over once the engine has shown this account's mail; for a mailbox
+ * that has fallen behind, which shows its own mail at once, the newest mail
+ * is handed over whenever it arrives, ahead of the catch-up.
  */
 export function useIngestInboxPreview() {
   const { emailAccountId } = useAccount();
@@ -147,7 +184,7 @@ export function useIngestInboxPreview() {
     if (
       !client?.ingestMessages ||
       !seed ||
-      retired ||
+      (retired && !seed.catchUp) ||
       seed.emailAccountId !== emailAccountId ||
       ingestedPreviews.has(seed.preview)
     )
@@ -206,8 +243,14 @@ export function InboxPreviewList({
       withChrome={withChrome}
     />
   );
-  // Only ever the open account's mail.
-  if (!isInbox || retired || seed?.emailAccountId !== emailAccountId) {
+  // Only ever the open account's mail. A mailbox that fell behind has mail
+  // of its own to show, and the engine shows the newest from there.
+  if (
+    !isInbox ||
+    retired ||
+    seed?.emailAccountId !== emailAccountId ||
+    seed.catchUp
+  ) {
     return placeholder;
   }
   return (

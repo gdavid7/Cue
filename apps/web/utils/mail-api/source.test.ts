@@ -9,6 +9,7 @@ import {
 } from "@/utils/email/mailbox-sync";
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { syncPageSchema } from "@inboxzero/mail-core/sync";
+import { runWithAuditContext } from "@/utils/audit/context";
 import { createEmailProviderMailboxSource } from "./source";
 import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
 import { currentGmailQuotaContext } from "@/utils/gmail/quota";
@@ -1404,13 +1405,18 @@ describe("createEmailProviderMailboxSource", () => {
         },
       } as unknown as EmailProvider,
     });
-    const result = await source.hydrate({
-      session: { accountId: "acc-1", generation: "g1" },
-      requestId: "r1",
-      signal: new AbortController().signal,
-      keys: [{ accountId: "acc-1", messageId: "m1" }],
-      purpose: "body",
-    });
+    // As the engine's hydration route reads, at sync priority.
+    const result = await runWithAuditContext(
+      { source: "mail/v1/hydration" },
+      () =>
+        source.hydrate({
+          session: { accountId: "acc-1", generation: "g1" },
+          requestId: "r1",
+          signal: new AbortController().signal,
+          keys: [{ accountId: "acc-1", messageId: "m1" }],
+          purpose: "body",
+        }),
+    );
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
     if (result.status !== "paused") throw new Error("expected paused");
     expect(result.retryAfterMs).toBeGreaterThanOrEqual(30_000);

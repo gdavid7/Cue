@@ -8,7 +8,7 @@
  * failing. The script never prints secrets, mail content, or addresses.
  */
 import { appendFile, readFile, writeFile } from "node:fs/promises";
-import { errorName, queryAxiomWindow } from "./axiom-query";
+import { errorName, queryAxiomWindow, queryServiceHealth } from "./axiom-query";
 import {
   buildHealthReport,
   formatHumanSummary,
@@ -19,6 +19,12 @@ import {
   type SentryIssue,
   summarizeSentry,
 } from "./health-report";
+import {
+  DEPLOY_CHECK_SKIPPED,
+  evaluateServiceHealth,
+  formatServiceHealthMarkdown,
+  worstStatus,
+} from "./service-health";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -43,16 +49,34 @@ async function main() {
   console.log(formatReportBlock(report));
   console.log(formatHumanSummary(report));
 
+  const serviceResults = await queryServiceHealth();
+  const serviceChecks = serviceResults
+    ? [...evaluateServiceHealth(serviceResults), DEPLOY_CHECK_SKIPPED]
+    : [];
+  const serviceMarkdown = serviceChecks.length
+    ? formatServiceHealthMarkdown(serviceChecks)
+    : "## Service health\n\nNOT CONFIGURED (missing AXIOM_QUERY_TOKEN, AXIOM_DATASET)\n";
+  console.log(serviceMarkdown);
+
   if (process.env.HEALTH_REPORT_FILE) {
     await writeFile(process.env.HEALTH_REPORT_FILE, JSON.stringify(report));
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
-    await appendFile(process.env.GITHUB_STEP_SUMMARY, formatJobSummary(report));
+    await appendFile(
+      process.env.GITHUB_STEP_SUMMARY,
+      `${formatJobSummary(report)}\n${serviceMarkdown}`,
+    );
   }
   const outcome =
     report.robot.status === "ok" ? report.robot.outcome : report.robot.status;
   if (process.env.GITHUB_OUTPUT) {
     await appendFile(process.env.GITHUB_OUTPUT, `robot_outcome=${outcome}\n`);
+  }
+  if (serviceChecks.length && worstStatus(serviceChecks) === "FAIL") {
+    console.log(
+      "::error title=Service health check failed::See the Service health section of the report.",
+    );
+    process.exitCode = 1;
   }
   if (outcome === "needs_reconnect") {
     console.log(

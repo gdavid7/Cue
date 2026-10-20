@@ -4,7 +4,7 @@ import { ZodError } from "zod";
 
 const mocks = vi.hoisted(() => ({
   rateLimitCount: vi.fn(),
-  suggestReply: vi.fn(),
+  suggestReaderReply: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -14,7 +14,7 @@ vi.mock("@/utils/redis", () => ({
 vi.mock("@/utils/exa/search", () => ({ isExaSearchEnabled: () => true }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getSuggestedReplySettings: async () => ({ webLookupEnabled: true }),
-  suggestReply: mocks.suggestReply,
+  suggestReaderReply: mocks.suggestReaderReply,
 }));
 vi.mock("@/utils/middleware", async () => {
   const { createWithEmailProviderTestMiddleware } = await vi.importActual<
@@ -29,7 +29,7 @@ import { POST } from "./route";
 describe("POST /api/user/suggested-reply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.suggestReply.mockResolvedValue({ status: "insufficient" });
+    mocks.suggestReaderReply.mockResolvedValue({ status: "insufficient" });
   });
 
   it("stops web lookups for a user over the rate limit", async () => {
@@ -39,7 +39,7 @@ describe("POST /api/user/suggested-reply", () => {
 
     expect(response.status).toBe(429);
     expect(await response.json()).toMatchObject({ isKnownError: true });
-    expect(mocks.suggestReply).not.toHaveBeenCalled();
+    expect(mocks.suggestReaderReply).not.toHaveBeenCalled();
     expect(mocks.rateLimitCount).toHaveBeenCalledWith(
       expect.any(String),
       ["rate-limit:suggested-reply-web:user-1"],
@@ -53,7 +53,7 @@ describe("POST /api/user/suggested-reply", () => {
 
     await get("threadId=t1&web=1&webQuery=venue%20opening%20hours");
 
-    expect(mocks.suggestReply).toHaveBeenCalledWith(
+    expect(mocks.suggestReaderReply).toHaveBeenCalledWith(
       expect.objectContaining({
         searchWeb: true,
         webQuery: "venue opening hours",
@@ -75,7 +75,7 @@ describe("POST /api/user/suggested-reply", () => {
 
     await get("threadId=t1", { context: [item] });
 
-    expect(mocks.suggestReply).toHaveBeenCalledWith(
+    expect(mocks.suggestReaderReply).toHaveBeenCalledWith(
       expect.objectContaining({ context: [item] }),
     );
   });
@@ -95,7 +95,7 @@ describe("POST /api/user/suggested-reply", () => {
     await expect(get("threadId=t1", { context: [item] })).rejects.toThrow(
       ZodError,
     );
-    expect(mocks.suggestReply).not.toHaveBeenCalled();
+    expect(mocks.suggestReaderReply).not.toHaveBeenCalled();
   });
 
   it("limits suggestions from mail and calendar alone loosely, on their own count", async () => {
@@ -126,7 +126,7 @@ describe("POST /api/user/suggested-reply", () => {
 
     await get("threadId=t1", { context: [item] });
 
-    const [{ context }] = mocks.suggestReply.mock.calls[0];
+    const [{ context }] = mocks.suggestReaderReply.mock.calls[0];
     expect(context[0].url).toBeUndefined();
     expect(context[0].title).toBe("Opening hours");
   });

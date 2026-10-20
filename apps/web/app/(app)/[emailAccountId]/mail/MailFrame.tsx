@@ -1,10 +1,15 @@
 "use client";
 
+import {
+  clearRumAccountSwitch,
+  markRumAccountSwitch,
+} from "@/utils/analytics/rum-app-open";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { useRouter } from "next/navigation";
 import {
   type ReactNode,
   useCallback,
+  useEffect,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -40,18 +45,24 @@ export function MailFrame({
     () => false,
   );
   const isToday = activeType === "today";
+  // A switch that landed on Today has no first mail row to time.
+  useEffect(() => {
+    if (isToday) clearRumAccountSwitch();
+  }, [isToday]);
   const allAccountsScope = useAllAccountsScope();
   // Today across accounts keeps the sidebar and switcher All inboxes shows.
   const isAllAccounts = isToday && allAccountsScope;
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   // Switching accounts keeps you where you are.
   const selectAccount = useCallback(
-    (accountId: string) =>
+    (accountId: string) => {
+      if (!isToday) markRumAccountSwitch();
       redirectToSafeUrl(
         isToday
           ? prefixPath(accountId, "/home")
           : getMailAccountUrl(accountIds, accountId, window.location),
-      ),
+      );
+    },
     [accountIds, isToday],
   );
   // On Today, all accounts is Today across them, as one account keeps Today.

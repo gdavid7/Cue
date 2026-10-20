@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActionType } from "@/generated/prisma/enums";
+import { ActionType, SystemType } from "@/generated/prisma/enums";
+import { getAction } from "@/__tests__/helpers";
 import {
   canWriteRequestedReplies,
   getDraftRepliesSetting,
+  withDefaultDraftReply,
 } from "@/utils/rule/draft-replies-enabled";
+import type { RuleWithActions } from "@/utils/types";
 
 const mockEnv = vi.hoisted(() => ({ autoDraftDisabled: false }));
 
@@ -38,16 +41,16 @@ describe("getDraftRepliesSetting", () => {
     expect(canWriteRequestedReplies(setting)).toBe(false);
   });
 
-  // Mailboxes from before drafting was the default: never asked, so a reply
-  // the user asks for is still allowed, but nothing drafts unasked.
+  // DR-5: mailboxes from before drafting was the default never chose, and
+  // never choosing is on, so they get suggestions like a new mailbox.
   it.each([
     ["no To Reply rule", null],
     ["To Reply only labelling", { enabled: true, actions: [labels] }],
     ["To Reply with no actions", { enabled: true, actions: [] }],
-  ])("is unset with %s", (_case, rule) => {
+  ])("is on with %s", (_case, rule) => {
     const setting = getDraftRepliesSetting(rule);
 
-    expect(setting).toBe("unset");
+    expect(setting).toBe("on");
     expect(canWriteRequestedReplies(setting)).toBe(true);
   });
 
@@ -58,5 +61,102 @@ describe("getDraftRepliesSetting", () => {
       "off",
     );
     expect(getDraftRepliesSetting(null)).toBe("off");
+    expect(getDraftRepliesSetting({ enabled: true, actions: [] })).toBe("off");
   });
 });
+
+describe("withDefaultDraftReply", () => {
+  beforeEach(() => {
+    mockEnv.autoDraftDisabled = false;
+  });
+
+  it("gives a To Reply rule that never chose the draft it would have had", () => {
+    const rule = toReply({ actions: [] });
+
+    expect(actionTypes(withDefaultDraftReply(rule))).toEqual([
+      ActionType.DRAFT_EMAIL,
+    ]);
+    // Only in memory: the saved rule is left as it is.
+    expect(rule.actions).toEqual([]);
+  });
+
+  it("keeps a To Reply rule's own actions alongside the draft", () => {
+    const rule = toReply({ actions: [getAction({ type: ActionType.LABEL })] });
+
+    expect(actionTypes(withDefaultDraftReply(rule))).toEqual([
+      ActionType.LABEL,
+      ActionType.DRAFT_EMAIL,
+    ]);
+  });
+
+  it("adds no second draft to a rule that already drafts", () => {
+    const rule = toReply({
+      actions: [getAction({ type: ActionType.DRAFT_EMAIL })],
+    });
+
+    expect(withDefaultDraftReply(rule)).toBe(rule);
+  });
+
+  it("adds no email draft to a rule that drafts to a messaging channel", () => {
+    const rule = toReply({
+      actions: [getAction({ type: ActionType.DRAFT_MESSAGING_CHANNEL })],
+    });
+
+    expect(withDefaultDraftReply(rule)).toBe(rule);
+  });
+
+  // DR-5a: an enabled To Reply rule whose draft action the user removed in
+  // the rule editor can't be told apart from one that never chose, so it
+  // reads as on. Needs a saved "off" that isn't the rule being disabled.
+  it.todo(
+    "keeps drafting off after the user removes the draft action in the rule editor",
+  );
+
+  it("leaves a To Reply rule the user turned off alone", () => {
+    const rule = toReply({ enabled: false, actions: [] });
+
+    expect(withDefaultDraftReply(rule)).toBe(rule);
+  });
+
+  it("leaves other rules alone", () => {
+    const rule = toReply({ systemType: SystemType.FYI, actions: [] });
+
+    expect(withDefaultDraftReply(rule)).toBe(rule);
+  });
+
+  it("adds nothing when the deployment disables auto drafting", () => {
+    mockEnv.autoDraftDisabled = true;
+    const rule = toReply({ actions: [] });
+
+    expect(withDefaultDraftReply(rule)).toBe(rule);
+  });
+});
+
+function toReply(overrides: Partial<RuleWithActions>): RuleWithActions {
+  return {
+    id: "rule-1",
+    name: "To Reply",
+    instructions: null,
+    enabled: true,
+    emailAccountId: "account-1",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    actions: [],
+    runOnThreads: true,
+    from: null,
+    to: null,
+    subject: null,
+    body: null,
+    groupId: null,
+    conditionalOperator: "AND",
+    systemType: SystemType.TO_REPLY,
+    automate: true,
+    promptText: null,
+    categoryFilterType: null,
+    ...overrides,
+  } as RuleWithActions;
+}
+
+function actionTypes(rule: RuleWithActions) {
+  return rule.actions.map((action) => action.type);
+}

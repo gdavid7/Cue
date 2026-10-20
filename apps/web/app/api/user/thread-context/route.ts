@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  OPEN_THREAD_GMAIL_WAIT_MS,
+  runWithGmailWaitBudget,
+} from "@/utils/gmail/quota";
 import { withEmailProvider } from "@/utils/middleware";
 import { getThreadContext } from "@/utils/thread-context/get-thread-context";
 
@@ -21,13 +25,15 @@ export const GET = withEmailProvider(
     });
 
     return NextResponse.json(
-      await getThreadContext({
-        emailAccountId: request.auth.emailAccountId,
-        userEmail: request.auth.email,
-        threadId,
-        emailProvider: request.emailProvider,
-        logger: request.logger,
-      }),
+      await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, () =>
+        getThreadContext({
+          emailAccountId: request.auth.emailAccountId,
+          userEmail: request.auth.email,
+          threadId,
+          emailProvider: request.emailProvider,
+          logger: request.logger,
+        }),
+      ),
     );
   },
   { maxDuration },

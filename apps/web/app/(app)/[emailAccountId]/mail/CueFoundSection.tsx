@@ -6,6 +6,7 @@ import {
   CUE_FOUND_VISIBLE_ROWS,
   type CueSearchIntent,
   type CueSearchStage,
+  type CueWidening,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
@@ -19,8 +20,14 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { describeSearch } from "@/utils/mail-search/describe-search";
 import { readableSearch } from "@/utils/mail-search/generated-search";
+import type { WideningTier } from "@/utils/mail-search/natural-language-search";
 
 const PLACEHOLDER_WIDTHS = ["w-3/4", "w-2/3", "w-5/6"];
+const WIDENING_LABELS: Record<WideningTier, string> = {
+  fewer_words: "searched with fewer words",
+  sender_and_dates: "searched by sender and date alone",
+  wider_dates: "searched a wider date range",
+};
 
 /**
  * What Cue found for a search typed as a sentence, above the plain results.
@@ -34,7 +41,7 @@ const PLACEHOLDER_WIDTHS = ["w-3/4", "w-2/3", "w-5/6"];
 export function CueFoundSection({
   stage,
   intent,
-  widerSearches,
+  widening,
   threads,
   totalCount,
   showAll,
@@ -56,7 +63,8 @@ export function CueFoundSection({
   /** "off" closes the section: Cue gave nothing to search. */
   stage: CueSearchStage;
   intent: CueSearchIntent | null;
-  widerSearches: string[];
+  /** The tier Cue widened to, and the searches it ran for it. */
+  widening: CueWidening | null;
   /** The rows to show; all of them, or the first few. */
   threads: ListThread[];
   /** All the rows Cue found, shown or not. */
@@ -89,15 +97,18 @@ export function CueFoundSection({
         Math.max(0, CUE_FOUND_VISIBLE_ROWS - threads.length),
       )
     : [];
+  const toItem = (search: string, editable?: string) => ({
+    // What the search box takes back, with days it can read.
+    edit: editable ?? readableSearch(search, intent?.timeZone ?? "UTC"),
+    label: describeSearch(search, { timeZone: intent?.timeZone ?? "UTC" }),
+  });
   const searches = intent
-    ? [...intent.searches, ...widerSearches].map((search, index) => ({
-        // What the search box takes back, with days it can read.
-        edit:
-          intent.editableSearches[index] ??
-          readableSearch(search, intent.timeZone),
-        label: describeSearch(search, { timeZone: intent.timeZone }),
-      }))
+    ? intent.searches.map((search, index) =>
+        toItem(search, intent.editableSearches[index]),
+      )
     : [];
+  const widerSearches =
+    intent && widening ? widening.searches.map((search) => toItem(search)) : [];
 
   return (
     <EaseHeight>
@@ -120,7 +131,8 @@ export function CueFoundSection({
                 type="button"
               >
                 {intent.explanation || "Show the searches Cue ran"}
-                {widerSearches.length ? " · searched more widely" : ""}
+                {widening ? ` · ${WIDENING_LABELS[widening.tier]}` : ""}
+                {widening?.onProvider ? ", then on the server" : ""}
               </button>
             ) : (
               <span className="text-muted-foreground" role="status">
@@ -133,19 +145,25 @@ export function CueFoundSection({
               <p className="text-muted-foreground text-xs">
                 Cue ran these searches. Pick one to edit it.
               </p>
-              <ul className="mt-1 flex flex-col items-start gap-0.5">
-                {searches.map(({ edit, label }) => (
-                  <li className="max-w-full" key={edit}>
-                    <button
-                      className="max-w-full truncate rounded px-1 py-0.5 text-left font-mono text-foreground text-xs hover:bg-muted"
-                      onClick={() => onEditSearch(edit)}
-                      type="button"
-                    >
-                      {label}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <SearchList onEditSearch={onEditSearch} searches={searches} />
+              {widening && widerSearches.length ? (
+                <>
+                  <p className="mt-1 text-muted-foreground text-xs">
+                    They found too little, so Cue{" "}
+                    {WIDENING_LABELS[widening.tier]}:
+                  </p>
+                  <SearchList
+                    onEditSearch={onEditSearch}
+                    searches={widerSearches}
+                  />
+                  {widening.onProvider ? (
+                    <p className="mt-1 text-muted-foreground text-xs">
+                      Nothing turned up in the mail on this device, so Cue also
+                      ran these on the server, which holds older mail.
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
             </div>
           ) : null}
           {/* Rows are options, which need a listbox around them. */}
@@ -204,6 +222,30 @@ export function CueFoundSection({
         </section>
       )}
     </EaseHeight>
+  );
+}
+
+function SearchList({
+  searches,
+  onEditSearch,
+}: {
+  searches: { edit: string; label: string }[];
+  onEditSearch: (search: string) => void;
+}) {
+  return (
+    <ul className="mt-1 flex flex-col items-start gap-0.5">
+      {searches.map(({ edit, label }) => (
+        <li className="max-w-full" key={edit}>
+          <button
+            className="max-w-full truncate rounded px-1 py-0.5 text-left font-mono text-foreground text-xs hover:bg-muted"
+            onClick={() => onEditSearch(edit)}
+            type="button"
+          >
+            {label}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

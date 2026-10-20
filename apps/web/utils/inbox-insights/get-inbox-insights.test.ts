@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import type { EmailProvider } from "@/utils/email/types";
 import { createScopedLogger } from "@/utils/logger";
+import prisma from "@/utils/__mocks__/prisma";
 import { getInboxInsights } from "./get-inbox-insights";
 
 vi.mock("server-only", () => ({}));
@@ -44,6 +45,39 @@ const logger = createScopedLogger("test");
 describe("getInboxInsights", () => {
   beforeEach(() => {
     recordingRedis.reset();
+    prisma.executedAction.findMany.mockResolvedValue([]);
+  });
+
+  // The row says "Cue drafted a reply" for a reply waiting in Cue, read for
+  // every row, held or not.
+  it("names the messages with a reply Cue wrote, by ID only", async () => {
+    prisma.executedAction.findMany.mockResolvedValue([
+      { executedRule: { messageId: "m2" } },
+    ] as never);
+
+    const { draftedMessageIds } = await getInboxInsights({
+      emailAccountId: "a1",
+      userId: "u1",
+      userEmail: "me@example.com",
+      items: ["m1", "m2"].map((messageId) => ({
+        threadId: `t-${messageId}`,
+        messageId,
+      })),
+      known: ["m1", "m2"],
+      emailProvider: {} as EmailProvider,
+      logger,
+    });
+
+    expect(draftedMessageIds).toEqual(["m2"]);
+    const query = prisma.executedAction.findMany.mock.calls[0]?.[0];
+    expect(query?.where).toMatchObject({
+      type: "DRAFT_EMAIL",
+      draftId: null,
+      draftStatus: "PENDING",
+      suggestedReplyDraft: null,
+      executedRule: { emailAccountId: "a1", messageId: { in: ["m1", "m2"] } },
+    });
+    expect(query?.select).not.toHaveProperty("content");
   });
 
   // RD-3: what Cue reads from an email goes to the browser, which keeps it

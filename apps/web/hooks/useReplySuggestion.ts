@@ -62,5 +62,9 @@ export function useReplySuggestion({
     phase,
     suggestion: phase === "done" ? result.data?.suggestion : undefined,
     error: result.error,
+    /** Asks again for whichever pass hasn't answered. */
+    retry: () => {
+      (needsWeb ? web : plain).mutate?.();
+    },
   };
 }

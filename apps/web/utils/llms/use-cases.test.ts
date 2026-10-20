@@ -145,6 +145,7 @@ describe("LLM use cases", () => {
       [LlmUseCase.MeetingWebSearch]: "economy",
       [LlmUseCase.ParseFilingReply]: "economy",
       [LlmUseCase.PersonaAnalysis]: "economy",
+      [LlmUseCase.PredraftReply]: "economy",
       [LlmUseCase.PromptToRules]: "chat",
       [LlmUseCase.PromptToSplit]: "economy",
       [LlmUseCase.ReplyContextCollector]: "economy",

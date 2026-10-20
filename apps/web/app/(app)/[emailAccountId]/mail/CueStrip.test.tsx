@@ -16,6 +16,7 @@ import type { ThreadMessage } from "@/components/email-list/types";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { onSWRErrorRetry } from "@/utils/swr";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
+import { resetInboxInsightRequestsForTesting } from "@/hooks/useInboxInsights";
 
 const mocks = vi.hoisted(() => ({
   requests: [] as { url: string; emailAccountId: string | undefined }[],
@@ -69,6 +70,7 @@ describe("CueStrip", () => {
     mocks.aiAccess = true;
     window.localStorage.clear();
     resetBrowserCacheForTesting();
+    resetInboxInsightRequestsForTesting();
   });
   afterEach(cleanup);
 
@@ -218,19 +220,30 @@ describe("CueStrip", () => {
   // A failed lookup isn't an answer: folding and then reopening when a retry
   // lands would move the messages twice.
   it("keeps holding the space while Cue's note fails to load, then shows", async () => {
-    mocks.insight = { action: "reply" };
-    mocks.insightFailures = 1;
-    renderStrip({ labels: [] }, { errorRetryInterval: 10 });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocks.insight = { action: "reply" };
+      mocks.insightFailures = 1;
+      renderStrip({ labels: [] }, { errorRetryInterval: 10 });
 
-    await waitForRequest("/api/user/inbox-insights");
-    expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
-    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+      await waitForRequest("/api/user/inbox-insights");
+      expect(screen.getByRole("region", { name: "Cue summary" })).toBeTruthy();
+      await act(() => vi.advanceTimersByTimeAsync(1500));
+      expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // RD-3: the server keeps no notes, so a note the inbox already read is
-  // this browser's. Opening the email names it as kept, and the strip shows
-  // even while the account's Gmail budget defers every new read.
+  // this browser's. Opening the email again asks for nothing on this page,
+  // names it as kept on the next, and the strip shows even while the
+  // account's Gmail budget defers every new read.
   it("shows from the note this browser kept while Gmail defers new reads", async () => {
+    const insightRequests = () =>
+      mocks.requests.filter((r) =>
+        r.url.startsWith("/api/user/inbox-insights"),
+      );
     mocks.insight = { action: "reply" };
     renderStrip({ labels: [] });
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
@@ -238,13 +251,16 @@ describe("CueStrip", () => {
 
     mocks.insightDeferredUnlessKept = true;
     renderStrip({ labels: [] });
+    expect(await screen.findByText(SUMMARY)).toBeTruthy();
+    expect(insightRequests()).toHaveLength(1);
+    cleanup();
+
+    // The next page load.
+    resetInboxInsightRequestsForTesting();
+    renderStrip({ labels: [] });
 
     expect(await screen.findByText(SUMMARY)).toBeTruthy();
-    expect(
-      mocks.requests
-        .filter((r) => r.url.startsWith("/api/user/inbox-insights"))
-        .at(-1)?.url,
-    ).toContain("known=m1");
+    expect(insightRequests().at(-1)?.url).toContain("known=m1");
   });
 
   it("folds away if Cue can't decide in time, and stays folded", async () => {
@@ -479,7 +495,12 @@ async function fetcher(key: string | [string, string]) {
         status: 503,
         retryAfterMs: 60_000,
       });
-    return { insights: {}, events: [], draftRepliesEnabled: true };
+    return {
+      insights: {},
+      events: [],
+      draftRepliesEnabled: true,
+      draftedMessageIds: [],
+    };
   }
   if (url.startsWith("/api/user/inbox-insights") && mocks.insightFailures > 0) {
     mocks.insightFailures -= 1;
@@ -503,6 +524,7 @@ async function fetcher(key: string | [string, string]) {
         : {},
       events: [],
       draftRepliesEnabled: true,
+      draftedMessageIds: [],
     };
   }
   if (url.startsWith("/api/user/save-destinations")) return { calendar: false };

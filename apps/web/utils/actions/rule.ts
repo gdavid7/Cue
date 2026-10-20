@@ -179,8 +179,9 @@ export const enableDraftRepliesAction = actionClient
       include: { actions: true },
     });
 
+    // No To Reply rule counts as on, so turning it off has to save the "off".
     if (!existingRule) {
-      if (enable) await createDraftOnlyToReplyRule(emailAccountId);
+      await createToReplyRule(emailAccountId, enable);
       return;
     }
 
@@ -775,11 +776,13 @@ export const importRulesAction = actionClient
  * sorts in its own database, so the rule only drafts and never creates or
  * applies a mailbox label. It also turns reply tracking on, which To Reply is.
  */
-async function createDraftOnlyToReplyRule(emailAccountId: string) {
-  const data = replyTrackingRuleData(SystemType.TO_REPLY);
+async function createToReplyRule(emailAccountId: string, enabled: boolean) {
+  const { actions, ...data } = replyTrackingRuleData(SystemType.TO_REPLY);
   try {
     const rule = await prisma.rule.create({
-      data: { ...data, emailAccountId },
+      data: enabled
+        ? { ...data, actions, emailAccountId }
+        : { ...data, enabled: false, emailAccountId },
       include: ruleHistoryRuleInclude,
     });
     after(() => createRuleHistory({ rule, triggerType: "created" }));

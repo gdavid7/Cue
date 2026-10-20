@@ -15,6 +15,7 @@ import { GmailLabel } from "@/utils/gmail/label";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
+import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 import type { Logger } from "@/utils/logger";
 import { parseReply } from "@/utils/mail";
 import { assertHasAiAccess } from "@/utils/premium/limits";
@@ -49,6 +50,27 @@ const MAX_SOURCE_TEXT = 2000;
 const WEB_SEARCH_RESULTS = 3;
 // Everything Relevant context shows, so a fact the user can see there can back the reply.
 const MAX_CONTEXT_SOURCES = 8;
+
+/**
+ * Who the suggestion is for. The reader's, for an open conversation, is
+ * written on the drafting tier. One written ahead of time for incoming mail
+ * runs unasked at mail volume, so it uses the cheap tier and bills as triage.
+ * The prompt and checks are the same either way.
+ */
+type SuggestionSource = "reader" | "predraft";
+const SUGGESTION_MODEL = {
+  reader: {
+    useCase: LlmUseCase.DraftReply,
+    label: "Grounded reply suggestion",
+  },
+  predraft: {
+    useCase: LlmUseCase.PredraftReply,
+    label: TRIAGE_AI_LABELS.predraftReply,
+  },
+} as const satisfies Record<
+  SuggestionSource,
+  { useCase: LlmUseCase; label: string }
+>;
 
 const suggestionSchema = z.object({
   enoughEvidence: z
@@ -145,6 +167,7 @@ export async function suggestReply({
   webQuery: knownWebQuery,
   context: knownContext,
   settings: knownSettings,
+  source = "reader",
   now = new Date(),
 }: {
   emailAccountId: string;
@@ -166,6 +189,7 @@ export async function suggestReply({
   context?: Awaited<ReturnType<typeof collectThreadContext>>["items"];
   /** From `getSuggestedReplySettings`, when the caller already has them. */
   settings?: SuggestedReplySettings;
+  source?: SuggestionSource;
   now?: Date;
 }): Promise<SuggestedReply | null> {
   const { thread, items } = await collectThreadContext({
@@ -186,8 +210,7 @@ export async function suggestReply({
   const settings =
     knownSettings ?? (await getSuggestedReplySettings(emailAccountId));
   // Turning off "Auto draft replies" stops every AI-written reply, cached
-  // ones included. Never having chosen still allows one: Cue only works one
-  // out unasked when the setting is on, and the reader decides that.
+  // ones included.
   if (!canWriteRequestedReplies(settings.draftReplies))
     return { status: "unavailable" };
   const searchWeb = searchWebRequested && settings.webLookupEnabled;
@@ -242,6 +265,7 @@ export async function suggestReply({
       sources: [...sources, ...extra],
       writingStyle: style?.writingStyle,
       learnedWritingStyle: style?.learnedWritingStyle,
+      source,
       now,
     });
 
@@ -273,6 +297,35 @@ export async function suggestReply({
     );
   if (pages.length) return suggest(pages);
   return plain ?? suggest([]);
+}
+
+/**
+ * The reader's suggestion, with one line saying how it ended, so a reply the
+ * user never saw can be told apart from Cue choosing not to write one. IDs
+ * and fixed reasons only: never the reply, what was missing, or the query.
+ */
+export async function suggestReaderReply(
+  options: Parameters<typeof suggestReply>[0] & {
+    settings: SuggestedReplySettings;
+  },
+): Promise<SuggestedReply | null> {
+  const log = (outcome: SuggestReplyOutcome) =>
+    options.logger.info("Reply suggestion outcome", {
+      ...outcome,
+      threadId: options.threadId,
+      webPass: Boolean(options.searchWeb),
+    });
+  try {
+    const suggestion = await suggestReply(options);
+    log(getSuggestReplyOutcome(suggestion, options.settings.draftReplies));
+    return suggestion;
+  } catch (error) {
+    log({
+      outcome: "unavailable",
+      reason: isGmailCallDeferredError(error) ? "quota" : "error",
+    });
+    throw error;
+  }
 }
 
 /**
@@ -310,21 +363,21 @@ export async function aiSuggestReply({
   sources,
   writingStyle,
   learnedWritingStyle,
+  source = "reader",
   now = new Date(),
 }: {
   emailAccount: EmailAccountWithAI & { name: string | null };
   sources: Source[];
   writingStyle?: string | null;
   learnedWritingStyle?: string | null;
+  source?: SuggestionSource;
   now?: Date;
 }): Promise<SuggestedReply> {
-  const modelOptions = getModelForUseCase(
-    emailAccount.user,
-    LlmUseCase.DraftReply,
-  );
+  const { useCase, label } = SUGGESTION_MODEL[source];
+  const modelOptions = getModelForUseCase(emailAccount.user, useCase);
   const generateObject = createGenerateObject({
     emailAccount,
-    label: "Grounded reply suggestion",
+    label,
     modelOptions,
     promptHardening: { trust: "untrusted", level: "compact" },
   });
@@ -663,4 +716,41 @@ async function hasEmailed({
     })
     .catch(() => null);
   return !!sent;
+}
+
+type SuggestReplyOutcome = {
+  outcome: "suggested" | "declined" | "unavailable" | "gated";
+  reason?:
+    | "insufficient-evidence"
+    | "unsupported-claim"
+    | "already-replied"
+    | "drafting-off"
+    | "no-ai-access"
+    | "no-thread"
+    | "quota"
+    | "error";
+};
+
+function getSuggestReplyOutcome(
+  suggestion: SuggestedReply | null,
+  draftReplies: DraftRepliesSetting,
+): SuggestReplyOutcome {
+  if (!suggestion) return { outcome: "unavailable", reason: "no-thread" };
+  switch (suggestion.status) {
+    case "suggested":
+      return { outcome: "suggested" };
+    case "insufficient":
+      return {
+        outcome: "declined",
+        reason: suggestion.unsupported.length
+          ? "unsupported-claim"
+          : "insufficient-evidence",
+      };
+    case "already-replied":
+      return { outcome: "gated", reason: "already-replied" };
+    case "unavailable":
+      return canWriteRequestedReplies(draftReplies)
+        ? { outcome: "unavailable", reason: "no-ai-access" }
+        : { outcome: "gated", reason: "drafting-off" };
+  }
 }

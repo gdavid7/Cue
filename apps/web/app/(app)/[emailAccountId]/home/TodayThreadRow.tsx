@@ -8,7 +8,10 @@ import {
 } from "lucide-react";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { MailLabelChip } from "@/app/(app)/[emailAccountId]/mail/MailLabelChip";
-import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import {
+  AccountMarker,
+  InsightText,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import { getSnoozePresets } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
 import {
   RowButton,
@@ -26,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/utils";
+import { CUE_DRAFTED_REPLY } from "@/utils/inbox-insights/compose-insight";
 import type { TodayThread } from "@/utils/home/merge-home";
 
 export type TodayRowHandlers = ThreadRowActionHandlers & {
@@ -212,6 +216,12 @@ export function TodayThreadRow({
         }
         hasAnySelection={false}
         index={0}
+        // The same line the inbox row shows for it.
+        insight={
+          thread.cueDrafted ? (
+            <InsightText line={{ tone: "ready", parts: [CUE_DRAFTED_REPLY] }} />
+          ) : null
+        }
         isDraft={false}
         isFocused={isFocused}
         isSelected={false}

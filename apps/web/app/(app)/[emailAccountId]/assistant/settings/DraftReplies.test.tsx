@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   enableDraftReplies: vi.fn(),
   mutateRules: vi.fn(),
   mutateGlobal: vi.fn(),
+  rules: [] as { systemType: string; enabled: boolean; actions: unknown[] }[],
+  autoDraftDisabled: false,
 }));
 
 vi.mock("@/utils/actions/rule", () => ({
@@ -15,7 +17,7 @@ vi.mock("@/utils/actions/rule", () => ({
 }));
 vi.mock("@/hooks/useRules", () => ({
   useRules: () => ({
-    data: [],
+    data: mocks.rules,
     mutate: mocks.mutateRules,
     isLoading: false,
     error: undefined,
@@ -28,11 +30,47 @@ vi.mock("swr", async (importOriginal) => ({
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({ emailAccountId: "ea_1" }),
 }));
-vi.mock("@/env", () => ({ env: {} }));
+vi.mock("@/env", () => ({
+  env: {
+    get NEXT_PUBLIC_AUTO_DRAFT_DISABLED() {
+      return mocks.autoDraftDisabled;
+    },
+  },
+}));
 
 describe("useDraftReplies", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.rules = [];
+    mocks.autoDraftDisabled = false;
+  });
+
+  // DR-5: never having chosen shows as on, as the rules and the reader treat it.
+  it.each([
+    ["no To Reply rule", []],
+    [
+      "a To Reply rule with no actions",
+      [{ systemType: "TO_REPLY", enabled: true, actions: [] }],
+    ],
+  ])("shows on with %s", (_case, rules) => {
+    mocks.rules = rules;
+    const { result } = renderHook(() => useDraftReplies());
+
+    expect(result.current.enabled).toBe(true);
+  });
+
+  it("shows off once the user turned it off", () => {
+    mocks.rules = [{ systemType: "TO_REPLY", enabled: false, actions: [] }];
+    const { result } = renderHook(() => useDraftReplies());
+
+    expect(result.current.enabled).toBe(false);
+  });
+
+  it("shows off when the deployment disables auto drafting", () => {
+    mocks.autoDraftDisabled = true;
+    const { result } = renderHook(() => useDraftReplies());
+
+    expect(result.current.enabled).toBe(false);
   });
 
   // A server error comes back as data, not a throw: it must still fail, or

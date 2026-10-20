@@ -16,6 +16,7 @@ import {
   useFetchOpenedPreviewThreads,
   useIngestInboxPreview,
   useRetireInboxPreview,
+  useServerClockOffset,
 } from "./InboxPreviewList";
 
 const account = vi.hoisted(() => ({ emailAccountId: "acc-1" }));
@@ -249,6 +250,76 @@ describe("InboxPreviewList", () => {
     });
 
     expect(mailClient.ingestMessages).not.toHaveBeenCalled();
+  });
+
+  // RL-1: a mailbox opened after days shows its own (old) mail at once; the
+  // newest inbox mail fetched with the page is added while it catches up.
+  it("hands a mailbox that fell behind the newest mail even though it already shows mail", async () => {
+    let arrive: (preview: InboxPreview) => void = () => undefined;
+    const pending = new Promise<InboxPreview>((resolve) => {
+      arrive = resolve;
+    });
+    engine.client = mailClient;
+    await act(async () => {
+      render(
+        <InboxPreviewSeed emailAccountId="acc-1" preview={pending} catchUp>
+          <Screen />
+        </InboxPreviewSeed>,
+      );
+    });
+
+    fireEvent.click(screen.getByText("engine has mail"));
+    await act(async () => {
+      arrive(await previewOf("t1", "t2"));
+      await pending;
+    });
+
+    expect(mailClient.ingestMessages.mock.calls).toEqual([
+      [{ accountId: "acc-1", changes: [patch("t1"), patch("t2")] }],
+    ]);
+    // Its own mail is what shows; the rows never stand in for it.
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("never shows a fallen-behind mailbox's rows in place of its own mail", async () => {
+    await act(async () => {
+      render(
+        <InboxPreviewSeed
+          emailAccountId="acc-1"
+          preview={previewOf("t1")}
+          catchUp
+        >
+          <Screen />
+        </InboxPreviewSeed>,
+      );
+    });
+
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  // RL-1 review S2: the last sync is recorded on the server's clock, which
+  // is what the server compares it with.
+  it("measures how far the server's clock is from this browser's", async () => {
+    let offset: number | undefined;
+    function ReadOffset() {
+      offset = useServerClockOffset();
+      return null;
+    }
+    const browserNow = Date.now();
+    await act(async () => {
+      render(
+        <InboxPreviewSeed
+          emailAccountId="acc-1"
+          preview={null}
+          serverNowMs={browserNow + 3_600_000}
+        >
+          <ReadOffset />
+        </InboxPreviewSeed>,
+      );
+    });
+
+    expect(offset).toBeGreaterThan(3_600_000 - 5000);
+    expect(offset).toBeLessThanOrEqual(3_600_000);
   });
 
   it("keeps the mail screen and hands nothing over when the rows fail", async () => {

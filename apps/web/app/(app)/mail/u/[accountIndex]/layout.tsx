@@ -9,8 +9,9 @@ import {
   parseLastEmailAccountCookieValue,
 } from "@/utils/cookies";
 import {
-  hasLocalMailbox,
+  isLocalMailboxStale,
   LOCAL_MAILBOX_COOKIE,
+  localMailboxSyncedAt,
 } from "@/utils/mail-engine/local-mailbox-cookie";
 import {
   buildMailPath,
@@ -68,11 +69,16 @@ export default async function MailRouteLayout({
     redirect(buildMailPath({ accountIndex: Math.max(lastIndex, 0) }));
   }
 
-  const { preview } = await startInboxPreview(account);
+  const { preview, catchUp } = await startInboxPreview(account);
   return (
     <MailScreenLayout>
       {/* Always here, so the mail screen keeps its place in the tree. */}
-      <InboxPreviewSeed emailAccountId={account.id} preview={preview}>
+      <InboxPreviewSeed
+        emailAccountId={account.id}
+        preview={preview}
+        catchUp={catchUp}
+        serverNowMs={Date.now()}
+      >
         <MailScreen />
       </InboxPreviewSeed>
       {children}
@@ -86,6 +92,12 @@ export default async function MailRouteLayout({
  * The inbox's newest conversations are fetched here instead, without being
  * awaited, so they stream to the page with its first response. Wrapped, as an
  * async function's returned promise would otherwise be awaited with it.
+ *
+ * A local mailbox that last synced a while ago (`catchUp`), as on a laptop
+ * opened again after days, shows its own mail at once, but the engine's
+ * catch-up replays Gmail's history oldest first, so the newest mail would be
+ * the last to arrive. The same newest messages are fetched for it, and the
+ * engine adds the ones it lacks while the catch-up runs (RL-1).
  */
 async function startInboxPreview(account: { id: string; provider: string }) {
   const [headerStore, cookieStore] = await Promise.all([headers(), cookies()]);
@@ -100,22 +112,38 @@ async function startInboxPreview(account: { id: string; provider: string }) {
     headerStore.has(SERVER_ACTION_HEADER) ||
     headerStore.has(OFFLINE_MAIL_SAVE_HEADER)
   )
-    return { preview: null };
+    return { preview: null, catchUp: false };
   const location = parseMailPath(pathname ?? "", search);
   if (location?.view?.kind !== "inbox" || location.allInboxes)
-    return { preview: null };
-  if (hasLocalMailbox(cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value, account.id))
-    return { preview: null };
-  return { preview: loadLandingInboxPreview(account) };
+    return { preview: null, catchUp: false };
+  const syncedAt = localMailboxSyncedAt(
+    cookieStore.get(LOCAL_MAILBOX_COOKIE)?.value,
+    account.id,
+  );
+  if (syncedAt !== null && !isLocalMailboxStale(syncedAt))
+    return { preview: null, catchUp: false };
+  const catchUp = syncedAt !== null;
+  return { preview: loadLandingInboxPreview(account, catchUp), catchUp };
 }
 
 // An inbox that opens on a tab, such as Gmail's Primary, would show its other
 // tabs' mail and then swap to the tab. Checked with the rows, not before the
-// page is sent, so the page never waits on it.
-async function loadLandingInboxPreview(account: {
-  id: string;
-  provider: string;
-}) {
+// page is sent, so the page never waits on it. A mailbox that fell behind
+// only hands the messages to the engine, which files them into its tabs.
+async function loadLandingInboxPreview(
+  account: {
+    id: string;
+    provider: string;
+  },
+  catchUp: boolean,
+) {
+  if (catchUp) {
+    return loadInboxPreview({
+      emailAccountId: account.id,
+      provider: account.provider,
+      catchUp,
+    });
+  }
   const settings = await getMailSettings({ emailAccountId: account.id }).catch(
     (error: unknown) => {
       logger.warn("Could not read the inbox's tabs for its preview", {

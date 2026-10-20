@@ -240,7 +240,11 @@ test("advances the split reader after archiving an open conversation", async ({
       await emailBody.click();
       await emailBody.press("e");
     } else {
-      await page.getByTestId("thread-reader").click();
+      // The subject, not the reader's middle: links such as the Related
+      // threads can sit there and would open another conversation.
+      await page
+        .getByRole("heading", { name: "Second Unread Command Message" })
+        .click();
       await page.keyboard.press("e");
     }
     archived = true;
@@ -283,6 +287,10 @@ test("advances the split reader after archiving an open conversation", async ({
           })
           .catch(() => undefined)
       )?.ok();
+      // Opening it marked it read; a retry finds it under Unread again.
+      if (restoreSucceeded) {
+        await markThreadUnread(page, emailAccountId, "thr_playwright_3");
+      }
     }
   }
   expect(restoreSucceeded).toBe(true);

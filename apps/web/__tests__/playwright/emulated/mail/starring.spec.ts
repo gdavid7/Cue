@@ -1,11 +1,55 @@
 import { expect, type Page } from "@playwright/test";
 import { test } from "../playwright-test";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
+import { playwrightMailProvider } from "../mail-provider";
 import {
   conversationWithSubject,
   openMail,
   readLatestMailMutation,
+  readProviderAccessToken,
 } from "./mail-test-helpers";
+
+// Later specs, and a retry of this one, expect both conversations as seeded:
+// unread and unstarred. The reader at the end also marked one read.
+test.afterEach(async () => {
+  const messageIds = ["msg_playwright_1", "msg_playwright_3"];
+  if (playwrightMailProvider === "microsoft") {
+    for (const messageId of messageIds) {
+      const response = await fetch(
+        `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${messageId}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: "Bearer playwright_microsoft_fixture_token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            isRead: false,
+            flag: { flagStatus: "notFlagged" },
+          }),
+        },
+      );
+      expect(response.ok).toBe(true);
+    }
+    return;
+  }
+  const response = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/batchModify`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ids: messageIds,
+        addLabelIds: ["UNREAD"],
+        removeLabelIds: ["STARRED"],
+      }),
+    },
+  );
+  expect(response.ok).toBe(true);
+});
 
 test("toggles stars with shortcuts, the palette and the list toolbar while preserving unread", async ({
   page,
@@ -96,6 +140,14 @@ test("toggles stars with shortcuts, the palette and the list toolbar while prese
   );
 
   await row.click();
+  // S acts only on the conversation the reader shows, so wait for it.
+  await expect(page.getByTestId("thread-reader")).toHaveAttribute(
+    "data-detail-selection-settled",
+    "true",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Second Unread Command Message" }),
+  ).toBeVisible();
   const readerStarStatus = page
     .getByTestId("thread-reader")
     .getByRole("img", { name: "Starred conversation", exact: true });
