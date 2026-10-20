@@ -11,6 +11,8 @@ export interface CalendarEvent {
   // day after the last, both at UTC midnight, so they are dates, not instants.
   allDay?: boolean;
   attendees: CalendarEventAttendee[];
+  /** The connected calendar account the event was read from. */
+  calendarEmail?: string;
   description?: string;
   endTime: Date;
   eventUrl?: string;
@@ -61,6 +63,8 @@ export interface CalendarEventUpdateInput {
 }
 
 export interface CalendarEventProvider {
+  /** The connected calendar account's address. */
+  readonly calendarEmail?: string;
   fetchEvents(options: {
     timeMin?: Date;
     timeMax?: Date;

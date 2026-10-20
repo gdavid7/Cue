@@ -810,6 +810,37 @@ describe("HomeDashboard across accounts", () => {
     expect(screen.queryByText("All clear.")).toBeNull();
   });
 
+  it("names the account of each draft ready for review", () => {
+    mocks.homes = {
+      account: homeData([]),
+      "account-b": {
+        ...homeData([]),
+        agentTasks: [
+          {
+            id: "draft-b",
+            kind: "draft",
+            threadId: "b1",
+            title: "Suggested reply: Lunch on Friday?",
+            detail: "Ready for your review",
+            at: "2026-10-13T09:00:00.000Z",
+          },
+        ],
+      },
+    };
+
+    renderToday();
+
+    const draft = screen.getByRole("link", {
+      name: /Suggested reply: Lunch on Friday\?/,
+    });
+    expect(
+      within(draft).getByRole("img", { name: "Inbox: b@example.com" }),
+    ).toBeTruthy();
+    expect(draft.getAttribute("href")).toBe(
+      "/mail/u/0/all-inboxes/inbox/b1?account=1&from=today",
+    );
+  });
+
   it("is one account's Today with one account in All inboxes", () => {
     mocks.emailAccounts = [emailAccount("account", "a@example.com")];
     mocks.home.data = homeData([thread("a1", "Quarterly numbers")]);
@@ -820,6 +851,69 @@ describe("HomeDashboard across accounts", () => {
     expect(screen.queryByRole("img", { name: /^Inbox:/ })).toBeNull();
   });
 });
+
+describe("HomeDashboard greeting", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = homeData([]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.emailAccounts = [];
+  });
+
+  it("greets the user by their own name, not the open mailbox's", async () => {
+    mocks.emailAccounts = [
+      {
+        ...emailAccount("account", "support@acme.example"),
+        name: "Acme Support",
+        user: { name: "Grace Hopper", email: "grace@example.com" },
+      },
+    ];
+
+    renderToday();
+
+    await waitFor(() => expect(greeting()).toMatch(/^Good \w+, Grace$/));
+  });
+
+  it("uses the name on the user's own mailbox when the profile has none", async () => {
+    const user = { name: "", email: "grace@example.com" };
+    mocks.emailAccounts = [
+      { ...emailAccount("work", "support@acme.example"), name: "Acme", user },
+      {
+        ...emailAccount("account", "grace@example.com"),
+        name: "Grace Hopper",
+        user,
+      },
+    ];
+
+    renderToday();
+
+    await waitFor(() => expect(greeting()).toMatch(/^Good \w+, Grace$/));
+  });
+
+  it("greets without a name rather than with an address", async () => {
+    const user = { name: "", email: "grace@example.com" };
+    mocks.emailAccounts = [
+      {
+        ...emailAccount("account", "grace@example.com"),
+        name: "grace@example.com",
+        user,
+      },
+    ];
+
+    renderToday();
+
+    await waitFor(() => expect(greeting()).toMatch(/^Good \w+$/));
+  });
+});
+
+function greeting() {
+  return screen.getByRole("heading", { level: 1 }).textContent;
+}
 
 function emailAccount(id: string, email: string) {
   return {

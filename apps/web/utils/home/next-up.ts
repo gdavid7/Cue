@@ -136,6 +136,8 @@ export async function getNextUp({
         (a) => a.declined && self.has(a.email.toLowerCase()),
       ),
   );
+  // With two calendar accounts, each meeting says whose calendar it is on.
+  const labelCalendars = distinctCalendars(calendarAccounts) > 1;
   // Late in the day, what's left tonight matters less than how tomorrow starts.
   const evening = new TZDate(now, timeZone).getHours() >= EVENING_HOUR;
   const next = evening
@@ -155,7 +157,9 @@ export async function getNextUp({
         : null,
     },
     nextUp: sortByDue([
-      ...events.slice(0, EVENTS_SHOWN).map(eventItem),
+      ...events
+        .slice(0, EVENTS_SHOWN)
+        .map((event) => eventItem(event, labelCalendars)),
       ...deadlines.items,
     ]).slice(0, NEXT_UP_SHOWN),
     suggestion,
@@ -547,7 +551,7 @@ async function clickUpDeadlines(
   });
 }
 
-function eventItem(event: CalendarEvent): NextUpItem {
+function eventItem(event: CalendarEvent, labelCalendar: boolean): NextUpItem {
   return {
     id: `event:${event.id}`,
     kind: "event",
@@ -555,8 +559,15 @@ function eventItem(event: CalendarEvent): NextUpItem {
     at: event.startTime.toISOString(),
     endAt: event.endTime.toISOString(),
     source: "Calendar",
+    ...(labelCalendar && event.calendarEmail
+      ? { detail: event.calendarEmail }
+      : {}),
     url: event.eventUrl,
   };
+}
+
+function distinctCalendars(accounts: { email: string }[]) {
+  return new Set(accounts.map((account) => account.email.toLowerCase())).size;
 }
 
 /** The last minute of a `YYYY-MM-DD` date in the user's time zone. */

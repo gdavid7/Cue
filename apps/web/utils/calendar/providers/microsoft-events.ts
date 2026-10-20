@@ -29,6 +29,7 @@ const MICROSOFT_TEAMS_PROVIDER = "teamsForBusiness";
 
 export interface MicrosoftCalendarConnectionParams {
   accessToken: string | null;
+  calendarEmail?: string;
   /** Calendars to read events from; the default calendar when empty. */
   calendarIds?: string[];
   emailAccountId: string;
@@ -75,9 +76,11 @@ type MicrosoftOnlineMeetingFields = {
 export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
   private readonly connection: MicrosoftCalendarConnectionParams;
   private readonly logger: Logger;
+  readonly calendarEmail?: string;
 
   constructor(connection: MicrosoftCalendarConnectionParams, logger: Logger) {
     this.connection = connection;
+    this.calendarEmail = connection.calendarEmail;
     this.logger = logger;
   }
 

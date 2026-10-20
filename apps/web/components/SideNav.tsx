@@ -44,6 +44,8 @@ import {
   useMeetingBriefsEnabled,
   useMeetingRecorderEnabled,
 } from "@/hooks/useFeatureFlags";
+import { getDeepCleanAccounts } from "@/app/(app)/[emailAccountId]/clean/deep-clean-accounts";
+import { useAccounts } from "@/hooks/useAccounts";
 import { useCurrentOrganization } from "@/hooks/useCurrentOrganization";
 import { useMessagingChannels } from "@/hooks/useMessagingChannels";
 import { useMailHref } from "@/hooks/useMailHref";
@@ -92,6 +94,18 @@ export const useNavigation = () => {
     : mailHref({ accountId: currentEmailAccountId });
   const todayHref = useTodayHref();
   const account = allAccounts ? emailAccount?.email : undefined;
+  const { data: accountsData } = useAccounts();
+  const cleanAccount = useMemo(() => {
+    if (!allAccounts)
+      return isGoogleProvider(provider)
+        ? { id: currentEmailAccountId, email: undefined }
+        : undefined;
+    // Across accounts it opens in the open account when it can.
+    const included = getDeepCleanAccounts(accountsData?.emailAccounts ?? []);
+    return (
+      included.find(({ id }) => id === currentEmailAccountId) ?? included[0]
+    );
+  }, [accountsData, allAccounts, currentEmailAccountId, provider]);
   const { data: channelsData } = useMessagingChannels(
     currentEmailAccountId || null,
   );
@@ -219,12 +233,12 @@ export const useNavigation = () => {
         icon: BarChartBigIcon,
         keywords: ["statistics", "charts", "stats"],
       },
-      ...(isGoogleProvider(provider) && showCleaner
+      ...(cleanAccount && showCleaner
         ? [
             {
               name: "Deep Clean",
-              href: prefixPath(currentEmailAccountId, "/clean"),
-              account,
+              href: prefixPath(cleanAccount.id, "/clean"),
+              account: cleanAccount.email,
               icon: BrushIcon,
               keywords: ["clean", "organize", "tidy"],
               beta: true,
@@ -234,9 +248,9 @@ export const useNavigation = () => {
     ],
     [
       account,
+      cleanAccount,
       currentEmailAccountId,
       isOrganizationMember,
-      provider,
       showChannels,
       showCleaner,
       showMeetingBriefs,
