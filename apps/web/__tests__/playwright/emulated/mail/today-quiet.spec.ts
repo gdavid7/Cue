@@ -190,7 +190,9 @@ test("weather service down: Today stays calm and the weather can be turned off",
   await openToday(page);
   const line = main.getByRole("button", { name: "Lisbon" });
   await expect(line).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  // Nothing on Today calls out the outage (Next's route announcer is outside main).
+  await expect(main.getByRole("alert")).toHaveCount(0);
+  await expect(main.getByText(/weather/i)).toHaveCount(0);
 
   await line.click();
   await page.getByRole("button", { name: "Turn off weather" }).click();
