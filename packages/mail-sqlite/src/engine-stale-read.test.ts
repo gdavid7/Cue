@@ -93,7 +93,7 @@ function outlookSource(store: MailStore) {
         value: {
           bootstrapId: "mailbox",
           scopeId: "primary",
-          changes: [patch("K0", false)],
+          changes: [patch(false)],
           requiredHydration: [],
           bodies: [],
           nextPage: null,
@@ -112,7 +112,7 @@ function outlookSource(store: MailStore) {
         starPending = false;
         reads += 1;
         await confirmStarElsewhere(store);
-        changes.push(patch("K0", false));
+        changes.push(patch(false));
       }
       return {
         status: "page",
@@ -171,7 +171,7 @@ async function confirmStarElsewhere(store: MailStore) {
     result: {
       status: "confirmed",
       receiptId: null,
-      observations: [patch("K1", true)],
+      observations: [patch(true)],
       targets: [
         {
           key: { accountId: "acc-1", messageId: "m1" },
@@ -190,7 +190,6 @@ async function starred(store: MailStore) {
 }
 
 function patch(
-  version: string,
   isStarred: boolean,
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   return {
@@ -200,7 +199,7 @@ function patch(
       provider: "microsoft",
       messageId: "m1",
       conversationId: "c1",
-      version,
+      version: null,
     },
     fields: {
       subject: "subject",

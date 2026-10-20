@@ -335,9 +335,9 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
-        const sequence = await requestedSequence(tx, input.requestedAt);
+        const read = await readOrder(tx, input.requestedAt, digest);
         for (const change of input.page.changes) {
-          await applyChange(tx, change, sequence);
+          await applyChange(tx, change, read);
         }
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
@@ -726,7 +726,7 @@ export async function createSqliteMailStore(
           bodies,
           digest,
           bodyCodec,
-          requestedSequence: await requestedSequence(tx, input.requestedAt),
+          read: await readOrder(tx, input.requestedAt, digest),
         });
         await tx.execute(
           `INSERT INTO sync_streams(account_id, stream_id, generation, checkpoint)
@@ -780,7 +780,7 @@ export async function createSqliteMailStore(
           return { status: "stale" as const };
         }
         let applied = 0;
-        const sequence = await requestedSequence(tx, input.requestedAt);
+        const read = await readOrder(tx, input.requestedAt, digest);
         for (const change of input.changes) {
           if (
             input.onlyMissing &&
@@ -795,8 +795,7 @@ export async function createSqliteMailStore(
           ) {
             continue;
           }
-          await applyChange(tx, change, sequence);
-          applied += 1;
+          if (await applyChange(tx, change, read)) applied += 1;
         }
         for (const body of input.bodies) {
           if (await isStaleMessageVersion(tx, body.key, body.version)) continue;
@@ -854,7 +853,7 @@ export async function createSqliteMailStore(
             if (inserted.changedRows > 0) newTargets.push(key);
           }
         }
-        const sequence = await requestedSequence(tx, input.requestedAt);
+        const read = await readOrder(tx, input.requestedAt, digest);
         for (const change of input.page.changes) {
           if (
             change.kind === "message_patch" &&
@@ -862,7 +861,7 @@ export async function createSqliteMailStore(
           ) {
             continue;
           }
-          await applyChange(tx, change, sequence);
+          await applyChange(tx, change, read);
         }
         await recomputeTargets(tx, newTargets);
         if (!input.page.nextPage) {
@@ -1822,7 +1821,7 @@ export async function createSqliteMailStore(
           bodies,
           digest,
           bodyCodec,
-          requestedSequence: await requestedSequence(tx, input.requestedAt),
+          read: await readOrder(tx, input.requestedAt, digest),
         });
         if (input.nextPage) {
           await tx.execute(
@@ -2625,11 +2624,11 @@ async function applyPageFacts(
     bodies: BodyObservation[];
     digest: (value: unknown) => Promise<string>;
     bodyCodec: MessageBodyCodec;
-    requestedSequence: number | null;
+    read: ReadOrder | null;
   },
 ) {
   for (const change of input.changes) {
-    await applyChange(tx, change, input.requestedSequence);
+    await applyChange(tx, change, input.read);
   }
   for (const body of input.bodies) {
     if (await isStaleMessageVersion(tx, body.key, body.version)) continue;
@@ -2855,13 +2854,18 @@ async function clearStaleBootstrapScopeMembership(
   }
 }
 
+/** Resolves `false` when it kept the stored copy over the provider's. */
 async function applyChange(
   tx: SqlTransaction,
   change: ProviderChange,
-  requestedSequence: number | null = null,
-) {
+  read: ReadOrder | null = null,
+): Promise<boolean> {
   if (change.kind === "message_patch") {
-    const current = await loadConfirmed(tx, change.key);
+    const [row] = await tx.query(
+      "SELECT * FROM messages WHERE account_id = ? AND message_id = ?",
+      [change.key.accountId, change.key.messageId],
+    );
+    const current = row ? confirmedFromRow(row) : null;
     // Any provider read made before a change landed, such as a star whose
     // result already recorded the provider's newer copy, would undo it until
     // the next sync.
@@ -2869,18 +2873,22 @@ async function applyChange(
       current?.version && change.reference.version
         ? compareProviderVersions(change.reference.version, current.version)
         : "unknown";
-    if (comparison === "older") return;
+    if (comparison === "older") return false;
     // When versions can't be ordered (Outlook), or a change was recorded at
     // the version the message already had, the time the read was sent
     // decides: one sent before the change was confirmed can't undo it. A
     // provably newer copy is still the provider's latest word.
     if (
-      current &&
-      comparison !== "newer" &&
-      requestedSequence !== null &&
-      (await changedLocallyAfter(tx, change.key, requestedSequence))
+      read &&
+      row?.local_change_sequence != null &&
+      Number(row.local_change_sequence) > read.sequence &&
+      comparison !== "newer"
     ) {
-      return;
+      // The skipped copy may also carry a remote edit made around the
+      // change, which sync has now moved past. A read sent from here on
+      // follows the change, so its copy lands.
+      await enqueueMetadataReread(tx, change.key, read.digest);
+      return false;
     }
     const base: MessageMetadata = current ?? {
       subject: "",
@@ -2907,7 +2915,7 @@ async function applyChange(
       deleted: false,
     });
     await recomputeTargets(tx, [change.key]);
-    return;
+    return true;
   }
   if (change.kind === "message_deleted") {
     await tx.execute(
@@ -2923,7 +2931,7 @@ async function applyChange(
 
   if (change.kind === "removed_from_scope") {
     const current = await loadConfirmed(tx, change.key);
-    if (!current) return;
+    if (!current) return true;
     const scopeFolderId = folderIdForBootstrapScope(change.scopeId);
     const namedInbox =
       change.scopeId === "inbox" || change.scopeId.endsWith(":inbox");
@@ -2932,7 +2940,7 @@ async function applyChange(
       (current.folderId === scopeFolderId ||
         current.folderId === change.scopeId);
     if (!namedInbox && !(leftItsFolder && current.roles.includes("inbox"))) {
-      return;
+      return true;
     }
     const next = applyMetadataChange(current, { kind: "archive" });
     await upsertConfirmed(tx, {
@@ -2942,6 +2950,7 @@ async function applyChange(
     });
     await recomputeTargets(tx, [change.key]);
   }
+  return true;
 }
 
 async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
@@ -3450,31 +3459,50 @@ async function insertMessageContent(
   await indexMessageContent(tx, body.key, stored);
 }
 
+type ReadOrder = {
+  sequence: number;
+  digest: (value: unknown) => Promise<string>;
+};
+
 // The store's own sequence orders a read against local changes: it is shared
 // by every engine on this database and never mixes provider and device clocks.
 // A read dated in another database epoch predates everything here.
-async function requestedSequence(
+async function readOrder(
   tx: SqlTransaction,
   requestedAt: LocalRevision | undefined,
-): Promise<number | null> {
+  digest: (value: unknown) => Promise<string>,
+): Promise<ReadOrder | null> {
   if (!requestedAt) return null;
   const current = await readRevision(tx);
-  return current.databaseEpoch === requestedAt.databaseEpoch
-    ? requestedAt.sequence
-    : -1;
+  return {
+    sequence:
+      current.databaseEpoch === requestedAt.databaseEpoch
+        ? requestedAt.sequence
+        : -1,
+    digest,
+  };
 }
 
-async function changedLocallyAfter(
+// Same job id as any metadata hydration of this one message. A copy of the
+// job already out may have been sent before the change too, so its claim is
+// released: that attempt's result no longer lands, and the job runs again.
+async function enqueueMetadataReread(
   tx: SqlTransaction,
   key: MessageKey,
-  sequence: number,
+  digest: (value: unknown) => Promise<string>,
 ) {
-  const rows = await tx.query(
-    `SELECT 1 FROM messages
-     WHERE account_id = ? AND message_id = ? AND local_change_sequence > ?`,
-    [key.accountId, key.messageId, sequence],
+  const keys = [{ accountId: key.accountId, messageId: key.messageId }];
+  await tx.execute(
+    `INSERT INTO sync_jobs(job_id, account_id, kind, payload_json)
+     VALUES (?, ?, 'hydrate', ?)
+     ON CONFLICT(job_id) DO UPDATE SET
+       claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL`,
+    [
+      `hydrate:${key.accountId}:metadata:${await digest(keys)}`,
+      key.accountId,
+      JSON.stringify({ keys, purpose: "metadata" }),
+    ],
   );
-  return rows.length > 0;
 }
 
 // A read outside sync can return a message deleted since; only a strictly
