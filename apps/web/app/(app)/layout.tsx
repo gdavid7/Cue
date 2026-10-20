@@ -19,6 +19,7 @@ import { GoogleSignInReminder } from "@/app/(app)/GoogleSignInReminder";
 import { DesktopMailIndicators } from "@/app/(app)/DesktopMailIndicators";
 import { TabUnreadTitle } from "@/app/(app)/TabUnreadTitle";
 import { KeepTodayPrefetched } from "@/app/(app)/KeepTodayPrefetched";
+import { GetStartedRecorder } from "@/app/(app)/GetStartedRecorder";
 import { WebNewMailNotifications } from "@/app/(app)/WebNewMailNotifications";
 import { ProviderRateLimitBanner } from "@/app/(app)/ProviderRateLimitBanner";
 import { MailEngineRuntime } from "@/utils/mail-engine/MailEngineHost";
@@ -105,6 +106,7 @@ export default async function AppLayout({
               <DesktopMailIndicators />
               <TabUnreadTitle />
               <KeepTodayPrefetched />
+              <GetStartedRecorder />
               <WebNewMailNotifications />
               <AiAutomationStatusBanner
                 aiAccess={aiAccess}

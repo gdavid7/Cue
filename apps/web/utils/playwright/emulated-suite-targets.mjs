@@ -12,6 +12,7 @@ const featureGroups = [
     providers: ["google", "microsoft"],
     specs: [
       "onboarding/first-run.spec.ts",
+      "onboarding/get-started.spec.ts",
       "attachments/attachment-onboarding.spec.ts",
     ],
   },
