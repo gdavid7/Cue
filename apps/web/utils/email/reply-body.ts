@@ -38,8 +38,19 @@ export function withoutDraftReplySignature(
   body: string,
   signature: string | null | undefined,
 ) {
-  const suffix = signature ? `${SIGNATURE_SEPARATOR}${signature}` : "";
-  return suffix && body.endsWith(suffix) ? body.slice(0, -suffix.length) : body;
+  const known = signature && normalizeLines(signature).trim();
+  if (!known) return body;
+  // Line endings and trailing space can differ between the stored body and
+  // the signature as it is now; the words can't.
+  const normalized = normalizeLines(body);
+  const suffix = `${SIGNATURE_SEPARATOR}${known}`;
+  return normalized.endsWith(suffix)
+    ? normalized.slice(0, -suffix.length).trimEnd()
+    : body;
+}
+
+function normalizeLines(text: string) {
+  return text.replace(/\r\n?/g, "\n").trimEnd();
 }
 
 const SIGNATURE_SEPARATOR = "\n\n";
