@@ -60,6 +60,11 @@ export function getCueSearchStage({
 
 /** One tier of widening, and the searches Cue runs for it, all at once. */
 export type WideningStep = { tier: WideningTier; searches: string[] };
+/**
+ * The tier Cue widened to. `onProvider` is the last resort: no local search
+ * found any mail, so the last tier's searches went to the provider too.
+ */
+export type CueWidening = WideningStep & { onProvider: boolean };
 
 /**
  * The tiers a search widens through, in order, each with the wider searches
@@ -115,6 +120,30 @@ export function getWideningStep({
   return widened.settled && widened.count === 0 && step + 1 < ladderLength
     ? step + 1
     : step;
+}
+
+/**
+ * Whether to send the ladder's last tier to the provider, once: every
+ * search has answered and none found any mail, the first (which the
+ * provider answered too) or any tier (which read the local mail alone). It
+ * finds mail older than an account's local copy reaches.
+ */
+export function shouldAskProviderLastResort({
+  step,
+  primary,
+  widened,
+  ladderLength,
+  expired,
+}: Parameters<typeof getWideningStep>[0]): boolean {
+  return (
+    !expired &&
+    step !== null &&
+    step === ladderLength - 1 &&
+    primary.settled &&
+    primary.count === 0 &&
+    widened.settled &&
+    widened.count === 0
+  );
 }
 
 export type SearchAnswerRequest = { query: string; searches?: string[] };

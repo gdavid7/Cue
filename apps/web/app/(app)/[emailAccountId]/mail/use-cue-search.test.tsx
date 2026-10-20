@@ -16,6 +16,8 @@ const state = vi.hoisted(() => ({
   intent: undefined as unknown,
   /** Results by the joined searches each window runs. */
   results: new Map<string, { settled: boolean; ids: string[] }>(),
+  /** What the provider answers for a window, where it differs from local mail. */
+  providerResults: new Map<string, { settled: boolean; ids: string[] }>(),
   enabledWindows: [] as string[],
   localOnlyWindows: [] as string[],
   enabledPredicates: [] as unknown[],
@@ -52,7 +54,11 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
     if (enabled) state.enabledWindows.push(key);
     if (enabled && providerSearch === false) state.localOnlyWindows.push(key);
     if (enabled) state.enabledPredicates.push(predicate);
-    const result = enabled ? state.results.get(key) : undefined;
+    const result = !enabled
+      ? undefined
+      : providerSearch !== false && state.providerResults.has(key)
+        ? state.providerResults.get(key)
+        : state.results.get(key);
     return {
       threads: (result?.ids ?? []).map((id) => ({ id, messages: [] })),
       hasRemoteResponse: Boolean(result?.settled),
@@ -85,6 +91,7 @@ beforeEach(() => {
     isQuestion: false,
   };
   state.results = new Map();
+  state.providerResults = new Map();
   state.enabledWindows = [];
   state.localOnlyWindows = [];
   state.enabledPredicates = [];
@@ -181,16 +188,54 @@ describe("useCueSearch", () => {
     expect(state.enabledWindows).not.toContain(sender);
   });
 
-  it("ends at the top of the ladder when no tier finds anything", () => {
+  it("sends the last tier to the provider once when no local search finds any mail", () => {
+    const keys = ladderKeys();
+    for (const key of keys) {
+      state.results.set(key, { settled: true, ids: [] });
+    }
+    const last = keys[keys.length - 1];
+    state.providerResults.set(last, { settled: false, ids: [] });
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    const { result, rerender } = render(SENTENCE);
+
+    expect(result.current.widening).toMatchObject({
+      tier: "wider_dates",
+      onProvider: true,
+    });
+    expect(result.current.stage).toBe("widening");
+    expect(result.current.foundNothing).toBe(false);
+
+    state.providerResults.set(last, { settled: true, ids: ["old"] });
+    rerender({ q: SENTENCE });
+    expect(result.current.stage).toBe("done");
+    expect(result.current.threads.map((t) => t.id)).toEqual(["old"]);
+  });
+
+  it("says it found nothing once the provider's last-resort search finds nothing too", () => {
     for (const key of ladderKeys()) {
       state.results.set(key, { settled: true, ids: [] });
     }
     state.results.set(SEARCH, { settled: true, ids: [] });
     const { result } = render(SENTENCE);
 
-    expect(result.current.widening?.tier).toBe("wider_dates");
+    expect(result.current.widening?.onProvider).toBe(true);
     expect(result.current.stage).toBe("done");
     expect(result.current.foundNothing).toBe(true);
+  });
+
+  it("keeps the ladder local when the first search found some mail", () => {
+    const keys = ladderKeys();
+    for (const key of keys) {
+      state.results.set(key, { settled: true, ids: ["a"] });
+    }
+    state.results.set(SEARCH, { settled: true, ids: ["a"] });
+    const { result } = render(SENTENCE);
+
+    expect(result.current.widening).toMatchObject({
+      tier: "wider_dates",
+      onProvider: false,
+    });
+    expect(result.current.threads.map((t) => t.id)).toEqual(["a"]);
   });
 
   it("stops waiting at the budget and doesn't widen after it", () => {

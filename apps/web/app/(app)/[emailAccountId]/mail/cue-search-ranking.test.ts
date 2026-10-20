@@ -1,6 +1,9 @@
 import type { ConversationSummary } from "@inboxzero/mail-core/queries";
 import { describe, expect, it } from "vitest";
-import { rankCueFoundThreads } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import {
+  rankCueFoundThreads,
+  rankWithWidened,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 
 const NOW = new Date("2026-10-19T17:00:00Z");
@@ -115,14 +118,58 @@ describe("rankCueFoundThreads", () => {
   });
 });
 
+describe("rankWithWidened", () => {
+  const search = "(conference OR summit) (talk OR invitation)";
+  const invite = thread("invite", {
+    daysAgo: 60,
+    subject: "Invitation to speak at DevSummit",
+  });
+
+  it("lets a wider tier's better fit pass a promotion the first search found", () => {
+    const promo = thread("promo", {
+      daysAgo: 1,
+      subject: "Conference talk recordings",
+      labelIds: ["CATEGORY_PROMOTIONS"],
+    });
+    expect(ids(rankWithWidened([promo], [invite], context(search)))).toEqual([
+      "invite",
+      "promo",
+    ]);
+  });
+
+  it("keeps the first search's other matches ahead of anything a tier found", () => {
+    const weak = thread("weak", {
+      daysAgo: 1,
+      subject: "Notes",
+      preview: "the conference talk",
+    });
+    const strong = thread("strong", {
+      daysAgo: 2,
+      subject: "Conference talk invitation",
+    });
+    expect(ids(rankWithWidened([weak], [strong], context(search)))).toEqual([
+      "weak",
+      "strong",
+    ]);
+  });
+});
+
 function rank(search: string, threads: ReturnType<typeof thread>[]) {
-  return rankCueFoundThreads(threads, {
+  return ids(rankCueFoundThreads(threads, context(search)));
+}
+
+function context(search: string) {
+  return {
     searches: [search],
     labels: [NEWSLETTER_LABEL],
     now: NOW,
     timeZone: "UTC",
-    provider: "google",
-  }).map((row) => row.id);
+    provider: "google" as const,
+  };
+}
+
+function ids(threads: { id: string }[]) {
+  return threads.map((row) => row.id);
 }
 
 function thread(

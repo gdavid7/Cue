@@ -6,6 +6,7 @@ import {
   getWideningLadder,
   getWideningStep,
   keepFrozenRows,
+  shouldAskProviderLastResort,
   withoutPlainDuplicates,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 
@@ -144,6 +145,38 @@ describe("getWideningStep", () => {
       getWideningStep({ ...base, step: 0, widened: EMPTY, expired: true }),
     ).toBe(0);
     expect(getWideningStep({ ...base, expired: true })).toBeNull();
+  });
+});
+
+describe("shouldAskProviderLastResort", () => {
+  const top = {
+    step: 2,
+    primary: EMPTY,
+    widened: EMPTY,
+    ladderLength: 3,
+    expired: false,
+  };
+
+  it("asks once every search, the top tier's included, has found no mail", () => {
+    expect(shouldAskProviderLastResort(top)).toBe(true);
+  });
+
+  it("doesn't ask below the top, while a search is out, after mail is found, or past the budget", () => {
+    expect(shouldAskProviderLastResort({ ...top, step: 1 })).toBe(false);
+    expect(shouldAskProviderLastResort({ ...top, widened: IDLE })).toBe(false);
+    expect(
+      shouldAskProviderLastResort({
+        ...top,
+        primary: { settled: true, count: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      shouldAskProviderLastResort({
+        ...top,
+        widened: { settled: true, count: 1 },
+      }),
+    ).toBe(false);
+    expect(shouldAskProviderLastResort({ ...top, expired: true })).toBe(false);
   });
 });
 

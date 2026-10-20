@@ -76,6 +76,44 @@ export function rankCueFoundThreads<T extends ListThread>(
   context: CueRankingContext,
 ): T[] {
   if (threads.length < 2) return threads;
+  return sortByScore(scoreThreads(threads, context));
+}
+
+/**
+ * Cue's matches with what a wider tier added beyond them. The first
+ * search's matches lead, since they meet all of it, except those it
+ * demotes (a promotion or newsletter the search didn't ask for): those
+ * compete with the tier's on how well they fit, so mail that fits the
+ * search better comes first even when only a wider search found it.
+ */
+export function rankWithWidened<T extends ListThread>(
+  primary: T[],
+  widened: T[],
+  context: CueRankingContext,
+): T[] {
+  if (!widened.length) return rankCueFoundThreads(primary, context);
+  const scored = scoreThreads([...primary, ...widened], context);
+  const leading = scored.filter(
+    (entry) => entry.index < primary.length && !entry.demoted,
+  );
+  const rest = scored.filter(
+    (entry) => entry.index >= primary.length || entry.demoted,
+  );
+  return [...sortByScore(leading), ...sortByScore(rest)];
+}
+
+type ScoredThread<T> = {
+  thread: T;
+  index: number;
+  latestMs: number;
+  score: number;
+  demoted: boolean;
+};
+
+function scoreThreads<T extends ListThread>(
+  threads: T[],
+  context: CueRankingContext,
+): ScoredThread<T>[] {
   const facets = readFacets(context);
   const lowPriorityIds = new Set(LOW_PRIORITY_LABEL_IDS);
   for (const label of context.labels) {
@@ -85,20 +123,23 @@ export function rankCueFoundThreads<T extends ListThread>(
     mentionsLabel(condition, lowPriorityIds),
   );
   const nowMs = context.now.getTime();
-  return threads
-    .map((thread, index) => {
-      const fields = threadFields(thread);
-      return {
-        thread,
-        index,
-        latestMs: fields.latestMs,
-        score: scoreThread(fields, facets, {
-          lowPriorityIds,
-          asksForLowPriority,
-          nowMs,
-        }),
-      };
-    })
+  return threads.map((thread, index) => {
+    const fields = threadFields(thread);
+    return {
+      thread,
+      index,
+      latestMs: fields.latestMs,
+      ...scoreThread(fields, facets, {
+        lowPriorityIds,
+        asksForLowPriority,
+        nowMs,
+      }),
+    };
+  });
+}
+
+function sortByScore<T>(scored: ScoredThread<T>[]): T[] {
+  return [...scored]
     .sort(
       (a, b) =>
         b.score - a.score || b.latestMs - a.latestMs || a.index - b.index,
@@ -136,7 +177,7 @@ function scoreThread(
     asksForLowPriority: boolean;
     nowMs: number;
   },
-): number {
+): { score: number; demoted: boolean } {
   let score = 0;
   for (const group of facets.groups) {
     let best = 0;
@@ -170,10 +211,14 @@ function scoreThread(
   }
 
   const lowPriority = [...fields.labelIds].some((id) => lowPriorityIds.has(id));
-  if (lowPriority && !asksForLowPriority && !fromSender) score += LOW_PRIORITY;
+  const demoted = lowPriority && !asksForLowPriority && !fromSender;
+  if (demoted) score += LOW_PRIORITY;
 
   const ageMs = Math.max(0, nowMs - fields.latestMs);
-  return score + MAX_RECENCY * 0.5 ** (ageMs / RECENCY_HALF_LIFE_MS);
+  return {
+    score: score + MAX_RECENCY * 0.5 ** (ageMs / RECENCY_HALF_LIFE_MS),
+    demoted,
+  };
 }
 
 function readFacets(context: CueRankingContext): Facets {

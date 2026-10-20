@@ -71,6 +71,7 @@ describe("CueFoundSection", () => {
       stage: "done",
       widening: {
         tier: "fewer_words",
+        onProvider: false,
         searches: ["from:sarah lease OR contract after:1788393600"],
       },
     });
@@ -101,6 +102,25 @@ describe("CueFoundSection", () => {
       }),
     );
     expect(onEditSearch).toHaveBeenLastCalledWith(INTENT.editableSearches[0]);
+  });
+
+  it("says when Cue also ran the last tier on the server", () => {
+    renderSection({
+      stage: "done",
+      widening: {
+        tier: "wider_dates",
+        onProvider: true,
+        searches: ["from:sarah lease after:1780000000"],
+      },
+    });
+    const reading = screen.getByRole("button", {
+      name: /Mail from Sarah with attachments in September/,
+    });
+    expect(reading.textContent).toContain(
+      "searched a wider date range, then on the server",
+    );
+    fireEvent.click(reading);
+    expect(screen.getByText(/also ran these on the server/)).toBeTruthy();
   });
 
   it("says its searches found nothing only when told they all answered", () => {

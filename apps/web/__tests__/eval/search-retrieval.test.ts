@@ -27,7 +27,7 @@ import {
   getWideningLadder,
   getWideningStep,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
-import { rankCueFoundThreads } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import { rankWithWidened } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import {
@@ -255,9 +255,9 @@ async function readSearches(store: MailStore, searches: string[]) {
 }
 
 /**
- * Cue's searches, ranked, then the widening ladder's tiers when they find
- * too little, up to the first tier that finds more; its matches go after
- * the first ones, ranked among themselves, as on screen.
+ * Cue's searches, then the widening ladder's tiers when they find too
+ * little, up to the first tier that finds more, ranked together as on
+ * screen. The provider is stubbed, so its last-resort search finds nothing.
  */
 async function runCueSearch(store: MailStore, searches: string[]) {
   const ranking = {
@@ -268,9 +268,7 @@ async function runCueSearch(store: MailStore, searches: string[]) {
     provider: "google" as const,
   };
   const primary = await readSearches(store, searches);
-  const ranked = rankCueFoundThreads(primary, ranking).map(
-    (thread) => thread.id,
-  );
+  const primaryIds = new Set(primary.map((thread) => thread.id));
   const ladder = getWideningLadder(searches, ranking);
   let step = getWideningStep({
     step: null,
@@ -284,7 +282,7 @@ async function runCueSearch(store: MailStore, searches: string[]) {
   while (step !== null) {
     queries += 1;
     wider = (await readSearches(store, ladder[step].searches)).filter(
-      (thread) => !ranked.includes(thread.id),
+      (thread) => !primaryIds.has(thread.id),
     );
     const next = getWideningStep({
       step,
@@ -298,10 +296,7 @@ async function runCueSearch(store: MailStore, searches: string[]) {
   }
   const widening = step === null ? null : ladder[step];
   return {
-    ranked: [
-      ...ranked,
-      ...rankCueFoundThreads(wider, ranking).map((thread) => thread.id),
-    ],
+    ranked: rankWithWidened(primary, wider, ranking).map((thread) => thread.id),
     widenedSearches: widening?.searches ?? [],
     wideningTier: widening?.tier,
     queries,

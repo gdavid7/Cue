@@ -6,15 +6,18 @@ import useSWR from "swr";
 import {
   CUE_SEARCH_BUDGET_MS,
   type CueSearchIntent,
+  type CueWidening,
   getCueSearchStage,
   getSearchAnswerRequest,
   getWideningLadder,
   getWideningStep,
   keepFrozenRows,
+  shouldAskProviderLastResort,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import {
   type CueRankingContext,
   rankCueFoundThreads,
+  rankWithWidened,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import {
   getListThreadKey,
@@ -163,18 +166,25 @@ export function useCueSearch({
   const [widenedTo, setWidenedTo] = useState<{
     query: string;
     step: number;
+    onProvider: boolean;
   } | null>(null);
-  const step = widenedTo?.query === query ? widenedTo.step : null;
-  const widening = step === null ? null : (ladder[step] ?? null);
+  const wideningState = widenedTo?.query === query ? widenedTo : null;
+  const step = wideningState?.step ?? null;
+  const onProvider = Boolean(wideningState?.onProvider);
+  const widening = useMemo<CueWidening | null>(() => {
+    const tier = step === null ? undefined : ladder[step];
+    return tier ? { ...tier, onProvider } : null;
+  }, [ladder, step, onProvider]);
   // Each tier reads the local mail alone, so climbing the ladder stays fast;
-  // the first search already asked the provider. Unread is a narrowing
-  // condition, which widening drops.
+  // the first search already asked the provider. Only when nothing at all
+  // turns up does the last tier go to the provider too. Unread is a
+  // narrowing condition, which widening drops.
   const wider = useCueFoundThreads({
     emailAccountId,
     searches: widening?.searches ?? NO_SEARCHES,
     timeZone,
     unreadOnly: false,
-    providerSearch: false,
+    providerSearch: onProvider,
     enabled: Boolean(widening),
   });
   const primaryKeys = useMemo(
@@ -197,26 +207,34 @@ export function useCueSearch({
     widening: Boolean(widening),
     widened: wider.window,
   });
+  const ladderState = {
+    step,
+    primary: primary.window,
+    widened: { settled: wider.window.settled, count: widerNew.length },
+    ladderLength: ladder.length,
+    expired,
+  };
   const nextStep =
     stage === "done" || stage === "widening"
-      ? getWideningStep({
-          step,
-          primary: primary.window,
-          widened: { settled: wider.window.settled, count: widerNew.length },
-          ladderLength: ladder.length,
-          expired,
-        })
+      ? getWideningStep(ladderState)
       : step;
   if (query && nextStep !== null && nextStep !== step)
-    setWidenedTo({ query, step: nextStep });
+    setWidenedTo({ query, step: nextStep, onProvider: false });
+  else if (
+    query &&
+    nextStep !== null &&
+    !onProvider &&
+    shouldAskProviderLastResort(ladderState)
+  )
+    setWidenedTo({ query, step: nextStep, onProvider: true });
 
-  // The first search's matches lead, best first; a wider tier only adds
-  // what it found beyond them, ranked among themselves.
-  const liveThreads = useMemo(() => {
-    const first = rankCueFoundThreads(primary.threads, ranking);
-    if (!widening) return first;
-    return [...first, ...rankCueFoundThreads(widerNew, ranking)];
-  }, [widening, primary.threads, widerNew, ranking]);
+  const liveThreads = useMemo(
+    () =>
+      widening
+        ? rankWithWidened(primary.threads, widerNew, ranking)
+        : rankCueFoundThreads(primary.threads, ranking),
+    [widening, primary.threads, widerNew, ranking],
+  );
   useEffect(() => {
     rowKeysRef.current = liveThreads.map(getListThreadKey);
   }, [liveThreads]);

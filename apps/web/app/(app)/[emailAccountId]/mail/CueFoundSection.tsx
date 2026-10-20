@@ -6,7 +6,7 @@ import {
   CUE_FOUND_VISIBLE_ROWS,
   type CueSearchIntent,
   type CueSearchStage,
-  type WideningStep,
+  type CueWidening,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
@@ -64,7 +64,7 @@ export function CueFoundSection({
   stage: CueSearchStage;
   intent: CueSearchIntent | null;
   /** The tier Cue widened to, and the searches it ran for it. */
-  widening: WideningStep | null;
+  widening: CueWidening | null;
   /** The rows to show; all of them, or the first few. */
   threads: ListThread[];
   /** All the rows Cue found, shown or not. */
@@ -132,6 +132,7 @@ export function CueFoundSection({
               >
                 {intent.explanation || "Show the searches Cue ran"}
                 {widening ? ` · ${WIDENING_LABELS[widening.tier]}` : ""}
+                {widening?.onProvider ? ", then on the server" : ""}
               </button>
             ) : (
               <span className="text-muted-foreground" role="status">
@@ -155,6 +156,12 @@ export function CueFoundSection({
                     onEditSearch={onEditSearch}
                     searches={widerSearches}
                   />
+                  {widening.onProvider ? (
+                    <p className="mt-1 text-muted-foreground text-xs">
+                      Nothing turned up in the mail on this device, so Cue also
+                      ran these on the server, which holds older mail.
+                    </p>
+                  ) : null}
                 </>
               ) : null}
             </div>
