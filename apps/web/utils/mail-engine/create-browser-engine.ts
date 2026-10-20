@@ -46,6 +46,8 @@ const EARLY_OWNER_LOCK_ATTEMPTS = 20;
 let prewarmed: {
   worker: Worker;
   timer: ReturnType<typeof setTimeout>;
+  /** Its script failed before a start could listen for that. */
+  failed: boolean;
 } | null = null;
 // The engine's owner lock, taken while the page hydrates so its early worker
 // can open the mailbox. No other tab can own the engine, and so open its
@@ -90,7 +92,15 @@ export async function createBrowserMailEngine(
   // The previous user's mailbox must be gone before this one opens it. Only
   // a pending wipe is awaited, so a start goes out to the worker in the task
   // that asked for it.
-  if (isLocalMailboxWipePending()) await finishPendingLocalMailboxWipe();
+  if (isLocalMailboxWipePending()) {
+    // An early worker may have opened the signed-out mailbox, and holds its
+    // files until it is gone.
+    releasePrewarmedMailEngineWorker();
+    await finishPendingLocalMailboxWipe();
+    if (isLocalMailboxWipePending()) {
+      throw new Error("The signed-out mailbox could not be wiped");
+    }
+  }
   const start: BrowserEngineStart = {
     ...input,
     maxPendingOperations:
@@ -158,7 +168,11 @@ export function prewarmMailEngineWorker() {
     worker.terminate();
     letGoOfEarlyOwnerLock();
   }, PREWARMED_WORKER_IDLE_MS);
-  prewarmed = { worker, timer };
+  const record = { worker, timer, failed: false };
+  worker.addEventListener("error", () => {
+    record.failed = true;
+  });
+  prewarmed = record;
   earlyOwner = askForOwnerLockEarly(worker);
 }
 
@@ -433,8 +447,13 @@ function delay(ms: number) {
 function takePrewarmedWorker() {
   if (!prewarmed) return null;
   clearTimeout(prewarmed.timer);
-  const { worker } = prewarmed;
+  const { worker, failed } = prewarmed;
   prewarmed = null;
+  // It would never answer a start.
+  if (failed) {
+    worker.terminate();
+    return null;
+  }
   return worker;
 }
 

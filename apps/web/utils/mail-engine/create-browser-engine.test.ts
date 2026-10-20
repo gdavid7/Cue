@@ -49,12 +49,81 @@ describe("createBrowserMailEngine", () => {
     const order: string[] = [];
     wipe.finishPending.mockImplementation(async () => {
       order.push("wipe");
+      wipe.isPending.mockReturnValue(false);
     });
     FakeWorker.onCreate = () => order.push("worker");
 
     await startEngine();
 
     expect(order).toEqual(["wipe", "worker"]);
+  });
+
+  it("wipes a mailbox signed out after the early worker opened it, and starts in a fresh worker", async () => {
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    const early = FakeWorker.instances[0];
+    await vi.waitFor(() => expect(early.received("preopen")).toBe(1));
+    const release = claimEarlyMailEngineOwnerLock();
+    // Another tab signs out while this page hydrates.
+    let pending = true;
+    wipe.isPending.mockImplementation(() => pending);
+    wipe.finishPending.mockImplementation(async () => {
+      // The early worker holds the mailbox files until it is gone.
+      if (early.terminated) pending = false;
+    });
+
+    await startEngine();
+
+    expect(wipe.finishPending).toHaveBeenCalledOnce();
+    expect(early.terminated).toBe(true);
+    expect(early.received("start")).toBe(0);
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(FakeWorker.instances[1].received("start")).toBe(1);
+    // The start still owns the engine under the lock it claimed.
+    expect(locks.held()).toBe(true);
+    if (typeof release === "function") release();
+  });
+
+  it("opens no mailbox while a sign-out wipe cannot finish", async () => {
+    prewarmMailEngineWorker();
+    wipe.isPending.mockReturnValue(true);
+
+    await expect(startEngine()).rejects.toThrow();
+
+    expect(FakeWorker.instances.every((w) => w.received("start") === 0)).toBe(
+      true,
+    );
+    expect(sqlite.createStore).not.toHaveBeenCalled();
+  });
+
+  it("starts in a fresh worker when the early one failed to load", async () => {
+    prewarmMailEngineWorker();
+    // Its script fails before the engine starts and listens for errors.
+    FakeWorker.instances[0].fail("worker script failed");
+
+    await startEngine();
+
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    expect(FakeWorker.instances[1].received("start")).toBe(1);
+  });
+
+  it("starts under the claimed lock in a fresh worker when the early one idled out first", async () => {
+    vi.useFakeTimers();
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    await vi.advanceTimersByTimeAsync(0);
+    const release = claimEarlyMailEngineOwnerLock();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const started = startEngine();
+    await vi.runAllTimersAsync();
+    await started;
+
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(FakeWorker.instances[1].received("start")).toBe(1);
+    expect(locks.held()).toBe(true);
+    if (typeof release === "function") release();
   });
 
   it("opens the mailbox in the worker started while the page loaded", async () => {
@@ -410,16 +479,30 @@ class FakeWorker {
   static startMessages: unknown[] = [];
   readonly silent = new Set<string>();
   terminated = false;
+  private dead = false;
   private readonly sent: Message[] = [];
   private readonly listeners = new Set<(event: { data: unknown }) => void>();
+  private readonly errorListeners = new Set<
+    (event: { message: string }) => void
+  >();
 
   constructor() {
     FakeWorker.instances.push(this);
     FakeWorker.onCreate?.();
   }
 
-  addEventListener(type: string, listener: (event: { data: unknown }) => void) {
+  addEventListener(
+    type: string,
+    listener: (event: { data: unknown; message: string }) => void,
+  ) {
     if (type === "message") this.listeners.add(listener);
+    if (type === "error") this.errorListeners.add(listener);
+  }
+
+  /** Its script fails: it reports an error and never answers again. */
+  fail(message: string) {
+    this.dead = true;
+    for (const listener of this.errorListeners) listener({ message });
   }
 
   postMessage(message: Message) {
@@ -428,7 +511,7 @@ class FakeWorker {
     // A real worker answers on a later task and never after it is terminated.
     setTimeout(
       () => {
-        if (this.terminated || !message.id) return;
+        if (this.terminated || this.dead || !message.id) return;
         const startError =
           message.type === "start" ? FakeWorker.startErrors.shift() : undefined;
         const replies: unknown[] = [
