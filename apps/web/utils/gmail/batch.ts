@@ -14,6 +14,7 @@ import {
   withGmailInflightSlot,
 } from "@/utils/gmail/inflight";
 import { isRetryableError } from "@/utils/gmail/retry";
+import { timeRequestDependency } from "@/utils/request-metrics";
 
 const logger = createScopedLogger("gmail/batch");
 
@@ -67,22 +68,23 @@ async function sendBatch(
   });
   const { textRes, contentType } = await withGmailInflightSlot(
     { emailAccountId, priority: ticket.priority, weight: ids.length },
-    async () => {
-      const res = await fetch(getGoogleGmailBatchUrl(), {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "multipart/mixed; boundary=batch_boundary",
-          "Accept-Encoding": "gzip",
-          "User-Agent": "Cue (gzip)",
-        },
-        body: batchRequestBody,
-      });
-      return {
-        textRes: await res.text(),
-        contentType: res.headers.get("Content-Type"),
-      };
-    },
+    () =>
+      timeRequestDependency("gmailBatch", async () => {
+        const res = await fetch(getGoogleGmailBatchUrl(), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "multipart/mixed; boundary=batch_boundary",
+            "Accept-Encoding": "gzip",
+            "User-Agent": "Cue (gzip)",
+          },
+          body: batchRequestBody,
+        });
+        return {
+          textRes: await res.text(),
+          contentType: res.headers.get("Content-Type"),
+        };
+      }),
   );
 
   const batch = parseBatchResponse(textRes, contentType);

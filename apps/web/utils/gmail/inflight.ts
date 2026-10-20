@@ -1,5 +1,6 @@
 import type { GmailQuotaPriority as Priority } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
+import { timeRequestDependency } from "@/utils/request-metrics";
 
 // Gmail limits how many requests one user has in flight at once, across every
 // client, and counts each request inside a batch toward it; it answers past
@@ -131,46 +132,50 @@ async function acquire(
   }
 
   const startedAt = Date.now();
-  const granted = await new Promise<boolean>((resolve, reject) => {
-    const remove = () => {
-      const index = account.waiters.indexOf(waiter);
-      if (index !== -1) account.waiters.splice(index, 1);
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      // The waiter may have been the head holding back calls that now fit.
-      grantWaiters(account);
-    };
-    const onAbort = () => {
-      remove();
-      if (total(account) <= 0 && account.waiters.length === 0)
-        accounts.delete(emailAccountId);
-      reject(signal?.reason);
-    };
-    const waiter: Waiter = {
-      priority,
-      permits,
-      grant: () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-        resolve(true);
-      },
-    };
-    const timer = setTimeout(() => {
-      remove();
-      account.inflight[priority] += permits;
-      resolve(false);
-    }, GMAIL_INFLIGHT_MAX_WAIT_MS[priority]);
-    signal?.addEventListener("abort", onAbort, { once: true });
-    // Higher priorities first, arrival order within one.
-    const before = account.waiters.findIndex(
-      (other) => RANK[other.priority] > RANK[priority],
-    );
-    account.waiters.splice(
-      before === -1 ? account.waiters.length : before,
-      0,
-      waiter,
-    );
-  });
+  const granted = await timeRequestDependency(
+    "wait",
+    () =>
+      new Promise<boolean>((resolve, reject) => {
+        const remove = () => {
+          const index = account.waiters.indexOf(waiter);
+          if (index !== -1) account.waiters.splice(index, 1);
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          // The waiter may have been the head holding back calls that now fit.
+          grantWaiters(account);
+        };
+        const onAbort = () => {
+          remove();
+          if (total(account) <= 0 && account.waiters.length === 0)
+            accounts.delete(emailAccountId);
+          reject(signal?.reason);
+        };
+        const waiter: Waiter = {
+          priority,
+          permits,
+          grant: () => {
+            clearTimeout(timer);
+            signal?.removeEventListener("abort", onAbort);
+            resolve(true);
+          },
+        };
+        const timer = setTimeout(() => {
+          remove();
+          account.inflight[priority] += permits;
+          resolve(false);
+        }, GMAIL_INFLIGHT_MAX_WAIT_MS[priority]);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        // Higher priorities first, arrival order within one.
+        const before = account.waiters.findIndex(
+          (other) => RANK[other.priority] > RANK[priority],
+        );
+        account.waiters.splice(
+          before === -1 ? account.waiters.length : before,
+          0,
+          waiter,
+        );
+      }),
+  );
 
   const waitedMs = Date.now() - startedAt;
   stats.waits += 1;
