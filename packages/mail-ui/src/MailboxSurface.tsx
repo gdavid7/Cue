@@ -106,13 +106,15 @@ export function MailboxThreadList<T>({
   const onLoadMoreRef = useRef(onLoadMore);
   onLoadMoreRef.current = onLoadMore;
 
-  // Only a list's first render, on mount or a switch to another list, is cut
-  // to a screen of rows. A list that grows keeps every row it showed, so a
-  // new message, an undo or another page never drops the bottom rows and the
-  // load-more sentinel for a render.
-  const shownAllOf = useDeferredValue<string | null>(listKey, null);
+  // Only the render that first fills a list, on mount, once its first page
+  // arrives or on a switch to another list, is cut to a screen of rows. A
+  // list that grows keeps every row it showed, so a new message, an undo or
+  // another page never drops the bottom rows and the load-more sentinel for
+  // a render.
+  const filledList = items.length > 0 ? listKey : null;
+  const shownAllOf = useDeferredValue(filledList, null);
   const renderedCount =
-    shownAllOf === listKey
+    shownAllOf === filledList
       ? items.length
       : Math.min(items.length, MAILBOX_FIRST_RENDER_ROWS);
   const allRendered = renderedCount >= items.length;

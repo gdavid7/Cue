@@ -51,6 +51,26 @@ describe("mailbox thread list", () => {
     expect(screen.getAllByText(/^t\d+$/)).toHaveLength(50);
   });
 
+  // The first page of a mailbox usually arrives after its list mounted empty
+  // while the mailbox opened.
+  it("commits a screen of rows first when the first rows arrive after the list mounted", () => {
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const passes: number[][] = [];
+    const onRenderRow = (index: number) => {
+      if (index === 0) passes.push([]);
+      passes.at(-1)?.push(index);
+    };
+    const { rerender } = render(list([], onRenderRow));
+
+    rerender(list(items, onRenderRow));
+
+    expect(passes[0]).toHaveLength(MAILBOX_FIRST_RENDER_ROWS);
+    expect(passes.at(-1)).toHaveLength(50);
+  });
+
   // A list that grows by a new message, an undo or a page keeps its rows:
   // dropping the bottom ones for a render jumped the scroll and lost focus.
   it("never renders fewer rows than before when the list grows", () => {
