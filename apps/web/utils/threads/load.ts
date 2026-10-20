@@ -1,3 +1,5 @@
+import { ActionType } from "@/generated/prisma/enums";
+import { withoutDraftReplySignature } from "@/utils/email/reply-body";
 import type { EmailProvider, EmailThread } from "@/utils/email/types";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
 import { isDefined } from "@/utils/types";
@@ -153,12 +155,32 @@ export async function loadThreadPlans({
   emailAccountId: string;
   threadId: string;
 }) {
-  const executedRules = await prisma.executedRule.findMany({
-    where: { emailAccountId, threadId },
-    select: executedRulePlanSelect,
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-  });
-  return aggregateThreadPlans(executedRules);
+  const [executedRules, emailAccount] = await Promise.all([
+    prisma.executedRule.findMany({
+      where: { emailAccountId, threadId },
+      select: executedRulePlanSelect,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    }),
+    prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { signature: true },
+    }),
+  ]);
+  // The reader opens a drafted reply in a composer that adds the signature.
+  return aggregateThreadPlans(executedRules).map((plan) => ({
+    ...plan,
+    actionItems: plan.actionItems.map((item) =>
+      item.type === ActionType.DRAFT_EMAIL && item.content
+        ? {
+            ...item,
+            content: withoutDraftReplySignature(
+              item.content,
+              emailAccount?.signature,
+            ),
+          }
+        : item,
+    ),
+  }));
 }
 
 function aggregateThreadPlans<

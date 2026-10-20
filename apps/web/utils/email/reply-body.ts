@@ -23,8 +23,23 @@ export async function buildDraftReplyBody({
   });
 
   if (emailAccount?.signature) {
-    body = `${body}\n\n${emailAccount.signature}`;
+    body = `${body}${SIGNATURE_SEPARATOR}${emailAccount.signature}`;
   }
 
   return body;
 }
+
+/**
+ * A drafted reply's body without the signature `buildDraftReplyBody` ended
+ * it with, for a composer that adds the signature itself. A body signed with
+ * another signature is left as it is.
+ */
+export function withoutDraftReplySignature(
+  body: string,
+  signature: string | null | undefined,
+) {
+  const suffix = signature ? `${SIGNATURE_SEPARATOR}${signature}` : "";
+  return suffix && body.endsWith(suffix) ? body.slice(0, -suffix.length) : body;
+}
+
+const SIGNATURE_SEPARATOR = "\n\n";
