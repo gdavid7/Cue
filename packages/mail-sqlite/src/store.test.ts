@@ -4008,6 +4008,47 @@ describe("per-target outcomes, dependencies, pagination, and stale hydration", (
     await store.close();
   });
 
+  it("keeps a newer message copy when a sync page read before it arrives", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const starred = messagePatchWithVersion("m1", "c1", 1000, ["inbox"], "20");
+    await store.applySyncPage({
+      ownerId: "owner",
+      page: {
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "after-star",
+        from: { streamId: "primary", generation: "g1", checkpoint: null },
+        to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+        changes: [{ ...starred, fields: { ...starred.fields, starred: true } }],
+        requiredHydration: [],
+        roundComplete: true,
+      },
+    });
+    await store.applySyncPage({
+      ownerId: "owner",
+      page: {
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "read-before-star",
+        from: { streamId: "primary", generation: "g1", checkpoint: "1" },
+        to: { streamId: "primary", generation: "g1", checkpoint: "2" },
+        changes: [messagePatchWithVersion("m1", "c1", 1000, ["inbox"], "10")],
+        requiredHydration: [],
+        roundComplete: true,
+      },
+    });
+
+    const conversation = await store.readConversation(
+      { accountId: "acc-1", conversationId: "c1" },
+      { after: null, pageSize: 10 },
+    );
+    expect(conversation.view.messages[0]?.metadata.starred).toBe(true);
+    await store.close();
+  });
+
   it("rejects hydration when an opaque provider version differs from current metadata", async () => {
     const store = await createSqliteMailStore(createNodeSqliteDriver());
     await store.ensureAccount({
