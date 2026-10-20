@@ -962,7 +962,15 @@ test.describe("Cue writing partner", () => {
     await page.keyboard.press("ControlOrMeta+j");
     await page.keyboard.press("i");
     const suggestion = page.getByRole("group", { name: "Suggested text" });
-    await expect(suggestion).toContainText("Could you confirm that");
+    await expect
+      .poll(() =>
+        suggestion.evaluate((group) => {
+          const copy = group.cloneNode(true) as HTMLElement;
+          for (const removed of copy.querySelectorAll("del")) removed.remove();
+          return copy.textContent;
+        }),
+      )
+      .toBe("Could you confirm that Thursday works?");
     await capturePlaywrightCheckpoint(page, testInfo, "cue-reply-suggestion");
 
     await page.keyboard.press("Enter");
