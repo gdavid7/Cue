@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/table";
 import {
   getBetaTesters,
+  LAST_PROCESSED_LOOKBACK_DAYS,
   SUGGESTION_WINDOW_DAYS,
 } from "@/app/(app)/admin/beta/get-beta-testers";
 
@@ -36,7 +37,7 @@ export default async function AdminBetaTestersPage() {
   }
 
   const now = new Date();
-  const { testers, truncated } = await getBetaTesters(now);
+  const { testers } = await getBetaTesters(now);
 
   return (
     <PageWrapper>
@@ -44,11 +45,6 @@ export default async function AdminBetaTestersPage() {
         title="Beta testers"
         description={`How each person's Cue is doing. Counts and dates only. Suggested replies are those written in the last ${SUGGESTION_WINDOW_DAYS} days.`}
       />
-      {truncated && (
-        <p className="mt-4 text-muted-foreground text-sm">
-          Suggestions counted from the newest 100,000 only.
-        </p>
-      )}
       <div className="mt-6 overflow-x-auto rounded-md border">
         <Table>
           <TableHeader>
@@ -56,7 +52,9 @@ export default async function AdminBetaTestersPage() {
               <TableHead>Person</TableHead>
               <TableHead>Last active</TableHead>
               <TableHead>Accounts</TableHead>
-              <TableHead>Last mail processed</TableHead>
+              <TableHead>
+                Last mail processed ({LAST_PROCESSED_LOOKBACK_DAYS}d)
+              </TableHead>
               <TableHead className="text-right">Errors (24h)</TableHead>
               <TableHead>Sync issues</TableHead>
               <TableHead>Get started</TableHead>
@@ -97,7 +95,11 @@ export default async function AdminBetaTestersPage() {
                     </span>
                   ) : null}
                 </TableCell>
-                <TableCell>{formatAgo(tester.lastProcessedAt, now)}</TableCell>
+                <TableCell>
+                  {tester.lastProcessedAt
+                    ? formatAgo(tester.lastProcessedAt, now)
+                    : "None"}
+                </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {tester.errorsLast24h}
                 </TableCell>

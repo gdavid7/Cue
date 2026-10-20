@@ -44,10 +44,13 @@ export function noteGetStartedStep(step: GetStartedClientStep) {
  */
 export function noteShortcutForGetStarted(shortcutId: string) {
   if (!TRIAGE_SHORTCUT_IDS.has(shortcutId)) return;
-  const count = Math.min(
-    (readTriageCount() ?? pageTriageCount) + 1,
-    KEYBOARD_TRIAGE_GOAL,
-  );
+  const stored = readTriageCount() ?? pageTriageCount;
+  // Past the goal nothing is written; the recorder ignores a step it saved.
+  if (stored >= KEYBOARD_TRIAGE_GOAL) {
+    noteGetStartedStep("keyboard");
+    return;
+  }
+  const count = stored + 1;
   pageTriageCount = count;
   writeTriageCount(count);
   if (count >= KEYBOARD_TRIAGE_GOAL) noteGetStartedStep("keyboard");

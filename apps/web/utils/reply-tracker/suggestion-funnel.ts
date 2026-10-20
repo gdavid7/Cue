@@ -1,3 +1,4 @@
+import { Prisma } from "@/generated/prisma/client";
 import { ActionType, DraftEmailStatus } from "@/generated/prisma/enums";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
@@ -27,6 +28,17 @@ export const SIMILARITY_BUCKETS = ["unchanged", "light", "heavy"] as const;
 type SimilarityBucket = (typeof SIMILARITY_BUCKETS)[number];
 
 export const FUNNEL_WINDOWS_DAYS = [7, 30] as const;
+
+/**
+ * A suggestion waits in Cue: no mailbox draft, and a status from the moment
+ * it was written. `countReplySuggestionsByAccount` applies the same test in
+ * SQL; change both together.
+ */
+const REPLY_SUGGESTION_WHERE = {
+  type: ActionType.DRAFT_EMAIL,
+  draftId: null,
+  draftStatus: { not: null },
+} satisfies Prisma.ExecutedActionWhereInput;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Bounds the admin page's read; far above what the beta writes in 30 days.
@@ -83,11 +95,7 @@ export async function getReplySuggestionFunnel(now = new Date()) {
   const longest = Math.max(...FUNNEL_WINDOWS_DAYS);
   const rows = await prisma.executedAction.findMany({
     where: {
-      type: ActionType.DRAFT_EMAIL,
-      // A suggestion waits in Cue: no mailbox draft, and a status from the
-      // moment it was written.
-      draftId: null,
-      draftStatus: { not: null },
+      ...REPLY_SUGGESTION_WHERE,
       createdAt: { gte: new Date(now.getTime() - longest * DAY_MS) },
     },
     select: {
@@ -116,6 +124,43 @@ export async function getReplySuggestionFunnel(now = new Date()) {
     ),
   };
 }
+
+/**
+ * Suggestions written since `since`, per account: how many were shown in the
+ * reader and how many were sent. Counted in the database, one row per account.
+ */
+export async function countReplySuggestionsByAccount({
+  emailAccountIds,
+  since,
+}: {
+  emailAccountIds: string[];
+  since: Date;
+}) {
+  if (!emailAccountIds.length) return new Map<string, SuggestionCounts>();
+  const rows = await prisma.$queryRaw<
+    ({ emailAccountId: string } & SuggestionCounts)[]
+  >`
+    SELECT er."emailAccountId",
+      COUNT(*) FILTER (WHERE ea."replySuggestionShownAt" IS NOT NULL)::int AS shown,
+      COUNT(*) FILTER (WHERE ea."draftStatus" = ${DraftEmailStatus.LIKELY_SENT}::"DraftEmailStatus")::int AS sent
+    FROM "ExecutedAction" ea
+    JOIN "ExecutedRule" er ON er.id = ea."executedRuleId"
+    WHERE ea.type = ${ActionType.DRAFT_EMAIL}::"ActionType"
+      AND ea."draftId" IS NULL
+      AND ea."draftStatus" IS NOT NULL
+      AND ea."createdAt" >= ${since}
+      AND er."emailAccountId" IN (${Prisma.join(emailAccountIds)})
+    GROUP BY er."emailAccountId"
+  `;
+  return new Map(
+    rows.map(({ emailAccountId, shown, sent }) => [
+      emailAccountId,
+      { shown, sent },
+    ]),
+  );
+}
+
+type SuggestionCounts = { shown: number; sent: number };
 
 type FunnelRow = {
   draftStatus: DraftEmailStatus | null;

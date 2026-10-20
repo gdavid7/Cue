@@ -1,8 +1,4 @@
-import {
-  ActionType,
-  DraftEmailStatus,
-  ExecutedRuleStatus,
-} from "@/generated/prisma/enums";
+import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import {
   getErrorTypes,
   getWatchStatus,
@@ -13,13 +9,13 @@ import {
 } from "@/utils/get-started/checklist";
 import { getGetStartedFacts } from "@/utils/get-started/checklist.server";
 import prisma from "@/utils/prisma";
+import { countReplySuggestionsByAccount } from "@/utils/reply-tracker/suggestion-funnel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const SUGGESTION_WINDOW_DAYS = 30;
+export const LAST_PROCESSED_LOOKBACK_DAYS = 90;
 // Far above the friends beta; most recently active first.
 const MAX_USERS = 500;
-// Bounds the suggestions read, as the draft funnel does.
-const MAX_SUGGESTION_ROWS = 100_000;
 
 /**
  * One row per person: when they were last in the app, their mailboxes'
@@ -51,50 +47,41 @@ export async function getBetaTesters(now = new Date()) {
     user.emailAccounts.map((account) => account.id),
   );
   const inAccounts = { emailAccountId: { in: emailAccountIds } };
-  const suggestionsSince = new Date(
-    now.getTime() - SUGGESTION_WINDOW_DAYS * DAY_MS,
-  );
 
-  const [facts, lastProcessed, recentErrors, suggestions] = await Promise.all([
-    getGetStartedFacts(emailAccountIds),
-    // The last incoming mail Cue processed without failing, as the
-    // first-hour health snapshot reads it.
-    prisma.executedRule.groupBy({
-      by: ["emailAccountId"],
-      where: {
-        ...inAccounts,
-        status: { not: ExecutedRuleStatus.ERROR },
-        createdAt: { gte: suggestionsSince },
-      },
-      _max: { createdAt: true },
-    }),
-    prisma.executedRule.groupBy({
-      by: ["emailAccountId"],
-      where: {
-        ...inAccounts,
-        status: ExecutedRuleStatus.ERROR,
-        createdAt: { gte: new Date(now.getTime() - DAY_MS) },
-      },
-      _count: { _all: true },
-    }),
-    // The draft funnel's suggestions: waiting in Cue, with a status.
-    prisma.executedAction.findMany({
-      where: {
-        type: ActionType.DRAFT_EMAIL,
-        draftId: null,
-        draftStatus: { not: null },
-        createdAt: { gte: suggestionsSince },
-        executedRule: inAccounts,
-      },
-      select: {
-        draftStatus: true,
-        replySuggestionShownAt: true,
-        executedRule: { select: { emailAccountId: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: MAX_SUGGESTION_ROWS,
-    }),
-  ]);
+  const [facts, lastProcessed, recentErrors, suggestionCounts] =
+    await Promise.all([
+      // Unbounded in time: a step done before the last 30 days still counts,
+      // and each lookup is one grouped query on the account's indexed rules.
+      getGetStartedFacts(emailAccountIds),
+      // The last incoming mail Cue processed without failing, as the
+      // first-hour health snapshot reads it.
+      prisma.executedRule.groupBy({
+        by: ["emailAccountId"],
+        where: {
+          ...inAccounts,
+          status: { not: ExecutedRuleStatus.ERROR },
+          createdAt: {
+            gte: new Date(
+              now.getTime() - LAST_PROCESSED_LOOKBACK_DAYS * DAY_MS,
+            ),
+          },
+        },
+        _max: { createdAt: true },
+      }),
+      prisma.executedRule.groupBy({
+        by: ["emailAccountId"],
+        where: {
+          ...inAccounts,
+          status: ExecutedRuleStatus.ERROR,
+          createdAt: { gte: new Date(now.getTime() - DAY_MS) },
+        },
+        _count: { _all: true },
+      }),
+      countReplySuggestionsByAccount({
+        emailAccountIds,
+        since: new Date(now.getTime() - SUGGESTION_WINDOW_DAYS * DAY_MS),
+      }),
+    ]);
 
   const lastProcessedAt = new Map(
     lastProcessed.map((row) => [row.emailAccountId, row._max.createdAt]),
@@ -102,17 +89,7 @@ export async function getBetaTesters(now = new Date()) {
   const errorCount = new Map(
     recentErrors.map((row) => [row.emailAccountId, row._count._all]),
   );
-  const suggestionCounts = new Map<string, { shown: number; sent: number }>();
-  for (const row of suggestions) {
-    const id = row.executedRule.emailAccountId;
-    const counts = suggestionCounts.get(id) ?? { shown: 0, sent: 0 };
-    if (row.replySuggestionShownAt) counts.shown++;
-    if (row.draftStatus === DraftEmailStatus.LIKELY_SENT) counts.sent++;
-    suggestionCounts.set(id, counts);
-  }
-
   return {
-    truncated: suggestions.length === MAX_SUGGESTION_ROWS,
     testers: users.map((user) => {
       const accountIds = user.emailAccounts.map((account) => account.id);
       const items = getGetStartedItems({

@@ -39,4 +39,13 @@ describe("noteShortcutForGetStarted", () => {
     noteShortcutForGetStarted("archive");
     expect(listener).toHaveBeenCalledWith("keyboard");
   });
+
+  it("stops writing once the goal is reached, but still notes the step", () => {
+    localStorage.setItem("cue:get-started:keyboard-triage", "5");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    noteShortcutForGetStarted("archive");
+    expect(setItem).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledWith("keyboard");
+    setItem.mockRestore();
+  });
 });

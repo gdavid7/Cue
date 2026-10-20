@@ -12,7 +12,10 @@ export type GetStartedResponse = Awaited<ReturnType<typeof getGetStarted>>;
 
 export const GET = withAuth("user/get-started", async (request) => {
   const result = await getGetStarted({ userId: request.auth.userId });
-  return NextResponse.json(result);
+  // Steps tick off as they happen; a cached answer would show them undone.
+  return NextResponse.json(result, {
+    headers: { "Cache-Control": "no-store" },
+  });
 });
 
 async function getGetStarted({ userId }: { userId: string }) {

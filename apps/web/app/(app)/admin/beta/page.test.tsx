@@ -3,7 +3,6 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
-import { DraftEmailStatus } from "@/generated/prisma/enums";
 import { getInboxStyleHintId } from "@/utils/split-inbox/inbox-styles";
 import AdminBetaTestersPage from "./page";
 
@@ -25,7 +24,7 @@ describe("/admin/beta", () => {
     prisma.calendarConnection.groupBy.mockResolvedValue([] as never);
     prisma.chat.groupBy.mockResolvedValue([] as never);
     prisma.executedRule.groupBy.mockResolvedValue([] as never);
-    prisma.executedAction.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([]);
   });
   afterEach(cleanup);
 
@@ -78,17 +77,8 @@ describe("/admin/beta", () => {
             ]
           : []) as never);
     prisma.chat.groupBy.mockResolvedValue([{ emailAccountId: "acc" }] as never);
-    prisma.executedAction.findMany.mockResolvedValue([
-      {
-        draftStatus: DraftEmailStatus.LIKELY_SENT,
-        replySuggestionShownAt: new Date(),
-        executedRule: { emailAccountId: "acc" },
-      },
-      {
-        draftStatus: DraftEmailStatus.PENDING,
-        replySuggestionShownAt: new Date(),
-        executedRule: { emailAccountId: "acc" },
-      },
+    prisma.$queryRaw.mockResolvedValue([
+      { emailAccountId: "acc", shown: 2, sent: 1 },
     ] as never);
 
     render(await AdminBetaTestersPage());

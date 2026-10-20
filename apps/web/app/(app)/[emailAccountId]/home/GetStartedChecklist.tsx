@@ -4,6 +4,7 @@ import Link from "next/link";
 import { CheckIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useGetStarted } from "@/hooks/useGetStarted";
 import { useMailHref } from "@/hooks/useMailHref";
 import { useUser } from "@/hooks/useUser";
@@ -11,7 +12,9 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { dismissHintAction } from "@/utils/actions/hints";
 import {
   GET_STARTED_DISMISSED_HINT,
+  GET_STARTED_ITEM_IDS,
   type GetStartedItemId,
+  isGetStartedWindowOpen,
 } from "@/utils/get-started/checklist";
 import { prefixPath } from "@/utils/path";
 import { cn } from "@/utils";
@@ -59,9 +62,14 @@ const ITEM_COPY: Record<
 export function GetStartedChecklist() {
   const { emailAccountId } = useAccount();
   const mailHref = useMailHref();
-  const { data, mutate } = useGetStarted();
   const { data: user, mutate: mutateUser } = useUser();
-  const items = data?.items;
+  // Past the first week, or once closed, Today never asks.
+  const windowOpen = Boolean(user && isGetStartedWindowOpen(user, new Date()));
+  const { data, mutate } = useGetStarted(windowOpen);
+  if (!windowOpen) return null;
+  // Holds the card's place while it loads, so Today's lanes don't jump.
+  if (!data) return <ChecklistPlaceholder />;
+  const items = data.items;
   if (!items) return null;
 
   const doneCount = items.filter((item) => item.done).length;
@@ -102,6 +110,8 @@ export function GetStartedChecklist() {
           size="iconXs"
           variant="ghost"
           aria-label="Hide checklist"
+          // A 44px hit area on touchscreens without a bigger button.
+          className="relative pointer-coarse:after:absolute pointer-coarse:after:-inset-2 pointer-coarse:after:content-['']"
           onClick={dismiss}
         >
           <XIcon className="size-4" aria-hidden />
@@ -169,5 +179,30 @@ export function GetStartedChecklist() {
         })}
       </ul>
     </section>
+  );
+}
+
+function ChecklistPlaceholder() {
+  return (
+    <div
+      aria-hidden
+      className="rounded-xl border border-border bg-card p-4"
+      data-get-started-placeholder
+    >
+      <Skeleton className="h-4 w-36" />
+      <Skeleton className="mt-1.5 h-3 w-56" />
+      <Skeleton className="mt-3 h-1 w-full" />
+      <div className="mt-3 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+        {GET_STARTED_ITEM_IDS.map((id) => (
+          <div className="flex gap-2 px-1.5 py-1.5" key={id}>
+            <Skeleton className="mt-0.5 size-4 shrink-0 rounded-full" />
+            <div className="flex-1 space-y-1">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
