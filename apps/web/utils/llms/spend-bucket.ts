@@ -22,6 +22,7 @@ export const TRIAGE_AI_LABELS = {
   categorizeSender: "Categorize sender",
   ruleArgs: "Args for rule",
   draftReply: "Draft reply",
+  predraftReply: "Pre-drafted reply suggestion",
   replyContextCollector: "Reply context collector",
   replyMemorySelection: "Reply memory selection",
   digestSummary: "Summarize email",

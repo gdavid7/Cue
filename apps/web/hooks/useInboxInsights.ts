@@ -78,6 +78,8 @@ type Queue = {
   failures: number;
   /** Requests made only for the account's settings and meetings. */
   metaAttempts: number;
+  /** Asked to read the kept rows' drafted replies again (refreshInboxInsights). */
+  refresh: boolean;
   error: unknown;
 };
 
@@ -87,6 +89,9 @@ const meta = new Map<
   string,
   Pick<GetInboxInsightsResponse, "events" | "draftRepliesEnabled">
 >();
+// The messages Cue wrote a reply for ahead of time, waiting in Cue, by
+// account, as the server last said for each (DR-3).
+const drafted = new Map<string, Set<string>>();
 const listeners = new Set<() => void>();
 let version = 0;
 let mailSettled = false;
@@ -153,15 +158,19 @@ export function useInboxInsights(
       if (!errors.has(item.emailAccountId) || !queueError)
         errors.set(item.emailAccountId, queueError);
       const entry = keptExtraction(item.emailAccountId, item.messageId);
-      if (entry) {
+      const replyDrafted = Boolean(
+        drafted.get(item.emailAccountId)?.has(item.messageId),
+      );
+      if (entry || replyDrafted) {
         data[item.key] = toThreadInsight({
           entry,
           item,
           emailAccountId: item.emailAccountId,
           accountMeta: meta.get(item.emailAccountId),
+          replyDrafted,
         });
-        continue;
       }
+      if (entry) continue;
       if ((attempts.get(attemptKey(item)) ?? 0) < MAX_ATTEMPTS)
         isLoading = true;
     }
@@ -219,6 +228,27 @@ export function getInboxInsightRequests(items: InboxInsightItem[]) {
     });
 }
 
+/**
+ * Reads the account's rows again for what changed on the server rather than
+ * in the email, such as a reply Cue drafted being dismissed (which
+ * `withoutDraftFor` drops at once). One request for the rows the page
+ * already read, which costs no Gmail reads, on the queue's usual spacing and
+ * retry times.
+ */
+export function refreshInboxInsights(
+  emailAccountId: string,
+  { withoutDraftFor }: { withoutDraftFor?: string } = {},
+) {
+  if (withoutDraftFor) drafted.get(emailAccountId)?.delete(withoutDraftFor);
+  for (const lane of ["rows", "open"] as const) {
+    const queue = queues.get(queueKey(emailAccountId, lane));
+    if (!queue) continue;
+    queue.refresh = true;
+    pump(queue);
+  }
+  notify();
+}
+
 /** Part of signing out: nothing read for this user stays on the page. */
 export function clearInboxInsightRequests() {
   resetInboxInsightRequestsForTesting();
@@ -232,6 +262,7 @@ export function resetInboxInsightRequestsForTesting() {
   attempts.clear();
   answered.clear();
   meta.clear();
+  drafted.clear();
   mailSettled = false;
 }
 
@@ -279,8 +310,10 @@ function pump(queue: Queue) {
     kept.length > 0 &&
     !meta.has(emailAccountId) &&
     queue.metaAttempts < MAX_ATTEMPTS;
-  if (!pending.length && !needsMeta) return;
+  const needsRefresh = !pending.length && kept.length > 0 && queue.refresh;
+  if (!pending.length && !needsMeta && !needsRefresh) return;
   if (needsMeta) queue.metaAttempts += 1;
+  queue.refresh = false;
   const batch = pending.length
     ? pending.slice(0, MAX_NEW_PER_REQUEST)
     : kept.slice(0, CHUNK_SIZE);
@@ -313,6 +346,13 @@ function pump(queue: Queue) {
         events: response.events,
         draftRepliesEnabled: response.draftRepliesEnabled,
       });
+      const accountDrafted = drafted.get(emailAccountId) ?? new Set<string>();
+      const draftedNow = new Set(response.draftedMessageIds ?? []);
+      for (const item of batch) {
+        if (draftedNow.has(item.messageId)) accountDrafted.add(item.messageId);
+        else accountDrafted.delete(item.messageId);
+      }
+      drafted.set(emailAccountId, accountDrafted);
       for (const item of batch) {
         const fresh = response.insights[item.threadId];
         if (fresh?.messageId === item.messageId) {
@@ -377,6 +417,7 @@ function queueFor(emailAccountId: string, lane: Lane) {
     waitingForMail: false,
     failures: 0,
     metaAttempts: 0,
+    refresh: false,
     error: undefined,
   };
   queues.set(key, created);
@@ -423,19 +464,25 @@ function notify() {
   for (const listener of listeners) listener();
 }
 
-/** One row's insight: what the email asks, the meeting with its people, and the reply this browser kept. */
+/**
+ * One row's insight: what the email asks, the meeting with its people, and
+ * its reply: the one Cue wrote ahead of time, which the reader opens first,
+ * or else the one this browser kept.
+ */
 function toThreadInsight({
   entry,
   item,
   emailAccountId,
   accountMeta,
+  replyDrafted,
 }: {
-  entry: InboxInsightExtraction;
+  entry: InboxInsightExtraction | undefined;
   item: { threadId: string; messageId: string };
   emailAccountId: string;
   accountMeta:
     | Pick<GetInboxInsightsResponse, "events" | "draftRepliesEnabled">
     | undefined;
+  replyDrafted: boolean;
 }): ThreadInsightData {
   const suggestion = accountMeta?.draftRepliesEnabled
     ? keptSuggestionFor({
@@ -445,11 +492,14 @@ function toThreadInsight({
       })
     : null;
   let reply: ThreadInsightData["reply"] = null;
-  if (suggestion?.status === "suggested") reply = "ready";
+  if (replyDrafted) reply = "drafted";
+  else if (suggestion?.status === "suggested") reply = "ready";
   else if (suggestion?.status === "insufficient") reply = "needs-info";
   return {
-    insight: entry.insight,
-    meeting: nextMeetingWith(entry.people, accountMeta?.events ?? []),
+    insight: entry?.insight ?? null,
+    meeting: entry
+      ? nextMeetingWith(entry.people, accountMeta?.events ?? [])
+      : null,
     reply,
   };
 }

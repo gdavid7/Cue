@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   useThreadContext: vi.fn(),
   insights: undefined as Record<string, ThreadInsightData> | undefined,
   insightError: undefined as unknown,
+  refreshInsights: vi.fn(),
   draftReplies: drafting("on"),
   plans: [] as Record<string, unknown>[],
   mutatePlans: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("@/hooks/useInboxInsights", async (importOriginal) => ({
     data: mocks.insights,
     error: mocks.insightError,
   }),
+  refreshInboxInsights: mocks.refreshInsights,
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({ userEmail: "user@example.com" }),
@@ -107,6 +109,28 @@ describe("useReaderReplySuggestion", () => {
     });
     expect(lastEnabled()).toBe(false);
     expect(result.current.reply.offer).toBe(false);
+  });
+
+  // Written ahead of time for mail filed To Reply: the row said so, and the
+  // reader opens that reply at once, gathering nothing to write another.
+  it("opens the reply Cue pre-drafted as it was stored", () => {
+    mocks.plans = [ruleSuggestionPlan("ask", { predrafted: true })];
+
+    const { result } = renderSuggestion([
+      incoming("ask", ["INBOX", "Label_to_reply"]),
+    ]);
+
+    expect(result.current.assist).toMatchObject({
+      messageId: "ask",
+      reply: "Thursday works for me.",
+      executedActionId: "suggestion-1",
+      toSomeoneElse: false,
+    });
+    expect(lastEnabled()).toBe(false);
+    expect(mocks.useThreadContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: null }),
+    );
+    expect(result.current.reply.settledFor).toBe("ask");
   });
 
   it.each([
@@ -249,6 +273,10 @@ describe("useReaderReplySuggestion", () => {
       update({ plans: mocks.plans }).plans[0].actionItems[0].draftStatus,
     ).toBe("DISMISSED");
     expect(mocks.toastError).not.toHaveBeenCalled();
+    // The inbox row stops saying "Cue drafted a reply".
+    expect(mocks.refreshInsights).toHaveBeenCalledWith("account-1", {
+      withoutDraftFor: "ask",
+    });
   });
 
   it("brings the rule's reply back when dismissing fails", async () => {
@@ -639,6 +667,7 @@ function ruleSuggestionPlan(
     subject?: string | null;
     staticAttachments?: unknown;
     selectedAttachments?: unknown;
+    predrafted?: boolean;
   } = {},
 ) {
   return {
@@ -659,6 +688,7 @@ function ruleSuggestionPlan(
         subject: action.subject ?? null,
         staticAttachments: action.staticAttachments ?? null,
         selectedAttachments: action.selectedAttachments ?? null,
+        replySuggestionPredrafted: action.predrafted ?? false,
       },
     ],
   };

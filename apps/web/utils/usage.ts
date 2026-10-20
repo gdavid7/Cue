@@ -1,4 +1,5 @@
 /** biome-ignore-all lint/style/noMagicNumbers: we're defining constants */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { LanguageModelUsage } from "ai";
 import { saveUsage } from "@/utils/redis/usage";
 import { getAiSpendBucket } from "@/utils/llms/spend-bucket";
@@ -50,6 +51,19 @@ export function subscribeToAiUsage(listener: AiUsageListener): () => void {
   return () => {
     aiUsageListeners.delete(listener);
   };
+}
+
+// The AI calls made inside one `collectAiUsage` run.
+const usageCollector = new AsyncLocalStorage<AiUsageEvent[]>();
+
+/**
+ * Runs `work` and returns the usage of every AI call it made, so a feature
+ * can account for its own cost without counting concurrent requests' calls.
+ */
+export async function collectAiUsage<T>(work: () => Promise<T>) {
+  const events: AiUsageEvent[] = [];
+  const result = await usageCollector.run(events, work);
+  return { result, events };
 }
 
 export async function saveAiUsage({
@@ -363,6 +377,7 @@ function buildModelLookupCandidates({
 }
 
 function notifyAiUsageListeners(event: AiUsageEvent): void {
+  usageCollector.getStore()?.push(event);
   for (const listener of aiUsageListeners) {
     try {
       listener(event);

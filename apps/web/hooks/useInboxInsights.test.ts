@@ -11,6 +11,7 @@ import {
 } from "@/utils/thread-context/suggested-reply-store";
 import {
   getInboxInsightRequests,
+  refreshInboxInsights,
   resetInboxInsightRequestsForTesting,
   threadInsightItem,
   useInboxInsights,
@@ -399,6 +400,65 @@ describe("useInboxInsights and what this browser keeps", () => {
       expect(result.current.data?.["work:t1"]?.reply).toBe("ready"),
     );
   });
+
+  it("says Cue drafted a reply it wrote ahead of time, even before it read the email", async () => {
+    const fetcher = vi.fn(async () => fromServer({}, ["t1-latest"]));
+
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await waitFor(() =>
+      expect(result.current.data?.["work:t1"]).toEqual({
+        insight: null,
+        meeting: null,
+        reply: "drafted",
+      }),
+    );
+  });
+});
+
+// DR-3 through RL-1's queue: dismissing Cue's reply takes the row's label
+// away at once and reads the rows again once, without reading the emails.
+describe("refreshInboxInsights", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops a dismissed draft at once and asks again once, on the rows' spacing", async () => {
+    let draftedNow = ["t1-latest"];
+    const fetcher = vi.fn(async () =>
+      fromServer({ t1: extraction("t1") }, draftedNow),
+    );
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+    await waitFor(() =>
+      expect(result.current.data?.["work:t1"]?.reply).toBe("drafted"),
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    draftedNow = [];
+    act(() => {
+      refreshInboxInsights("work", { withoutDraftFor: "t1-latest" });
+      refreshInboxInsights("work");
+    });
+    expect(result.current.data?.["work:t1"]?.reply).toBeNull();
+
+    await act(() => vi.advanceTimersByTimeAsync(20_000));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    // The email was already read: only the drafts and settings are asked for.
+    expect(fetcher.mock.calls[1]?.[0][0]).toContain("known=t1-latest");
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("useInboxInsights with one account busy in All inboxes", () => {
@@ -550,6 +610,7 @@ function fromServer(
       withAi: boolean;
     }
   >,
+  draftedMessageIds: string[] = [],
 ) {
-  return { insights, events: [], draftRepliesEnabled: true };
+  return { insights, events: [], draftRepliesEnabled: true, draftedMessageIds };
 }

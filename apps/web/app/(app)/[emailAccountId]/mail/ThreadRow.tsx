@@ -288,7 +288,7 @@ const INSIGHT_TONE: Record<InsightLine["tone"], string> = {
   info: "text-muted-foreground",
 };
 
-function InsightText({ line }: { line: InsightLine }) {
+export function InsightText({ line }: { line: InsightLine }) {
   return (
     <span
       className={cn(

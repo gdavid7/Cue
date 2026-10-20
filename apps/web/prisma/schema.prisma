@@ -882,21 +882,24 @@ model ExecutedAction {
   integrationArgs     Json? // Resolved tool args used for this execution
 
   // additional fields as a result of the action
-  draftId                 String? // Mailbox draft ID from a DRAFT_EMAIL run before replies became suggestions; null for a suggestion kept only in Cue
-  draftStatus             DraftEmailStatus? // Last observed/inferred draft lifecycle status; provider state may be stale or ambiguous. PENDING with no draftId is a suggestion waiting in Cue.
-  wasDraftSent            Boolean? // @deprecated Use draftStatus. Kept for historical compatibility only.
-  draftModelProvider      String?
-  draftModelName          String?
-  draftPipelineVersion    Int?
-  draftContextMetadata    Json?
+  draftId                   String? // Mailbox draft ID from a DRAFT_EMAIL run before replies became suggestions; null for a suggestion kept only in Cue
+  draftStatus               DraftEmailStatus? // Last observed/inferred draft lifecycle status; provider state may be stale or ambiguous. PENDING with no draftId is a suggestion waiting in Cue.
+  wasDraftSent              Boolean? // @deprecated Use draftStatus. Kept for historical compatibility only.
+  draftModelProvider        String?
+  draftModelName            String?
+  draftPipelineVersion      Int?
+  draftContextMetadata      Json?
   // When a rule's suggestion first showed in the reader, and first opened in
   // the composer: the draft funnel stages no other record keeps.
-  replySuggestionShownAt  DateTime?
-  replySuggestionOpenedAt DateTime?
-  draftSendLog            DraftSendLog? // Exists when an outbound reply was compared against this draft
-  suggestedReplyDraft     SuggestedReplyDraft? // The mailbox draft the user's first edit of this suggestion became
-  digestItems             DigestItem[] // Relation to digest items created by this action
-  scheduledAction         ScheduledAction? // Reverse relation for delayed actions
+  replySuggestionShownAt    DateTime?
+  replySuggestionOpenedAt   DateTime?
+  // Cue wrote this suggestion ahead of time, for mail that needs a reply,
+  // rather than a rule's draft action writing it
+  replySuggestionPredrafted Boolean              @default(false)
+  draftSendLog              DraftSendLog? // Exists when an outbound reply was compared against this draft
+  suggestedReplyDraft       SuggestedReplyDraft? // The mailbox draft the user's first edit of this suggestion became
+  digestItems               DigestItem[] // Relation to digest items created by this action
+  scheduledAction           ScheduledAction? // Reverse relation for delayed actions
 
   @@index([executedRuleId])
   @@index([executionStatus, createdAt])

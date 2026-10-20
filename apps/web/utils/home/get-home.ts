@@ -28,6 +28,8 @@ import {
   runWithGmailQuota,
 } from "@/utils/gmail/quota";
 import { getTrackedThreads } from "@/utils/reply-tracker/tracked-threads";
+import { getReadySuggestionMessageIds } from "@/utils/reply-tracker/ready-suggestions";
+import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import { getNextUp } from "@/utils/home/next-up";
 import {
   HOME_LANE_LIMIT,
@@ -95,6 +97,8 @@ export type HomeThread = {
   starred: boolean;
   /** Waiting-on conversations can be archived; the other lanes are inbox mail. */
   inInbox: boolean;
+  /** A reply Cue wrote to the newest message is waiting in Cue. */
+  cueDrafted?: boolean;
 };
 
 export type AgentTask = {
@@ -162,6 +166,7 @@ export async function getHomeData({
     cue,
     today,
     nextUp,
+    replySettings,
   ] = await Promise.all([
     gmail("labels", () => emailProvider.getLabels()),
     // Reply tracking lives in Cue's database, so these lanes don't depend
@@ -201,6 +206,8 @@ export async function getHomeData({
       since: startOfDay(new TZDate(now, timeZone)),
     }),
     getNextUp({ emailAccountId, ownAddresses, timeZone, logger, now }),
+    // Only for marking rows with a reply Cue wrote; Today loads without it.
+    getSuggestedReplySettings(emailAccountId).catch(() => null),
   ]).finally(() => releaseDemand.then((release) => release()));
 
   const labels = labelsResult.ok ? labelsResult.value : [];
@@ -255,14 +262,28 @@ export async function getHomeData({
         PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
         b.at.localeCompare(a.at),
     );
+  const inboxRows = lane(inbox)
+    .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t))
+    .map(toRow)
+    .filter(isDefined);
+  // Only mail someone else sent can have a reply waiting; waiting-on
+  // conversations are the user's own move.
+  const drafted = await getReadySuggestionMessageIds({
+    emailAccountId,
+    messageIds: [...needsYouRows, ...inboxRows].map((row) => row.messageId),
+    draftReplies: replySettings?.draftReplies ?? "off",
+    now,
+  }).catch((error) => {
+    logger.warn("Failed to load drafted replies for home", { error });
+    return new Set<string>();
+  });
+  const withDrafted = (row: HomeThread): HomeThread =>
+    drafted.has(row.messageId) ? { ...row, cueDrafted: true } : row;
 
   return {
-    needsYou: needsYouRows,
+    needsYou: needsYouRows.map(withDrafted),
     waiting: waiting.map(toRow).filter(isDefined),
-    alsoInInbox: lane(inbox)
-      .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t))
-      .map(toRow)
-      .filter(isDefined),
+    alsoInInbox: inboxRows.map(withDrafted),
     /** Lanes Gmail couldn't serve in time; empty here means "not loaded yet". */
     pending,
     /** Lanes that failed to load; empty here means "unknown", not "nothing". */

@@ -25,6 +25,7 @@ import { runRules } from "@/utils/ai/choose-rule/run-rules";
 import { sendMobilePushNotification } from "@/utils/mobile-push";
 import { SafeError } from "@/utils/error";
 import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
+import { predraftReply } from "@/utils/reply-tracker/predraft-reply";
 
 vi.mock("@/utils/prisma", () => ({
   default: {
@@ -67,6 +68,9 @@ vi.mock("@/utils/mobile-push", () => ({
 }));
 vi.mock("@/utils/web-push/send-new-mail", () => ({
   sendNewMailWebPush: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/utils/reply-tracker/predraft-reply", () => ({
+  predraftReply: vi.fn().mockResolvedValue("not-needed"),
 }));
 
 const logger = createTestLogger();
@@ -158,6 +162,23 @@ describe("Provider Edge Cases", () => {
         },
         logger,
       });
+    });
+
+    it("hands the rules' results to the pre-draft step", async () => {
+      await processArrival();
+
+      expect(predraftReply).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.objectContaining({ id: "arrival-message" }),
+          results: [
+            expect.objectContaining({
+              rule: expect.objectContaining({
+                systemType: SystemType.TO_REPLY,
+              }),
+            }),
+          ],
+        }),
+      );
     });
 
     it.each([
