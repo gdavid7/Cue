@@ -1,3 +1,4 @@
+import { NextResponse } from "next/server";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { processHistoryForUser } from "./process-history";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
@@ -174,6 +175,52 @@ describe("processHistoryForUser - 404 Handling", () => {
 
     // Verify lastSyncedHistoryId was updated to the current historyId via conditional update
     expect(prisma.$executeRaw).toHaveBeenCalled();
+  });
+
+  it("moves the cursor to the push when Cue just gave the mailbox its default sorting", async () => {
+    const email = "user@test.com";
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue({
+      id: "account-123",
+      email,
+      lastSyncedHistoryId: "1000",
+    } as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: false,
+      response: NextResponse.json({ ok: true }),
+      defaultSortingApplied: true,
+    });
+
+    await processHistoryForUser(
+      { emailAddress: email, historyId: 9000 },
+      {},
+      logger,
+    );
+
+    // The defaults sort the latest inbox mail themselves; the history the
+    // mailbox built up without rules is not replayed.
+    expect(getHistory).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prisma.$executeRaw).mock.calls[0]).toContain("9000");
+  });
+
+  it("leaves the cursor alone for a mailbox with no rules", async () => {
+    vi.mocked(getWebhookEmailAccount).mockResolvedValue({
+      id: "account-123",
+      email: "user@test.com",
+      lastSyncedHistoryId: "1000",
+    } as any);
+    vi.mocked(validateWebhookAccount).mockResolvedValue({
+      success: false,
+      response: NextResponse.json({ ok: true }),
+    });
+
+    await processHistoryForUser(
+      { emailAddress: "user@test.com", historyId: 9000 },
+      {},
+      logger,
+    );
+
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 
   it("processes Gmail history", async () => {

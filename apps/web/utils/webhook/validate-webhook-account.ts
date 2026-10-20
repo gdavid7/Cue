@@ -17,6 +17,7 @@ import { OutlookProvider } from "@/utils/email/microsoft";
 import prisma from "@/utils/prisma";
 import type { Logger } from "@/utils/logger";
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
+import { ensureDefaultCueSorting } from "@/utils/split-inbox/default-sorting.server";
 import type { Prisma } from "@/generated/prisma/client";
 import {
   isGoogleProvider,
@@ -34,6 +35,7 @@ const webhookEmailAccountSelect = {
   calendarBookingLink: true,
   draftReplyConfidence: true,
   lastSyncedHistoryId: true,
+  defaultSortingCheckedAt: true,
   autoCategorizeSenders: true,
   filingEnabled: true,
   filingPrompt: true,
@@ -153,7 +155,12 @@ export type ValidatedWebhookAccount = {
 
 type ValidationResult =
   | { success: true; data: ValidatedWebhookAccount }
-  | { success: false; response: NextResponse };
+  | {
+      success: false;
+      response: NextResponse;
+      /** Cue just gave the mailbox its default sorting, which sorts the latest inbox mail itself. */
+      defaultSortingApplied?: boolean;
+    };
 
 export async function cleanupWebhookAccountOnRateLimitSkip(
   emailAccount: ValidatedWebhookAccountData | null,
@@ -271,7 +278,24 @@ export async function validateWebhookAccount(
 
   if (!hasAutomationRules && !hasFilingEnabled) {
     logger.info("Has no rules enabled and filing not configured");
-    return { success: false, response: NextResponse.json({ ok: true }) };
+    // Rules used to be added only when the person answered the inbox style
+    // card, so mailboxes linked before every new one started with them can
+    // have none. The next push gives them the defaults, once.
+    const defaultSortingApplied = emailAccount.defaultSortingCheckedAt
+      ? false
+      : await ensureDefaultCueSorting({
+          emailAccountId: emailAccount.id,
+          provider: emailAccount.account?.provider ?? "",
+          logger,
+        }).catch((error) => {
+          logger.error("Failed to add default Cue sorting", { error });
+          return false;
+        });
+    return {
+      success: false,
+      response: NextResponse.json({ ok: true }),
+      defaultSortingApplied,
+    };
   }
 
   if (

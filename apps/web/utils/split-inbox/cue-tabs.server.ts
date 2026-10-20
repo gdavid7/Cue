@@ -16,6 +16,7 @@ import {
   isConversationStatusType,
 } from "@/utils/reply-tracker/conversation-status-config";
 import { getRuleConfig } from "@/utils/rule/consts";
+import type { GmailQuotaPriority } from "@/utils/gmail/quota";
 import { MAX_MAIL_SPLITS } from "@/utils/split-inbox/split-constants";
 import {
   createMailSplit,
@@ -55,11 +56,14 @@ export async function setUpCueSorting({
   emailAccountId,
   provider,
   addTabs,
+  backfillPriority,
   logger,
 }: {
   emailAccountId: string;
   provider: string;
   addTabs: boolean;
+  /** Quota priority for sorting the latest inbox mail afterwards. */
+  backfillPriority?: GmailQuotaPriority;
   logger: Logger;
 }) {
   const systemTypes = addTabs
@@ -174,6 +178,7 @@ export async function setUpCueSorting({
         maxEmails: ONBOARDING_PROCESS_EMAILS_COUNT,
         skipArchive: true,
         ruleIds,
+        priority: backfillPriority,
         logger,
       });
     });

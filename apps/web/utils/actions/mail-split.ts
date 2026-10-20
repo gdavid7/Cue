@@ -22,6 +22,7 @@ import {
 } from "@/utils/split-inbox/splits.server";
 import { applyInboxStyle } from "@/utils/split-inbox/inbox-styles.server";
 import { setUpCueSorting } from "@/utils/split-inbox/cue-tabs.server";
+import { markSortingChoice } from "@/utils/split-inbox/default-sorting.server";
 
 export const applyInboxStyleAction = actionClient
   .metadata({ name: "applyInboxStyle" })
@@ -31,6 +32,7 @@ export const applyInboxStyleAction = actionClient
       ctx: { emailAccountId, provider, logger },
       parsedInput: { style, addCueTabs },
     }) => {
+      await markSortingChoice(emailAccountId);
       await applyInboxStyle({ emailAccountId, provider, style });
       // The style only picks tabs; missing reply tracking rules are added
       // whichever is chosen, and rules the person turned off stay off.
