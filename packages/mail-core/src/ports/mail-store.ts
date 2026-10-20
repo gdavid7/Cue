@@ -34,6 +34,8 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  PersonCard,
+  PersonCardQuery,
   QuerySnapshot,
 } from "../queries";
 import type {
@@ -433,6 +435,7 @@ export interface MailStore {
     revision: LocalRevision;
     operation: OperationState | null;
   }>;
+  readPersonCard(query: PersonCardQuery): Promise<PersonCard>;
   /** Resolves `true` when the stored connection state changed. */
   recordConnection(input: {
     accountId: string;

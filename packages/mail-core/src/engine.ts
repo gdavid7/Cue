@@ -49,6 +49,8 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  PersonCard,
+  PersonCardQuery,
   QueryHandle,
 } from "./queries";
 import {
@@ -140,6 +142,11 @@ export type MailClient = {
    * provider. Hosts that can't answer off the UI thread leave it out.
    */
   searchMessages?(query: MessageSearchQuery): Promise<MessageSearchPage>;
+  /**
+   * What the reader's person card shows, read once from the local store.
+   * Hosts that can't answer off the UI thread leave it out.
+   */
+  queryPersonCard?(query: PersonCardQuery): Promise<PersonCard>;
   observeMailbox(query: ConversationQuery): QueryHandle<MailboxView>;
   observeMailboxCounts(
     query: MailboxCountsQuery,
@@ -312,6 +319,9 @@ export function createMailEngine(input: {
     },
     searchMessages(query) {
       return store.readMessageSearch(query);
+    },
+    queryPersonCard(query) {
+      return store.readPersonCard(query);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
