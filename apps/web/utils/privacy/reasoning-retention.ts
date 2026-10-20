@@ -2,6 +2,10 @@ import { subDays } from "date-fns/subDays";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 
+// Cue's suggestions in a reply that was never sent can no longer teach
+// anything once send tracking stops looking for them.
+const UNSENT_COMPOSE_ASSIST_RETENTION_DAYS = 7;
+
 export type ReasoningRetentionSkippedResult = {
   skipped: true;
   reason: "not-configured";
@@ -17,6 +21,8 @@ export type ReasoningRetentionResult = {
 export type DraftSentTextRetentionResult = {
   cutoff: Date;
   draftSendLogs: number;
+  unsentComposeAssistReplies: number;
+  sentComposeAssistReplies: number;
 };
 
 export type ReasoningRetentionPolicyResult =
@@ -102,21 +108,46 @@ export async function enforceDraftSentTextRetention({
   }
 
   const cutoff = subDays(now, days);
+  const unsentCutoff = subDays(
+    now,
+    Math.min(days, UNSENT_COMPOSE_ASSIST_RETENTION_DAYS),
+  );
 
-  const draftSendLogs = await prisma.draftSendLog.updateMany({
-    where: {
-      createdAt: { lt: cutoff },
-      OR: [{ sentText: { not: null } }, { replyMemorySentText: { not: null } }],
-    },
-    data: {
-      sentText: null,
-      replyMemorySentText: null,
-    },
-  });
+  const [draftSendLogs, unsentComposeAssistReplies, sentComposeAssistReplies] =
+    await Promise.all([
+      prisma.draftSendLog.updateMany({
+        where: {
+          createdAt: { lt: cutoff },
+          OR: [
+            { sentText: { not: null } },
+            { replyMemorySentText: { not: null } },
+          ],
+        },
+        data: {
+          sentText: null,
+          replyMemorySentText: null,
+        },
+      }),
+      prisma.composeAssistReply.deleteMany({
+        where: { updatedAt: { lt: unsentCutoff }, draftSendLog: null },
+      }),
+      // A sent reply's row stays as the source its memories were learned
+      // from; only the text the user and Cue wrote goes.
+      prisma.composeAssistReply.updateMany({
+        where: {
+          createdAt: { lt: cutoff },
+          draftSendLog: { isNot: null },
+          NOT: { outcomes: { equals: [] } },
+        },
+        data: { outcomes: [] },
+      }),
+    ]);
 
   const result: DraftSentTextRetentionResult = {
     cutoff,
     draftSendLogs: draftSendLogs.count,
+    unsentComposeAssistReplies: unsentComposeAssistReplies.count,
+    sentComposeAssistReplies: sentComposeAssistReplies.count,
   };
 
   logger.info("Applied draft sent text retention policy", result);

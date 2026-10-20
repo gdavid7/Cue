@@ -25,6 +25,7 @@ type Scenario = {
   name: string;
   incomingEmailContent: string;
   senderEmail: string;
+  startingDraftText?: string;
   outcomes: ComposeAssistOutcome[];
   sentText: string;
   expectsMemory: boolean;
@@ -118,6 +119,36 @@ const scenarios: Scenario[] = [
     },
   },
   {
+    name: "learns a fact the user corrected in the draft Cue started from",
+    incomingEmailContent:
+      "Before we sign up, how long is your free trial and do we need a card?",
+    senderEmail: "buyer@prospect.io",
+    startingDraftText:
+      "Thanks for your interest! We offer a 30-day free trial, and a credit card is required to start.",
+    outcomes: [
+      {
+        outcome: "accepted",
+        request: "More friendly",
+        refinements: [],
+        original:
+          "Thanks for your interest! We offer a 30-day free trial, and a credit card is required to start.",
+        suggestion:
+          "Thanks so much for reaching out! You can try us free for 30 days. A credit card is required to start.",
+      },
+    ],
+    sentText:
+      "Thanks so much for reaching out! You can try us free for 14 days, and no credit card is needed to start.",
+    expectsMemory: true,
+    allowedKinds: [ReplyMemoryKind.FACT],
+    expected:
+      "A FACT memory that the free trial is 14 days and/or needs no credit card.",
+    criterion: {
+      name: "Fact corrected in the starting draft",
+      description:
+        "The user corrected the trial length and the card requirement that both Cue's starting draft and its suggestion got wrong. The memories should capture the corrected facts (14-day trial, no card needed), not the wrong ones, and not the friendlier tone the user simply accepted.",
+    },
+  },
+  {
     name: "learns nothing from a one-off placeholder fill",
     incomingEmailContent: "Can we move our call this week? Something came up.",
     senderEmail: "sam@example.com",
@@ -157,6 +188,7 @@ describe.runIf(shouldRunEval)("compose assist learning eval", () => {
             incomingEmailContent: scenario.incomingEmailContent,
             draftText: "",
             composeAssistOutcomes: scenario.outcomes,
+            startingDraftText: scenario.startingDraftText,
             sentText: scenario.sentText,
             senderEmail: scenario.senderEmail,
             existingMemories: [],
@@ -214,6 +246,13 @@ function buildJudgeInput(scenario: Scenario) {
     "## Incoming Email",
     scenario.incomingEmailContent,
     "",
+    ...(scenario.startingDraftText
+      ? [
+          "## Draft Cue wrote before the user began",
+          scenario.startingDraftText,
+          "",
+        ]
+      : []),
     "## What the user did with Cue's suggestions",
     ...scenario.outcomes.map((outcome) =>
       [

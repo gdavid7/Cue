@@ -411,7 +411,7 @@ describe("reply-memory", () => {
 
   it("processes queued draft send logs into active reply memories", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -510,7 +510,7 @@ describe("reply-memory", () => {
 
   it("learns from edits to a saved suggested reply", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createSuggestedReplyDraftSendLog({
@@ -574,7 +574,7 @@ describe("reply-memory", () => {
 
   it("learns from how the user handled Cue's suggestions in the composer", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       {
@@ -600,6 +600,10 @@ describe("reply-memory", () => {
         },
       },
     ] as any);
+    vi.mocked(prisma.draftSendLog.findFirst).mockResolvedValue({
+      executedAction: { content: "Rule draft <b>text</b>." },
+      suggestedReplyDraft: null,
+    } as any);
     vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
     vi.mocked(prisma.replyMemory.upsert).mockResolvedValue(
       createReplyMemory({}) as any,
@@ -640,6 +644,18 @@ describe("reply-memory", () => {
       "<follow_up>drop the exclamation marks</follow_up>",
     );
     expect(prompt).not.toContain("<ai_draft>");
+    // The rule draft the reply started from, with its tags made inert.
+    expect(prompt).toContain(
+      "<starting_draft>\nRule draft &lt;b&gt;text&lt;/b&gt;.\n</starting_draft>",
+    );
+    expect(prisma.draftSendLog.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          sentMessageId: "sent-1",
+          id: { not: "draft-send-log-1" },
+        }),
+      }),
+    );
     expect(prisma.replyMemorySource.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: {
@@ -650,9 +666,30 @@ describe("reply-memory", () => {
     );
   });
 
+  it("leaves a log to the sync that claimed it first", async () => {
+    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({ count: 0 });
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      createDraftSendLog(),
+    ] as any);
+    const provider = createReplyMemoryProvider();
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: provider as any,
+      logger,
+    });
+
+    expect(prisma.draftSendLog.updateMany).toHaveBeenCalledWith({
+      where: { id: "draft-send-log-1", replyMemoryProcessedAt: null },
+      data: { replyMemoryProcessedAt: expect.any(Date) },
+    });
+    expect(provider.getMessage).not.toHaveBeenCalled();
+    expect(mockGenerateObject).not.toHaveBeenCalled();
+  });
+
   it("skips queued draft learning when the sent message did not reply to the source sender", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -695,7 +732,7 @@ Can you send pricing?`,
 
   it("attaches evidence to an existing memory when extraction returns an existing memory id", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -765,7 +802,7 @@ Can you send pricing?`,
 
   it("warns and skips unknown existing memory ids returned by extraction", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -808,7 +845,7 @@ Can you send pricing?`,
 
   it("does not refresh learned writing style before enough preference evidence exists", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -859,7 +896,7 @@ Can you send pricing?`,
 
   it("marks persisted preference memories as learned-style eligible", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -913,7 +950,7 @@ Can you send pricing?`,
 
   it("refreshes learned writing style from repeated sources on one preference memory", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1114,7 +1151,7 @@ Can you send pricing?`,
 
   it("increments retry state when the source email cannot be loaded", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1139,13 +1176,14 @@ Can you send pricing?`,
       where: { id: "draft-send-log-1" },
       data: {
         replyMemoryAttemptCount: { increment: 1 },
+        replyMemoryProcessedAt: null,
       },
     });
   });
 
   it("increments retry state when non-source reply memory processing fails", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1182,6 +1220,7 @@ Can you send pricing?`,
       where: { id: "draft-send-log-1" },
       data: {
         replyMemoryAttemptCount: { increment: 1 },
+        replyMemoryProcessedAt: null,
       },
     });
   });
@@ -1221,7 +1260,7 @@ Can you send pricing?`,
     ];
 
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockImplementation(
       async () =>
@@ -1292,7 +1331,7 @@ Can you send pricing?`,
 
   it("marks a draft send log processed after repeated source lookup failures", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1324,7 +1363,7 @@ Can you send pricing?`,
 
   it("marks a draft send log processed after repeated non-source processing failures", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1370,7 +1409,7 @@ Can you send pricing?`,
 
   it("marks draft send logs processed when sender extraction fails", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1402,7 +1441,7 @@ Can you send pricing?`,
 
   it("uses the actual sender context when a sender-scoped memory omits scope value", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1453,7 +1492,7 @@ Can you send pricing?`,
 
   it("skips topic memories without a concrete scope value", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1491,7 +1530,7 @@ Can you send pricing?`,
 
   it("skips domain memories for public email domains", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
@@ -1546,7 +1585,7 @@ Can you send pricing?`,
 
   it("clamps sender and domain scope values to the actual source context", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 0,
+      count: 1,
     });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({

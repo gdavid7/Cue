@@ -7,6 +7,7 @@ import {
 } from "@/utils/actions/compose-assist.validation";
 import { getReplyMemoryRetentionCutoff } from "@/utils/ai/reply/reply-memory";
 import prisma from "@/utils/prisma";
+import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 
 // The latest few say the most about this reply; older ones only add cost.
 const MAX_OUTCOMES_PER_REPLY = 5;
@@ -21,9 +22,20 @@ export const recordComposeAssistOutcomeAction = actionClient
   .inputSchema(recordComposeAssistOutcomeBody)
   .action(
     async ({
-      ctx: { emailAccountId, logger },
+      ctx: { emailAccountId, userId, logger },
       parsedInput: { threadId, messageId, outcome },
     }) => {
+      // Matches the compose-assist route's limit: one outcome per suggestion
+      // at most, so a person never reaches it and a script can't fill the
+      // table. Which message the outcome is for is checked when the reply is
+      // sent, against the sent message's threading.
+      await assertWithinUserRateLimit({
+        scope: "compose-assist-outcome",
+        userId,
+        limit: 60,
+        windowSeconds: 5 * 60,
+        logger,
+      });
       try {
         const reply = await prisma.composeAssistReply.findFirst({
           where: {

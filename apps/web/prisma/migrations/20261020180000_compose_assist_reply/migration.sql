@@ -28,4 +28,6 @@ ALTER TABLE "DraftSendLog" ADD CONSTRAINT "DraftSendLog_composeAssistReplyId_fke
 
 -- A send log compares the sent reply against exactly one draft source.
 ALTER TABLE "DraftSendLog" DROP CONSTRAINT "DraftSendLog_one_draft_source_check";
-ALTER TABLE "DraftSendLog" ADD CONSTRAINT "DraftSendLog_one_draft_source_check" CHECK (num_nonnulls("executedActionId", "suggestedReplyDraftId", "composeAssistReplyId") = 1);
+-- NOT VALID skips checking existing rows under this migration's exclusive
+-- lock; the next migration validates them under a lighter one.
+ALTER TABLE "DraftSendLog" ADD CONSTRAINT "DraftSendLog_one_draft_source_check" CHECK (num_nonnulls("executedActionId", "suggestedReplyDraftId", "composeAssistReplyId") = 1) NOT VALID;

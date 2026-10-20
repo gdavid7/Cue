@@ -97,7 +97,7 @@ Temporary retention is acceptable, and the current system:
 - learned writing style is stored separately on `EmailAccount`
 - raw evidence lives on `ReplyMemorySource` and keeps draft/send examples for short-term analysis
 - a `DraftSendLog` compares the sent reply against exactly one source: a rule's draft (`ExecutedAction`), a saved suggested reply (`SuggestedReplyDraft`), or Cue's suggestions in the composer (`ComposeAssistReply`)
-- `ComposeAssistReply` holds what the user did with each composer suggestion in a reply (accepted or discarded, with follow-up requests). Sending the reply logs it alongside any other source, and extraction reads the outcomes with its own prompt variant. Sends that used every suggestion as written skip the model call, and unsent rows are deleted after the evidence retention window
+- `ComposeAssistReply` holds what the user did with each composer suggestion in a reply (accepted or discarded, with follow-up requests). Sending the reply logs it alongside any other source (only when the sent message answers the message the suggestions were for), and then that send learns only from Cue's outcomes, with the other source's draft given as the starting draft; the extraction prompt has its own variant for this. Sends that used every suggestion as written skip the model call. Each send log is claimed atomically before processing, so overlapping syncs never learn from it twice. The retention cron (`utils/privacy/reasoning-retention.ts`) deletes unsent rows after 7 days and clears the outcomes of sent ones after the draft sent text retention
 
 ## Future Notes
 

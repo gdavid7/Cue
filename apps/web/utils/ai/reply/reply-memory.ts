@@ -316,6 +316,14 @@ async function processReplyMemoryDraftSendLog({
   provider: EmailProvider;
   logger: Logger;
 }) {
+  // Overlapping syncs (two sends close together) each pick up the same log;
+  // only the one that claims it learns from it.
+  const claim = await prisma.draftSendLog.updateMany({
+    where: { id: draftSendLog.id, replyMemoryProcessedAt: null },
+    data: { replyMemoryProcessedAt: new Date() },
+  });
+  if (claim.count !== 1) return;
+
   const draft = getDraftSendLogDraft(draftSendLog);
   if (!draft) {
     await markDraftSendLogReplyMemoryProcessed(draftSendLog.id);
@@ -406,6 +414,7 @@ async function processReplyMemoryDraftSendLog({
     existingPromptableMemories,
     existingPreferenceMemories,
     writingContext,
+    startingDraftText,
   ] = await Promise.all([
     prisma.replyMemory.findMany({
       where: {
@@ -435,6 +444,13 @@ async function processReplyMemoryDraftSendLog({
       where: { id: emailAccountId },
       select: { learnedWritingStyle: true, writingStyle: true },
     }),
+    composeAssistOutcomes
+      ? getStartingDraftText({
+          emailAccountId,
+          sentMessageId: draftSendLog.sentMessageId,
+          draftSendLogId: draftSendLog.id,
+        })
+      : null,
   ]);
 
   const existingMemories = [
@@ -452,6 +468,7 @@ async function processReplyMemoryDraftSendLog({
       : "",
     draftText,
     composeAssistOutcomes,
+    startingDraftText,
     sentText,
     senderEmail: normalizedSenderEmail,
     existingMemories,
@@ -816,8 +833,44 @@ async function recordDraftSendLogReplyMemoryFailure(
           }
         : {
             replyMemoryAttemptCount: { increment: 1 },
+            // Releases the claim so a later sync tries again.
+            replyMemoryProcessedAt: null,
           },
   });
+}
+
+/**
+ * The rule draft or saved suggested reply a reply written with Cue started
+ * from, logged against the same send.
+ */
+async function getStartingDraftText({
+  emailAccountId,
+  sentMessageId,
+  draftSendLogId,
+}: {
+  emailAccountId: string;
+  sentMessageId: string;
+  draftSendLogId: string;
+}) {
+  const startingDraft = await prisma.draftSendLog.findFirst({
+    where: {
+      sentMessageId,
+      id: { not: draftSendLogId },
+      OR: [
+        { executedAction: { executedRule: { emailAccountId } } },
+        { suggestedReplyDraft: { emailAccountId } },
+      ],
+    },
+    select: {
+      executedAction: { select: { content: true } },
+      suggestedReplyDraft: { select: { content: true } },
+    },
+  });
+  return (
+    startingDraft?.executedAction?.content ??
+    startingDraft?.suggestedReplyDraft?.content ??
+    null
+  );
 }
 
 const draftSendLogReplyMemoryInclude = {

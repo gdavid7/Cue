@@ -45,6 +45,7 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
   incomingEmailContent,
   draftText,
   composeAssistOutcomes,
+  startingDraftText = null,
   sentText,
   senderEmail,
   existingMemories,
@@ -60,6 +61,8 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
    * rather than from editing one whole draft.
    */
   composeAssistOutcomes?: ComposeAssistOutcome[];
+  /** With composeAssistOutcomes: the AI draft the user started from, if any. */
+  startingDraftText?: string | null;
   sentText: string;
   senderEmail: string;
   existingMemories: Pick<
@@ -95,6 +98,7 @@ export async function aiExtractReplyMemoriesFromDraftEdit({
     incomingEmailContent: normalizedIncomingEmailContent,
     draftText: normalizedDraftText,
     composeAssistOutcomes,
+    startingDraftText,
     sentText: normalizedSentText,
     existingMemories,
     writingStyle,
@@ -185,6 +189,7 @@ function getPrompt({
   incomingEmailContent,
   draftText,
   composeAssistOutcomes,
+  startingDraftText,
   sentText,
   existingMemories,
   writingStyle,
@@ -196,6 +201,7 @@ function getPrompt({
   incomingEmailContent: string;
   draftText: string;
   composeAssistOutcomes?: ComposeAssistOutcome[];
+  startingDraftText: string | null;
   sentText: string;
   existingMemories: Pick<
     ReplyMemory,
@@ -230,7 +236,7 @@ ${incomingEmailContent}
 
 ${
   composeAssistOutcomes
-    ? formatComposeAssistOutcomes(composeAssistOutcomes)
+    ? formatComposeAssistOutcomes(composeAssistOutcomes, startingDraftText)
     : `<ai_draft>
 ${draftText}
 </ai_draft>`
@@ -257,26 +263,41 @@ ${
 }`;
 }
 
-function formatComposeAssistOutcomes(outcomes: ComposeAssistOutcome[]) {
-  return `<cue_suggestions>
+function formatComposeAssistOutcomes(
+  outcomes: ComposeAssistOutcome[],
+  startingDraftText: string | null | undefined,
+) {
+  const startingDraft = startingDraftText?.trim()
+    ? `<starting_draft>
+${escapeTags(startingDraftText.trim())}
+</starting_draft>
+
+`
+    : "";
+  return `${startingDraft}<cue_suggestions>
 ${outcomes
   .map(
     (outcome) => `<suggestion outcome="${outcome.outcome}">
-<request>${outcome.request}</request>
-${outcome.refinements.map((text) => `<follow_up>${text}</follow_up>\n`).join("")}${
+<request>${escapeTags(outcome.request)}</request>
+${outcome.refinements.map((text) => `<follow_up>${escapeTags(text)}</follow_up>\n`).join("")}${
   outcome.original
     ? `<replaced_text>
-${outcome.original}
+${escapeTags(outcome.original)}
 </replaced_text>
 `
     : ""
 }<suggested_text>
-${outcome.suggestion}
+${escapeTags(outcome.suggestion)}
 </suggested_text>
 </suggestion>`,
   )
   .join("\n")}
 </cue_suggestions>`;
+}
+
+// Text the user and Cue wrote can't open or close the prompt's tags.
+function escapeTags(text: string) {
+  return text.replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 }
 
 export function formatReplyMemoryPromptLine(
@@ -340,8 +361,32 @@ function getSystemPrompt({
 - Learn from what the user did with the suggestions: their follow-up requests, the changes they made to accepted text before sending, and suggestions they discarded and wrote differently. Text the user accepted and sent unchanged teaches nothing on its own.
 - A request is about one passage of this reply. Do not turn a single request, such as translating or shortening a passage, into a memory unless the follow-ups or the sent reply show a lasting preference.
 - A discarded suggestion is weak evidence on its own. Learn from it only when the sent reply shows what the user wanted instead.
+- A starting draft, when given, is the reply Cue wrote before the user began. Learn from how the user changed it as well; text they kept from it teaches nothing on its own.
 `
     : "- Learn from the user's substantive edit, not from content that was already present in the AI draft.\n";
+  // The draft-edit wording stays as it was; the composer variant speaks of
+  // the user's changes across Cue's suggestions.
+  const wording = fromComposeAssist
+    ? {
+        reveals: "the user's changes explicitly reveal",
+        copyFrom: "the suggestions or the sent reply",
+        factAdds: "the user's changes add",
+        procedureShows: "the user's changes show",
+        singleMatch: "A single reply",
+        evidenceFor: "the user's changes",
+        ideaFrom: "the user's changes",
+        teaches: "the user's changes teach",
+      }
+    : {
+        reveals: "the edit explicitly reveals",
+        copyFrom: "the draft or sent reply",
+        factAdds: "the edit adds",
+        procedureShows: "the edit shows",
+        singleMatch: "A single edit",
+        evidenceFor: "the edit",
+        ideaFrom: "the edit",
+        teaches: "the edit teaches",
+      };
 
   return `${intro}
 
@@ -360,16 +405,16 @@ ${domainScopeLine}- TOPIC: applies to a reusable topic or subject area
 Rules:
 - Return at most ${MAX_MEMORIES_PER_EDIT} memories.
 ${sourceRuleLines}- Before creating a memory, apply this durability test: would following it in a future unrelated thread be correct without the original context? If not, return no memory for that idea.
-- Skip one-off logistics, temporary states, completed actions, current documents or attachments, and ad hoc or explicitly one-time exceptions unless the edit explicitly reveals a stable policy, preference, fact, or repeatable process.
+- Skip one-off logistics, temporary states, completed actions, current documents or attachments, and ad hoc or explicitly one-time exceptions unless ${wording.reveals} a stable policy, preference, fact, or repeatable process.
 - For current documents, attachments, or completed actions, do not create memories that simply say to send, share, attach, confirm, or complete the item. Only store a stable rule for how that class of request should be handled in the future.
 - Prefer concise, direct drafting instructions.
-- Do not copy example sentences from the draft or sent reply into memory content. Describe the reusable rule instead.
+- Do not copy example sentences from ${wording.copyFrom} into memory content. Describe the reusable rule instead.
 - Each memory should be a single prompt-ready instruction or fact in the content field. Do not split the same idea across a title and body.
 - Do not infer a durable style preference from a single scheduling choice or one-off availability update.
 - Do not store a PREFERENCE memory that simply repeats the user's explicit writing style setting.
 - PREFERENCE memories are always account-level. Use GLOBAL scope for PREFERENCE memories.
-- Use FACT when the edit adds reusable business information, policy, pricing, product capabilities, constraints, contacts, or logistics.
-- Use PROCEDURE when the edit shows a reusable way to handle a recurring class of replies.
+- Use FACT when ${wording.factAdds} reusable business information, policy, pricing, product capabilities, constraints, contacts, or logistics.
+- Use PROCEDURE when ${wording.procedureShows} a reusable way to handle a recurring class of replies.
 - Use PREFERENCE for stable tone, length, formatting, or phrasing preferences.
 - For GLOBAL scope, leave scopeValue empty.
 - For SENDER scope, use the exact sender email from the context.
@@ -377,9 +422,9 @@ ${domainRuleLine}- For TOPIC scope, use a short stable topic phrase such as "pri
 - TOPIC scope values must be short topic labels, not copied sentences or arbitrary thread text.
 - Always include a scopeValue field. Use an empty string for GLOBAL scope.
 - Prefer matching an existing memory over creating a new one when the existing memory substantially covers the same durable idea, even if the wording is different.
-- A single edit can match multiple existing memories, such as one factual/procedure memory and one style preference. Return every matching id that is useful evidence for the edit, up to the maximum.
-- If any existing memory already captures a durable idea from the edit, return its id in matchingExistingMemoryId and set newMemory to null for that idea.
-- If the edit teaches a new durable memory, set matchingExistingMemoryId to null and fill newMemory.
+- ${wording.singleMatch} can match multiple existing memories, such as one factual/procedure memory and one style preference. Return every matching id that is useful evidence for ${wording.evidenceFor}, up to the maximum.
+- If any existing memory already captures a durable idea from ${wording.ideaFrom}, return its id in matchingExistingMemoryId and set newMemory to null for that idea.
+- If ${wording.teaches} a new durable memory, set matchingExistingMemoryId to null and fill newMemory.
 - Only return ids from the provided existing memory list.
 - Be conservative about creating new memories. Only create a new memory when none of the provided existing memories substantially covers that durable idea.
 - Work language-agnostically. The memories may be written in any language.
