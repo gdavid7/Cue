@@ -16,6 +16,7 @@ const notifications = vi.hoisted(() => ({
   toastSending: vi.fn(),
   toastSendFailed: vi.fn(),
   toastSendUndone: vi.fn(),
+  toastSendUndoneElsewhere: vi.fn(),
   toastSent: vi.fn(),
 }));
 
@@ -31,6 +32,9 @@ const server = vi.hoisted(() => ({
   cancelHeldSendAction: vi.fn(),
 }));
 vi.mock("@/utils/actions/scheduled-email", () => server);
+
+const navigation = vi.hoisted(() => ({ redirectToSafeUrl: vi.fn() }));
+vi.mock("@/utils/redirect", () => navigation);
 
 describe("undo send", () => {
   beforeEach(async () => {
@@ -386,8 +390,240 @@ describe("undo send", () => {
   });
 });
 
+// Switching account reloads the page, which drops everything in memory: the
+// toast, the tracked send and the engine. The server and the local mailbox
+// still hold the send, so the next page takes the undo back up.
+describe("undo send across a page reload", () => {
+  let storage: Map<string, string>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storage = new Map();
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    });
+    server.cancelHeldSendAction.mockResolvedValue({
+      data: { status: "cancelled" },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("offers undo again on the page an account switch reloads to", async () => {
+    const before = await loadPage();
+    const original = createClient();
+    before.setActiveMailClient(original.client);
+    before.beginUndoSend({
+      client: original.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer: vi.fn(),
+    });
+    vi.clearAllMocks();
+
+    const after = await loadPage();
+    const stop = after.resumeUndoSend();
+    // The next page's engine starts after the page does.
+    expect(notifications.toastSending).not.toHaveBeenCalled();
+    const next = createClient();
+    after.setActiveMailClient(next.client);
+
+    expect(notifications.toastSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "undo-send:mutation",
+        hold: expect.objectContaining({ onUndo: expect.any(Function) }),
+      }),
+    );
+    await expect(after.undoPendingSend()).resolves.toBe(true);
+    expect(next.cancel).toHaveBeenCalledWith({
+      accountId: "account-a",
+      operationId: "mutation",
+    });
+    expect(notifications.toastSendUndoneElsewhere).toHaveBeenCalledWith({
+      id: "undo-send:mutation",
+      onEdit: expect.any(Function),
+    });
+    stop();
+  });
+
+  it("reopens an undone new message in the account it was written from", async () => {
+    await holdOnFirstPage({ emailAccountId: "account-a" });
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+    await after.undoPendingSend();
+
+    const [{ onEdit }] =
+      notifications.toastSendUndoneElsewhere.mock.calls.at(-1) ?? [];
+    onEdit();
+    expect(navigation.redirectToSafeUrl).toHaveBeenCalledWith(
+      "/account-a/mail",
+    );
+
+    // The page the redirect lands on opens the composer once its engine runs.
+    const landed = await loadPage();
+    const open = vi.fn();
+    landed.reopenUndoneComposer("account-b", open)();
+    const stop = landed.reopenUndoneComposer("account-a", open);
+    expect(open).not.toHaveBeenCalled();
+    landed.setActiveMailClient(createClient().client);
+    expect(open).toHaveBeenCalledOnce();
+    stop();
+    landed.reopenUndoneComposer("account-a", open)();
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it("reopens an undone reply in its thread", async () => {
+    await holdOnFirstPage({
+      emailAccountId: "account-a",
+      replyThreadId: "thread 1",
+    });
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+    await after.undoPendingSend();
+
+    const [{ onEdit }] =
+      notifications.toastSendUndoneElsewhere.mock.calls.at(-1) ?? [];
+    onEdit();
+    expect(navigation.redirectToSafeUrl).toHaveBeenCalledWith(
+      "/account-a/mail?thread-id=thread+1",
+    );
+    const open = vi.fn();
+    after.reopenUndoneComposer("account-a", open)();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("cancels on the server when the next page's engine has no record of the send", async () => {
+    await holdOnFirstPage();
+    const after = await loadPage();
+    const next = createClient({ cancelStatus: "not_found" });
+    after.setActiveMailClient(next.client);
+    after.resumeUndoSend()();
+
+    await expect(after.undoPendingSend()).resolves.toBe(true);
+    expect(server.cancelHeldSendAction).toHaveBeenCalledWith("account-a", {
+      operationId: "mutation",
+    });
+  });
+
+  it("tells the user an undo that landed as the page left went through", async () => {
+    await holdOnFirstPage();
+    const after = await loadPage();
+    const next = createClient();
+    next.handle.set("cancelled");
+    after.setActiveMailClient(next.client);
+    after.resumeUndoSend()();
+
+    expect(notifications.toastSendUndoneElsewhere).toHaveBeenCalledWith({
+      id: "undo-send:mutation",
+      onEdit: expect.any(Function),
+    });
+    await expect(after.undoPendingSend()).resolves.toBe(false);
+  });
+
+  it("offers undo again when an undo pressed as the page left never landed", async () => {
+    const before = await holdOnFirstPage();
+    // The page unloads before the engine answers.
+    before.client.cancel.mockReturnValue(new Promise(() => {}));
+    before.page.undoPendingSend().catch(() => {});
+
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+
+    await expect(after.undoPendingSend()).resolves.toBe(true);
+  });
+
+  it("reports a send that went out while the page was switching", async () => {
+    await holdOnFirstPage();
+    const after = await loadPage();
+    const next = createClient();
+    next.handle.set("succeeded");
+    after.setActiveMailClient(next.client);
+    after.resumeUndoSend()();
+
+    expect(notifications.toastSent).toHaveBeenCalledWith("undo-send:mutation");
+    await expect(after.undoPendingSend()).resolves.toBe(false);
+  });
+
+  it("does not offer undo once the hold ended before the next page started", async () => {
+    vi.useFakeTimers();
+    await holdOnFirstPage();
+    vi.advanceTimersByTime(UNDO_SEND_DELAY_MS);
+    // The page left before its own hold ended, so nothing settled there.
+    vi.clearAllMocks();
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+
+    expect(notifications.toastSending).not.toHaveBeenCalled();
+    const later = await loadPage();
+    later.setActiveMailClient(createClient().client);
+    later.resumeUndoSend()();
+    expect(notifications.toastSending).not.toHaveBeenCalled();
+  });
+
+  it("does not offer undo again for a send that had settled when undo began", async () => {
+    const page = await loadPage();
+    const client = createClient();
+    client.handle.set("succeeded");
+    page.setActiveMailClient(client.client);
+    page.beginUndoSend({
+      client: client.client,
+      operationId: "mutation",
+      emailAccountId: "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer: vi.fn(),
+    });
+    vi.clearAllMocks();
+
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+    expect(notifications.toastSending).not.toHaveBeenCalled();
+  });
+
+  it("does not offer undo again after the send settled", async () => {
+    const before = await holdOnFirstPage();
+    before.client.handle.set("succeeded");
+
+    const after = await loadPage();
+    after.setActiveMailClient(createClient().client);
+    after.resumeUndoSend()();
+    expect(notifications.toastSending).not.toHaveBeenCalled();
+  });
+
+  async function holdOnFirstPage(
+    options: { emailAccountId?: string; replyThreadId?: string } = {},
+  ) {
+    const page = await loadPage();
+    const client = createClient();
+    page.setActiveMailClient(client.client);
+    page.beginUndoSend({
+      client: client.client,
+      operationId: "mutation",
+      emailAccountId: options.emailAccountId ?? "account-a",
+      holdUntil: Date.now() + UNDO_SEND_DELAY_MS,
+      restoreComposer: vi.fn(),
+      replyThreadId: options.replyThreadId,
+    });
+    vi.clearAllMocks();
+    server.cancelHeldSendAction.mockResolvedValue({
+      data: { status: "cancelled" },
+    });
+    return { page, client };
+  }
+});
+
 function createClient(options?: {
-  cancelStatus?: "cancelled" | "too_late" | "unavailable";
+  cancelStatus?: "cancelled" | "too_late" | "unavailable" | "not_found";
 }) {
   const handle = createHandle();
   const cancel = vi
@@ -443,4 +679,13 @@ function operationState(status: OperationState["status"]): OperationState {
     nextAttemptAtMs: null,
     error: null,
   };
+}
+
+// A fresh copy of the page's modules, as a reload leaves them; session
+// storage is what carries over.
+async function loadPage() {
+  vi.resetModules();
+  const undo = await import("./undo-send");
+  const active = await import("@/utils/mail-engine/active-client");
+  return { ...undo, setActiveMailClient: active.setActiveMailClient };
 }

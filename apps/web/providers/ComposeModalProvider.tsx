@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -15,6 +16,10 @@ import { useModal } from "@/hooks/useModal";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useVisualViewportBox } from "@/hooks/useVisualViewportBox";
 import { ComposeEmailFormLazy } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailFormLazy";
+import {
+  reopenUndoneComposer,
+  resumeUndoSend,
+} from "@/app/(app)/[emailAccountId]/compose/undo-send";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
 import {
   EmailAccountScopeProvider,
@@ -167,6 +172,13 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     },
     [reply, closeCompose],
   );
+  // An account switch reloads the page, so a send still held for undo is
+  // taken up again here, and a new message it undid opens again.
+  useEffect(resumeUndoSend, []);
+  useEffect(() => {
+    if (emailAccountId)
+      return reopenUndoneComposer(emailAccountId, openCompose);
+  }, [emailAccountId, openCompose]);
   const contextValue = useMemo(
     () => ({
       onOpen: openCompose,

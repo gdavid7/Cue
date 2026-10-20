@@ -136,6 +136,21 @@ export function toastSendUndone(id: string) {
   });
 }
 
+/** For a send undone after the page it was written on was left. */
+export function toastSendUndoneElsewhere(options: {
+  id: string;
+  onEdit: () => void;
+}) {
+  releaseUndo(options.id);
+  return toast.success("Send undone. Saved as a draft.", {
+    id: options.id,
+    icon: null,
+    description: undefined,
+    duration: 8000,
+    action: { label: "Edit", onClick: options.onEdit },
+  });
+}
+
 export function toastSendFailed(options: { id: string; onRetry: () => void }) {
   releaseUndo(options.id);
   return toast.error("Couldn't send", {
