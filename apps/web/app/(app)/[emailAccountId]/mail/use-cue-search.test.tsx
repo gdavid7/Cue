@@ -22,14 +22,21 @@ const state = vi.hoisted(() => ({
   localOnlyWindows: [] as string[],
   enabledPredicates: [] as unknown[],
   provider: "google",
+  client: null as null | { searchSemantic?: () => Promise<unknown> },
+  semantic: undefined as unknown,
 }));
 
 vi.mock("swr", () => ({
   default: (key: unknown, fetcher: (key: unknown) => Promise<unknown>) => {
+    if (Array.isArray(key) && key[0] === "cue-semantic")
+      return { data: state.semantic, error: undefined };
     state.swrKeys.push(key);
     state.fetcher = fetcher;
     return { data: key ? state.intent : undefined, error: undefined };
   },
+}));
+vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
+  useOptionalMailClient: () => state.client,
 }));
 vi.mock("@/hooks/useLabels", () => ({
   useLabels: () => ({
@@ -98,6 +105,8 @@ beforeEach(() => {
   state.provider = "google";
   state.labels = [];
   state.labelsLoading = false;
+  state.client = null;
+  state.semantic = undefined;
 });
 
 afterEach(() => {
@@ -155,6 +164,38 @@ describe("useCueSearch", () => {
     expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(result.current.widening).toBeNull();
     expect(new Set(state.enabledWindows)).toEqual(new Set([SEARCH]));
+  });
+
+  it("adds mail close in meaning, read from the local mail alone, and waits for it", () => {
+    // Words alone: mail found by meaning must meet a search's sender and dates.
+    const words = "lease OR contract";
+    state.intent = { searches: [words], explanation: "", isQuestion: false };
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(words, { settled: true, ids: ["a", "b"] });
+    state.results.set("messages:m-lease", { settled: true, ids: ["lease"] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(result.current.foundNothing).toBe(false);
+
+    state.semantic = [
+      { messageId: "m-lease", conversationId: "lease", similarity: 0.8 },
+    ];
+    rerender({ q: SENTENCE });
+    expect(result.current.threads.map((t) => t.id)).toContain("lease");
+    expect(state.localOnlyWindows).toContain("messages:m-lease");
+  });
+
+  it("says it found nothing only once the search by meaning has answered too", () => {
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    for (const key of ladderKeys())
+      state.results.set(key, { settled: true, ids: [] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.foundNothing).toBe(false);
+
+    state.semantic = [];
+    rerender({ q: SENTENCE });
+    expect(result.current.foundNothing).toBe(true);
   });
 
   it("climbs the ladder past tiers that find nothing new, stopping at the first that does", () => {
@@ -387,6 +428,8 @@ function searchesOf(predicate: unknown): string[] {
     predicates?: unknown[];
   };
   if (node.kind === "search" && node.query) return [node.query];
+  if (node.kind === "message")
+    return [`messages:${(node as unknown as { ids: string[] }).ids.join(",")}`];
   return (node.predicates ?? []).flatMap(searchesOf);
 }
 

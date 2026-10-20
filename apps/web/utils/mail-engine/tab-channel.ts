@@ -310,6 +310,7 @@ export function createTabFollowerClient(input: {
     // Answered by the tab that owns the engine; it fails over to the
     // provider search if that tab can't.
     searchMessages: (query) => call("searchMessages", [query]) as never,
+    searchSemantic: (query) => call("searchSemantic", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

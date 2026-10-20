@@ -10,6 +10,7 @@ import {
   browserMailEngineCapabilities,
   pageConnectivityOnline,
   readPageMaxPendingOperations,
+  readPageSemanticIndexIntervalMs,
   requestSyncUnlessOffline,
   type BrowserEngineStart,
   type WorkerObserveKind,
@@ -105,6 +106,8 @@ export async function createBrowserMailEngine(
     ...input,
     maxPendingOperations:
       input.maxPendingOperations ?? readPageMaxPendingOperations(),
+    semanticIndexIntervalMs:
+      input.semanticIndexIntervalMs ?? readPageSemanticIndexIntervalMs(),
   };
   const startedAt = Date.now();
   for (let attempt = 0; ; attempt++) {
@@ -328,6 +331,8 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "queryContactSuggestions", [query]),
     searchMessages: (query) =>
       callWorker(worker, pending, "searchMessages", [query]),
+    searchSemantic: (query) =>
+      callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),
     observeMailboxCounts: (query) => observe("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

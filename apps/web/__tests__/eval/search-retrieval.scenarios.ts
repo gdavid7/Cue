@@ -10,7 +10,8 @@ export type RetrievalQueryType =
   | "attribute"
   | "vague"
   | "question"
-  | "multilingual";
+  | "multilingual"
+  | "paraphrase";
 
 export type RetrievalQuery = {
   id: string;
@@ -375,5 +376,99 @@ export const RETRIEVAL_QUERIES: RetrievalQuery[] = [
     intent: "Mom's emails (in English) with pictures from the lake weekend",
     relevant: ["mom-lake-1", "mom-lake-2"],
     keywords: "אמא אגם תמונות",
+  },
+  // Paraphrase: said in other words than the mail's, so the typed words
+  // and most of their synonyms miss it. What semantic search is for.
+  {
+    id: "para-kitchen-contractor",
+    type: "paraphrase",
+    query: "the invoice from the contractor about the kitchen",
+    intent:
+      "Ben Alvarez's (the remodeler's) emails about the kitchen remodel: the proposal, the cabinet order and the countertop update",
+    relevant: ["kitchen-proposal", "kitchen-cabinets", "kitchen-week2"],
+    fuzzy: true,
+    keywords: "kitchen remodel",
+  },
+  {
+    id: "para-teeth-cleaned",
+    type: "paraphrase",
+    query: "when do I get my teeth looked at next",
+    intent: "The dental appointment confirmation for Thursday, November 5",
+    relevant: ["dentist-november"],
+    keywords: "dentist appointment",
+  },
+  {
+    id: "para-house-financing",
+    type: "paraphrase",
+    query: "has the bank said yes on financing the house",
+    intent: "The credit union's mortgage pre-approval and conditional approval",
+    relevant: ["mortgage-preapproval", "mortgage-conditional"],
+    keywords: "mortgage approval",
+  },
+  {
+    id: "para-accountant-paperwork",
+    type: "paraphrase",
+    query: "what paperwork does my accountant still need from me",
+    intent: "The CPA's list of documents needed for the 2025 return",
+    relevant: ["tax-documents-needed"],
+    keywords: "from:nina documents",
+  },
+  {
+    id: "para-retreat-moved",
+    type: "paraphrase",
+    query: "where did the team retreat get moved to",
+    intent: "Sarah's note that the offsite moved to Seabright Retreat Center",
+    relevant: ["offsite-sarah-3"],
+    keywords: "offsite venue",
+  },
+  {
+    id: "para-appliance-water",
+    type: "paraphrase",
+    query: "the appliance that kept leaving water in the bottom",
+    intent:
+      "The maintenance request about the dishwasher not draining, and the reply",
+    relevant: ["dishwasher-alex", "dishwasher-diane"],
+    keywords: "dishwasher",
+  },
+  {
+    id: "para-school-portraits",
+    type: "paraphrase",
+    query: "when do the kids get their portraits taken at school",
+    intent: "The school's picture day notice for Thursday, Oct 22",
+    relevant: ["school-picture-day"],
+    keywords: "picture day",
+  },
+  {
+    id: "para-sleeping-outdoors",
+    type: "paraphrase",
+    query: "the shelter I bought for sleeping outdoors",
+    intent: "The order and shipping emails for the 4-person camping tent",
+    relevant: ["order-tent", "order-tent-shipped"],
+    keywords: "tent",
+  },
+  {
+    id: "para-presentation-due",
+    type: "paraphrase",
+    query: "when are my presentation materials due for the developer event",
+    intent:
+      "DevSummit West's speaker logistics, which say slides are due Nov 5",
+    relevant: ["conf-logistics"],
+    keywords: "DevSummit slides",
+  },
+  {
+    id: "para-confidentiality-signed",
+    type: "paraphrase",
+    query: "the confidentiality agreement the analytics firm signed",
+    intent: "Northpeak's fully executed mutual NDA",
+    relevant: ["nda-signed"],
+    keywords: "NDA countersigned",
+  },
+  {
+    id: "para-beans-delivery",
+    type: "paraphrase",
+    query: "my monthly beans delivery receipt",
+    intent: "Ridgeline Coffee's receipt for the October subscription",
+    relevant: ["coffee-october"],
+    keywords: "coffee subscription",
   },
 ];

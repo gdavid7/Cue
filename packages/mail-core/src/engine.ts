@@ -50,6 +50,8 @@ import type {
   MessageSearchPage,
   MessageSearchQuery,
   QueryHandle,
+  SemanticMatch,
+  SemanticSearchQuery,
 } from "./queries";
 import {
   createQueryRegistry,
@@ -140,6 +142,12 @@ export type MailClient = {
    * provider. Hosts that can't answer off the UI thread leave it out.
    */
   searchMessages?(query: MessageSearchQuery): Promise<MessageSearchPage>;
+  /**
+   * Finds mail by meaning, from vectors this device made of recent mail.
+   * Resolves no matches while the account has none. Only hosts that run
+   * the embedding model offer it.
+   */
+  searchSemantic?(query: SemanticSearchQuery): Promise<SemanticMatch[]>;
   observeMailbox(query: ConversationQuery): QueryHandle<MailboxView>;
   observeMailboxCounts(
     query: MailboxCountsQuery,

@@ -16,6 +16,8 @@ import {
 export const CUE_SEARCH_BUDGET_MS = 4000;
 /** Fewer matches than this and Cue widens the search, tier by tier. */
 export const WIDEN_BELOW_RESULTS = 2;
+/** Conversations the search by meaning may add: a screen and a half. */
+export const CUE_SEMANTIC_RESULTS = 15;
 /** The Cue found rows shown before "Show all". */
 export const CUE_FOUND_VISIBLE_ROWS = 3;
 

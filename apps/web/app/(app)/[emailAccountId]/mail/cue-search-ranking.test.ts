@@ -154,6 +154,103 @@ describe("rankWithWidened", () => {
   });
 });
 
+describe("rankWithWidened with the search by meaning", () => {
+  const search = "contractor kitchen invoice";
+  const primaryMatch = thread("cookbook", {
+    daysAgo: 1,
+    subject: "Kitchen invoice for your cookbook order",
+  });
+  const proposal = thread("proposal", {
+    daysAgo: 30,
+    subject: "Kitchen remodel proposal",
+    from: "Ben (Remodeling) <ben@remodel.example>",
+  });
+
+  it("puts mail the model finds clearly close among the first search's matches, by fit", () => {
+    const ranked = rankWithWidened(
+      [primaryMatch],
+      [],
+      withSimilarity(search, { proposal: 0.7 }),
+      [proposal],
+    );
+    expect(ids(ranked)).toEqual(["cookbook", "proposal"]);
+    const demotedMatch = thread("deal", {
+      daysAgo: 1,
+      subject: "Kitchen invoice template sale",
+      labelIds: ["CATEGORY_PROMOTIONS"],
+    });
+    expect(
+      ids(
+        rankWithWidened(
+          [demotedMatch],
+          [],
+          withSimilarity(search, { proposal: 0.7 }),
+          [proposal],
+        ),
+      ),
+    ).toEqual(["proposal", "deal"]);
+  });
+
+  it("keeps mail only loosely close after the first search's matches", () => {
+    const loose = thread("loose", {
+      daysAgo: 2,
+      subject: "Kitchen remodel ideas",
+    });
+    const close = thread("close", { daysAgo: 90, subject: "Remodel quote" });
+    const ranked = rankWithWidened(
+      [primaryMatch],
+      [],
+      withSimilarity(search, { loose: 0.32, close: 0.38 }),
+      [loose, close],
+    );
+    expect(ids(ranked)).toEqual(["cookbook", "loose", "close"]);
+  });
+
+  it("leaves the first search's matches in their order, however close each is", () => {
+    const newer = thread("newer", { daysAgo: 1, subject: "Kitchen invoice" });
+    const older = thread("older", { daysAgo: 9, subject: "Kitchen invoice" });
+    expect(
+      ids(
+        rankWithWidened(
+          [older, newer],
+          [],
+          withSimilarity(search, { older: 0.9, newer: 0.2 }),
+          [older, newer],
+        ),
+      ),
+    ).toEqual(["newer", "older"]);
+  });
+
+  it("drops mail found by meaning alone that misses the search's sender or dates", () => {
+    const fromBen = "from:ben kitchen after:2026/09/01";
+    const recent = thread("recent", {
+      daysAgo: 5,
+      subject: "Countertops",
+      from: "Ben <ben@remodel.example>",
+    });
+    const tooOld = thread("too-old", {
+      daysAgo: 200,
+      subject: "Cabinets",
+      from: "Ben <ben@remodel.example>",
+    });
+    const otherSender = thread("other", {
+      daysAgo: 5,
+      subject: "Cabinets",
+      from: "Weeknight Recipes <hi@recipes.example>",
+    });
+    expect(
+      ids(
+        rankWithWidened(
+          [],
+          [],
+          withSimilarity(fromBen, { recent: 0.6, "too-old": 0.9, other: 0.9 }),
+          [recent, tooOld, otherSender],
+        ),
+      ),
+    ).toEqual(["recent"]);
+  });
+});
+
 function rank(search: string, threads: ReturnType<typeof thread>[]) {
   return ids(rankCueFoundThreads(threads, context(search)));
 }
@@ -165,6 +262,13 @@ function context(search: string) {
     now: NOW,
     timeZone: "UTC",
     provider: "google" as const,
+  };
+}
+
+function withSimilarity(search: string, similarity: Record<string, number>) {
+  return {
+    ...context(search),
+    similarity: new Map(Object.entries(similarity)),
   };
 }
 

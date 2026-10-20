@@ -11,6 +11,11 @@ export type BrowserEngineStart = {
   persist?: boolean;
   maxPendingOperations?: number;
   online?: boolean;
+  /**
+   * How long the semantic index waits after start, and between passes for
+   * new mail; tests shorten it.
+   */
+  semanticIndexIntervalMs?: number;
 };
 
 export function shouldReleaseDeferredOnStart(online?: boolean) {
@@ -135,8 +140,19 @@ export function readPageMaxPendingOperations(): number | undefined {
   return Math.floor(value);
 }
 
+/** Set by browser tests that need the semantic index without its delays. */
+export function readPageSemanticIndexIntervalMs(): number | undefined {
+  if (typeof window === "undefined") return;
+  const value = window.__inboxZeroMailSemanticIndexIntervalMs;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return;
+  }
+  return value;
+}
+
 declare global {
   interface Window {
     __inboxZeroMailMaxPendingOperations?: number;
+    __inboxZeroMailSemanticIndexIntervalMs?: number;
   }
 }
