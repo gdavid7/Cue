@@ -335,8 +335,9 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
+        const sequence = await requestedSequence(tx, input.requestedAt);
         for (const change of input.page.changes) {
-          await applyChange(tx, change);
+          await applyChange(tx, change, sequence);
         }
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
@@ -725,6 +726,7 @@ export async function createSqliteMailStore(
           bodies,
           digest,
           bodyCodec,
+          requestedSequence: await requestedSequence(tx, input.requestedAt),
         });
         await tx.execute(
           `INSERT INTO sync_streams(account_id, stream_id, generation, checkpoint)
@@ -778,6 +780,7 @@ export async function createSqliteMailStore(
           return { status: "stale" as const };
         }
         let applied = 0;
+        const sequence = await requestedSequence(tx, input.requestedAt);
         for (const change of input.changes) {
           if (
             input.onlyMissing &&
@@ -792,7 +795,7 @@ export async function createSqliteMailStore(
           ) {
             continue;
           }
-          await applyChange(tx, change);
+          await applyChange(tx, change, sequence);
           applied += 1;
         }
         for (const body of input.bodies) {
@@ -851,6 +854,7 @@ export async function createSqliteMailStore(
             if (inserted.changedRows > 0) newTargets.push(key);
           }
         }
+        const sequence = await requestedSequence(tx, input.requestedAt);
         for (const change of input.page.changes) {
           if (
             change.kind === "message_patch" &&
@@ -858,7 +862,7 @@ export async function createSqliteMailStore(
           ) {
             continue;
           }
-          await applyChange(tx, change);
+          await applyChange(tx, change, sequence);
         }
         await recomputeTargets(tx, newTargets);
         if (!input.page.nextPage) {
@@ -919,6 +923,9 @@ export async function createSqliteMailStore(
         if (!(await accountGenerationMatches(tx, input.operation.session))) {
           return { status: "stale" };
         }
+        // Stamped with this settle's revision, which a read sent before it
+        // can't have reached.
+        const confirmedTargets: MessageKey[] = [];
         if (input.result.status === "confirmed") {
           const targets = resolveTargetOutcomes(
             input.operation,
@@ -926,6 +933,12 @@ export async function createSqliteMailStore(
             "applied",
           );
           await persistTargetOutcomes(tx, input.operation.key, targets);
+          if (input.operation.intent.kind === "metadata") {
+            for (const target of targets) {
+              if (target.outcome === "applied")
+                confirmedTargets.push(target.key);
+            }
+          }
           const observedKeys = new Set(
             input.result.observations.flatMap((change) => {
               const key = providerChangeKey(change);
@@ -1084,6 +1097,12 @@ export async function createSqliteMailStore(
           await recomputeTargets(tx, input.operation.intent.targets);
         }
         const revision = await bumpRevision(tx);
+        for (const key of confirmedTargets) {
+          await tx.execute(
+            "UPDATE messages SET local_change_sequence = ? WHERE account_id = ? AND message_id = ?",
+            [revision.sequence, key.accountId, key.messageId],
+          );
+        }
         return { status: "committed", revision };
       });
     },
@@ -1484,6 +1503,9 @@ export async function createSqliteMailStore(
           : ("incomplete" as const);
       });
     },
+    readRevision() {
+      return driver.read(readRevision);
+    },
     async readOperation(key) {
       return driver.read(async (tx) => {
         const revision = await readRevision(tx);
@@ -1800,6 +1822,7 @@ export async function createSqliteMailStore(
           bodies,
           digest,
           bodyCodec,
+          requestedSequence: await requestedSequence(tx, input.requestedAt),
         });
         if (input.nextPage) {
           await tx.execute(
@@ -2602,10 +2625,11 @@ async function applyPageFacts(
     bodies: BodyObservation[];
     digest: (value: unknown) => Promise<string>;
     bodyCodec: MessageBodyCodec;
+    requestedSequence: number | null;
   },
 ) {
   for (const change of input.changes) {
-    await applyChange(tx, change);
+    await applyChange(tx, change, input.requestedSequence);
   }
   for (const body of input.bodies) {
     if (await isStaleMessageVersion(tx, body.key, body.version)) continue;
@@ -2831,17 +2855,30 @@ async function clearStaleBootstrapScopeMembership(
   }
 }
 
-async function applyChange(tx: SqlTransaction, change: ProviderChange) {
+async function applyChange(
+  tx: SqlTransaction,
+  change: ProviderChange,
+  requestedSequence: number | null = null,
+) {
   if (change.kind === "message_patch") {
     const current = await loadConfirmed(tx, change.key);
     // Any provider read made before a change landed, such as a star whose
     // result already recorded the provider's newer copy, would undo it until
     // the next sync.
+    const comparison =
+      current?.version && change.reference.version
+        ? compareProviderVersions(change.reference.version, current.version)
+        : "unknown";
+    if (comparison === "older") return;
+    // When versions can't be ordered (Outlook), or a change was recorded at
+    // the version the message already had, the time the read was sent
+    // decides: one sent before the change was confirmed can't undo it. A
+    // provably newer copy is still the provider's latest word.
     if (
-      current?.version &&
-      change.reference.version &&
-      compareProviderVersions(change.reference.version, current.version) ===
-        "older"
+      current &&
+      comparison !== "newer" &&
+      requestedSequence !== null &&
+      (await changedLocallyAfter(tx, change.key, requestedSequence))
     ) {
       return;
     }
@@ -3411,6 +3448,33 @@ async function insertMessageContent(
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
   await indexMessageContent(tx, body.key, stored);
+}
+
+// The store's own sequence orders a read against local changes: it is shared
+// by every engine on this database and never mixes provider and device clocks.
+// A read dated in another database epoch predates everything here.
+async function requestedSequence(
+  tx: SqlTransaction,
+  requestedAt: LocalRevision | undefined,
+): Promise<number | null> {
+  if (!requestedAt) return null;
+  const current = await readRevision(tx);
+  return current.databaseEpoch === requestedAt.databaseEpoch
+    ? requestedAt.sequence
+    : -1;
+}
+
+async function changedLocallyAfter(
+  tx: SqlTransaction,
+  key: MessageKey,
+  sequence: number,
+) {
+  const rows = await tx.query(
+    `SELECT 1 FROM messages
+     WHERE account_id = ? AND message_id = ? AND local_change_sequence > ?`,
+    [key.accountId, key.messageId, sequence],
+  );
+  return rows.length > 0;
 }
 
 // A read outside sync can return a message deleted since; only a strictly
