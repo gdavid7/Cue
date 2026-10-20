@@ -375,6 +375,9 @@ function searchHarness(input: {
     async indexSearchBacklog() {
       return { remaining: false };
     },
+    async readRevision() {
+      return { databaseEpoch: "test", sequence: 0 };
+    },
     async readAccountSyncStates() {
       return [];
     },
