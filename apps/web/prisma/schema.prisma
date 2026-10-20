@@ -826,6 +826,7 @@ model ExecutedRule {
   automated     Boolean
   reason        String?
   matchMetadata Json? // Stores structured match information (e.g., learned patterns, match types)
+  senderHash    String? // sha256 of the message's canonical From address; lets thread carryover compare senders
 
   // may be null if the rule was deleted
   ruleId String?

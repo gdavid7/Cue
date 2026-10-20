@@ -29,7 +29,10 @@ import {
   getEmailAccount,
   createTestLogger,
 } from "@/__tests__/helpers";
-import { findMatchingRules } from "@/utils/ai/choose-rule/match-rules";
+import {
+  findMatchingRules,
+  hashSenderAddress,
+} from "@/utils/ai/choose-rule/match-rules";
 import { getActionItemsWithAiArgs } from "@/utils/ai/choose-rule/choose-args";
 import { executeAct } from "@/utils/ai/choose-rule/execute";
 import { determineConversationStatus } from "@/utils/reply-tracker/handle-conversation-status";
@@ -39,7 +42,10 @@ import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 const logger = createTestLogger();
 
 vi.mock("@/utils/prisma");
-vi.mock("@/utils/ai/choose-rule/match-rules", () => ({
+vi.mock("@/utils/ai/choose-rule/match-rules", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/utils/ai/choose-rule/match-rules")
+  >()),
   findMatchingRules: vi.fn(),
 }));
 vi.mock("@/utils/reply-tracker/handle-conversation-status", () => ({
@@ -614,6 +620,28 @@ describe("runRules draft attribution persistence", () => {
         ],
       }),
     ]);
+  });
+
+  it("stores the sender as a hash of its canonical address, not the address", async () => {
+    const notificationRule = createRule(
+      "notification-rule",
+      SystemType.NOTIFICATION,
+      [getAction({ id: "label-action-1", type: ActionType.LABEL })],
+    );
+    mockMatchingRules([{ rule: notificationRule, matchReasons: [] }]);
+    vi.mocked(getActionItemsWithAiArgs).mockResolvedValue([]);
+    const createSpy = mockExecutedRuleCreate({ rule: notificationRule });
+
+    await runRulesWithDefaults({
+      rules: [notificationRule],
+      message: getRunRulesMessage({
+        headers: { from: "Alerts <ALERTS@Example.com>" },
+      }),
+    });
+
+    const { senderHash } = createSpy.mock.calls[0]?.[0].data ?? {};
+    expect(senderHash).toBe(hashSenderAddress("alerts@example.com"));
+    expect(senderHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it.each([
