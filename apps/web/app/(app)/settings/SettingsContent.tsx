@@ -90,7 +90,7 @@ export function SettingsContent() {
 
   return (
     <div className="space-y-10">
-      <SettingsGroup title="Email accounts">
+      <SettingsGroup title="Email accounts" loadsInPlace>
         <LoadingContent loading={isLoading} error={error}>
           {emailAccounts.length > 0 && (
             <div className="space-y-4">
@@ -123,7 +123,7 @@ export function SettingsContent() {
       </SettingsGroup>
 
       {!env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS && canManageBilling && (
-        <SettingsGroup title="Billing">
+        <SettingsGroup title="Billing" loadsInPlace>
           <ItemCard>
             <BillingSection />
           </ItemCard>
@@ -332,13 +332,22 @@ function ProviderIcon({
 
 function SettingsGroup({
   title,
+  loadsInPlace,
   children,
 }: {
   title: string;
+  /**
+   * The group appears or changes height as its parts load. The browser then
+   * anchors scrolling to the settings below it instead, so they stay where
+   * the user is looking, with any menu open on them still on screen.
+   */
+  loadsInPlace?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-4">
+    <section
+      className={cn("space-y-4", loadsInPlace && "[overflow-anchor:none]")}
+    >
       <SectionHeader>{title}</SectionHeader>
       {children}
     </section>

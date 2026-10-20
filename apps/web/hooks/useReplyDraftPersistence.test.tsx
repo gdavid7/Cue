@@ -1,21 +1,22 @@
 // @vitest-environment jsdom
 
-import { act, render, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { useImperativeHandle, useRef, type Ref } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useReplyDraftPersistence } from "./useReplyDraftPersistence";
 import type { ReplyDraftContent } from "@/utils/mail-engine/reply-drafts";
 
-const { save, clear } = vi.hoisted(() => ({
+const { save, clear, keepUnsaved } = vi.hoisted(() => ({
   save: vi.fn(),
   clear: vi.fn(),
+  keepUnsaved: vi.fn(),
 }));
 
 vi.mock("@/utils/mail-engine/reply-drafts", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/utils/mail-engine/reply-drafts")
   >()),
-  createReplyDraftWriter: () => ({ save, clear }),
+  createReplyDraftWriter: () => ({ save, clear, keepUnsaved }),
 }));
 
 const content: ReplyDraftContent = {
@@ -32,6 +33,7 @@ const content: ReplyDraftContent = {
 
 describe("useReplyDraftPersistence", () => {
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -102,6 +104,41 @@ describe("useReplyDraftPersistence", () => {
     await act(() => vi.advanceTimersByTimeAsync(0));
 
     expect(save).toHaveBeenCalledWith(content);
+  });
+
+  it("keeps text typed right before the page is hidden, before its save lands", async () => {
+    vi.useFakeTimers();
+    save.mockReturnValue(new Promise(() => {}));
+    const { result, unmount } = renderHook(() =>
+      useReplyDraftPersistence({ identity, getContent: () => content }),
+    );
+
+    act(() => result.current.capture());
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+
+    expect(save).toHaveBeenCalledExactlyOnceWith(content);
+    expect(keepUnsaved).toHaveBeenCalledExactlyOnceWith(content);
+    unmount();
+  });
+
+  it("keeps nothing extra when the page is hidden after the draft saved", async () => {
+    vi.useFakeTimers();
+    save.mockResolvedValue({});
+    const { result, unmount } = renderHook(() =>
+      useReplyDraftPersistence({ identity, getContent: () => content }),
+    );
+
+    act(() => result.current.capture());
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+
+    expect(save).toHaveBeenCalledOnce();
+    expect(keepUnsaved).not.toHaveBeenCalled();
+    unmount();
   });
 
   it("reads the editor once per debounced save instead of on every keystroke", async () => {

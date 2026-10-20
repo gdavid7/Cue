@@ -78,6 +78,13 @@ const draftSessionMessageIds = new Map<string, Map<string, string>>();
 const latestDraftMessageIds = new Map<string, Map<string, string>>();
 const listeners = new Set<(scope: ReplyDraftScope) => void>();
 const accountEpoch = new Map<string, number>();
+// A draft a composer held when its page was hidden or closed, kept in this
+// browser until the engine has saved it. Only this device reads it.
+const UNSAVED_DRAFT_PREFIX = "cue:unsaved-reply-draft:v1:";
+// Edits left this long were abandoned; they should not outlive that on a
+// shared browser.
+const UNSAVED_DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+let unsavedDraftsBlocked = false;
 const channel =
   typeof window !== "undefined" && typeof BroadcastChannel !== "undefined"
     ? new BroadcastChannel("inbox-zero-reply-drafts")
@@ -164,6 +171,11 @@ export function getLatestDraftMessageId(
 
 channel?.addEventListener("message", (event) => {
   const scope = event.data;
+  if (scope?.type === "signed-out") {
+    // This tab's composers would otherwise keep drafts as they close.
+    unsavedDraftsBlocked = true;
+    return;
+  }
   if (
     typeof scope?.emailAccountId !== "string" ||
     typeof scope?.threadId !== "string"
@@ -186,11 +198,11 @@ export async function getReplyDraft(identity: ReplyDraftIdentity) {
   assertAccountEpoch(identity.emailAccountId);
   const local = drafts.get(draftKey(identity));
   if (local) return local;
+  let stored: StoredReplyDraft | undefined;
   try {
-    return await loadEngineReplyDraft(identity);
-  } catch {
-    return;
-  }
+    stored = await loadEngineReplyDraft(identity);
+  } catch {}
+  return (await restoreUnsavedReplyDraft(identity, stored)) ?? stored;
 }
 
 export async function getReplyDraftForSession(
@@ -394,7 +406,12 @@ export function createReplyDraftWriter(
           updatedAt: Date.now(),
         });
         revision += 1;
-        await persistEngineReplyDraft(identity, nextContent).catch(() => {});
+        const savedAt = Date.now();
+        const persisted = await persistEngineReplyDraft(
+          identity,
+          nextContent,
+        ).catch(() => false);
+        if (persisted) forgetUnsavedReplyDraft(identity, savedAt);
         if (Boolean(previous?.content) !== Boolean(content)) {
           notifyReplyDraftChange(identity);
         }
@@ -419,8 +436,26 @@ export function createReplyDraftWriter(
       }
       return write(content);
     },
+    /**
+     * Keeps what the composer holds, synchronously, for a page that is being
+     * hidden or closed: the engine saves in a worker that stops with the page,
+     * so a save started now may never land.
+     */
+    keepUnsaved(content: ReplyDraftContent) {
+      // A composer behind the stored draft (saved elsewhere, or deleted from
+      // the mailbox) holds edits that must not come back over it.
+      if (
+        stopped ||
+        unsavedDraftsBlocked ||
+        currentEpoch(identity.emailAccountId) !== epoch ||
+        (drafts.get(draftKey(identity))?.revision ?? 0) !== revision
+      )
+        return;
+      writeUnsavedReplyDraft(identity, content);
+    },
     clear() {
       stopped = true;
+      forgetUnsavedReplyDraft(identity);
       return write(null).catch((error) => {
         stopped = false;
         throw error;
@@ -494,6 +529,7 @@ export async function dropReplyDraftDeletedFromMailbox(
       revision: draft.revision + 1,
       updatedAt: Date.now(),
     });
+    forgetUnsavedReplyDraft(draft);
     notifyReplyDraftChange(draft);
   } else {
     await createReplyDraftWriter(draft, draft.revision)
@@ -506,7 +542,12 @@ export async function dropReplyDraftDeletedFromMailbox(
 }
 
 export function clearLocalReplyDrafts(emailAccountId?: string) {
+  forgetUnsavedReplyDrafts(emailAccountId);
   if (!emailAccountId) {
+    // Signing out leaves the page, and its composers would keep their drafts
+    // again on the way out. The next page load starts unblocked.
+    unsavedDraftsBlocked = true;
+    channel?.postMessage({ type: "signed-out" });
     drafts.clear();
     engineRevisions.clear();
     draftSessionMessageIds.clear();
@@ -743,5 +784,96 @@ function sentAttachments(clientState: string | undefined) {
     return Array.isArray(parsed.attachments) ? parsed.attachments : [];
   } catch {
     return [];
+  }
+}
+
+async function restoreUnsavedReplyDraft(
+  identity: ReplyDraftIdentity,
+  stored: StoredReplyDraft | undefined,
+) {
+  const unsaved = readUnsavedReplyDraft(identity);
+  if (!unsaved) return;
+  if (stored && stored.updatedAt > unsaved.updatedAt) {
+    forgetUnsavedReplyDraft(identity);
+    return;
+  }
+  // Saved like any edit, so it keeps the mailbox draft it belongs to, and
+  // loses to a composer that saved while the engine was read.
+  await createReplyDraftWriter(identity, stored?.revision ?? 0)
+    .save(unsaved.content)
+    .catch(() => {});
+  return drafts.get(draftKey(identity));
+}
+
+function writeUnsavedReplyDraft(
+  identity: ReplyDraftIdentity,
+  content: ReplyDraftContent,
+) {
+  try {
+    window.localStorage.setItem(
+      UNSAVED_DRAFT_PREFIX + draftKey(identity),
+      JSON.stringify({ content, updatedAt: Date.now() }),
+    );
+  } catch {
+    // Quota or a blocked storage must never break the composer.
+  }
+}
+
+function readUnsavedReplyDraft(
+  identity: ReplyDraftIdentity,
+): { content: ReplyDraftContent; updatedAt: number } | undefined {
+  try {
+    const raw = window.localStorage.getItem(
+      UNSAVED_DRAFT_PREFIX + draftKey(identity),
+    );
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed?.updatedAt !== "number" ||
+      !parsed.content?.draft ||
+      !parsed.content.values
+    )
+      return;
+    if (Date.now() - parsed.updatedAt > UNSAVED_DRAFT_MAX_AGE_MS) {
+      window.localStorage.removeItem(UNSAVED_DRAFT_PREFIX + draftKey(identity));
+      return;
+    }
+    return parsed;
+  } catch {
+    return;
+  }
+}
+
+/** Drops the kept draft once a save at least as new as it has landed. */
+function forgetUnsavedReplyDraft(
+  identity: ReplyDraftIdentity,
+  savedAt = Number.POSITIVE_INFINITY,
+) {
+  try {
+    const unsaved = readUnsavedReplyDraft(identity);
+    if (unsaved && unsaved.updatedAt > savedAt) return;
+    window.localStorage.removeItem(UNSAVED_DRAFT_PREFIX + draftKey(identity));
+  } catch {}
+}
+
+function forgetUnsavedReplyDrafts(emailAccountId?: string) {
+  try {
+    const storage = window.localStorage;
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key?.startsWith(UNSAVED_DRAFT_PREFIX)) continue;
+      if (!emailAccountId || unsavedDraftAccountId(key) === emailAccountId)
+        keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
+  } catch {}
+}
+
+function unsavedDraftAccountId(key: string) {
+  try {
+    return JSON.parse(key.slice(UNSAVED_DRAFT_PREFIX.length))[0];
+  } catch {
+    return;
   }
 }
