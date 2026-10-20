@@ -1,12 +1,14 @@
 import { GraphError } from "@microsoft/microsoft-graph-client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/utils/redis";
+import { SafeError } from "@/utils/error";
 import { ProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { createTestLogger } from "@/__tests__/helpers";
 import {
   assertProviderNotRateLimited,
   getEmailProviderRateLimitState,
   getProviderRateLimitDelayMs,
+  getProviderRateLimitRetryAfterSeconds,
   recordRateLimitFromApiError,
   recordProviderRateLimitFromError,
   setEmailProviderRateLimitState,
@@ -501,5 +503,88 @@ describe("getProviderRateLimitDelayMs", () => {
         attemptNumber: 1,
       }),
     ).toBeLessThan(30_000);
+  });
+});
+
+describe("the app's own 429 is not a provider rate limit", () => {
+  const ownLimit = () =>
+    new SafeError("Rate limit exceeded. Try again in a few minutes.", 429);
+  const graph429 = () => {
+    const error = new GraphError(429, "Too many requests");
+    error.code = "TooManyRequests";
+    return error;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(redis.get).mockResolvedValue(null);
+  });
+
+  it.each([
+    "microsoft",
+    "google",
+  ] as const)("gives no delay for %s", (provider) => {
+    expect(
+      getProviderRateLimitDelayMs({
+        error: ownLimit(),
+        provider,
+        attemptNumber: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("gives no retry-after for Outlook", () => {
+    expect(
+      getProviderRateLimitRetryAfterSeconds(ownLimit(), "Outlook Rate Limit"),
+    ).toBeUndefined();
+    expect(
+      getProviderRateLimitRetryAfterSeconds(graph429(), "Outlook Rate Limit"),
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not record it", async () => {
+    const state = await recordProviderRateLimitFromError({
+      emailAccountId: "account-1",
+      provider: "microsoft",
+      error: ownLimit(),
+      source: "test",
+      logger,
+    });
+
+    expect(state).toBeNull();
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
+  it("does not record it through withRateLimitRecording, but records Graph's", async () => {
+    const error = ownLimit();
+    await expect(
+      withRateLimitRecording(
+        {
+          emailAccountId: "account-1",
+          provider: "microsoft",
+          source: "test",
+          logger,
+        },
+        async () => {
+          throw error;
+        },
+      ),
+    ).rejects.toBe(error);
+    expect(redis.set).not.toHaveBeenCalled();
+
+    await expect(
+      withRateLimitRecording(
+        {
+          emailAccountId: "account-1",
+          provider: "microsoft",
+          source: "test",
+          logger,
+        },
+        async () => {
+          throw graph429();
+        },
+      ),
+    ).rejects.toBeInstanceOf(GraphError);
+    expect(redis.set).toHaveBeenCalledTimes(1);
   });
 });

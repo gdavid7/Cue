@@ -24,6 +24,7 @@ import {
   getGraphRetryAfterHeader,
   isRetryableError as isOutlookRetryableError,
 } from "@/utils/outlook/retry";
+import { SafeError } from "@/utils/error";
 import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
 import { logRedisFailureOnce } from "@/utils/redis/unavailable-log";
 import {
@@ -380,6 +381,9 @@ export function getProviderRateLimitDelayMs({
   // The guard's own error is not a provider response. Recording it would
   // push retryAt forward on every skipped call, so the mode never expires.
   if (isProviderRateLimitModeError(error)) return null;
+  // The app's own limits throw a SafeError with a 429; only the provider's
+  // answer starts account-wide rate-limit mode.
+  if (error instanceof SafeError) return null;
 
   if (provider === "google") {
     return getGoogleRateLimitDelayMs(error, attemptNumber);
