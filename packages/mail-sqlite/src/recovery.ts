@@ -107,9 +107,12 @@ export async function openMailStoreWithRecovery(input: {
   /**
    * The signed-in user's accounts. The stash outlives sign-out when a rebuild
    * was still running, so work for any other account is dropped, never
-   * admitted into this user's mailbox.
+   * admitted into this user's mailbox. A host can open the mailbox before it
+   * knows them: they are awaited only when there is work to carry, before
+   * any of it is read or `onRebuild` runs. A rejection abandons the open and
+   * closes the mailbox.
    */
-  ownedAccountIds: readonly string[];
+  ownedAccountIds: readonly string[] | Promise<readonly string[]>;
   options?: SqliteMailStoreOptions;
   onRebuild?: () => void;
   onDropped?: (drop: DroppedMailWork) => void;
@@ -122,7 +125,6 @@ export async function openMailStoreWithRecovery(input: {
     stashReadError = error;
     return null;
   });
-  let carried = stashed && ownedWork(stashed, input.ownedAccountIds, drops);
   let opened: { driver: SqliteDriver; store: MailStore } | null = null;
   let failure: unknown = null;
   let driver: SqliteDriver | null = null;
@@ -132,17 +134,31 @@ export async function openMailStoreWithRecovery(input: {
   } catch (error) {
     failure = error;
   }
-  if (!opened) {
-    if (classifyMailboxError(failure) !== "corrupt") {
-      await driver?.close().catch(() => undefined);
-      throw failure;
+  if (!opened && classifyMailboxError(failure) !== "corrupt") {
+    await driver?.close().catch(() => undefined);
+    throw failure;
+  }
+  const readOwnedAccountIds = async () => {
+    try {
+      return await input.ownedAccountIds;
+    } catch (error) {
+      // The host gave up on this open before naming them.
+      await (opened ? opened.store.close() : driver?.close())?.catch(
+        () => undefined,
+      );
+      throw error;
     }
+  };
+  let carried =
+    stashed && ownedWork(stashed, await readOwnedAccountIds(), drops);
+  if (!opened) {
     // A stash that could not be read may hold earlier work that the write
     // below would replace.
     if (stashReadFailed) {
       await driver?.close().catch(() => undefined);
       throw stashReadError ?? new Error("recovery stash could not be read");
     }
+    const ownedAccountIds = await readOwnedAccountIds();
     input.onRebuild?.();
     if (driver) {
       const damaged = driver;
@@ -152,7 +168,7 @@ export async function openMailStoreWithRecovery(input: {
       ]).finally(() => damaged.close().catch(() => undefined));
       carried = mergePendingWork(
         carried,
-        ownedWork(current, input.ownedAccountIds, drops),
+        ownedWork(current, ownedAccountIds, drops),
         settled,
       );
     }

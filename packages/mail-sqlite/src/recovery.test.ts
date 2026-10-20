@@ -209,6 +209,92 @@ describe("openMailStoreWithRecovery", () => {
     await driver.close();
   });
 
+  it("opens a mailbox before the signed-in accounts are known, waiting for them only to carry work", async () => {
+    const healthy = await openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(await mailboxPath()),
+      wipe: async () => undefined,
+      stash: memoryStash(),
+      ownedAccountIds: new Promise(() => undefined),
+    });
+    await healthy.close();
+
+    const stash = memoryStash();
+    await stash.write(await pendingWorkFrom(await seededMailbox()));
+    let nameOwned: (accountIds: string[]) => void = () => undefined;
+    let opened = false;
+    const opening = openMailStoreWithRecovery({
+      open: async () => createNodeSqliteDriver(await mailboxPath()),
+      wipe: async () => undefined,
+      stash,
+      ownedAccountIds: new Promise((resolve) => {
+        nameOwned = resolve;
+      }),
+    }).then((store) => {
+      opened = true;
+      return store;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(opened).toBe(false);
+    nameOwned(["acc-1"]);
+    const store = await opening;
+    expect(await store.readDraft(DRAFT)).toMatchObject({ status: "found" });
+    await store.close();
+  });
+
+  it("closes a mailbox opened early when its host abandons it before naming the accounts", async () => {
+    const stash = memoryStash();
+    await stash.write(await pendingWorkFrom(await seededMailbox()));
+    const path = await mailboxPath();
+    const closed = vi.fn();
+    let abandon: (error: Error) => void = () => undefined;
+
+    const opening = openMailStoreWithRecovery({
+      open: async () => {
+        const driver = createNodeSqliteDriver(path);
+        const close = driver.close.bind(driver);
+        return Object.assign(driver, {
+          close: async () => {
+            closed();
+            await close();
+          },
+        });
+      },
+      wipe: async () => undefined,
+      stash,
+      ownedAccountIds: new Promise((_, reject) => {
+        abandon = reject;
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    abandon(new Error("abandoned"));
+
+    await expect(opening).rejects.toThrow("abandoned");
+    expect(closed).toHaveBeenCalledOnce();
+    // Nothing was carried, so the next open still has the work.
+    expect(await stash.read()).not.toBeNull();
+  });
+
+  it("lets go of a mailbox held elsewhere at once, before the signed-in accounts are known", async () => {
+    // A mailbox opened early keeps its files until it settles, so a held one
+    // must not wait for an engine start that may never come.
+    const stash = memoryStash();
+    await stash.write(await pendingWorkFrom(await seededMailbox()));
+
+    await expect(
+      openMailStoreWithRecovery({
+        open: async () =>
+          failingWrites(
+            createNodeSqliteDriver(await mailboxPath()),
+            Object.assign(new Error("database is locked"), { errcode: 5 }),
+          ),
+        wipe: async () => undefined,
+        stash,
+        ownedAccountIds: new Promise(() => undefined),
+      }),
+    ).rejects.toThrow("database is locked");
+    expect(await stash.read()).not.toBeNull();
+  });
+
   it("reports carried rows it could not restore, without their content", async () => {
     const work = await pendingWorkFrom(await seededMailbox());
     const draft = work.drafts[0];

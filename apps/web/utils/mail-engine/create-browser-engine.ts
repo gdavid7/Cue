@@ -13,9 +13,11 @@ import {
   requestSyncUnlessOffline,
   type BrowserEngineStart,
   type WorkerObserveKind,
+  type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
 } from "@/utils/mail-engine/worker-protocol";
+import { MAIL_ENGINE_OWNER_LOCK } from "@/utils/mail-engine/tab-channel";
 import {
   finishPendingLocalMailboxWipe,
   isLocalMailboxWipePending,
@@ -36,11 +38,31 @@ const BUSY_START_BUDGET_MS = 10_000;
 // An early worker this tab never starts, as when another tab owns the engine,
 // is let go after this long.
 const PREWARMED_WORKER_IDLE_MS = 30_000;
+// A page that just closed or reloaded can hold the engine's owner lock for a
+// moment, so an early open asks for it again a few times.
+const EARLY_OWNER_LOCK_RETRY_MS = 100;
+const EARLY_OWNER_LOCK_ATTEMPTS = 20;
 
 let prewarmed: {
   worker: Worker;
   timer: ReturnType<typeof setTimeout>;
+  /** Its script failed before a start could listen for that. */
+  failed: boolean;
 } | null = null;
+// The engine's owner lock, taken while the page hydrates so its early worker
+// can open the mailbox. No other tab can own the engine, and so open its
+// files, until this page's engine start claims the lock or the page lets it go.
+let earlyOwner: EarlyOwnerLock | null = null;
+
+type EarlyOwnerLock = {
+  /** The latest request for the lock: whether this page took it. */
+  attempt: Promise<boolean>;
+  /** Its answer, once it came. */
+  held?: boolean;
+  retry?: ReturnType<typeof setTimeout>;
+  state: "asking" | "claimed" | "released";
+  release: () => void;
+};
 // The worker asks for SQLite's wasm only once its own scripts have loaded and
 // run. Asked for here as the worker is created, the two download together,
 // and the worker's own request is answered from the cache.
@@ -67,8 +89,18 @@ export async function createBrowserMailEngine(
   input: BrowserEngineStart,
   hooks: BrowserEngineHooks = {},
 ): Promise<BrowserMailEngine> {
-  // The previous user's mailbox must be gone before this one opens it.
-  await finishPendingLocalMailboxWipe();
+  // The previous user's mailbox must be gone before this one opens it. Only
+  // a pending wipe is awaited, so a start goes out to the worker in the task
+  // that asked for it.
+  if (isLocalMailboxWipePending()) {
+    // An early worker may have opened the signed-out mailbox, and holds its
+    // files until it is gone.
+    releasePrewarmedMailEngineWorker();
+    await finishPendingLocalMailboxWipe();
+    if (isLocalMailboxWipePending()) {
+      throw new Error("The signed-out mailbox could not be wiped");
+    }
+  }
   const start: BrowserEngineStart = {
     ...input,
     maxPendingOperations:
@@ -115,9 +147,10 @@ async function startBrowserEngine(
 
 /**
  * Starts loading the engine worker and SQLite while the page is still
- * hydrating, so the engine can open the mailbox as soon as it starts. The
- * worker opens nothing until then, and none is started while a sign-out wipe
- * is unfinished, since that wipe must come before any mailbox opens.
+ * hydrating, and opens the mailbox too once this page takes the engine's
+ * owner lock, as no other tab owns the engine. None is started while a
+ * sign-out wipe is unfinished, since that wipe must come before any mailbox
+ * opens.
  */
 export function prewarmMailEngineWorker() {
   if (
@@ -127,13 +160,52 @@ export function prewarmMailEngineWorker() {
   ) {
     return;
   }
+  performance.mark("mail-engine:prewarm");
   const worker = createEngineWorker();
   const timer = setTimeout(() => {
     if (prewarmed?.worker !== worker) return;
     prewarmed = null;
     worker.terminate();
+    letGoOfEarlyOwnerLock();
   }, PREWARMED_WORKER_IDLE_MS);
-  prewarmed = { worker, timer };
+  const record = { worker, timer, failed: false };
+  worker.addEventListener("error", () => {
+    record.failed = true;
+  });
+  prewarmed = record;
+  earlyOwner = askForOwnerLockEarly(worker);
+}
+
+/**
+ * Lets go of an early worker this page will not start, such as when another
+ * tab owns the engine, so a mailbox it opened early holds no files, and of
+ * the owner lock it took for that.
+ */
+export function releasePrewarmedMailEngineWorker() {
+  const worker = takePrewarmedWorker();
+  worker?.terminate();
+  letGoOfEarlyOwnerLock();
+}
+
+/**
+ * Hands the owner lock this page took while it hydrated to the engine's
+ * start, which then holds it until it calls the returned function. Null when
+ * the page holds none and must ask for the lock itself; this page stops
+ * asking early either way, so the two requests never wait on each other.
+ * Only a request still unanswered returns a promise, so a start that already
+ * holds the lock goes out in the same task, not after the page's other work.
+ */
+export function claimEarlyMailEngineOwnerLock():
+  | (() => void)
+  | null
+  | Promise<(() => void) | null> {
+  const owner = earlyOwner;
+  earlyOwner = null;
+  if (!owner) return null;
+  owner.state = "claimed";
+  clearTimeout(owner.retry);
+  if (owner.held !== undefined) return owner.held ? owner.release : null;
+  return owner.attempt.then((held) => (held ? owner.release : null));
 }
 
 async function createWorkerOwnedEngine(
@@ -375,8 +447,13 @@ function delay(ms: number) {
 function takePrewarmedWorker() {
   if (!prewarmed) return null;
   clearTimeout(prewarmed.timer);
-  const { worker } = prewarmed;
+  const { worker, failed } = prewarmed;
   prewarmed = null;
+  // It would never answer a start.
+  if (failed) {
+    worker.terminate();
+    return null;
+  }
   return worker;
 }
 
@@ -391,4 +468,61 @@ function createEngineWorker() {
       .catch(() => undefined);
   }
   return worker;
+}
+
+function askForOwnerLockEarly(worker: Worker): EarlyOwnerLock | null {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks?.request || !browserMailEngineCapabilities().opfs) return null;
+  const owner: EarlyOwnerLock = {
+    attempt: Promise.resolve(false),
+    state: "asking",
+    release: () => undefined,
+  };
+  const ask = (attemptsLeft: number) => {
+    owner.held = undefined;
+    owner.attempt = new Promise<boolean>((resolve) => {
+      locks
+        .request(MAIL_ENGINE_OWNER_LOCK, { ifAvailable: true }, (lock) => {
+          if (!lock || owner.state === "released") {
+            owner.held = false;
+            resolve(false);
+            if (!lock && owner.state === "asking" && attemptsLeft > 1) {
+              owner.retry = setTimeout(
+                () => ask(attemptsLeft - 1),
+                EARLY_OWNER_LOCK_RETRY_MS,
+              );
+            }
+            return;
+          }
+          const held = new Promise<void>((letGo) => {
+            owner.release = letGo;
+          });
+          owner.held = true;
+          resolve(true);
+          // The engine's start takes over the mailbox opened here.
+          worker.postMessage({
+            type: "preopen",
+            maxPendingOperations: readPageMaxPendingOperations(),
+          } satisfies WorkerPreopenRequest);
+          return held;
+        })
+        .catch(() => {
+          owner.held = false;
+          resolve(false);
+        });
+    });
+  };
+  ask(EARLY_OWNER_LOCK_ATTEMPTS);
+  return owner;
+}
+
+function letGoOfEarlyOwnerLock() {
+  const owner = earlyOwner;
+  earlyOwner = null;
+  if (!owner) return;
+  owner.state = "released";
+  clearTimeout(owner.retry);
+  owner.attempt.then((held) => {
+    if (held) owner.release();
+  });
 }

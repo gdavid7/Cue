@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  claimEarlyMailEngineOwnerLock,
   createBrowserMailEngine,
   prewarmMailEngineWorker,
+  releasePrewarmedMailEngineWorker,
 } from "./create-browser-engine";
+import { MAIL_ENGINE_OWNER_LOCK } from "./tab-channel";
 
 const wipe = vi.hoisted(() => ({
   finishPending: vi.fn(),
@@ -34,21 +37,93 @@ describe("createBrowserMailEngine", () => {
   });
 
   afterEach(() => {
+    // Each test is a new page.
+    releasePrewarmedMailEngineWorker();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
   it("finishes an interrupted sign-out wipe before opening the mailbox", async () => {
+    wipe.isPending.mockReturnValue(true);
     const order: string[] = [];
     wipe.finishPending.mockImplementation(async () => {
       order.push("wipe");
+      wipe.isPending.mockReturnValue(false);
     });
     FakeWorker.onCreate = () => order.push("worker");
 
     await startEngine();
 
     expect(order).toEqual(["wipe", "worker"]);
+  });
+
+  it("wipes a mailbox signed out after the early worker opened it, and starts in a fresh worker", async () => {
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    const early = FakeWorker.instances[0];
+    await vi.waitFor(() => expect(early.received("preopen")).toBe(1));
+    const release = claimEarlyMailEngineOwnerLock();
+    // Another tab signs out while this page hydrates.
+    let pending = true;
+    wipe.isPending.mockImplementation(() => pending);
+    wipe.finishPending.mockImplementation(async () => {
+      // The early worker holds the mailbox files until it is gone.
+      if (early.terminated) pending = false;
+    });
+
+    await startEngine();
+
+    expect(wipe.finishPending).toHaveBeenCalledOnce();
+    expect(early.terminated).toBe(true);
+    expect(early.received("start")).toBe(0);
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(FakeWorker.instances[1].received("start")).toBe(1);
+    // The start still owns the engine under the lock it claimed.
+    expect(locks.held()).toBe(true);
+    if (typeof release === "function") release();
+  });
+
+  it("opens no mailbox while a sign-out wipe cannot finish", async () => {
+    prewarmMailEngineWorker();
+    wipe.isPending.mockReturnValue(true);
+
+    await expect(startEngine()).rejects.toThrow();
+
+    expect(FakeWorker.instances.every((w) => w.received("start") === 0)).toBe(
+      true,
+    );
+    expect(sqlite.createStore).not.toHaveBeenCalled();
+  });
+
+  it("starts in a fresh worker when the early one failed to load", async () => {
+    prewarmMailEngineWorker();
+    // Its script fails before the engine starts and listens for errors.
+    FakeWorker.instances[0].fail("worker script failed");
+
+    await startEngine();
+
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    expect(FakeWorker.instances[1].received("start")).toBe(1);
+  });
+
+  it("starts under the claimed lock in a fresh worker when the early one idled out first", async () => {
+    vi.useFakeTimers();
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    await vi.advanceTimersByTimeAsync(0);
+    const release = claimEarlyMailEngineOwnerLock();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    const started = startEngine();
+    await vi.runAllTimersAsync();
+    await started;
+
+    expect(FakeWorker.instances).toHaveLength(2);
+    expect(FakeWorker.instances[1].received("start")).toBe(1);
+    expect(locks.held()).toBe(true);
+    if (typeof release === "function") release();
   });
 
   it("opens the mailbox in the worker started while the page loaded", async () => {
@@ -61,6 +136,106 @@ describe("createBrowserMailEngine", () => {
 
     expect(FakeWorker.instances).toHaveLength(1);
     expect(FakeWorker.instances[0].received("start")).toBe(1);
+  });
+
+  it("opens the mailbox early under the engine's owner lock and hands the lock to the start", async () => {
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0].received("preopen")).toBe(1),
+    );
+    expect(locks.held()).toBe(true);
+
+    const release = claimEarlyMailEngineOwnerLock();
+    expect(release).toEqual(expect.any(Function));
+    const starting = startEngine();
+    // Sent in the same task: a phone's main thread can be busy for most of a
+    // second after the effect that starts the engine.
+    expect(FakeWorker.instances[0].received("start")).toBe(1);
+    await starting;
+    expect(FakeWorker.instances).toHaveLength(1);
+
+    // Another tab becomes owner only once this page's engine lets go.
+    const otherTab = locks.take();
+    await settle();
+    expect(otherTab.granted()).toBe(false);
+    if (typeof release === "function") release();
+    await vi.waitFor(() => expect(otherTab.granted()).toBe(true));
+  });
+
+  it("never opens the mailbox early while another tab holds the owner lock", async () => {
+    vi.useFakeTimers();
+    const locks = stubBrowserLocks();
+    // Holding the lock is enough, even before that tab's engine has started
+    // and announced itself.
+    locks.take();
+    await vi.advanceTimersByTimeAsync(0);
+    prewarmMailEngineWorker();
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(FakeWorker.instances[0].received("preopen")).toBe(0);
+    expect(await claimEarlyMailEngineOwnerLock()).toBeNull();
+  });
+
+  it("opens the mailbox early once a page that just closed lets go of the lock", async () => {
+    vi.useFakeTimers();
+    const locks = stubBrowserLocks();
+    const closingPage = locks.take();
+    await vi.advanceTimersByTimeAsync(0);
+    prewarmMailEngineWorker();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(FakeWorker.instances[0].received("preopen")).toBe(0);
+
+    closingPage.release();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(FakeWorker.instances[0].received("preopen")).toBe(1);
+    expect(await claimEarlyMailEngineOwnerLock()).toEqual(expect.any(Function));
+  });
+
+  it("stops asking early once the engine's start asks for the lock itself", async () => {
+    vi.useFakeTimers();
+    const locks = stubBrowserLocks();
+    const closingPage = locks.take();
+    await vi.advanceTimersByTimeAsync(0);
+    prewarmMailEngineWorker();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(await claimEarlyMailEngineOwnerLock()).toBeNull();
+    // The start's own request is next in line, and nothing jumps ahead of it.
+    const start = locks.take();
+    closingPage.release();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(start.granted()).toBe(true);
+    expect(FakeWorker.instances[0].received("preopen")).toBe(0);
+  });
+
+  it("lets go of the owner lock with an early worker this page will not start", async () => {
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    await vi.waitFor(() => expect(locks.held()).toBe(true));
+
+    // The page follows another tab or signs out.
+    releasePrewarmedMailEngineWorker();
+
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    await vi.waitFor(() => expect(locks.held()).toBe(false));
+    expect(await claimEarlyMailEngineOwnerLock()).toBeNull();
+  });
+
+  it("lets go of the owner lock when an early worker is never started", async () => {
+    vi.useFakeTimers();
+    const locks = stubBrowserLocks();
+    prewarmMailEngineWorker();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(locks.held()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+    expect(locks.held()).toBe(false);
   });
 
   it("starts no worker early while a sign-out wipe is unfinished", () => {
@@ -220,6 +395,70 @@ describe("createBrowserMailEngine", () => {
   });
 });
 
+/**
+ * Web Locks for one exclusive lock, granted in request order, and OPFS.
+ * `take()` asks for the lock as another page would.
+ */
+function stubBrowserLocks() {
+  type Request = { grant: () => void };
+  const queue: Request[] = [];
+  let holder: Request | null = null;
+  const next = () => {
+    if (holder) return;
+    holder = queue.shift() ?? null;
+    holder?.grant();
+  };
+  const request = (
+    name: string,
+    options: { ifAvailable?: boolean },
+    callback: (lock: { name: string } | null) => unknown,
+  ) => {
+    expect(name).toBe(MAIL_ENGINE_OWNER_LOCK);
+    if (options.ifAvailable && (holder || queue.length > 0)) {
+      return Promise.resolve().then(() => callback(null));
+    }
+    return new Promise((resolve, reject) => {
+      const entry: Request = {
+        grant: () => {
+          Promise.resolve()
+            .then(() => callback({ name }))
+            .then(resolve, reject)
+            .finally(() => {
+              holder = null;
+              next();
+            });
+        },
+      };
+      queue.push(entry);
+      next();
+    });
+  };
+  vi.stubGlobal("navigator", {
+    onLine: true,
+    storage: { getDirectory: async () => ({}) },
+    locks: { request },
+  });
+  return {
+    held: () => holder !== null,
+    take() {
+      let granted = false;
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      request(MAIL_ENGINE_OWNER_LOCK, {}, () => {
+        granted = true;
+        return held;
+      });
+      return { granted: () => granted, release: () => release() };
+    },
+  };
+}
+
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function startEngine() {
   return createBrowserMailEngine({
     accountId: "account-1",
@@ -240,16 +479,30 @@ class FakeWorker {
   static startMessages: unknown[] = [];
   readonly silent = new Set<string>();
   terminated = false;
+  private dead = false;
   private readonly sent: Message[] = [];
   private readonly listeners = new Set<(event: { data: unknown }) => void>();
+  private readonly errorListeners = new Set<
+    (event: { message: string }) => void
+  >();
 
   constructor() {
     FakeWorker.instances.push(this);
     FakeWorker.onCreate?.();
   }
 
-  addEventListener(type: string, listener: (event: { data: unknown }) => void) {
+  addEventListener(
+    type: string,
+    listener: (event: { data: unknown; message: string }) => void,
+  ) {
     if (type === "message") this.listeners.add(listener);
+    if (type === "error") this.errorListeners.add(listener);
+  }
+
+  /** Its script fails: it reports an error and never answers again. */
+  fail(message: string) {
+    this.dead = true;
+    for (const listener of this.errorListeners) listener({ message });
   }
 
   postMessage(message: Message) {
@@ -258,7 +511,7 @@ class FakeWorker {
     // A real worker answers on a later task and never after it is terminated.
     setTimeout(
       () => {
-        if (this.terminated || !message.id) return;
+        if (this.terminated || this.dead || !message.id) return;
         const startError =
           message.type === "start" ? FakeWorker.startErrors.shift() : undefined;
         const replies: unknown[] = [

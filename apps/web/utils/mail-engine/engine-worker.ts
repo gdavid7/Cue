@@ -8,18 +8,39 @@ import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
   type BrowserEngineStart,
+  type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
 } from "./worker-protocol";
+import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
+import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import { browserStoragePressure } from "./storage-pressure";
 import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
 import { PUSHED_CHANGES_CATCH_UP_INTERVAL_MS } from "@/utils/mail-engine/follow-mailbox-changes";
 
+performance.mark("mail-engine:worker-loaded");
 // Compiling sqlite-wasm takes a while and opens no files, so it starts as
 // soon as the worker loads rather than when the engine starts.
-preloadSqlite().catch(() => undefined);
+preloadSqlite()
+  .then(() => performance.mark("mail-engine:sqlite-ready"))
+  .catch(() => undefined);
+
+const runtime = createHostRuntime({
+  storagePressure: browserStoragePressure,
+});
+// The mailbox the page asked to open before it named the account, which the
+// engine's start takes over.
+let preopened:
+  | {
+      maxPendingOperations: number | undefined;
+      opened: Promise<{ store: MailStore } | { error: unknown }>;
+      nameOwnedAccounts: (accountIds: string[]) => void;
+      abandon: () => void;
+    }
+  | undefined;
+let startReceived = false;
 
 const host = createMailWorkerHost({
   createEngine: createWorkerEngine,
@@ -28,8 +49,19 @@ const host = createMailWorkerHost({
   },
 });
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
-  host.handle(event.data).catch((error) => {
+self.onmessage = (
+  event: MessageEvent<WorkerRequest | WorkerPreopenRequest>,
+) => {
+  const message = event.data;
+  if (message.type === "preopen") {
+    if (!startReceived && !preopened) preopenStore(message);
+    return;
+  }
+  if (message.type === "start") {
+    startReceived = true;
+    performance.mark("mail-engine:start-received");
+  }
+  host.handle(message).catch((error) => {
     self.postMessage({
       id: "worker",
       type: "error",
@@ -41,20 +73,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 async function createWorkerEngine(
   input: BrowserEngineStart,
 ): Promise<BrowserMailEngine> {
-  const runtime = createHostRuntime({
-    storagePressure: browserStoragePressure,
-  });
-  const store = await createWasmMailStore({
-    persist: input.persist,
-    options: { maxPendingOperations: input.maxPendingOperations, runtime },
-    ownedAccountIds: input.ownedAccountIds,
-    onRebuild: () => {
-      self.postMessage({ type: "rebuilding" } satisfies WorkerResponse);
-    },
-    onDropped: (drop) => {
-      self.postMessage({ type: "dropped", drop } satisfies WorkerResponse);
-    },
-  });
+  const store = (await takePreopenedStore(input)) ?? (await openStore(input));
   performance.mark("mail-engine:store-ready");
   const ensureAccount: BrowserMailEngine["ensureAccount"] = async (account) => {
     await store.ensureAccount({
@@ -64,6 +83,7 @@ async function createWorkerEngine(
     });
   };
   await ensureAccount(input);
+  performance.mark("mail-engine:account-ensured");
   const ports = createRoutedBackendAdapter({
     requestFor: (accountId) =>
       createMailHttpRequest(accountId, () => {
@@ -82,6 +102,7 @@ async function createWorkerEngine(
   if (shouldReleaseDeferredOnStart(input.online)) {
     await created.requestSync([input.accountId]);
   }
+  performance.mark("mail-engine:sync-requested");
   const loop = startEngineLoop(created);
   const originalClose = created.close.bind(created);
   return {
@@ -94,4 +115,72 @@ async function createWorkerEngine(
       await originalClose();
     },
   };
+}
+
+function openStore(input: {
+  persist?: boolean;
+  maxPendingOperations?: number;
+  ownedAccountIds: string[] | Promise<string[]>;
+}) {
+  return createWasmMailStore({
+    persist: input.persist,
+    options: { maxPendingOperations: input.maxPendingOperations, runtime },
+    ownedAccountIds: input.ownedAccountIds,
+    onRebuild: () => {
+      self.postMessage({ type: "rebuilding" } satisfies WorkerResponse);
+    },
+    onDropped: (drop) => {
+      self.postMessage({ type: "dropped", drop } satisfies WorkerResponse);
+    },
+  });
+}
+
+// Opening the mailbox is most of the engine's start, and needs nothing the
+// page learns from hydrating except which accounts a rebuild may carry work
+// for; a rebuild waits for those, so it starts only once the engine does.
+function preopenStore(message: WorkerPreopenRequest) {
+  let nameOwnedAccounts: (accountIds: string[]) => void = () => undefined;
+  let abandon: () => void = () => undefined;
+  const ownedAccountIds = new Promise<string[]>((resolve, reject) => {
+    nameOwnedAccounts = resolve;
+    abandon = () => reject(new Error("early mailbox open abandoned"));
+  });
+  // Unawaited by a mailbox with no work to carry.
+  ownedAccountIds.catch(() => undefined);
+  preopened = {
+    maxPendingOperations: message.maxPendingOperations,
+    opened: openStore({
+      maxPendingOperations: message.maxPendingOperations,
+      ownedAccountIds,
+    }).then(
+      (store) => ({ store }),
+      (error: unknown) => ({ error }),
+    ),
+    nameOwnedAccounts,
+    abandon,
+  };
+}
+
+// A start that wants another mailbox than the one opened early opens its
+// own, and the early open, never told the accounts, carries no work into a
+// mailbox the start will not use. One whose early open met files a closing
+// tab still held opens again; any other failure is the start's.
+async function takePreopenedStore(input: BrowserEngineStart) {
+  const early = preopened;
+  preopened = undefined;
+  if (!early) return null;
+  if (
+    input.persist === false ||
+    early.maxPendingOperations !== input.maxPendingOperations
+  ) {
+    early.abandon();
+    const opened = await early.opened;
+    if ("store" in opened) await opened.store.close().catch(() => undefined);
+    return null;
+  }
+  early.nameOwnedAccounts(input.ownedAccountIds);
+  const opened = await early.opened;
+  if ("store" in opened) return opened.store;
+  if (classifyMailboxError(opened.error) === "busy") return null;
+  throw opened.error;
 }

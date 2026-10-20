@@ -4,7 +4,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
+import {
+  MAILBOX_FIRST_RENDER_ROWS,
+  MailboxThreadList,
+} from "@inboxzero/mail-ui/MailboxSurface";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { ThreadList } from "./ThreadList";
 import { markRumRowsShown } from "@/utils/analytics/rum-actions";
@@ -70,6 +73,90 @@ describe("thread list timing signal", () => {
 
 describe("mailbox thread list", () => {
   afterEach(cleanup);
+
+  // Building a whole page of rows in one task held the first paint of the
+  // inbox for over a second on a phone.
+  it("commits a screen of rows first and the rest of a long list after", () => {
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const passes: number[][] = [];
+    render(
+      list(items, (index) => {
+        if (index === 0) passes.push([]);
+        passes.at(-1)?.push(index);
+      }),
+    );
+
+    expect(passes[0]).toHaveLength(MAILBOX_FIRST_RENDER_ROWS);
+    expect(passes.at(-1)).toHaveLength(50);
+    expect(screen.getAllByText(/^t\d+$/)).toHaveLength(50);
+  });
+
+  // The first page of a mailbox usually arrives after its list mounted empty
+  // while the mailbox opened.
+  it("commits a screen of rows first when the first rows arrive after the list mounted", () => {
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const passes: number[][] = [];
+    const onRenderRow = (index: number) => {
+      if (index === 0) passes.push([]);
+      passes.at(-1)?.push(index);
+    };
+    const { rerender } = render(list([], onRenderRow));
+
+    rerender(list(items, onRenderRow));
+
+    expect(passes[0]).toHaveLength(MAILBOX_FIRST_RENDER_ROWS);
+    expect(passes.at(-1)).toHaveLength(50);
+  });
+
+  // A list that grows by a new message, an undo or a page keeps its rows:
+  // dropping the bottom ones for a render jumped the scroll and lost focus.
+  it("never renders fewer rows than before when the list grows", () => {
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const { rerender } = render(list(items));
+    expect(screen.getAllByText(/^t\d+$/)).toHaveLength(50);
+    const passes: number[][] = [];
+    const onRenderRow = (index: number) => {
+      if (index === 0) passes.push([]);
+      passes.at(-1)?.push(index);
+    };
+
+    rerender(list([{ id: "new", day: "Today" }, ...items], onRenderRow));
+    rerender(list([...items, { id: "more", day: "Today" }], onRenderRow));
+
+    expect(passes.length).toBeGreaterThan(0);
+    for (const pass of passes) expect(pass.length).toBeGreaterThanOrEqual(51);
+  });
+
+  it("keeps the load-more sentinel while more rows arrive", () => {
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const { rerender } = render(list(items, undefined, true));
+    const loadMore = screen.getByRole("button", { name: "Load more" });
+
+    rerender(list([...items, { id: "more", day: "Today" }], undefined, true));
+
+    // Unmounted for a render, it would come back as another element.
+    expect(screen.getByRole("button", { name: "Load more" })).toBe(loadMore);
+    vi.unstubAllGlobals();
+  });
 
   // Archiving a conversation must only remove its row. Remounting every
   // later day's rows made each archive re-create most of the list.
@@ -298,7 +385,11 @@ function threadAt(id: string, receivedAtMs: number) {
   } as unknown as ListThread;
 }
 
-function list(items: Item[]) {
+function list(
+  items: Item[],
+  onRenderRow?: (index: number) => void,
+  showLoadMore = false,
+) {
   return (
     <MailboxThreadList<Item>
       focusedIndex={0}
@@ -312,13 +403,16 @@ function list(items: Item[]) {
       onOpen={vi.fn()}
       onSelectRangeTo={vi.fn()}
       onToggleSelect={vi.fn()}
-      renderItem={(row) => (
-        <div data-testid={row.item.id} key={row.rowKey}>
-          {row.item.id}
-        </div>
-      )}
+      renderItem={(row) => {
+        onRenderRow?.(row.index);
+        return (
+          <div data-testid={row.item.id} key={row.rowKey}>
+            {row.item.id}
+          </div>
+        );
+      }}
       selectedCount={0}
-      showLoadMore={false}
+      showLoadMore={showLoadMore}
     />
   );
 }

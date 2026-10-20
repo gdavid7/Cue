@@ -20,8 +20,10 @@ import { Button } from "@/components/ui/button";
 import { env } from "@/env";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
+  claimEarlyMailEngineOwnerLock,
   createBrowserMailEngine,
   prewarmMailEngineWorker,
+  releasePrewarmedMailEngineWorker,
   type BrowserMailEngine,
 } from "@/utils/mail-engine/create-browser-engine";
 import {
@@ -85,7 +87,8 @@ type MailEngineInspectTransport = "browser" | "desktop-ipc";
 const ENGINE_START_PREFETCH_HOLD_MS = 10_000;
 
 // On a page that starts the engine, its worker and SQLite load while the page
-// hydrates instead of after; the worker opens nothing until the engine starts.
+// hydrates instead of after, and the worker opens the mailbox once the page
+// holds the engine's owner lock.
 if (
   typeof window !== "undefined" &&
   !hasDesktopMailEngineIpc() &&
@@ -238,6 +241,13 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     [],
   );
 
+  // A page that will not start the engine lets go of its early worker, which
+  // may hold the owner lock and an open mailbox. One still loading its
+  // accounts can yet start.
+  useEffect(() => {
+    if (!canStart && !isLoading) releasePrewarmedMailEngineWorker();
+  }, [canStart, isLoading]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: startAttempt is how Retry starts the engine again, and desktopAccountKey how the desktop client follows the viewed account
   useEffect(() => {
     const { accountId: emailAccountId, mailProvider: viewedProvider } =
@@ -256,6 +266,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       opfs: browserMailEngineCapabilities().opfs,
     });
     if (mode === "unavailable") {
+      releasePrewarmedMailEngineWorker();
       setUnavailable(true);
       return;
     }
@@ -325,6 +336,8 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         ) {
           return;
         }
+        // Another tab owns the engine and its files.
+        releasePrewarmedMailEngineWorker();
         publishClient(
           createTabFollowerClient({
             accountId: emailAccountId,
@@ -354,6 +367,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     }
 
     async function start() {
+      performance.mark("mail-engine:start");
       const create = async () => {
         engine = await createBrowserMailEngine(
           {
@@ -383,6 +397,26 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         }
         await publishClient(engine, "owner", "browser");
       };
+      // Taken while the page hydrated, it is already this page's, and its
+      // early worker may have opened the mailbox under it. Awaited only while
+      // unanswered, so the start reaches the worker in this task rather than
+      // after the rest of the page's effects and renders.
+      const claim = claimEarlyMailEngineOwnerLock();
+      const releaseEarlyLock = claim instanceof Promise ? await claim : claim;
+      if (releaseEarlyLock) {
+        try {
+          if (abort.signal.aborted) {
+            // Its early worker may hold an open mailbox, which must not
+            // outlive the lock that keeps other tabs off its files.
+            releasePrewarmedMailEngineWorker();
+          } else {
+            await hold(create);
+          }
+        } finally {
+          releaseEarlyLock();
+        }
+        return;
+      }
       if (typeof navigator !== "undefined" && navigator.locks?.request) {
         await navigator.locks.request(
           MAIL_ENGINE_OWNER_LOCK,
@@ -402,6 +436,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
 
     const unsubscribeLogout = subscribeMailEngineLogout(() => {
       abort.abort();
+      releasePrewarmedMailEngineWorker();
       engine?.close().catch(() => undefined);
     });
 
