@@ -3,15 +3,38 @@
 import { useMemo, useSyncExternalStore } from "react";
 import useSWR from "swr";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
+import { useAllAccountsList } from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
 
 type HiddenDrafts = { emailAccountId: string; messageIds: string[] };
 
 const NO_HIDDEN_DRAFTS: HiddenDrafts[] = [];
+const NO_MESSAGE_IDS: string[] = [];
 let sendingDrafts = NO_HIDDEN_DRAFTS;
 const listeners = new Set<() => void>();
 
+const SCHEDULED_EMAILS_PATH = "/api/user/scheduled-emails";
+
 export function upcomingScheduledEmailsKey(emailAccountId: string) {
-  return ["/api/user/scheduled-emails", emailAccountId];
+  return [SCHEDULED_EMAILS_PATH, emailAccountId];
+}
+
+/**
+ * Every listed account's sends waiting to go out, each read as its own
+ * account. No accounts reads nothing.
+ */
+export function useAllAccountsUpcomingScheduledEmails(
+  accounts: { id: string }[] | undefined,
+) {
+  return useAllAccountsList<UpcomingScheduledEmailsResponse>(
+    SCHEDULED_EMAILS_PATH,
+    accounts,
+    {
+      refreshInterval: (current) =>
+        scheduledEmailsRefreshInterval(
+          current?.byAccount.flatMap(({ data }) => data.scheduledEmails) ?? [],
+        ),
+    },
+  );
 }
 
 /** Null reads nothing, as when the sends of several accounts are read instead. */
@@ -59,6 +82,32 @@ export function useHiddenDraftMessageIds(emailAccountId: string) {
     ],
     [data, sending, emailAccountId],
   );
+}
+
+/** The same, for every account All inboxes merges. No accounts reads nothing. */
+export function useAllAccountsHiddenDraftMessageIds(
+  accounts: { id: string }[] | undefined,
+) {
+  const { data } = useAllAccountsUpcomingScheduledEmails(accounts);
+  const sending = useSyncExternalStore(
+    subscribe,
+    () => sendingDrafts,
+    () => NO_HIDDEN_DRAFTS,
+  );
+  const accountKey = accounts?.map((account) => account.id).join("\n");
+  return useMemo(() => {
+    if (accountKey === undefined) return NO_MESSAGE_IDS;
+    const accountIds = new Set(accountKey.split("\n"));
+    const ids = [
+      ...getScheduledDraftMessageIds(
+        data?.byAccount.flatMap(({ data }) => data.scheduledEmails) ?? [],
+      ),
+      ...sending
+        .filter((entry) => accountIds.has(entry.emailAccountId))
+        .flatMap((entry) => entry.messageIds),
+    ];
+    return ids.length ? ids : NO_MESSAGE_IDS;
+  }, [accountKey, data, sending]);
 }
 
 /**

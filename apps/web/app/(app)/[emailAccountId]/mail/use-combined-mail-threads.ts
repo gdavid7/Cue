@@ -16,6 +16,11 @@ import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import { searchQueryForAccounts } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import {
+  threadsQueryToPredicate,
+  withoutHiddenDrafts,
+} from "@/utils/mail-engine/threads-query";
+import { useAllAccountsHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
 
 const EMPTY_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
 const MAX_MAIL_PREDICATE_CHILDREN = 32;
@@ -25,6 +30,7 @@ export function useCombinedMailThreads({
   emailAccountId,
   enabled,
   isUnread,
+  mailboxType,
   labelNames,
   searchQuery,
   providerSearch,
@@ -33,6 +39,8 @@ export function useCombinedMailThreads({
   emailAccountId: string;
   enabled: boolean;
   isUnread: boolean;
+  /** Drafts, Sent or Starred, merged in place of the inbox. */
+  mailboxType?: string;
   labelNames?: string[];
   searchQuery?: string;
   /** False while a search is still being typed: it reads local mail only. */
@@ -47,17 +55,35 @@ export function useCombinedMailThreads({
     [accounts],
   );
   const labelsByAccount = useLabelsByAccount(enabled ? accountIds : []);
-  const predicate = useMemo(
-    () =>
-      labelNames?.length
-        ? labelNamesToAccountScopedPredicate({
-            accountIds,
-            labelsByAccount,
-            labelNames,
-          })
-        : undefined,
-    [accountIds, labelNames, labelsByAccount],
+  const isDrafts = !searchQuery && mailboxType === "draft";
+  const hiddenDraftMessageIds = useAllAccountsHiddenDraftMessageIds(
+    enabled && isDrafts ? accounts : undefined,
   );
+  const predicate = useMemo(() => {
+    // A conversation stays in Drafts only through drafts that aren't hidden.
+    if (isDrafts)
+      return hiddenDraftMessageIds.length
+        ? withoutHiddenDrafts(
+            threadsQueryToPredicate({ type: "draft" }),
+            hiddenDraftMessageIds,
+          )
+        : undefined;
+    if (mailboxType) return;
+    return labelNames?.length
+      ? labelNamesToAccountScopedPredicate({
+          accountIds,
+          labelsByAccount,
+          labelNames,
+        })
+      : undefined;
+  }, [
+    accountIds,
+    hiddenDraftMessageIds,
+    isDrafts,
+    labelNames,
+    labelsByAccount,
+    mailboxType,
+  ]);
   // Each account reads the search in its own provider's syntax, and
   // `label:Name` by its own labels.
   const searchPredicate = useMemo(
@@ -80,12 +106,13 @@ export function useCombinedMailThreads({
   );
   const query = useMemo<ThreadsQuery>(() => {
     if (searchQuery) return { q: searchQuery };
+    if (mailboxType) return { type: mailboxType };
     if (labelNames?.length) {
       return { type: "inbox" };
     }
     if (isUnread) return { type: "unread" };
     return { type: "inbox" };
-  }, [isUnread, labelNames, searchQuery]);
+  }, [isUnread, labelNames, mailboxType, searchQuery]);
   const state = useEngineMailThreads({
     emailAccountId,
     accountIds: accountIds.length ? accountIds : [emailAccountId],

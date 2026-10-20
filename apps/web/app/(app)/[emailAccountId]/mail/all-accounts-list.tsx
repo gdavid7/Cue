@@ -17,7 +17,7 @@ type AccountsResult<T> = Awaited<ReturnType<typeof fetchForAccounts<T>>>;
  */
 export function useAllAccountsList<T>(
   path: string,
-  accounts: AllInboxesAccount[] | undefined,
+  accounts: { id: string }[] | undefined,
   config?: SWRConfiguration<AccountsResult<T>>,
 ) {
   const accountIds = accounts?.map((account) => account.id);

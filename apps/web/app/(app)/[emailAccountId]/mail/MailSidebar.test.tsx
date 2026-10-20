@@ -219,11 +219,15 @@ describe("MailSidebar", () => {
     expect(screen.queryByText("Promotions")).toBeNull();
   });
 
-  it("leaves the extra views out of the combined inbox", () => {
+  it("offers only the views every account can merge in the combined inbox", () => {
     renderSidebar({ unified: true });
 
+    const links = screen.getAllByRole("link").map((link) => link.textContent);
+    for (const name of ["Drafts", "Sent", "Starred", "Snoozed", "Scheduled"])
+      expect(links).toContain(name);
     expect(screen.queryByText("More")).toBeNull();
-    expect(screen.queryByText("Drafts")).toBeNull();
+    expect(screen.queryByText("Archived")).toBeNull();
+    expect(screen.queryByText("Spam")).toBeNull();
     expect(screen.getByText("All inboxes")).toBeDefined();
   });
 

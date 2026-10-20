@@ -21,6 +21,8 @@ import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import {
+  ALL_INBOXES_MAILBOX_TYPES,
+  ALL_INBOXES_VIEW_TYPES,
   getMailboxName,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
@@ -520,7 +522,10 @@ export function MailShell() {
       return mailTypeToThreadsQuery(scopeType);
     return null;
   }, [scopeFolderId, scopeLabelId, scopeType]);
-  const isScoped = !isAllAccounts && scopeQuery !== null;
+  // All inboxes merges only the views every account has, each in full.
+  const isAllInboxesView =
+    isAllAccounts && !!scopeType && ALL_INBOXES_VIEW_TYPES.has(scopeType);
+  const isScoped = scopeQuery !== null && (!isAllAccounts || isAllInboxesView);
 
   const searchEditIdentity = JSON.stringify([
     emailAccountId,
@@ -546,6 +551,13 @@ export function MailShell() {
   const isScheduledView = !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
   // The mailbox doesn't know what's snoozed or until when; our database does.
   const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
+  const allInboxesMailboxType =
+    isAllInboxesView &&
+    !searchQuery &&
+    scopeType &&
+    ALL_INBOXES_MAILBOX_TYPES.has(scopeType)
+      ? scopeType
+      : undefined;
   const [settledSearch, setSettledSearch] = useState(searchQuery);
   useEffect(() => {
     const timeout = setTimeout(() => setSettledSearch(searchQuery), 250);
@@ -686,6 +698,7 @@ export function MailShell() {
     emailAccountId,
     enabled:
       isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
+    mailboxType: allInboxesMailboxType,
     isUnread:
       !searchQuery &&
       !!activeSplit?.filters.length &&
@@ -1124,6 +1137,7 @@ export function MailShell() {
     if (isAllAccounts) {
       let scope: MatchingScope | null = null;
       if (searchQuery) scope = { q: searchQuery };
+      else if (allInboxesMailboxType) scope = { type: allInboxesMailboxType };
       else if (!activeSplit?.filters.length) scope = { type: "inbox" };
       return scope
         ? combinedAccounts.map((account) => ({ id: account.id, scope }))
@@ -1133,6 +1147,7 @@ export function MailShell() {
     return scope ? [{ id: emailAccountId, scope }] : null;
   }, [
     activeSplit?.filters.length,
+    allInboxesMailboxType,
     combinedAccounts,
     emailAccountId,
     isAllAccounts,
@@ -1933,11 +1948,11 @@ export function MailShell() {
       reply: () => openReply(false),
       replyAll: () => openReply(true),
       markRead: markReadTargets,
-      // The combined inbox has no per-account mailboxes to go to.
-      goToInbox: isAllAccounts ? undefined : () => goToMailbox("inbox"),
-      goToStarred: isAllAccounts ? undefined : () => goToMailbox("starred"),
-      goToSent: isAllAccounts ? undefined : () => goToMailbox("sent"),
-      goToDrafts: isAllAccounts ? undefined : () => goToMailbox("draft"),
+      // All inboxes goes to its own merged views; it has no merged All Mail.
+      goToInbox: () => goToMailbox("inbox"),
+      goToStarred: () => goToMailbox("starred"),
+      goToSent: () => goToMailbox("sent"),
+      goToDrafts: () => goToMailbox("draft"),
       goToAllMail: isAllAccounts ? undefined : () => goToMailbox("all"),
       forward: singleActionTarget ? requestForwardTarget : undefined,
       moreActions: openThreadId
@@ -1980,6 +1995,7 @@ export function MailShell() {
   function goToMailbox(type: string) {
     const href = buildMailPath({
       accountIndex: mailLocation.accountIndex,
+      ...(isAllAccounts ? { allInboxes: true } : {}),
       view: getMailNavView({ kind: "type", type }, mailSlugs),
     });
     if (!showMailView(href)) router.push(href);
@@ -2595,7 +2611,7 @@ export function MailShell() {
                       }
                       listKey={
                         isAllAccounts
-                          ? `all-accounts:${searchQuery ?? displayedActiveSplitId}`
+                          ? `all-accounts:${searchQuery ?? allInboxesMailboxType ?? displayedActiveSplitId}`
                           : JSON.stringify(query)
                       }
                     />
@@ -2739,7 +2755,10 @@ function getMailViewTitle({
   labelTerm: string;
 }): string | null {
   if (searchQuery) return "Search results";
-  if (isAllAccounts) return null;
+  if (isAllAccounts)
+    return scopeType && ALL_INBOXES_VIEW_TYPES.has(scopeType)
+      ? (getMailboxName(scopeType) ?? null)
+      : null;
   if (labelName) return `${labelTerm}: ${labelName}`;
   if (folderName) return folderName;
   if (scopeType && scopeType !== "inbox")
