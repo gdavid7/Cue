@@ -147,6 +147,8 @@ test("keeps undo for a message sent just before switching account", async ({
     await expect
       .poll(() => readHeldReply(emailAccountId, body), { timeout: 20_000 })
       .toMatchObject({ status: "PENDING" });
+    // Cancelling clears the held message, so the row is found by id after.
+    const held = await readHeldReply(emailAccountId, body);
 
     // Switching account reloads the page inside the undo window.
     await page
@@ -173,8 +175,8 @@ test("keeps undo for a message sent just before switching account", async ({
       notifications.getByText("Send undone. Saved as a draft."),
     ).toBeVisible();
     await expect
-      .poll(() => readHeldReply(emailAccountId, body))
-      .toMatchObject({ status: "CANCELLED" });
+      .poll(() => readScheduledEmailStatus(held.id))
+      .toBe("CANCELLED");
     await notifications.getByRole("button", { name: "Edit" }).click();
 
     const restored = page.getByRole("dialog", { name: "New Message" });
@@ -815,6 +817,16 @@ test("keeps reply and forward drafts in separate composer sessions", async ({
     0,
   );
 });
+
+async function readScheduledEmailStatus(id: string) {
+  return withClient(async (client) => {
+    const result = await client.query<{ status: string }>(
+      `SELECT status FROM "ScheduledEmail" WHERE id = $1`,
+      [id],
+    );
+    return result.rows[0]?.status;
+  });
+}
 
 async function readHeldReply(emailAccountId: string, replyBody: string) {
   return withClient(async (client) => {
