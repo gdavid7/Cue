@@ -35,6 +35,7 @@ import {
   isOutlookThrottlingError,
   markAsHandledUserKeyError,
   isGmailInsufficientPermissionsError,
+  SafeError,
 } from "./error";
 
 describe("isAiQuotaExceededError", () => {
@@ -476,6 +477,18 @@ describe("isOutlookThrottlingError", () => {
 
   it("returns false for unrelated errors", () => {
     expect(isOutlookThrottlingError({ code: "NotFound" })).toBe(false);
+  });
+
+  it("does not count the app's own rate limit as Outlook throttling", () => {
+    const error = new SafeError("Try again in a few minutes.", 429);
+    expect(isOutlookThrottlingError(error)).toBe(false);
+    expect(
+      checkCommonErrors(
+        error,
+        "/api/user/inbox-insights",
+        createScopedLogger("error-test"),
+      ),
+    ).toBeNull();
   });
 });
 

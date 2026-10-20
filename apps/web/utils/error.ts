@@ -347,6 +347,8 @@ export function isAiQuotaExceededError(error: RetryError): boolean {
 }
 
 export function isOutlookThrottlingError(error: unknown): boolean {
+  // The app's own limits throw a SafeError with a 429; only Graph throttles the mailbox.
+  if (error instanceof SafeError) return false;
   const err = error as Record<string, unknown>;
   const code = err?.code as string | undefined;
   const statusCode = err?.statusCode as number | undefined;
