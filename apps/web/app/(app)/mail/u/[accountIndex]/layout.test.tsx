@@ -8,7 +8,13 @@ const mocks = vi.hoisted(() => ({
   requestHeaders: {} as Record<string, string>,
   localMailCookie: undefined as string | undefined,
   lastAccountCookie: undefined as string | undefined,
-  splits: [] as { id: string; filters: { kind: string; value: string }[] }[],
+  splits: [] as {
+    id: string;
+    matchAll?: boolean;
+    filters: { kind: string; value: string }[];
+  }[],
+  dismissedHints: [] as string[],
+  findUser: vi.fn(),
   getMailSettings: vi.fn(),
   redirect: vi.fn((url: string) => {
     throw new Error(`redirect:${url}`);
@@ -16,6 +22,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/utils/auth", () => ({ auth: () => mocks.auth() }));
+vi.mock("@/utils/prisma", () => ({
+  default: {
+    user: {
+      findUnique: (input: unknown) => mocks.findUser(input),
+    },
+  },
+}));
 vi.mock("@/utils/mail-url.server", () => ({
   getOrderedEmailAccounts: (userId: string) =>
     mocks.getOrderedEmailAccounts(userId),
@@ -85,6 +98,10 @@ describe("MailRouteLayout", () => {
     mocks.localMailCookie = undefined;
     mocks.lastAccountCookie = undefined;
     mocks.splits = [{ id: "all", filters: [] }];
+    mocks.dismissedHints = ["inbox-style:acc_a", "inbox-style:acc_b"];
+    mocks.findUser.mockImplementation(async () => ({
+      dismissedHints: mocks.dismissedHints,
+    }));
     mocks.getMailSettings.mockImplementation(async () => ({
       splits: mocks.splits,
     }));
@@ -164,13 +181,36 @@ describe("MailRouteLayout", () => {
     await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());
   });
 
-  it("does not fetch the whole inbox when the inbox opens on a tab", async () => {
-    // Gmail's tabs: the inbox opens on Primary, not on All.
+  it("fetches the tab the inbox opens on, such as Gmail's Primary", async () => {
     mocks.splits = [
       { id: "all", filters: [] },
       {
         id: "primary",
+        matchAll: true,
         filters: [{ kind: "CATEGORY", value: "CATEGORY_PERSONAL" }],
+      },
+    ];
+
+    await renderAt("0");
+
+    // Primary is a slice of the inbox; its newest mail is what the first
+    // screen shows, not the newest of the whole inbox or of all mail.
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_a",
+        provider: "google",
+        tab: { splitId: "primary", labelIds: ["INBOX", "CATEGORY_PERSONAL"] },
+      }),
+    );
+  });
+
+  it("does not fetch the whole inbox when Outlook's inbox opens on Focused", async () => {
+    mocks.splits = [
+      { id: "all", filters: [] },
+      {
+        id: "focused",
+        matchAll: true,
+        filters: [{ kind: "CATEGORY", value: "focused" }],
       },
     ];
 
@@ -178,6 +218,67 @@ describe("MailRouteLayout", () => {
 
     await expect(screenOf(layout).props.preview).resolves.toBeNull();
     expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
+  });
+
+  it("reads Primary ahead for a new Gmail mailbox, whose inbox style opens on it", async () => {
+    // A new mailbox opens on All until its inbox style is chosen, and
+    // Gmail's default style opens on Primary from then on.
+    mocks.dismissedHints = [];
+
+    await renderAt("0");
+
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_a",
+        provider: "google",
+        readAhead: ["INBOX", "CATEGORY_PERSONAL"],
+      }),
+    );
+  });
+
+  it("still fetches the inbox, reading nothing ahead, when the style choice can't be read", async () => {
+    mocks.findUser.mockRejectedValue(new Error("database down"));
+
+    await renderAt("0");
+
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_a",
+        provider: "google",
+      }),
+    );
+  });
+
+  it("reads the style choice only where it can add a read-ahead", async () => {
+    // Outlook reads nothing ahead.
+    await renderAt("1");
+    await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());
+    // An inbox already on a tab reads that tab.
+    mocks.splits = [
+      { id: "all", filters: [] },
+      {
+        id: "primary",
+        matchAll: true,
+        filters: [{ kind: "CATEGORY", value: "CATEGORY_PERSONAL" }],
+      },
+    ];
+    await renderAt("0");
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledTimes(2),
+    );
+
+    expect(mocks.findUser).not.toHaveBeenCalled();
+  });
+
+  it("reads nothing ahead once the inbox style is chosen", async () => {
+    await renderAt("0");
+
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_a",
+        provider: "google",
+      }),
+    );
   });
 
   it("fetches the inbox when it opens on All", async () => {

@@ -82,6 +82,7 @@ afterEach(() => {
   engine.client = null;
   account.emailAccountId = "acc-1";
   navigation.pathname = "/mail/u/0/inbox";
+  listProps = {};
 });
 
 describe("InboxPreviewList", () => {
@@ -152,6 +153,33 @@ describe("InboxPreviewList", () => {
 
     expect(document.querySelector("[data-mail-inbox-preview]")).toBeNull();
     expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
+  });
+
+  it("shows a tab's rows on that tab, as the inbox opening on Primary does", async () => {
+    listProps = { splitId: "primary" };
+
+    await renderSeeded(previewOf("s1"), "primary");
+
+    expect(screen.getByText("s1")).toBeTruthy();
+  });
+
+  it("keeps a tab's rows off the other tabs, whose mail they aren't", async () => {
+    // The whole inbox (All), after rows were read for Primary.
+    listProps = { splitId: null };
+
+    await renderSeeded(previewOf("s1"), "primary");
+
+    expect(screen.queryByText("s1")).toBeNull();
+    expect(screen.getByText("Opening your mailbox…")).toBeTruthy();
+  });
+
+  it("keeps the whole inbox's rows off a tab, which shows only part of it", async () => {
+    // A style chosen meanwhile has the inbox open on Primary.
+    listProps = { splitId: "primary" };
+
+    await renderSeeded(previewOf("s1"));
+
+    expect(screen.queryByText("s1")).toBeNull();
   });
 
   it("keeps the skeleton for views other than the inbox", async () => {
@@ -350,6 +378,7 @@ describe("InboxPreviewList", () => {
 });
 
 let mounts = 0;
+let listProps: { splitId?: string | null } = {};
 
 function Screen() {
   const [mountedAs] = useState(() => {
@@ -365,7 +394,7 @@ function Screen() {
       <button onClick={retire} type="button">
         engine has mail
       </button>
-      <InboxPreviewList message="Opening your mailbox…" />
+      <InboxPreviewList message="Opening your mailbox…" {...listProps} />
     </>
   );
 }
@@ -378,12 +407,21 @@ function seeded(preview: Promise<InboxPreview | null> | null) {
   );
 }
 
-async function renderSeeded(preview: Promise<InboxPreview | null>) {
+async function renderSeeded(
+  preview: Promise<InboxPreview | null>,
+  splitId?: string,
+) {
   mounts = 0;
   let view: ReturnType<typeof render> | undefined;
   // Suspense resolves inside an async act.
   await act(async () => {
-    view = render(seeded(preview));
+    view = render(
+      seeded(
+        splitId
+          ? preview.then((loaded) => loaded && { ...loaded, splitId })
+          : preview,
+      ),
+    );
   });
   await act(async () => {
     await Promise.resolve(preview).catch(() => undefined);
@@ -397,6 +435,7 @@ function previewOf(...ids: string[]) {
     threads: ids.map((id) => thread(id)),
     nextPageToken: null,
     changes: ids.map((id) => patch(id)),
+    splitId: null,
   } as unknown as InboxPreview);
 }
 

@@ -224,12 +224,19 @@ export function InboxPreviewList({
   layout = "list",
   withChrome = false,
   enabled,
+  splitId,
 }: {
   message: string;
   layout?: MailLayoutMode;
   withChrome?: boolean;
   /** Defaults to whether the address is the account's inbox. */
   enabled?: boolean;
+  /**
+   * The tab the list shows, or null for the whole inbox; the rows show only
+   * for the one they were read for. Left out, they show for whatever the
+   * inbox address opens on, which is what the server read them for.
+   */
+  splitId?: string | null;
 }) {
   const { emailAccountId } = useAccount();
   const pathname = usePathname();
@@ -258,6 +265,7 @@ export function InboxPreviewList({
       <Suspense fallback={placeholder}>
         <SeededPreviewRows
           preview={seed.preview}
+          splitId={splitId}
           placeholder={placeholder}
           message={message}
           layout={layout}
@@ -270,10 +278,12 @@ export function InboxPreviewList({
 
 function SeededPreviewRows({
   preview,
+  splitId,
   placeholder,
   ...props
 }: {
   preview: Promise<InboxPreview>;
+  splitId: string | null | undefined;
   placeholder: ReactNode;
   message: string;
   layout: MailLayoutMode;
@@ -281,6 +291,7 @@ function SeededPreviewRows({
 }) {
   const data = use(preview);
   if (!data?.threads.length) return placeholder;
+  if (splitId !== undefined && data.splitId !== splitId) return placeholder;
   return <PreviewRows preview={data} {...props} />;
 }
 

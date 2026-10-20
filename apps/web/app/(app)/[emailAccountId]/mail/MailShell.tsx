@@ -727,13 +727,20 @@ export function MailShell() {
   const isFirstSync = isAllAccounts
     ? Boolean(allInboxesFirstSyncMessage)
     : accountThreadState.isFirstSync;
-  // Only the whole inbox can be shown from the server's newest-first list
-  // while the engine syncs; a tab or search would show different mail.
+  // While the engine syncs, the server's newest-first rows stand in for the
+  // whole inbox or for the tab the inbox opens on, whichever they were read
+  // for; a search or any other view would show different mail.
   const showsWholeInbox =
     !isAllAccounts &&
     !searchQuery &&
     query.type === "inbox" &&
     Object.keys(query).length === 1;
+  const showsLandingTab =
+    !isAllAccounts &&
+    !searchQuery &&
+    !scopeQuery &&
+    !!activeSplit?.filters.length &&
+    activeSplit.id === landingSplitId;
   // Once the local mailbox has this account's mail, later visits read it from
   // there, so the server stops fetching the inbox for them, and the rows it
   // fetched at sign-in are put away for good.
@@ -2556,7 +2563,8 @@ export function MailShell() {
                         <InboxPreviewList
                           message={listPlaceholderMessage}
                           layout={layout}
-                          enabled={showsWholeInbox}
+                          enabled={showsWholeInbox || showsLandingTab}
+                          splitId={showsLandingTab ? landingSplitId : null}
                         />
                       )
                     }
