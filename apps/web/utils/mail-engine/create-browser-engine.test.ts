@@ -78,6 +78,16 @@ describe("createBrowserMailEngine", () => {
     expect(FakeWorker.instances[0].received("start")).toBe(1);
   });
 
+  it("opens the mailbox early once a page that just closed lets go of the engine", async () => {
+    stubBrowserStorage({ ownerLockHeld: [true, true, false] });
+    prewarmMailEngineWorker();
+
+    await vi.waitFor(() =>
+      expect(FakeWorker.instances[0].received("preopen")).toBe(1),
+    );
+    releasePrewarmedMailEngineWorker();
+  });
+
   it("leaves the mailbox files alone while another tab owns the engine", async () => {
     stubBrowserStorage({ ownerLockHeld: true });
     prewarmMailEngineWorker();
@@ -246,13 +256,21 @@ describe("createBrowserMailEngine", () => {
   });
 });
 
-function stubBrowserStorage({ ownerLockHeld }: { ownerLockHeld: boolean }) {
+function stubBrowserStorage({
+  ownerLockHeld,
+}: {
+  /** One answer per query; the last repeats. */
+  ownerLockHeld: boolean | boolean[];
+}) {
+  const answers = [ownerLockHeld].flat();
   vi.stubGlobal("navigator", {
     onLine: true,
     storage: { getDirectory: async () => ({}) },
     locks: {
       query: async () => ({
-        held: ownerLockHeld ? [{ name: MAIL_ENGINE_OWNER_LOCK }] : [],
+        held: (answers.length > 1 ? answers.shift() : answers[0])
+          ? [{ name: MAIL_ENGINE_OWNER_LOCK }]
+          : [],
         pending: [],
       }),
     },

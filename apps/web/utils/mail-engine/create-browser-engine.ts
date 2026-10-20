@@ -38,6 +38,10 @@ const BUSY_START_BUDGET_MS = 10_000;
 // An early worker this tab never starts, as when another tab owns the engine,
 // is let go after this long.
 const PREWARMED_WORKER_IDLE_MS = 30_000;
+// A page that just closed or reloaded can still be listed as the engine's
+// owner for a moment, so an early open asks again a few times.
+const PREOPEN_OWNER_CHECK_INTERVAL_MS = 100;
+const PREOPEN_OWNER_CHECKS = 20;
 
 let prewarmed: {
   worker: Worker;
@@ -406,7 +410,7 @@ function createEngineWorker() {
   return worker;
 }
 
-function preopenUnlessOwned(worker: Worker) {
+function preopenUnlessOwned(worker: Worker, checksLeft = PREOPEN_OWNER_CHECKS) {
   const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
   if (!locks?.query || !browserMailEngineCapabilities().opfs) return;
   locks
@@ -414,7 +418,15 @@ function preopenUnlessOwned(worker: Worker) {
     .then(({ held = [], pending = [] }) => {
       // Taken means the engine already sent its start, which opens the mailbox.
       if (prewarmed?.worker !== worker) return;
-      if ([...held, ...pending].some(isOwnerLock)) return;
+      if ([...held, ...pending].some(isOwnerLock)) {
+        if (checksLeft > 1) {
+          setTimeout(
+            () => preopenUnlessOwned(worker, checksLeft - 1),
+            PREOPEN_OWNER_CHECK_INTERVAL_MS,
+          );
+        }
+        return;
+      }
       worker.postMessage({
         type: "preopen",
         maxPendingOperations: readPageMaxPendingOperations(),
