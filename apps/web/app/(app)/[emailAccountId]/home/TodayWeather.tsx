@@ -44,6 +44,9 @@ const weatherCache = createBrowserCache<Weather>({
   maxBytes: 4 * 1024,
 });
 
+// Its own row on phones, at a fixed height, so it never pushes Today down late.
+const SLOT = "flex min-h-8 min-w-0 items-center max-sm:min-h-11 max-sm:w-full";
+
 const ICONS: Record<WeatherKind, LucideIcon> = {
   clear: SunIcon,
   partly: CloudSunIcon,
@@ -89,13 +92,24 @@ export function TodayWeather() {
     },
   );
 
-  if (!user) return null;
+  // The slot keeps its height while the user loads, so nothing below it moves.
+  if (!user) return <div aria-hidden className={SLOT} />;
+  if (!location && user.todayWeatherDismissed) return null;
 
-  const save = async (next: TodayWeatherLocation | null) => {
+  const save = async (
+    next: TodayWeatherLocation | null,
+    { dismissed = false } = {},
+  ) => {
     const stored = next ? coarseLocation(next) : null;
-    mutate({ ...user, todayWeather: stored }, { revalidate: false });
+    mutate(
+      { ...user, todayWeather: stored, todayWeatherDismissed: dismissed },
+      { revalidate: false },
+    );
     setOpen(false);
-    const result = await saveTodayWeatherAction({ location: stored });
+    const result = await saveTodayWeatherAction({
+      location: stored,
+      dismissed,
+    });
     if (result?.serverError || result?.validationErrors) mutate();
   };
 
@@ -108,29 +122,32 @@ export function TodayWeather() {
     />
   ) : (
     <>
-      <CloudSunIcon aria-hidden className="size-4" />
+      <CloudSunIcon aria-hidden className="size-4 shrink-0" />
       Show weather
     </>
   );
 
   return (
-    <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>
-        <button
-          className="-mx-1.5 inline-flex min-h-8 items-center gap-1.5 rounded-md px-1.5 text-muted-foreground text-sm hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:bg-muted max-sm:min-h-11"
-          type="button"
-        >
-          {trigger}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-3 text-sm">
-        <WeatherSettings
-          location={location}
-          onSave={save}
-          onTurnOff={() => save(null)}
-        />
-      </PopoverContent>
-    </Popover>
+    <div className={SLOT}>
+      <Popover onOpenChange={setOpen} open={open}>
+        <PopoverTrigger asChild>
+          <button
+            className="-mx-1.5 inline-flex min-h-8 min-w-0 max-w-full items-center gap-1.5 rounded-md px-1.5 text-muted-foreground text-sm hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:bg-muted max-sm:min-h-11"
+            type="button"
+          >
+            {trigger}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-80 space-y-3 text-sm">
+          <WeatherSettings
+            location={location}
+            onDismiss={() => save(null, { dismissed: true })}
+            onSave={save}
+            onTurnOff={() => save(null)}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 
@@ -151,9 +168,11 @@ function WeatherLine({
     return (
       <>
         <CloudSunIcon aria-hidden className="size-4" />
-        <span className={error ? undefined : "invisible"}>
-          {label ?? "Weather"}
-        </span>
+        {error ? (
+          <span className="min-w-0 truncate">{label ?? "Weather"}</span>
+        ) : (
+          <span className="sr-only">{label ?? "Weather"}</span>
+        )}
       </>
     );
   }
@@ -186,10 +205,12 @@ function WeatherSettings({
   location,
   onSave,
   onTurnOff,
+  onDismiss,
 }: {
   location: TodayWeatherLocation | null;
   onSave: (location: TodayWeatherLocation) => void;
   onTurnOff: () => void;
+  onDismiss: () => void;
 }) {
   const [city, setCity] = useState("");
   const [busy, setBusy] = useState<"locating" | "searching" | null>(null);
@@ -291,7 +312,16 @@ function WeatherSettings({
         >
           Turn off weather
         </Button>
-      ) : null}
+      ) : (
+        <Button
+          className="w-full"
+          onClick={onDismiss}
+          size="sm"
+          variant="ghostMuted"
+        >
+          Not now
+        </Button>
+      )}
     </>
   );
 }

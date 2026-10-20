@@ -170,6 +170,26 @@ test("weather: on only when asked, from this browser, stored coarse, and off aga
     main.getByRole("button", { name: "Show weather" }),
   ).toBeVisible();
   await expect.poll(() => readTodayWeather(emailAccountId)).toBeNull();
+
+  // Not wanted at all: "Not now" stops offering it, across reloads.
+  await main.getByRole("button", { name: "Show weather" }).click();
+  await page.getByRole("button", { name: "Not now" }).click();
+  await expect(main.getByRole("button", { name: "Show weather" })).toHaveCount(
+    0,
+  );
+  await expect
+    .poll(() => readTodayWeather(emailAccountId))
+    .toEqual({ dismissed: true });
+  const settingsLoaded = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/user/me" && response.ok(),
+    { timeout: 60_000 },
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await settingsLoaded;
+  await expect(main.getByRole("button", { name: "Show weather" })).toHaveCount(
+    0,
+  );
 });
 
 test("weather service down: Today stays calm and the weather can be turned off", async ({

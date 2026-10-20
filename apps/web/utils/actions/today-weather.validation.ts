@@ -12,4 +12,12 @@ export type TodayWeatherLocation = z.infer<typeof todayWeatherLocationSchema>;
 export const saveTodayWeatherBody = z.object({
   /** Null turns the weather off. */
   location: todayWeatherLocationSchema.nullable(),
+  /** With no location: the user said "Not now", so Today stops offering it. */
+  dismissed: z.boolean().optional(),
 });
+
+/** What User.todayWeather holds: a location, or that the offer was dismissed. */
+export const todayWeatherSettingSchema = z.union([
+  todayWeatherLocationSchema,
+  z.object({ dismissed: z.literal(true) }),
+]);

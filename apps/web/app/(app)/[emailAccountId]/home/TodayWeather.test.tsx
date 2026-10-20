@@ -16,6 +16,7 @@ import { TodayWeather } from "./TodayWeather";
 const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   initial: null as TodayWeatherLocation | null,
+  dismissed: false,
 }));
 
 vi.mock("@/env", () => ({ env: {} }));
@@ -31,6 +32,7 @@ vi.mock("@/hooks/useUser", () => ({
     const [data, setData] = useState({
       id: "user",
       todayWeather: mocks.initial,
+      todayWeatherDismissed: mocks.dismissed,
     });
     return {
       data,
@@ -51,6 +53,7 @@ describe("TodayWeather", () => {
 
   beforeEach(() => {
     mocks.initial = null;
+    mocks.dismissed = false;
     mocks.save.mockResolvedValue({ data: { success: true } });
     fetchMock = vi.fn(async (input: string) => {
       const url = new URL(input);
@@ -97,6 +100,7 @@ describe("TodayWeather", () => {
     await waitFor(() =>
       expect(mocks.save).toHaveBeenCalledWith({
         location: { latitude: 48.9, longitude: 2.3, label: "Paris" },
+        dismissed: false,
       }),
     );
     const trigger = await screen.findByRole("button", { name: /^18°/ });
@@ -128,6 +132,7 @@ describe("TodayWeather", () => {
     await waitFor(() =>
       expect(mocks.save).toHaveBeenCalledWith({
         location: { latitude: 37.8, longitude: -122.4 },
+        dismissed: false,
       }),
     );
     await screen.findByText("H 21° L 12°");
@@ -148,6 +153,38 @@ describe("TodayWeather", () => {
     expect(mocks.save).not.toHaveBeenCalled();
   });
 
+  it("Not now: hides the offer and remembers it", async () => {
+    const { container } = renderWeather();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show weather" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+
+    await waitFor(() =>
+      expect(mocks.save).toHaveBeenCalledWith({
+        location: null,
+        dismissed: true,
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Show weather" })).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("dismissed earlier: offers nothing", () => {
+    mocks.dismissed = true;
+    renderWeather();
+
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("while the forecast loads, the control still has a name", () => {
+    mocks.initial = { latitude: 48.9, longitude: 2.3, label: "Paris" };
+    fetchMock.mockReturnValue(new Promise(() => undefined));
+    renderWeather();
+
+    expect(screen.getByRole("button", { name: "Paris" })).toBeTruthy();
+  });
+
   it("weather service down: fails quietly, and can still be turned off", async () => {
     mocks.initial = { latitude: 48.9, longitude: 2.3, label: "Paris" };
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
@@ -160,7 +197,10 @@ describe("TodayWeather", () => {
     fireEvent.click(screen.getByRole("button", { name: "Turn off weather" }));
 
     await waitFor(() =>
-      expect(mocks.save).toHaveBeenCalledWith({ location: null }),
+      expect(mocks.save).toHaveBeenCalledWith({
+        location: null,
+        dismissed: false,
+      }),
     );
     expect(
       await screen.findByRole("button", { name: "Show weather" }),
