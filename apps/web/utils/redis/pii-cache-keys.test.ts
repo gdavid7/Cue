@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hashAddressForKey } from "@/utils/redis/address-key";
 import {
   type CleanupRedis,
   deletePiiCacheKeys,
   hashedClaimKey,
+  PII_KEY_PATTERNS,
+  runPiiCleanupStep,
 } from "./pii-cache-keys";
 
 const HASH = "a".repeat(64);
@@ -137,6 +139,137 @@ describe("deletePiiCacheKeys", () => {
 
     expect(redis.store.size).toBe(0);
     expect(redis.scans).toBeGreaterThan(5);
+  });
+});
+
+describe("runPiiCleanupStep", () => {
+  it("keeps the ids-only Deep Clean threads that are still written", async () => {
+    const redis = fakeRedis({
+      "thread:a1:job1:t1": { threadId: "t1", status: "processing" },
+      "thread:a1:job1:t2": { threadId: "t2", from: "billing@acme.com" },
+    });
+
+    const { counts } = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+    });
+
+    expect(counts["thread:*"]).toBe(1);
+    expect([...redis.store.keys()]).toEqual(["thread:a1:job1:t1"]);
+  });
+
+  it("counts on a dry run without deleting, renaming or rewriting", async () => {
+    const redis = fakeRedis({
+      "reply:a1:m1": "Happy to meet",
+      "usage:me@example.com": { cost: 4 },
+      "processing-message:me@example.com:m1": "processed",
+    });
+    const unlink = vi.spyOn(redis.client, "unlink");
+    const set = vi.spyOn(redis.client, "set");
+    const renamenx = vi.spyOn(redis.client, "renamenx");
+
+    const { counts, nextCursor } = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: true,
+    });
+
+    expect(nextCursor).toBeNull();
+    expect(counts["reply:*"]).toBe(1);
+    expect(counts["usage:*@*"]).toBe(1);
+    expect(counts["processing-message:*@*"]).toBe(1);
+    expect(redis.store.size).toBe(3);
+    expect(unlink).not.toHaveBeenCalled();
+    expect(set).not.toHaveBeenCalled();
+    expect(renamenx).not.toHaveBeenCalled();
+  });
+
+  it("only scans and deletes the listed patterns, so a decoy survives", async () => {
+    const redis = fakeRedis({
+      "reply:a1:m1": "Happy to meet",
+      "reply-tracker:outbound-thread-status:a1:t1:m1": "1",
+      "summary-limit:a1": "1",
+      "digest:summary-limit:a1": "1",
+      "usage:email-account:a1": { cost: 1 },
+      "decoy:me@example.com": "keep",
+    });
+    const scanned = new Set<string>();
+    const scan = redis.client.scan;
+    redis.client.scan = (cursor, options) => {
+      scanned.add(options.match);
+      return scan(cursor, options);
+    };
+
+    await runPiiCleanupStep({ redis: redis.client, dryRun: false });
+
+    expect([...redis.store.keys()].sort()).toEqual([
+      "decoy:me@example.com",
+      "digest:summary-limit:a1",
+      "reply-tracker:outbound-thread-status:a1:t1:m1",
+      "summary-limit:a1",
+      "usage:email-account:a1",
+    ]);
+    const listed = new Set([
+      ...PII_KEY_PATTERNS.map((pattern) => pattern.match),
+      "processing-message:*@*",
+      "usage-migration:weekly-usage-cost-user:*:done",
+    ]);
+    expect(scanned).toEqual(listed);
+  });
+
+  it("stops at the time budget with a cursor, and resumes to finish", async () => {
+    const keys = Object.fromEntries([
+      ...Array.from({ length: 700 }, (_, i) => [`linked-page:${i}`, "page"]),
+      ...Array.from({ length: 5 }, (_, i) => [`reply:a1:${i}`, "text"]),
+    ]);
+    const redis = fakeRedis(keys, 300);
+    // Every clock read is 10ms later, so a 15ms budget allows two batches.
+    let tick = 0;
+    const now = () => (tick += 10);
+
+    const totals: Record<string, number> = {};
+    let cursor: string | null = null;
+    let calls = 0;
+    do {
+      const step: Awaited<ReturnType<typeof runPiiCleanupStep>> =
+        await runPiiCleanupStep({
+          redis: redis.client,
+          dryRun: false,
+          cursor,
+          budgetMs: 15,
+          now,
+        });
+      for (const [match, count] of Object.entries(step.counts))
+        totals[match] = (totals[match] ?? 0) + count;
+      cursor = step.nextCursor;
+      calls++;
+      if (cursor) expect(cursor).toMatch(/^\d+:\d+$/);
+    } while (cursor);
+
+    expect(calls).toBeGreaterThan(1);
+    expect(totals["linked-page:*"]).toBe(700);
+    expect(totals["reply:*"]).toBe(5);
+    expect(redis.store.size).toBe(0);
+  });
+
+  it("makes progress even with a zero budget", async () => {
+    const redis = fakeRedis({ "summary:1": "x" });
+
+    const first = await runPiiCleanupStep({
+      redis: redis.client,
+      dryRun: false,
+      budgetMs: 0,
+    });
+
+    expect(first.nextCursor).not.toBeNull();
+    expect(first.nextCursor).not.toBe("0:0");
+  });
+
+  it("rejects a cursor it did not hand out", async () => {
+    const redis = fakeRedis({});
+
+    await expect(
+      runPiiCleanupStep({ redis: redis.client, dryRun: true, cursor: "99:0" }),
+    ).rejects.toThrow("Invalid cleanup cursor");
   });
 });
 

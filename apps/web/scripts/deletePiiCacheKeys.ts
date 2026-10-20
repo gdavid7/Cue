@@ -13,7 +13,7 @@
 // REDIS_HTTP_URL, run this against it too.
 
 import { Redis } from "@upstash/redis";
-import { deletePiiCacheKeys } from "./lib/pii-cache-keys";
+import { deletePiiCacheKeys } from "@/utils/redis/pii-cache-keys";
 
 const url = process.env.REDIS_HTTP_URL;
 const token = process.env.REDIS_HTTP_TOKEN;
