@@ -377,6 +377,21 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/redis/predraft-cap.ts": {
+    writes: 2,
+    keys: [
+      {
+        key: "predraft-cap:v1:{emailAccountId}:{YYYY-MM-DD}",
+        holds: "a counter of the account's reply pre-drafts that UTC day",
+        ttl: "2 days",
+      },
+      {
+        key: "predraft-message:v1:{emailAccountId}:{sha256(messageId)}",
+        holds: "the value 1, claiming one message for a pre-draft",
+        ttl: "2 days",
+      },
+    ],
+  },
   "utils/redis/public-contact-context-lock.ts": {
     writes: 1,
     keys: [
