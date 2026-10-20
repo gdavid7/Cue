@@ -3,9 +3,10 @@ import {
   type CueSearchIntent,
   getCueSearchStage,
   getSearchAnswerRequest,
-  getWiderSearches,
+  getWideningLadder,
+  getWideningStep,
   keepFrozenRows,
-  shouldWidenCueSearch,
+  shouldAskProviderLastResort,
   withoutPlainDuplicates,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 
@@ -65,80 +66,117 @@ describe("getCueSearchStage", () => {
   });
 });
 
-describe("shouldWidenCueSearch", () => {
-  const wider = getWiderSearches(INTENT.searches);
+describe("getWideningLadder", () => {
+  const context = {
+    now: new Date("2026-10-19T17:00:00Z"),
+    timeZone: "UTC",
+    provider: "google" as const,
+  };
 
-  it("widens a search that found too little", () => {
-    expect(wider).toEqual(["from:sarah (lease OR contract)"]);
-    expect(
-      shouldWidenCueSearch({
-        stage: stage({ primary: EMPTY }),
-        primary: EMPTY,
-        widerSearches: wider,
-        expired: false,
-      }),
-    ).toBe(true);
-    expect(
-      shouldWidenCueSearch({
-        stage: stage({ primary: { settled: true, count: 1 } }),
-        primary: { settled: true, count: 1 },
-        widerSearches: wider,
-        expired: false,
-      }),
-    ).toBe(true);
+  it("climbs from fewer words to sender and dates to a wider window", () => {
+    const ladder = getWideningLadder(
+      ["from:sarah lease signed after:1788220800"],
+      context,
+    );
+    expect(ladder).toEqual([
+      {
+        tier: "fewer_words",
+        searches: [
+          "from:sarah signed after:1788220800",
+          "from:sarah lease after:1788220800",
+        ],
+      },
+      { tier: "sender_and_dates", searches: ["from:sarah after:1788220800"] },
+      {
+        tier: "wider_dates",
+        // A window open until now reaches back as far again.
+        searches: [
+          `from:sarah lease signed after:${2 * 1_788_220_800 - context.now.getTime() / 1000}`,
+        ],
+      },
+    ]);
   });
 
-  it("widens at most once", () => {
-    // Once widening, the stage is never "done" with the first searches alone.
-    const widening = stage({ primary: EMPTY, widening: true });
-    expect(
-      shouldWidenCueSearch({
-        stage: widening,
-        primary: EMPTY,
-        widerSearches: wider,
-        expired: false,
-      }),
-    ).toBe(false);
-    // A wider search that also finds nothing ends the search.
-    const widenedNothing = stage({
-      primary: EMPTY,
-      widening: true,
-      widened: EMPTY,
-    });
-    expect(widenedNothing).toBe("done");
-  });
-
-  it("doesn't widen enough results, unanswered searches, a spent budget, or a search that can't widen", () => {
-    const base = {
-      stage: stage({ primary: EMPTY }),
-      primary: EMPTY,
-      widerSearches: wider,
-      expired: false,
-    };
-    expect(
-      shouldWidenCueSearch({
-        ...base,
-        stage: stage({ primary: FOUND }),
-        primary: FOUND,
-      }),
-    ).toBe(false);
-    expect(
-      shouldWidenCueSearch({ ...base, stage: "searching", primary: IDLE }),
-    ).toBe(false);
-    expect(shouldWidenCueSearch({ ...base, expired: true })).toBe(false);
-    expect(shouldWidenCueSearch({ ...base, widerSearches: [] })).toBe(false);
+  it("never runs a search twice, and leaves out tiers with nothing new", () => {
+    // Leaving out the one word already leaves the sender and dates.
+    const ladder = getWideningLadder(
+      ["from:sarah lease after:1788220800", "from:sarah after:1788220800"],
+      context,
+    );
+    expect(ladder.map((step) => step.tier)).toEqual(["wider_dates"]);
+    expect(getWideningLadder(["lease"], context)).toEqual([]);
   });
 });
 
-describe("getWiderSearches", () => {
-  it("leaves out searches that can't widen and repeats", () => {
+describe("getWideningStep", () => {
+  const base = {
+    step: null,
+    primary: EMPTY,
+    widened: IDLE,
+    ladderLength: 3,
+    expired: false,
+  };
+
+  it("starts once the searches have answered with too little", () => {
+    expect(getWideningStep(base)).toBe(0);
     expect(
-      getWiderSearches([
-        "lease",
-        "from:sarah lease",
-        "from:sarah after:2026/09/01 lease",
-      ]),
-    ).toEqual(["from:sarah"]);
+      getWideningStep({ ...base, primary: { settled: true, count: 1 } }),
+    ).toBe(0);
+    expect(getWideningStep({ ...base, primary: FOUND })).toBeNull();
+    expect(getWideningStep({ ...base, primary: IDLE })).toBeNull();
+    expect(getWideningStep({ ...base, ladderLength: 0 })).toBeNull();
+  });
+
+  it("climbs while a tier finds nothing new, and stops at the first that does", () => {
+    expect(getWideningStep({ ...base, step: 0, widened: IDLE })).toBe(0);
+    expect(getWideningStep({ ...base, step: 0, widened: EMPTY })).toBe(1);
+    expect(
+      getWideningStep({
+        ...base,
+        step: 1,
+        widened: { settled: true, count: 1 },
+      }),
+    ).toBe(1);
+  });
+
+  it("stops at the top of the ladder and once the budget is spent", () => {
+    expect(getWideningStep({ ...base, step: 2, widened: EMPTY })).toBe(2);
+    expect(
+      getWideningStep({ ...base, step: 0, widened: EMPTY, expired: true }),
+    ).toBe(0);
+    expect(getWideningStep({ ...base, expired: true })).toBeNull();
+  });
+});
+
+describe("shouldAskProviderLastResort", () => {
+  const top = {
+    step: 2,
+    primary: EMPTY,
+    widened: EMPTY,
+    ladderLength: 3,
+    expired: false,
+  };
+
+  it("asks once every search, the top tier's included, has found no mail", () => {
+    expect(shouldAskProviderLastResort(top)).toBe(true);
+  });
+
+  it("doesn't ask below the top, while a search is out, after mail is found, or past the budget", () => {
+    expect(shouldAskProviderLastResort({ ...top, step: 1 })).toBe(false);
+    expect(shouldAskProviderLastResort({ ...top, widened: IDLE })).toBe(false);
+    expect(
+      shouldAskProviderLastResort({
+        ...top,
+        primary: { settled: true, count: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      shouldAskProviderLastResort({
+        ...top,
+        widened: { settled: true, count: 1 },
+      }),
+    ).toBe(false);
+    expect(shouldAskProviderLastResort({ ...top, expired: true })).toBe(false);
   });
 });
 

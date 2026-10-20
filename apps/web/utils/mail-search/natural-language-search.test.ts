@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   looksLikeNaturalLanguage,
-  widenSearch,
+  widenSearchByTier,
 } from "@/utils/mail-search/natural-language-search";
+
+const NOW = new Date("2026-10-19T17:00:00Z");
+const GOOGLE = { now: NOW, timeZone: "UTC", provider: "google" as const };
+const DAY_S = 24 * 60 * 60;
+const SEP_1 = Date.UTC(2026, 8, 1) / 1000;
+const OCT_1 = Date.UTC(2026, 9, 1) / 1000;
 
 describe("looksLikeNaturalLanguage", () => {
   it.each([
@@ -40,42 +46,70 @@ describe("looksLikeNaturalLanguage", () => {
   });
 });
 
-describe("widenSearch", () => {
-  it("drops the dates, attachment and label first", () => {
-    expect(
-      widenSearch(
-        "from:sarah has:attachment after:1756710000 before:1759302000 (lease OR contract)",
-      ),
-    ).toBe("from:sarah (lease OR contract)");
-    expect(
-      widenSearch("received>=2026-09-01 hasattachments:true from:sarah lease"),
-    ).toBe("from:sarah lease");
+describe("widenSearchByTier", () => {
+  it("first leaves out each word group or condition in turn, keeping people and dates", () => {
+    const tiers = widenSearchByTier(
+      `from:tom (spreadsheet OR xlsx) has:attachment after:${SEP_1}`,
+      GOOGLE,
+    );
+    expect(tiers.fewer_words).toEqual([
+      `from:tom has:attachment after:${SEP_1}`,
+      `from:tom (spreadsheet OR xlsx) after:${SEP_1}`,
+    ]);
   });
 
-  it("turns a subject into words", () => {
-    expect(widenSearch("subject:lease after:2026/09/01")).toBe("lease");
+  it("never leaves a search of only dates and conditions", () => {
+    expect(
+      widenSearchByTier(`lease has:attachment after:${SEP_1}`, GOOGLE)
+        .fewer_words,
+    ).toEqual([`lease after:${SEP_1}`]);
+    expect(widenSearchByTier("lease", GOOGLE)).toEqual({
+      fewer_words: [],
+      sender_and_dates: [],
+      wider_dates: [],
+    });
   });
 
-  it("accepts any word when there is nothing to drop", () => {
-    expect(widenSearch("lease contract")).toBe("lease OR contract");
-    expect(widenSearch("lease (contract OR agreement)")).toBe(
-      "lease OR contract OR agreement",
+  it("then keeps only who the mail is with and when, a group of senders included", () => {
+    expect(
+      widenSearchByTier(
+        `(from:sarah OR from:"Ana Lima") lease is:starred after:${SEP_1}`,
+        GOOGLE,
+      ).sender_and_dates,
+    ).toEqual([`(from:sarah OR from:"Ana Lima") after:${SEP_1}`]);
+    // Nothing to drop beside the sender: no tier repeats the search.
+    expect(widenSearchByTier("from:sarah", GOOGLE).sender_and_dates).toEqual(
+      [],
     );
   });
 
-  it("keeps just the person when there are words beside them", () => {
-    expect(widenSearch("from:sarah lease")).toBe("from:sarah");
-  });
-
-  it("keeps a group of senders as the people", () => {
+  it("then grows the window by its own length on each side, ending by now", () => {
+    const month = OCT_1 - SEP_1;
     expect(
-      widenSearch('(from:sarah OR from:"Ana Lima") (lease OR contract)'),
-    ).toBe('from:sarah OR from:"Ana Lima"');
+      widenSearchByTier(`from:sarah lease after:${SEP_1} before:${OCT_1}`, {
+        ...GOOGLE,
+        now: new Date("2027-03-01T00:00:00Z"),
+      }).wider_dates,
+    ).toEqual([
+      `from:sarah lease after:${SEP_1 - month} before:${OCT_1 + month}`,
+    ]);
+    // A window reaching now stays open-ended; a short one grows a week.
+    expect(
+      widenSearchByTier(`lease after:${OCT_1 + 15 * DAY_S}`, GOOGLE)
+        .wider_dates,
+    ).toEqual([`lease after:${OCT_1 + 8 * DAY_S}`]);
+    expect(widenSearchByTier("from:sarah lease", GOOGLE).wider_dates).toEqual(
+      [],
+    );
   });
 
-  it("returns null when a search can't get wider", () => {
-    expect(widenSearch("lease")).toBeNull();
-    expect(widenSearch("from:sarah")).toBeNull();
-    expect(widenSearch("lease OR contract")).toBeNull();
+  it("writes a wider Outlook window as received days in the account's zone", () => {
+    expect(
+      widenSearchByTier("from:sarah received>=2026-09-01 received<2026-10-01", {
+        now: NOW,
+        timeZone: "America/Los_Angeles",
+        provider: "microsoft",
+      }).wider_dates,
+    ).toEqual(["from:sarah received>=2026-08-02"]);
   });
 });
