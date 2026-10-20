@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { env } from "@/env";
 import { getAuditContext } from "@/utils/audit/context";
 import {
+  type GmailQuotaHold,
   type GmailQuotaNote,
   gmailQuotaStore,
 } from "@/utils/gmail/quota-store";
@@ -10,6 +11,7 @@ import { extractErrorInfo, isRetryableError } from "@/utils/gmail/retry";
 import { createScopedLogger } from "@/utils/logger";
 import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-provider-rate-limit";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
+import { timeRequestDependency } from "@/utils/request-metrics";
 import { sleep } from "@/utils/sleep";
 
 // The per-user Gmail limit for this Google Cloud project, shared by every
@@ -314,7 +316,13 @@ type Lane = {
   /** The latest wait the store gave, by blocker variant. */
   waits: Map<
     string,
-    { from: number; until: number; cost: number; defer: boolean }
+    {
+      from: number;
+      until: number;
+      cost: number;
+      defer: boolean;
+      held: GmailQuotaHold | undefined;
+    }
   >;
 };
 const lanes = new Map<string, Lane>();
@@ -340,17 +348,33 @@ const gateStats = {
 };
 let gateStatsSince = Date.now();
 
+export type GmailDeferralReason =
+  | "interactive_pause"
+  | "sync_pause"
+  | "background_pause"
+  | "initial_sync_scan"
+  | "per_minute_budget"
+  | "per_second_pace"
+  | "interactive_demand_yield"
+  | "unknown";
+
 export class GmailCallDeferredError extends Error {
   readonly code = "GMAIL_CALL_DEFERRED";
   readonly retryAfterMs: number;
   readonly priority: GmailQuotaPriority;
-  constructor(retryAfterMs: number, priority: GmailQuotaPriority) {
+  readonly reason: GmailDeferralReason;
+  constructor(
+    retryAfterMs: number,
+    priority: GmailQuotaPriority,
+    reason: GmailDeferralReason = "unknown",
+  ) {
     super(
       `Gmail call deferred for ${Math.ceil(retryAfterMs / 1000)}s to keep the account within its per-minute Gmail budget`,
     );
     this.name = "GmailCallDeferredError";
     this.retryAfterMs = Math.max(1000, Math.ceil(retryAfterMs));
     this.priority = priority;
+    this.reason = reason;
   }
 }
 
@@ -485,7 +509,7 @@ export async function meterGmailCall<T>(
     priority: priorityOverride,
   });
   try {
-    return await operation();
+    return await timeRequestDependency("provider", operation);
   } catch (error) {
     if (isGmailQuotaRefusal(error)) await noteGmailQuotaRefusal(ticket, error);
     throw error;
@@ -537,6 +561,11 @@ export async function admitGmailCall({
       { key: keys.backgroundPause },
     ],
   }[priority];
+  const blockerReasons: GmailDeferralReason[] = {
+    interactive: ["interactive_pause" as const],
+    sync: ["sync_pause" as const],
+    background: ["initial_sync_scan" as const, "background_pause" as const],
+  }[priority];
   const { stats, maxTotalWaitMs } = context;
   const deadline = Math.min(
     Date.now() +
@@ -571,7 +600,11 @@ export async function admitGmailCall({
     return admitted();
   };
   for (;;) {
-    let admission: { waitMs: number; defer: boolean } | null = null;
+    let admission: {
+      waitMs: number;
+      defer: boolean;
+      held?: GmailQuotaHold;
+    } | null = null;
     if (lane) {
       if (spendLease(lane, cost)) {
         gateStats.leaseAdmissions += 1;
@@ -671,7 +704,25 @@ export async function admitGmailCall({
         1,
       );
       if (stats) stats.deferred += 1;
-      throw new GmailCallDeferredError(wait, priority);
+      const error = new GmailCallDeferredError(
+        wait,
+        priority,
+        deferralReason(admission.held, blockerReasons),
+      );
+      logDeferral({
+        error,
+        emailAccountId,
+        caller: context.caller,
+        cost,
+        heldByStore: admission.defer,
+        waitBudgetMs: Number.isFinite(deadline)
+          ? Math.max(0, deadline - Date.now())
+          : null,
+        held: admission.held,
+        floor: FLOOR[priority],
+        paceCap: PACE_CAP[priority],
+      });
+      throw error;
     }
     const sleepMs = Math.min(wait, deadline - Date.now());
     await sleep(sleepMs);
@@ -968,6 +1019,60 @@ export function gmailRequestCost(method: string, url: string | URL): number {
     return 15;
   }
   return 20;
+}
+
+export function deferralReason(
+  held: GmailQuotaHold | undefined,
+  blockerReasons: GmailDeferralReason[],
+): GmailDeferralReason {
+  if (!held) return "unknown";
+  if (held.gate === "blocker")
+    return blockerReasons[held.blocker - 1] ?? "unknown";
+  if (held.gate === "bucket") return "per_minute_budget";
+  if (held.gate === "pace") return "per_second_pace";
+  if (held.gate === "interactive_demand") return "interactive_demand_yield";
+  return "unknown";
+}
+
+function logDeferral({
+  error,
+  emailAccountId,
+  caller,
+  cost,
+  heldByStore,
+  waitBudgetMs,
+  held,
+  floor,
+  paceCap,
+}: {
+  error: GmailCallDeferredError;
+  emailAccountId: string;
+  caller: string;
+  cost: number;
+  heldByStore: boolean;
+  waitBudgetMs: number | null;
+  held: GmailQuotaHold | undefined;
+  floor: number;
+  paceCap: number;
+}) {
+  logger.info("Gmail call deferred", {
+    emailAccountId,
+    requestId: getAuditContext().requestId,
+    reason: error.reason,
+    // "store_hold" is a pause the gate told callers not to wait on; otherwise
+    // the wait was longer than the caller could spend.
+    deferredBy: heldByStore ? "store_hold" : "wait_budget",
+    priority: error.priority,
+    caller,
+    retryAfterMs: error.retryAfterMs,
+    waitBudgetMs,
+    cost,
+    availableUnits: held?.availableUnits,
+    neededUnits: held?.neededUnits,
+    floorUnits: floor,
+    paceUsedUnits: held?.paceUnits,
+    paceCapUnits: paceCap,
+  });
 }
 
 function priorityForCaller(caller: string): GmailQuotaPriority {
@@ -1278,6 +1383,7 @@ async function takeForLane(
         until: sentAt + result.waitMs,
         cost: request.cost,
         defer: result.defer,
+        held: result.held,
       });
     return result;
   } catch (error) {
@@ -1367,7 +1473,7 @@ function sharedWait(lane: Lane, waitKey: string, cost: number) {
     cost < wait.cost
   )
     return null;
-  return { waitMs: wait.until - now, defer: wait.defer };
+  return { waitMs: wait.until - now, defer: wait.defer, held: wait.held };
 }
 
 function forgetLanes(

@@ -94,6 +94,12 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         0,
         ...held.map(({ key, deferMs }) => deferMs || ttl(key)),
       );
+      let gate: "blocker" | "bucket" | "pace" | "interactive_demand" =
+        "blocker";
+      let blocker = 0;
+      input.blockers.forEach(({ key, deferMs }, index) => {
+        if (ttl(key) > 0 && (deferMs || ttl(key)) >= wait) blocker = index + 1;
+      });
       const { budget } = input;
       let current = budgets.get(budget.key);
       if (!current) {
@@ -119,8 +125,10 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
       );
       const need =
         input.floor + Math.min(input.cost, input.capacity - input.floor);
-      if (tokens < need)
-        wait = Math.max(wait, Math.ceil((need - tokens) / rate));
+      if (tokens < need && Math.ceil((need - tokens) / rate) > wait) {
+        wait = Math.ceil((need - tokens) / rate);
+        gate = "bucket";
+      }
       const unpacedWait = wait;
 
       const { pace } = input;
@@ -151,6 +159,9 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         const yieldWait = windowWait(pace.demand.yieldCap);
         paceWait =
           yieldWait < 0 || yieldWait > afterDemand ? afterDemand : yieldWait;
+        if (paceWait > wait) gate = "interactive_demand";
+      } else if (paceWait > wait) {
+        gate = "pace";
       }
       wait = Math.max(wait, paceWait);
       const episode = demands.get(pace.demand.key);
@@ -166,7 +177,20 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
           renewsAt: now + (pace.demand.everyMs ?? pace.demand.markMs),
         });
       if (wait > 0)
-        return { waitMs: wait, defer, queued: 0, ahead: 0, reservation: null };
+        return {
+          waitMs: wait,
+          defer,
+          queued: 0,
+          ahead: 0,
+          reservation: null,
+          held: {
+            gate,
+            blocker,
+            availableUnits: Math.floor(tokens),
+            neededUnits: need,
+            paceUnits: inWindow,
+          },
+        };
 
       const grantCap =
         pace.demand.yieldCap !== undefined && demandTtl > 0

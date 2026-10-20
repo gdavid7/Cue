@@ -7,7 +7,7 @@ import type {
 import { people } from "@googleapis/people";
 import { saveTokens } from "@/utils/auth/save-tokens";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
-import type { Logger } from "@/utils/logger";
+import { createScopedLogger, type Logger } from "@/utils/logger";
 import { SCOPES } from "@/utils/gmail/scopes";
 import { SafeError } from "@/utils/error";
 import { classifyEmailAccountProviderIssue } from "@/utils/email/provider-health";
@@ -153,6 +153,7 @@ export const getGmailClientWithRefresh = async ({
         error: error instanceof Error ? error.message : String(error),
         // biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
         errorDescription: (error as any).response?.data?.error_description,
+        ...gmailRefreshFailureCode(error),
       });
 
       try {
@@ -184,9 +185,27 @@ export const getGmailClientWithRefresh = async ({
       }
     }
 
+    if (!issue) {
+      logger.warn("Gmail token refresh failed", {
+        emailAccountId,
+        error: error instanceof Error ? error.message : String(error),
+        ...gmailRefreshFailureCode(error),
+      });
+    }
     throw error;
   }
 };
+
+function gmailRefreshFailureCode(error: unknown) {
+  const response = (
+    error as { response?: { status?: number; data?: { error?: string } } }
+  )?.response;
+  return {
+    providerError: response?.data?.error,
+    httpStatus: response?.status,
+    errorCode: (error as { code?: string | number } | null)?.code,
+  };
+}
 
 // doesn't handle refreshing the access token
 // should probably use the same auth object as getGmailClientWithRefresh but not critical for now
@@ -220,6 +239,7 @@ export const getAccessTokenFromClient = (client: gmail_v1.Gmail): string => {
 // Batch requests carry only the access token, so each metered auth client
 // remembers its account to let the batch path charge the same budget.
 const meteredAccounts = new WeakMap<object, string>();
+const refreshLogger = createScopedLogger("gmail-client");
 
 // Every REST call the Gmail client makes passes through the auth client's
 // `request`, so this is where each call is charged to the account's budget
@@ -275,7 +295,15 @@ function meterGmailRequests(
       if (extractErrorInfo(error).status !== 401) throw error;
       // Gmail rejected a token before its recorded expiry: it was revoked or
       // the stored expiry is wrong. One refresh and a charged resend.
-      await client.refreshAccessToken();
+      try {
+        await client.refreshAccessToken();
+      } catch (refreshError) {
+        refreshLogger.warn("Gmail token refresh after 401 failed", {
+          emailAccountId,
+          ...gmailRefreshFailureCode(refreshError),
+        });
+        throw refreshError;
+      }
       return send(options);
     }
   };

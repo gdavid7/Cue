@@ -47,6 +47,12 @@ import type { EmailProvider } from "@/utils/email/types";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
 import { startRequestTimer } from "@/utils/request-timing";
 import {
+  createRequestMetrics,
+  getRequestMetricsFields,
+  runWithRequestMetrics,
+  timeRequestDependency,
+} from "@/utils/request-metrics";
+import {
   type AuditActorType,
   runWithAuditContext,
   setAuditContext,
@@ -150,251 +156,265 @@ function withMiddleware<T extends NextRequest>(
     reqWithLogger.logger = baseLogger;
     let requestForError = reqWithLogger as NextRequest;
     const startedAt = Date.now();
+    const requestMetrics = createRequestMetrics();
 
-    return runWithAuditContext(
-      {
-        actorType: getDefaultAuditActorType(scope),
-        requestId,
-        source: scope || new URL(req.url).pathname,
-      },
-      async () => {
-        try {
-          return await runWithRequestDeadline(
-            options?.maxDuration,
-            async () => {
-              // Apply middleware if provided
-              let enhancedReq = reqWithLogger;
-              if (middleware) {
-                const middlewareResult = await middleware(
-                  reqWithLogger,
-                  options,
-                );
+    return runWithRequestMetrics(requestMetrics, () =>
+      runWithAuditContext(
+        {
+          actorType: getDefaultAuditActorType(scope),
+          requestId,
+          source: scope || new URL(req.url).pathname,
+        },
+        async () => {
+          try {
+            return await runWithRequestDeadline(
+              options?.maxDuration,
+              async () => {
+                // Apply middleware if provided
+                let enhancedReq = reqWithLogger;
+                if (middleware) {
+                  const middlewareResult = await middleware(
+                    reqWithLogger,
+                    options,
+                  );
 
-                // If middleware returned a Response, return it directly
-                if (middlewareResult instanceof Response) {
-                  flushLogger(reqWithLogger);
-                  return middlewareResult;
+                  // If middleware returned a Response, return it directly
+                  if (middlewareResult instanceof Response) {
+                    flushLogger(reqWithLogger);
+                    return middlewareResult;
+                  }
+
+                  // Otherwise, continue with the enhanced request
+                  enhancedReq = middlewareResult;
+                }
+                requestForError = enhancedReq;
+
+                // Execute the handler with the (potentially) enhanced request
+                const response = await handler(enhancedReq as T, context);
+
+                flushLogger(enhancedReq);
+
+                return response;
+              },
+            );
+          } catch (error) {
+            flushLogger(requestForError);
+
+            // redirects work by throwing an error. allow these
+            if (isRedirectError(error)) throw error;
+
+            const requestPath = getRequestPath(requestForError);
+            const publicApiRequest = isPublicApiPath(
+              new URL(requestForError.url).pathname,
+            );
+
+            if (error instanceof SafeError) {
+              if (error.message === "No refresh token") {
+                getLogger(requestForError).warn("Returning 401", {
+                  reason: "no_refresh_token",
+                });
+                if (publicApiRequest) {
+                  return publicApiErrorResponse({
+                    status: 401,
+                    code: "UNAUTHORIZED",
+                    message:
+                      "Authorization required. Please grant permissions.",
+                  });
                 }
 
-                // Otherwise, continue with the enhanced request
-                enhancedReq = middlewareResult;
+                return NextResponse.json(
+                  {
+                    error: "Authorization required. Please grant permissions.",
+                    errorCode: NO_REFRESH_TOKEN_ERROR_CODE,
+                    isKnownError: true,
+                  },
+                  { status: 401 },
+                );
               }
-              requestForError = enhancedReq;
 
-              // Execute the handler with the (potentially) enhanced request
-              const response = await handler(enhancedReq as T, context);
+              if (
+                error.message.includes("Microsoft authorization has expired")
+              ) {
+                getLogger(requestForError).warn("Returning 401", {
+                  reason: "microsoft_authorization_expired",
+                });
+                if (publicApiRequest) {
+                  return publicApiErrorResponse({
+                    status: 401,
+                    code: "UNAUTHORIZED",
+                    message:
+                      error.safeMessage ||
+                      "Microsoft authorization has expired. Please reconnect.",
+                  });
+                }
 
-              flushLogger(enhancedReq);
+                return NextResponse.json(
+                  {
+                    error: error.safeMessage,
+                    errorCode: MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
+                    isKnownError: true,
+                  },
+                  { status: 401 },
+                );
+              }
+            }
 
-              return response;
-            },
-          );
-        } catch (error) {
-          flushLogger(requestForError);
+            const reqLogger = getLogger(requestForError);
 
-          // redirects work by throwing an error. allow these
-          if (isRedirectError(error)) throw error;
+            if (error instanceof ZodError) {
+              if (!env.DISABLE_LOG_ZOD_ERRORS) {
+                reqLogger.error("Zod validation error", { error });
+              }
+              if (publicApiRequest) {
+                return publicApiErrorFromUnknown(error);
+              }
+              return NextResponse.json(
+                { error: { issues: error.issues }, isKnownError: true },
+                { status: 400 },
+              );
+            }
 
-          const requestPath = getRequestPath(requestForError);
-          const publicApiRequest = isPublicApiPath(
-            new URL(requestForError.url).pathname,
-          );
+            const deferred = getGmailCallDeferredError(error);
+            if (deferred) {
+              reqLogger.info(
+                "Gmail call deferred by the account's quota budget",
+                {
+                  priority: deferred.priority,
+                  retryAfterMs: deferred.retryAfterMs,
+                },
+              );
+              return NextResponse.json(
+                {
+                  error: "Gmail is busy for this account. Try again shortly.",
+                  isKnownError: true,
+                },
+                {
+                  status: 503,
+                  headers: {
+                    "Retry-After": String(
+                      Math.ceil(deferred.retryAfterMs / 1000),
+                    ),
+                  },
+                },
+              );
+            }
 
-          if (error instanceof SafeError) {
-            if (error.message === "No refresh token") {
+            const apiError =
+              checkCommonErrors(error, requestPath, reqLogger) ??
+              providerRateLimitApiError(error, requestForError);
+            if (apiError) {
+              await recordRateLimitFromApiError({
+                apiErrorType: apiError.type,
+                error,
+                emailAccountId: getEmailAccountId(requestForError),
+                logger: reqLogger,
+                source: scope || new URL(requestForError.url).pathname,
+              });
+              const retryAfterSeconds = getProviderRateLimitRetryAfterSeconds(
+                error,
+                apiError.type,
+              );
+
+              await logErrorToPosthog(
+                "api",
+                requestPath,
+                apiError.type,
+                "unknown",
+                reqLogger,
+              ); // TODO: add emailAccountId
+
               if (publicApiRequest) {
                 return publicApiErrorResponse({
-                  status: 401,
-                  code: "UNAUTHORIZED",
-                  message: "Authorization required. Please grant permissions.",
+                  status: apiError.code,
+                  message: apiError.message || "Request failed",
                 });
               }
 
               return NextResponse.json(
+                { error: apiError.message, isKnownError: true },
                 {
-                  error: "Authorization required. Please grant permissions.",
-                  errorCode: NO_REFRESH_TOKEN_ERROR_CODE,
-                  isKnownError: true,
+                  status: apiError.code,
+                  headers: retryAfterSeconds
+                    ? { "Retry-After": String(retryAfterSeconds) }
+                    : undefined,
                 },
-                { status: 401 },
               );
             }
 
-            if (error.message.includes("Microsoft authorization has expired")) {
+            if (isErrorWithConfigAndHeaders(error)) {
+              error.config.headers = undefined;
+            }
+
+            if (error instanceof SafeError) {
               if (publicApiRequest) {
-                return publicApiErrorResponse({
-                  status: 401,
-                  code: "UNAUTHORIZED",
-                  message:
-                    error.safeMessage ||
-                    "Microsoft authorization has expired. Please reconnect.",
-                });
+                return publicApiErrorFromUnknown(error);
               }
 
               return NextResponse.json(
-                {
-                  error: error.safeMessage,
-                  errorCode: MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
-                  isKnownError: true,
-                },
-                { status: 401 },
+                { error: error.safeMessage, isKnownError: true },
+                { status: getSafeErrorStatusCode(error.statusCode) },
               );
             }
-          }
 
-          const reqLogger = getLogger(requestForError);
-
-          if (error instanceof ZodError) {
-            if (!env.DISABLE_LOG_ZOD_ERRORS) {
-              reqLogger.error("Zod validation error", { error });
+            // Quick fix: log full error in development. TODO: handle properly
+            if (env.NODE_ENV === "development") {
+              // biome-ignore lint/suspicious/noConsole: helpful for debugging
+              console.error(error);
             }
-            if (publicApiRequest) {
-              return publicApiErrorFromUnknown(error);
-            }
-            return NextResponse.json(
-              { error: { issues: error.issues }, isKnownError: true },
-              { status: 400 },
-            );
-          }
 
-          const deferred = getGmailCallDeferredError(error);
-          if (deferred) {
-            reqLogger.info(
-              "Gmail call deferred by the account's quota budget",
-              {
-                priority: deferred.priority,
-                retryAfterMs: deferred.retryAfterMs,
-              },
-            );
-            return NextResponse.json(
-              {
-                error: "Gmail is busy for this account. Try again shortly.",
-                isKnownError: true,
-              },
-              {
-                status: 503,
-                headers: {
-                  "Retry-After": String(
-                    Math.ceil(deferred.retryAfterMs / 1000),
-                  ),
-                },
-              },
-            );
-          }
-
-          const apiError =
-            checkCommonErrors(error, requestPath, reqLogger) ??
-            providerRateLimitApiError(error, requestForError);
-          if (apiError) {
-            await recordRateLimitFromApiError({
-              apiErrorType: apiError.type,
-              error,
-              emailAccountId: getEmailAccountId(requestForError),
-              logger: reqLogger,
-              source: scope || new URL(requestForError.url).pathname,
+            reqLogger.error("Unhandled error", {
+              error: error instanceof Error ? error.message : error,
+              cause:
+                error instanceof Error && error.cause
+                  ? error.cause instanceof Error
+                    ? error.cause.message
+                    : error.cause
+                  : undefined,
+              stack: error instanceof Error ? error.stack : undefined,
             });
-            const retryAfterSeconds = getProviderRateLimitRetryAfterSeconds(
-              error,
-              apiError.type,
-            );
-
-            await logErrorToPosthog(
-              "api",
-              requestPath,
-              apiError.type,
-              "unknown",
-              reqLogger,
-            ); // TODO: add emailAccountId
+            captureException(error, {
+              extra: { url: requestPath },
+            });
 
             if (publicApiRequest) {
               return publicApiErrorResponse({
-                status: apiError.code,
-                message: apiError.message || "Request failed",
+                status: 500,
+                code: "INTERNAL_ERROR",
+                message: "An unexpected error occurred",
               });
             }
 
             return NextResponse.json(
-              { error: apiError.message, isKnownError: true },
-              {
-                status: apiError.code,
-                headers: retryAfterSeconds
-                  ? { "Retry-After": String(retryAfterSeconds) }
-                  : undefined,
-              },
+              { error: "An unexpected error occurred" },
+              { status: 500 },
             );
+          } finally {
+            requestTimer?.logSlowCompletion();
+            requestTimer?.stop();
           }
-
-          if (isErrorWithConfigAndHeaders(error)) {
-            error.config.headers = undefined;
-          }
-
-          if (error instanceof SafeError) {
-            if (publicApiRequest) {
-              return publicApiErrorFromUnknown(error);
-            }
-
-            return NextResponse.json(
-              { error: error.safeMessage, isKnownError: true },
-              { status: getSafeErrorStatusCode(error.statusCode) },
-            );
-          }
-
-          // Quick fix: log full error in development. TODO: handle properly
-          if (env.NODE_ENV === "development") {
-            // biome-ignore lint/suspicious/noConsole: helpful for debugging
-            console.error(error);
-          }
-
-          reqLogger.error("Unhandled error", {
-            error: error instanceof Error ? error.message : error,
-            cause:
-              error instanceof Error && error.cause
-                ? error.cause instanceof Error
-                  ? error.cause.message
-                  : error.cause
-                : undefined,
-            stack: error instanceof Error ? error.stack : undefined,
+        },
+      ).then(
+        (response) => {
+          logRequestCompleted(getLogger(requestForError), samplingId, scope, {
+            method: req.method,
+            status: response.status,
+            durationMs: Date.now() - startedAt,
+            ...getRequestMetricsFields(requestMetrics),
           });
-          captureException(error, {
-            extra: { url: requestPath },
+          return response;
+        },
+        (error: unknown) => {
+          logRequestCompleted(getLogger(requestForError), samplingId, scope, {
+            method: req.method,
+            // Only a redirect is rethrown on purpose; Next answers anything else
+            // with a 500.
+            status: isRedirectError(error) ? getRedirectStatus(error) : 500,
+            durationMs: Date.now() - startedAt,
+            ...getRequestMetricsFields(requestMetrics),
           });
-
-          if (publicApiRequest) {
-            return publicApiErrorResponse({
-              status: 500,
-              code: "INTERNAL_ERROR",
-              message: "An unexpected error occurred",
-            });
-          }
-
-          return NextResponse.json(
-            { error: "An unexpected error occurred" },
-            { status: 500 },
-          );
-        } finally {
-          requestTimer?.logSlowCompletion();
-          requestTimer?.stop();
-        }
-      },
-    ).then(
-      (response) => {
-        logRequestCompleted(getLogger(requestForError), samplingId, scope, {
-          method: req.method,
-          status: response.status,
-          durationMs: Date.now() - startedAt,
-        });
-        return response;
-      },
-      (error: unknown) => {
-        logRequestCompleted(getLogger(requestForError), samplingId, scope, {
-          method: req.method,
-          // Only a redirect is rethrown on purpose; Next answers anything else
-          // with a 500.
-          status: isRedirectError(error) ? getRedirectStatus(error) : 500,
-          durationMs: Date.now() - startedAt,
-        });
-        throw error;
-      },
+          throw error;
+        },
+      ),
     );
   };
 }
@@ -415,7 +435,7 @@ async function authMiddleware(
 
   let session: Awaited<ReturnType<typeof auth>>;
   try {
-    session = await auth(req.headers);
+    session = await timeRequestDependency("auth", () => auth(req.headers));
   } catch (error) {
     baseLogger.warn("Auth middleware failed", {
       ...authLogContext,
@@ -430,10 +450,11 @@ async function authMiddleware(
   if (!session?.user) {
     baseLogger.warn("Auth middleware returning 401", {
       ...authLogContext,
-      reason:
-        session === null || session === undefined
-          ? "no_session"
-          : "session_without_user",
+      reason: getUnauthorizedReason({
+        session,
+        cookieNames: authLogContext.cookieNames,
+        hasAuthorization: authLogContext.hasAuthorization,
+      }),
     });
 
     return NextResponse.json(
@@ -456,6 +477,27 @@ async function authMiddleware(
   setAuditContext({ actorType: "user", userId: session.user.id });
 
   return authReq;
+}
+
+// Why a request carried no usable session, from what the request itself
+// shows. A session cookie that no longer resolves is an expired, revoked or
+// deleted session: the auth library does not say which.
+export function getUnauthorizedReason({
+  session,
+  cookieNames,
+  hasAuthorization,
+}: {
+  session: unknown;
+  cookieNames: string[];
+  hasAuthorization: boolean;
+}) {
+  if (session && typeof session === "object") return "session_without_user";
+  if (hasAuthorization && cookieNames.length === 0)
+    return "bearer_token_rejected";
+  if (cookieNames.length === 0) return "no_cookies";
+  if (!cookieNames.some((name) => name.includes("session_token")))
+    return "no_session_cookie";
+  return "session_cookie_unresolved";
 }
 
 function parseCookieNames(cookieHeader: string | null): string[] {
@@ -909,7 +951,11 @@ function logRequestCompleted(
   logger: Logger,
   samplingId: string,
   scope: string | undefined,
-  fields: { method: string; status: number; durationMs: number },
+  fields: {
+    method: string;
+    status: number;
+    durationMs: number;
+  } & ReturnType<typeof getRequestMetricsFields>,
 ) {
   const sampleRate = getFastRequestSampleRate(scope);
   if (fields.durationMs >= SLOW_REQUEST_MS || fields.status >= 500) {

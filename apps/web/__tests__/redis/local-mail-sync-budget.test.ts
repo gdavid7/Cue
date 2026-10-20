@@ -73,7 +73,10 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       const denied = vi.fn();
       await expect(
         withLocalMailSyncBudget(input, denied),
-      ).rejects.toBeInstanceOf(LocalMailSyncPausedError);
+      ).rejects.toMatchObject({
+        name: "LocalMailSyncPausedError",
+        reason: expect.stringMatching(/_budget$/),
+      });
       expect(denied).not.toHaveBeenCalled();
       expect(
         await command(

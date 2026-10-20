@@ -658,15 +658,28 @@ export function createEmailProviderMailboxSource(input: {
     { recordRateLimit = true }: { recordRateLimit?: boolean } = {},
   ) {
     if (error instanceof LocalMailSyncPausedError) {
+      logger.info("Mail sync paused", {
+        source: "local_budget",
+        reason: error.reason,
+        retryAfterMs: error.retryAfterMs,
+      });
       return throttled(error.retryAfterMs);
     }
+    // The quota gate logs its own deferrals with the reason, in "Gmail call
+    // deferred".
     const deferred = getGmailCallDeferredError(error);
     if (deferred) return throttled(deferred.retryAfterMs);
     if (isProviderRateLimitModeError(error)) {
       const retryAtMs = error.retryAt ? Date.parse(error.retryAt) : Number.NaN;
-      return throttled(
-        Number.isNaN(retryAtMs) ? 15_000 : retryAtMs - Date.now(),
-      );
+      const retryAfterMs = Number.isNaN(retryAtMs)
+        ? 15_000
+        : retryAtMs - Date.now();
+      logger.info("Mail sync paused", {
+        source: "provider_rate_limit_mode",
+        reason: "rate_limit_mode",
+        retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
+      });
+      return throttled(retryAfterMs);
     }
     const rateLimitProvider = isGmail ? "google" : "microsoft";
     const providerError = normalizeThrottleHeaders(error);
@@ -692,7 +705,18 @@ export function createEmailProviderMailboxSource(input: {
         });
       }
     }
-    if (rateLimitDelayMs !== null) return throttled(rateLimitDelayMs);
+    if (rateLimitDelayMs !== null) {
+      const providerStatus =
+        extractGmailErrorInfo(error).status ??
+        extractOutlookErrorInfo(error).status;
+      logger.info("Mail sync paused", {
+        source: "provider_rate_limit",
+        reason: "provider_throttled",
+        retryAfterMs: Math.max(1000, Math.ceil(rateLimitDelayMs)),
+        providerStatus,
+      });
+      return throttled(rateLimitDelayMs);
+    }
     const message = error instanceof Error ? error.message : "";
     const lowered = message.toLowerCase();
     if (
@@ -706,6 +730,15 @@ export function createEmailProviderMailboxSource(input: {
     ) {
       return { status: "blocked_auth" as const };
     }
+    logger.info("Mail sync paused", {
+      source: "provider_error",
+      reason: "unavailable",
+      retryAfterMs: 1000,
+      errorName: error instanceof Error ? error.name : typeof error,
+      providerStatus:
+        extractGmailErrorInfo(error).status ??
+        extractOutlookErrorInfo(error).status,
+    });
     return {
       status: "paused" as const,
       retryAfterMs: 1000,

@@ -91,6 +91,8 @@ export type GmailQuotaStore = {
     queued: number;
     ahead: number;
     reservation: string | null;
+    /** Why a wait was given; absent when admitted. */
+    held?: GmailQuotaHold;
   }>;
   /**
    * Lowers the budget in `key` to `fraction` of the units admitted within
@@ -137,6 +139,17 @@ export type GmailQuotaStore = {
     input: { usageKey: string; claimKey: string }[],
     notes?: GmailQuotaNote[],
   ): Promise<(Record<string, number> | null)[]>;
+};
+
+export type GmailQuotaHold = {
+  /** The gate that set the longest wait. */
+  gate: "blocker" | "bucket" | "pace" | "interactive_demand";
+  /** 1-based index into the request's `blockers` when `gate` is "blocker". */
+  blocker: number;
+  availableUnits: number;
+  neededUnits: number;
+  /** Units already admitted in the current pace window. */
+  paceUnits: number;
 };
 
 export type GmailQuotaNote = {
@@ -219,6 +232,9 @@ redis.call('PEXPIRE', KEYS[7], 86400000)
 local rate = perMinute / 60000
 local wait = 0
 local defer = 0
+-- Which gate set the longest wait, for diagnosing why a call was held.
+local reason = ''
+local blocker = 0
 for i = 9, #KEYS do
   local ttl = redis.call('PTTL', KEYS[i])
   local deferMs = tonumber(ARGV[i + 15])
@@ -226,15 +242,24 @@ for i = 9, #KEYS do
     ttl = deferMs
     defer = 1
   end
-  if ttl > wait then wait = ttl end
+  if ttl > wait then
+    wait = ttl
+    reason = 'blocker'
+    blocker = i - 8
+  end
 end
 local stored = redis.call('HMGET', KEYS[1], 'tokens', 'at')
 local tokens = tonumber(stored[1]) or capacity
 local at = tonumber(stored[2]) or now
 tokens = math.min(capacity, tokens + math.max(0, now - at) * rate)
 local need = floor + math.min(cost, capacity - floor)
+local bucketWait = 0
 if tokens < need then
-  wait = math.max(wait, math.ceil((need - tokens) / rate))
+  bucketWait = math.ceil((need - tokens) / rate)
+  if bucketWait > wait then
+    wait = bucketWait
+    reason = 'bucket'
+  end
 end
 -- The pace is what others yielding frees; nothing frees the rest sooner.
 local unpacedWait = wait
@@ -269,6 +294,9 @@ if yieldCap >= 0 and demandTtl > 0 then
   else
     paceWait = yieldWait
   end
+  if paceWait > wait then reason = 'interactive_demand' end
+elseif paceWait > wait then
+  reason = 'pace'
 end
 wait = math.max(wait, paceWait)
 -- Marked on arrival, so others yield while this request waits for room,
@@ -276,7 +304,7 @@ wait = math.max(wait, paceWait)
 if demandMs > 0 and (waitBudget < 0 or unpacedWait <= waitBudget) then
   redis.call('SET', KEYS[5], tostring(now + demandMs), 'PX', demandEvery, 'NX')
 end
-if wait > 0 then return {wait, defer, 0, 0, ''} end
+if wait > 0 then return {wait, defer, 0, 0, '', reason, blocker, math.floor(tokens), need, inWindow} end
 -- What this second may still carry, at the cap this caller's priority has now.
 local grantCap = paceCap
 if yieldCap >= 0 and demandTtl > 0 then grantCap = math.min(paceCap, yieldCap) end
@@ -468,6 +496,13 @@ export const gmailQuotaStore: GmailQuotaStore = {
       queued: 0,
       ahead: 0,
       reservation: null,
+      held: {
+        gate: String(result?.[5] ?? "") as GmailQuotaHold["gate"],
+        blocker: Number(result?.[6]) || 0,
+        availableUnits: Number(result?.[7]) || 0,
+        neededUnits: Number(result?.[8]) || 0,
+        paceUnits: Number(result?.[9]) || 0,
+      },
     };
   },
   async cutBudget(input) {

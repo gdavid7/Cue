@@ -4,6 +4,7 @@ import { permanentRedirect, redirect } from "next/navigation";
 import { ZodError, type ZodIssue } from "zod";
 import {
   getFastRequestSampleRate,
+  getUnauthorizedReason,
   isFastRequestSampled,
   withError,
   withAuth,
@@ -1026,3 +1027,26 @@ function createEmailAccountHandler() {
     ): Promise<NextResponse> => NextResponse.json({}),
   );
 }
+
+describe("getUnauthorizedReason", () => {
+  const base = { session: null, cookieNames: [], hasAuthorization: false };
+
+  it("tells apart the ways a request ends up without a session", () => {
+    expect(getUnauthorizedReason(base)).toBe("no_cookies");
+    expect(getUnauthorizedReason({ ...base, hasAuthorization: true })).toBe(
+      "bearer_token_rejected",
+    );
+    expect(
+      getUnauthorizedReason({ ...base, cookieNames: ["theme", "ph_session"] }),
+    ).toBe("no_session_cookie");
+    expect(
+      getUnauthorizedReason({
+        ...base,
+        cookieNames: ["__Secure-better-auth.session_token"],
+      }),
+    ).toBe("session_cookie_unresolved");
+    expect(getUnauthorizedReason({ ...base, session: {} })).toBe(
+      "session_without_user",
+    );
+  });
+});
