@@ -4,7 +4,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
+import {
+  MAILBOX_FIRST_RENDER_ROWS,
+  MailboxThreadList,
+} from "@inboxzero/mail-ui/MailboxSurface";
 import { MailThreadRow } from "@inboxzero/mail-ui/MailThreadRow";
 import { ThreadList } from "./ThreadList";
 import type { ListThread } from "./types";
@@ -27,6 +30,26 @@ type Item = { id: string; day: string };
 
 describe("mailbox thread list", () => {
   afterEach(cleanup);
+
+  // Building a whole page of rows in one task held the first paint of the
+  // inbox for over a second on a phone.
+  it("commits a screen of rows first and the rest of a long list after", () => {
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const passes: number[][] = [];
+    render(
+      list(items, (index) => {
+        if (index === 0) passes.push([]);
+        passes.at(-1)?.push(index);
+      }),
+    );
+
+    expect(passes[0]).toHaveLength(MAILBOX_FIRST_RENDER_ROWS);
+    expect(passes.at(-1)).toHaveLength(50);
+    expect(screen.getAllByText(/^t\d+$/)).toHaveLength(50);
+  });
 
   // Archiving a conversation must only remove its row. Remounting every
   // later day's rows made each archive re-create most of the list.
@@ -255,7 +278,7 @@ function threadAt(id: string, receivedAtMs: number) {
   } as unknown as ListThread;
 }
 
-function list(items: Item[]) {
+function list(items: Item[], onRenderRow?: (index: number) => void) {
   return (
     <MailboxThreadList<Item>
       focusedIndex={0}
@@ -269,11 +292,14 @@ function list(items: Item[]) {
       onOpen={vi.fn()}
       onSelectRangeTo={vi.fn()}
       onToggleSelect={vi.fn()}
-      renderItem={(row) => (
-        <div data-testid={row.item.id} key={row.rowKey}>
-          {row.item.id}
-        </div>
-      )}
+      renderItem={(row) => {
+        onRenderRow?.(row.index);
+        return (
+          <div data-testid={row.item.id} key={row.rowKey}>
+            {row.item.id}
+          </div>
+        );
+      }}
       selectedCount={0}
       showLoadMore={false}
     />

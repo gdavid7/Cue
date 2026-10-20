@@ -1,4 +1,5 @@
 import {
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,6 +13,12 @@ import {
 export const MAILBOX_PREFETCH_REMAINING = 8;
 export const MAILBOX_SCROLL_PADDING_PX = 8;
 export const MAILBOX_LOAD_MORE_ROOT_MARGIN = "400px 0px";
+/**
+ * Rows a list's first render commits, about a tall screen of them. Building
+ * a whole page of rows in one task held the first paint for over a second on
+ * a phone; the rest follow in a background render the browser can interrupt.
+ */
+export const MAILBOX_FIRST_RENDER_ROWS = 16;
 
 export type MailboxThreadListRenderInput<T> = {
   item: T;
@@ -99,16 +106,26 @@ export function MailboxThreadList<T>({
   const onLoadMoreRef = useRef(onLoadMore);
   onLoadMoreRef.current = onLoadMore;
 
+  const firstRenderCount = Math.min(items.length, MAILBOX_FIRST_RENDER_ROWS);
+  const renderedCount = Math.max(
+    useDeferredValue(items.length, firstRenderCount),
+    firstRenderCount,
+  );
+  const allRendered = renderedCount >= items.length;
+  const renderedItems = allRendered ? items : items.slice(0, renderedCount);
   const focusedKey = items[focusedIndex]
     ? getKey(items[focusedIndex])
     : undefined;
+  const focusedRendered = focusedIndex < renderedCount;
   const groups = useMemo(
-    () => groupItemsByLabel(items, getGroupLabel),
-    [items, getGroupLabel],
+    () => groupItemsByLabel(renderedItems, getGroupLabel),
+    [renderedItems, getGroupLabel],
   );
 
   useLayoutEffect(() => {
-    if (!scrollRoot || focusedIndex < 0 || !focusedKey) return;
+    if (!scrollRoot || focusedIndex < 0 || !focusedKey || !focusedRendered) {
+      return;
+    }
     const row = focusedRowRef.current;
     if (!row) return;
     scrollElementIntoContainer(scrollRoot, row);
@@ -123,7 +140,7 @@ export function MailboxThreadList<T>({
     if (active !== row && (scrollRoot.contains(active) || lostFromList)) {
       row.focus({ preventScroll: true });
     }
-  }, [focusedIndex, focusedKey, scrollRoot]);
+  }, [focusedIndex, focusedKey, focusedRendered, scrollRoot]);
 
   useEffect(() => {
     if (!scrollRoot) return;
@@ -171,7 +188,11 @@ export function MailboxThreadList<T>({
   }, [focusedIndex, isLoadingMore, listKey, showLoadMore, items.length]);
 
   useEffect(() => {
-    if (!showLoadMore || !scrollRoot || items.length === 0) return;
+    // Until every row is in, the sentinel sits mid-list and would ask for
+    // the next page early.
+    if (!showLoadMore || !scrollRoot || items.length === 0 || !allRendered) {
+      return;
+    }
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
 
@@ -185,7 +206,7 @@ export function MailboxThreadList<T>({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [scrollRoot, showLoadMore, items.length]);
+  }, [scrollRoot, showLoadMore, items.length, allRendered]);
 
   return (
     <div className={className} style={style}>
@@ -236,7 +257,7 @@ export function MailboxThreadList<T>({
               ))}
             </div>
 
-            {showLoadMore ? (
+            {showLoadMore && allRendered ? (
               <div
                 className={loadMoreClassName}
                 ref={sentinelRef}
