@@ -757,6 +757,7 @@ function ComposeEmailFormContent({
         ? {
             reply: suggestion.reply,
             executedActionId: suggestion.executedActionId,
+            decoded: true,
             files: suggestion.files?.length ? suggestion.files : undefined,
             values: {
               to: replyingToEmail?.to ?? "",

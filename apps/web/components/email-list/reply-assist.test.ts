@@ -194,6 +194,22 @@ describe("draftHtmlToReplyText", () => {
     ).toBe("Hi there");
   });
 
+  it("shows nothing of conditional comments, a doctype or an unclosed style", () => {
+    expect(
+      draftHtmlToReplyText(
+        "<!DOCTYPE html><![if !mso]><div>Hi</div><![endif]> there<style>p { color: red }",
+      ),
+    ).toBe("Hi\nthere");
+  });
+
+  it("keeps a preformatted block's spacing and lists' lines", () => {
+    expect(
+      draftHtmlToReplyText(
+        "Steps:<ul><li>One</li><li>Two</li></ul><pre>a  b\n  c</pre>Done   now",
+      ),
+    ).toBe("Steps:\nOne\nTwo\na  b\n  c\nDone now");
+  });
+
   it("reads a table's cells apart and a quoted > as part of its tag", () => {
     expect(
       draftHtmlToReplyText(
@@ -268,6 +284,53 @@ describe("withSuggestionEscapesRepaired", () => {
     );
   });
 
+  it("opens one whose stored reply had only markup without its tags", () => {
+    const reply = `Yes.\n\n<div dir="ltr">Sam<br>Acme</div>`;
+    const repaired = withSuggestionEscapesRepaired({
+      content: {
+        draft: { editableHtml: textToHtmlParagraphs(reply) },
+        startedFrom: { reply, executedActionId: "action-1" },
+      },
+    });
+
+    expect(repaired.content.draft.editableHtml).toBe(
+      "<p>Yes.</p><p>Sam<br />Acme</p>",
+    );
+    expect(repaired.content.startedFrom).toMatchObject({
+      reply: "Yes.\n\nSam\nAcme",
+      decoded: true,
+    });
+  });
+
+  it("only undoes the second escape once the opening was edited", () => {
+    const repaired = withSuggestionEscapesRepaired(
+      stored(`<p>Hi,</p>${textToHtmlParagraphs(OLD_REPLY)}`),
+    );
+
+    expect(
+      new DOMParser().parseFromString(
+        repaired.content.draft.editableHtml,
+        "text/html",
+      ).body.textContent,
+    ).toBe(`Hi,I'm sure "Q3" & <Q4> work.`);
+  });
+
+  // The model wrote "&amp;" itself, so the stored reply escaped it twice.
+  it("repairs a reply escaped twice over only once", () => {
+    const reply = renderEmailTextWithSafeLinks("Type &amp; for &.", {
+      allowHiddenLinks: false,
+    });
+    const once = withSuggestionEscapesRepaired({
+      content: {
+        draft: { editableHtml: textToHtmlParagraphs(reply) },
+        startedFrom: { reply, executedActionId: "action-1" },
+      },
+    });
+
+    expect(once.content.startedFrom.reply).toBe("Type &amp; for &.");
+    expect(withSuggestionEscapesRepaired(once)).toBe(once);
+  });
+
   it("repairs a draft once", () => {
     const once = withSuggestionEscapesRepaired(
       stored(textToHtmlParagraphs(OLD_REPLY)),
@@ -285,11 +348,16 @@ describe("withSuggestionEscapesRepaired", () => {
       revision: 1,
       content: {
         draft: { editableHtml },
-        startedFrom: { reply, executedActionId: "action-1" },
+        startedFrom: { reply, executedActionId: "action-1", decoded: true },
       },
     });
     const current = opened("I'm & you");
     const withTags = opened("Use <b> please");
+    const literalEntity = opened("Write R&amp;D, not R&D.");
+    const typedBreak = opened(
+      "Yes.",
+      "<p>Yes.</p><p>Use &lt;br&gt;<br>here</p>",
+    );
     const typedEntity = opened(
       "Yes.",
       `${textToHtmlParagraphs("Yes.")}<p>Type &amp;amp; for &amp;</p>`,
@@ -299,7 +367,14 @@ describe("withSuggestionEscapesRepaired", () => {
       content: { draft: { editableHtml: "<p>&amp;amp; is how</p>" } },
     };
 
-    for (const draft of [current, withTags, typedEntity, own]) {
+    for (const draft of [
+      current,
+      withTags,
+      literalEntity,
+      typedBreak,
+      typedEntity,
+      own,
+    ]) {
       expect(withSuggestionEscapesRepaired(draft)).toBe(draft);
     }
   });

@@ -1,4 +1,3 @@
-import he from "he";
 import { createContext, type ReactNode } from "react";
 import { textToHtmlParagraphs } from "@/utils/string";
 
@@ -36,87 +35,96 @@ export const ReplyAssistContext = createContext<ReplyAssist | null>(null);
 /**
  * A rule's reply as the plain text `ReplyAssist.reply` holds. The rule stores
  * the HTML body the mailbox would get: its text escaped, newlines kept, links
- * as anchors. The composer escapes the text again itself, so this decodes it
- * exactly once and never keeps markup.
+ * as anchors. The composer escapes the text again itself, so this reads the
+ * text the HTML shows, decoded exactly once, and never keeps markup. The
+ * document is inert: nothing in it runs or loads.
  */
 export function draftHtmlToReplyText(html: string) {
+  if (typeof DOMParser === "undefined") return "";
+  const doc = new DOMParser().parseFromString(html, "text/html");
   let text = "";
-  let link: { href: string; label: string } | undefined;
-  let skipUntil: string | undefined;
-  const append = (part: string) => {
-    if (link) link.label += part;
-    else text += part;
+  const breakLine = () => {
+    text = text.replace(/[ \t]+$/, "");
+    if (text && !text.endsWith("\n")) text += "\n";
   };
-  for (const [index, part] of html.split(HTML_TOKEN).entries()) {
-    if (index % 2 === 0) {
-      if (!skipUntil) append(he.decode(part));
-      continue;
+  const walk = (node: Node, inPre: boolean) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const data = node.textContent ?? "";
+      // The stored body keeps the reply's line breaks as newlines.
+      if (inPre) {
+        text += data;
+        return;
+      }
+      const collapsed = data
+        .replace(/[ \t\f\r]+/g, " ")
+        .replace(/ ?\n ?/g, "\n");
+      text += !text || text.endsWith("\n") ? collapsed.trimStart() : collapsed;
+      return;
     }
-    const tag = /^<(\/?)([a-z][a-z0-9]*)/i.exec(part);
-    if (!tag) continue;
-    const [, closing, name] = tag;
-    const element = name.toLowerCase();
-    if (skipUntil) {
-      if (closing && element === skipUntil) skipUntil = undefined;
-      continue;
+    if (!(node instanceof Element)) return;
+    const element = node.localName;
+    if (UNSHOWN_ELEMENTS.has(element)) return;
+    if (element === "br") {
+      text += "\n";
+      return;
     }
-    if (UNSHOWN_ELEMENTS.has(element) && !closing) skipUntil = element;
-    else if (element === "br") append("\n");
-    else if (element === "a" && !closing) {
-      const href = /\shref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(part);
-      link = {
-        href: he.decode(href?.[1] ?? href?.[2] ?? "", {
-          isAttributeValue: true,
-        }),
-        label: "",
-      };
-    } else if (element === "a" && link) {
-      text += linkText(link);
-      link = undefined;
-    } else if (CELL_ELEMENTS.has(element) && closing && !/\s$/.test(text)) {
-      text += " ";
-    } else if (BLOCK_ELEMENTS.has(element) && text && !text.endsWith("\n")) {
-      text = `${text.replace(/[ \t]+$/, "")}\n`;
+    if (element === "a") {
+      text += linkText({
+        href: node.getAttribute("href")?.trim() ?? "",
+        label: (node.textContent ?? "").replace(/\s+/g, " "),
+      });
+      return;
     }
-  }
-  if (link) text += linkText(link);
-  return text.trim();
+    const block = BLOCK_ELEMENTS.has(element);
+    if (block) breakLine();
+    for (const child of node.childNodes)
+      walk(child, inPre || element === "pre");
+    if (block) breakLine();
+    else if (CELL_ELEMENTS.has(element) && !/\s$/.test(text)) text += " ";
+  };
+  walk(doc.body, false);
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /**
- * A local draft opened from a rule's reply before the reply was decoded
- * (DR-6) shows and sends the stored HTML as text: "&#x27;" for "'", and any
- * markup as tags. One still untouched opens again from the decoded reply;
- * an edited one keeps the user's words with the second escape undone. Only
- * a reply still stored as HTML qualifies, so a repaired draft, or one opened
- * since, is never decoded again.
+ * A local draft opened from a rule's reply before DR-6 shows and sends the
+ * stored HTML as text: "&#x27;" for "'", and any markup as tags. Such a
+ * draft has no `decoded` mark. One still untouched opens again from the
+ * decoded reply; an edited one gets its opening rebuilt when it is still
+ * there, or else only the second escape undone. Then it is marked, so it is
+ * repaired once, and a draft opened since is never touched.
  */
 export function withSuggestionEscapesRepaired<
   T extends {
     content: {
       draft: { editableHtml: string };
-      startedFrom?: { reply: string; executedActionId?: string };
+      startedFrom?: {
+        reply: string;
+        executedActionId?: string;
+        decoded?: true;
+      };
     } | null;
   },
 >(stored: T): T {
   const content = stored.content;
   const html = content?.draft.editableHtml;
   const origin = content?.startedFrom;
-  if (!content || !html || !origin?.executedActionId) return stored;
-  if (!STORED_HTML.test(origin.reply)) return stored;
+  if (!content || !html || !origin?.executedActionId || origin.decoded)
+    return stored;
   const reply = draftHtmlToReplyText(origin.reply);
+  const opening = textToHtmlParagraphs(reply);
+  const oldOpening = textToHtmlParagraphs(origin.reply);
   let editableHtml: string;
-  if (isUneditedSuggestion(html, origin.reply))
-    editableHtml = textToHtmlParagraphs(reply);
-  else if (DOUBLE_ESCAPED.test(html))
-    editableHtml = html.replace(DOUBLE_ESCAPED_ALL, "&$1;");
-  else return stored;
+  if (isUneditedSuggestion(html, origin.reply)) editableHtml = opening;
+  else if (html.startsWith(oldOpening))
+    editableHtml = opening + html.slice(oldOpening.length);
+  else editableHtml = html.replace(DOUBLE_ESCAPED_ALL, "&$1;");
   return {
     ...stored,
     content: {
       ...content,
       draft: { ...content.draft, editableHtml },
-      startedFrom: { ...origin, reply },
+      startedFrom: { ...origin, reply, decoded: true },
     },
   };
 }
@@ -172,15 +180,12 @@ function withoutSpace(text: string) {
   return text.replace(/[\s ]+/g, "");
 }
 
-// What `he.escape` writes, and the same escaped a second time.
-const STORED_HTML = /&(#x27|#x60|quot|amp|lt|gt);/;
-const DOUBLE_ESCAPED = /&amp;(#x27|#x60|quot|amp|lt|gt);/;
-const DOUBLE_ESCAPED_ALL = new RegExp(DOUBLE_ESCAPED.source, "g");
+// What `he.escape` writes, escaped a second time.
+const DOUBLE_ESCAPED_ALL = /&amp;(#x27|#x60|quot|amp|lt|gt);/g;
 
-// A comment, or a tag whose quoted attributes may hold ">".
-const HTML_TOKEN = /(<!--[\s\S]*?-->|<\/?[a-z](?:[^>"']|"[^"]*"|'[^']*')*>)/i;
 const UNSHOWN_ELEMENTS = new Set([
   "head",
+  "noscript",
   "script",
   "style",
   "template",
@@ -191,6 +196,11 @@ const CELL_ELEMENTS = new Set(["td", "th"]);
 const BLOCK_ELEMENTS = new Set([
   "blockquote",
   "div",
+  "hr",
+  "ol",
+  "pre",
+  "table",
+  "ul",
   "h1",
   "h2",
   "h3",
