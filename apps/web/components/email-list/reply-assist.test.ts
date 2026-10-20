@@ -176,12 +176,30 @@ describe("draftHtmlToReplyText", () => {
     );
   });
 
-  it("keeps line breaks and a signature's lines", () => {
+  // The reader gets the body without its signature (DR-6b); a template's own
+  // markup still splits into lines.
+  it("keeps line breaks and block lines", () => {
     expect(
       draftHtmlToReplyText(
-        "Thanks &amp; talk soon\n\n<div>David</div><div>CEO, R&amp;D</div>",
+        "Thanks &amp; talk soon\n\n<div>Agenda</div><div>R&amp;D, then Q&amp;A</div>",
       ),
-    ).toBe("Thanks & talk soon\n\nDavid\nCEO, R&D");
+    ).toBe("Thanks & talk soon\n\nAgenda\nR&D, then Q&A");
+  });
+
+  it("shows none of a template's styles, scripts or comments", () => {
+    expect(
+      draftHtmlToReplyText(
+        "<head><title>T</title></head><style>p > a { color: red }</style><!-- a > b -->Hi<script>if (a > b) x()</script> there",
+      ),
+    ).toBe("Hi there");
+  });
+
+  it("reads a table's cells apart and a quoted > as part of its tag", () => {
+    expect(
+      draftHtmlToReplyText(
+        `<table><tr><td>Mon</td><td title="a > b">10am</td></tr><tr><th>Tue</th><td>2pm</td></tr></table>`,
+      ),
+    ).toBe("Mon 10am\nTue 2pm");
   });
 });
 
@@ -231,20 +249,58 @@ describe("withSuggestionEscapesRepaired", () => {
     ).toBe(`I'm sure "Q3" & <Q4> work.Thanks & bye`);
   });
 
+  it("opens an untouched one from the decoded reply, markup and all", () => {
+    const reply = `Sure &amp; see <a href="https://example.com/doc">the doc</a>.\n\n<div>Sam</div>`;
+    const repaired = withSuggestionEscapesRepaired({
+      content: {
+        draft: { editableHtml: textToHtmlParagraphs(reply) },
+        startedFrom: { reply, executedActionId: "action-1" },
+      },
+    });
+    const html = repaired.content.draft.editableHtml;
+
+    expect(
+      new DOMParser().parseFromString(html, "text/html").body.textContent,
+    ).toBe("Sure & see the doc (https://example.com/doc).Sam");
+    expect(html).not.toContain("&lt;");
+    expect(isUneditedSuggestion(html, repaired.content.startedFrom.reply)).toBe(
+      true,
+    );
+  });
+
+  it("repairs a draft once", () => {
+    const once = withSuggestionEscapesRepaired(
+      stored(textToHtmlParagraphs(OLD_REPLY)),
+    );
+
+    expect(withSuggestionEscapesRepaired(once)).toBe(once);
+  });
+
+  // Opened since DR-6: the reply is plain text, escaped once by the composer.
   it("leaves a draft written since, or the user's own, as it is", () => {
-    const current = {
+    const opened = (
+      reply: string,
+      editableHtml = textToHtmlParagraphs(reply),
+    ) => ({
       revision: 1,
       content: {
-        draft: { editableHtml: textToHtmlParagraphs("I'm & you") },
-        startedFrom: { reply: "I'm & you", executedActionId: "action-1" },
+        draft: { editableHtml },
+        startedFrom: { reply, executedActionId: "action-1" },
       },
-    };
+    });
+    const current = opened("I'm & you");
+    const withTags = opened("Use <b> please");
+    const typedEntity = opened(
+      "Yes.",
+      `${textToHtmlParagraphs("Yes.")}<p>Type &amp;amp; for &amp;</p>`,
+    );
     const own = {
       revision: 1,
       content: { draft: { editableHtml: "<p>&amp;amp; is how</p>" } },
     };
 
-    expect(withSuggestionEscapesRepaired(current)).toBe(current);
-    expect(withSuggestionEscapesRepaired(own)).toBe(own);
+    for (const draft of [current, withTags, typedEntity, own]) {
+      expect(withSuggestionEscapesRepaired(draft)).toBe(draft);
+    }
   });
 });

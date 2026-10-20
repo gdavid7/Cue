@@ -1,5 +1,6 @@
 import he from "he";
 import { createContext, type ReactNode } from "react";
+import { textToHtmlParagraphs } from "@/utils/string";
 
 /**
  * Cue's verified reply to one message, for that reply's composer: the text
@@ -35,37 +36,47 @@ export const ReplyAssistContext = createContext<ReplyAssist | null>(null);
 /**
  * A rule's reply as the plain text `ReplyAssist.reply` holds. The rule stores
  * the HTML body the mailbox would get: its text escaped, newlines kept, links
- * as anchors, maybe the signature's markup. The composer escapes the text
- * again itself, so this decodes it exactly once and never keeps markup.
+ * as anchors. The composer escapes the text again itself, so this decodes it
+ * exactly once and never keeps markup.
  */
 export function draftHtmlToReplyText(html: string) {
   let text = "";
   let link: { href: string; label: string } | undefined;
+  let skipUntil: string | undefined;
   const append = (part: string) => {
     if (link) link.label += part;
     else text += part;
   };
-  for (const [index, part] of html.split(/(<[^>]*>)/).entries()) {
+  for (const [index, part] of html.split(HTML_TOKEN).entries()) {
     if (index % 2 === 0) {
-      append(he.decode(part));
+      if (!skipUntil) append(he.decode(part));
       continue;
     }
-    const tag = /^<\s*(\/?)\s*([a-z][a-z0-9]*)/i.exec(part);
+    const tag = /^<(\/?)([a-z][a-z0-9]*)/i.exec(part);
     if (!tag) continue;
     const [, closing, name] = tag;
     const element = name.toLowerCase();
-    if (element === "br") append("\n");
+    if (skipUntil) {
+      if (closing && element === skipUntil) skipUntil = undefined;
+      continue;
+    }
+    if (UNSHOWN_ELEMENTS.has(element) && !closing) skipUntil = element;
+    else if (element === "br") append("\n");
     else if (element === "a" && !closing) {
-      const href = /\bhref\s*=\s*"([^"]*)"/i.exec(part)?.[1];
+      const href = /\shref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(part);
       link = {
-        href: he.decode(href ?? "", { isAttributeValue: true }),
+        href: he.decode(href?.[1] ?? href?.[2] ?? "", {
+          isAttributeValue: true,
+        }),
         label: "",
       };
     } else if (element === "a" && link) {
       text += linkText(link);
       link = undefined;
+    } else if (CELL_ELEMENTS.has(element) && closing && !/\s$/.test(text)) {
+      text += " ";
     } else if (BLOCK_ELEMENTS.has(element) && text && !text.endsWith("\n")) {
-      text += "\n";
+      text = `${text.replace(/[ \t]+$/, "")}\n`;
     }
   }
   if (link) text += linkText(link);
@@ -74,9 +85,11 @@ export function draftHtmlToReplyText(html: string) {
 
 /**
  * A local draft opened from a rule's reply before the reply was decoded
- * (DR-6) holds its punctuation escaped twice, so it shows and sends "&#x27;"
- * for "'". Undoes the second escape, and keeps the reply it started from
- * matching, so an untouched one still reads as Cue's. Other drafts pass as is.
+ * (DR-6) shows and sends the stored HTML as text: "&#x27;" for "'", and any
+ * markup as tags. One still untouched opens again from the decoded reply;
+ * an edited one keeps the user's words with the second escape undone. Only
+ * a reply still stored as HTML qualifies, so a repaired draft, or one opened
+ * since, is never decoded again.
  */
 export function withSuggestionEscapesRepaired<
   T extends {
@@ -88,20 +101,22 @@ export function withSuggestionEscapesRepaired<
 >(stored: T): T {
   const content = stored.content;
   const html = content?.draft.editableHtml;
-  if (!content?.startedFrom?.executedActionId || !html) return stored;
-  if (!DOUBLE_ESCAPED.test(html)) return stored;
+  const origin = content?.startedFrom;
+  if (!content || !html || !origin?.executedActionId) return stored;
+  if (!STORED_HTML.test(origin.reply)) return stored;
+  const reply = draftHtmlToReplyText(origin.reply);
+  let editableHtml: string;
+  if (isUneditedSuggestion(html, origin.reply))
+    editableHtml = textToHtmlParagraphs(reply);
+  else if (DOUBLE_ESCAPED.test(html))
+    editableHtml = html.replace(DOUBLE_ESCAPED_ALL, "&$1;");
+  else return stored;
   return {
     ...stored,
     content: {
       ...content,
-      draft: {
-        ...content.draft,
-        editableHtml: html.replace(DOUBLE_ESCAPED_ALL, "&$1;"),
-      },
-      startedFrom: {
-        ...content.startedFrom,
-        reply: draftHtmlToReplyText(content.startedFrom.reply),
-      },
+      draft: { ...content.draft, editableHtml },
+      startedFrom: { ...origin, reply },
     },
   };
 }
@@ -157,9 +172,21 @@ function withoutSpace(text: string) {
   return text.replace(/[\s ]+/g, "");
 }
 
-// What `he.escape` writes, escaped a second time.
+// What `he.escape` writes, and the same escaped a second time.
+const STORED_HTML = /&(#x27|#x60|quot|amp|lt|gt);/;
 const DOUBLE_ESCAPED = /&amp;(#x27|#x60|quot|amp|lt|gt);/;
 const DOUBLE_ESCAPED_ALL = new RegExp(DOUBLE_ESCAPED.source, "g");
+
+// A comment, or a tag whose quoted attributes may hold ">".
+const HTML_TOKEN = /(<!--[\s\S]*?-->|<\/?[a-z](?:[^>"']|"[^"]*"|'[^']*')*>)/i;
+const UNSHOWN_ELEMENTS = new Set([
+  "head",
+  "script",
+  "style",
+  "template",
+  "title",
+]);
+const CELL_ELEMENTS = new Set(["td", "th"]);
 
 const BLOCK_ELEMENTS = new Set([
   "blockquote",
