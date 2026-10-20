@@ -5,13 +5,28 @@
     "components/SidebarRight.tsx",
     "components/SideNavWithTopNav.tsx"
   ],
+  "cue-found-keyboard.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/CueFoundSection.tsx",
+    "app/(app)/[emailAccountId]/mail/use-cue-search.ts",
+    "app/(app)/[emailAccountId]/mail/cue-search.ts"
+  ],
   "cue-strip.spec.ts": [
     "app/(app)/[emailAccountId]/mail/CueStrip.tsx",
     "app/(app)/[emailAccountId]/mail/cue-strip.ts",
     "app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion.tsx",
     "hooks/useThreadBrief.ts",
     "utils/home/get-thread-brief.ts",
-    "app/api/user/thread-brief/route.ts"
+    "app/api/user/thread-brief/route.ts",
+    "hooks/useThread.ts"
+  ],
+  "rule-reply-suggestion.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion.tsx",
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "components/email-list/reply-assist.ts",
+    "utils/actions/thread-assist.ts",
+    "utils/ai/actions.ts",
+    "utils/reply-tracker/draft-tracking.ts"
   ],
   "today.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",

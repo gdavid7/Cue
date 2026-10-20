@@ -64,16 +64,14 @@ export function markLocalMailboxSynced(
   )
     return;
   entries.set(accountId, recordedAhead ? at : Math.max(at, recorded ?? 0));
-  writeCookie(
-    [...entries]
-      .map(([id, time]) =>
-        time
-          ? `${id}${SYNCED_AT_SEPARATOR}${Math.floor(time / 1000).toString(36)}`
-          : id,
-      )
-      .join("."),
-    MAX_AGE_SECONDS,
-  );
+  writeEntries(entries);
+}
+
+/** Part of removing one account's mail from this browser. */
+export function forgetLocalMailbox(accountId: string) {
+  const entries = readEntries(readCookie());
+  if (!entries.delete(accountId)) return;
+  writeEntries(entries);
 }
 
 /** Part of wiping the local mailbox, on sign-out. */
@@ -93,6 +91,19 @@ function readEntries(cookieValue: string | undefined) {
     entries.set(id, Number.isFinite(seconds) ? seconds * 1000 : 0);
   }
   return entries;
+}
+
+function writeEntries(entries: Map<string, number>) {
+  writeCookie(
+    [...entries]
+      .map(([id, time]) =>
+        time
+          ? `${id}${SYNCED_AT_SEPARATOR}${Math.floor(time / 1000).toString(36)}`
+          : id,
+      )
+      .join("."),
+    MAX_AGE_SECONDS,
+  );
 }
 
 function readCookie() {

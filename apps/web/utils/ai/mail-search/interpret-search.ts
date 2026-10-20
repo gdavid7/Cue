@@ -1,5 +1,5 @@
+import type { LanguageModelUsage } from "ai";
 import he from "he";
-import type { EmailProvider } from "@/utils/email/types";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
@@ -11,6 +11,7 @@ import {
   searchIntentSchema,
 } from "@/utils/mail-search/generated-search";
 import { assertHasAiAccess } from "@/utils/premium/limits";
+import { calculateUsageCost } from "@/utils/usage";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
 /**
@@ -31,6 +32,8 @@ export type SearchIntent = {
   unreadOnly: boolean;
   explanation: string;
   isQuestion: boolean;
+  /** The account's time zone, which dates in the searches are read in. */
+  timeZone: string;
 };
 
 /**
@@ -42,13 +45,19 @@ export type SearchIntent = {
 export async function interpretSearch({
   emailAccountId,
   query,
-  emailProvider,
+  provider,
+  labelNames,
   logger,
   now = new Date(),
 }: {
   emailAccountId: string;
   query: string;
-  emailProvider: EmailProvider;
+  provider: "google" | "microsoft";
+  /**
+   * The account's label names, from the browser, which already holds them. A
+   * label the account doesn't have would make a search find nothing.
+   */
+  labelNames: string[];
   logger: Logger;
   now?: Date;
 }): Promise<SearchIntent | null> {
@@ -62,22 +71,27 @@ export async function interpretSearch({
     .catch(() => false);
   if (!hasAccess) return null;
 
+  const startedAt = Date.now();
+  let call: SearchIntentCall | undefined;
   const timeout = new AbortController();
   const timer = setTimeout(
     () => timeout.abort(new Error("Search interpretation timed out")),
     INTERPRET_SEARCH_TIMEOUT_MS,
   );
-  // Both settle at the deadline even if a call ignores the abort.
-  const [parts, labelNames] = await Promise.all([
-    Promise.race([
-      aiInterpretSearch({
-        emailAccount,
-        query,
-        now,
-        abortSignal: timeout.signal,
-      }),
-      rejectOnAbort(timeout.signal),
-    ]).catch((error) => {
+  // Settles at the deadline even if the call ignores the abort.
+  const parts = await Promise.race([
+    aiInterpretSearch({
+      emailAccount,
+      query,
+      now,
+      abortSignal: timeout.signal,
+      onCompleted: (completed) => {
+        call = completed;
+      },
+    }),
+    rejectOnAbort(timeout.signal),
+  ])
+    .catch((error) => {
       // A parse or validation error's message can quote the model's output.
       logger.warn("Search interpretation failed", {
         timedOut: timeout.signal.aborted,
@@ -85,42 +99,57 @@ export async function interpretSearch({
       });
       logger.trace("Search interpretation error", { error });
       return null;
-    }),
-    // A label the account doesn't have would make a search find nothing.
-    Promise.race([
-      emailProvider
-        .getLabels()
-        .then((labels) => labels.map((label) => label.name)),
-      rejectOnAbort(timeout.signal),
-    ]).catch((error) => {
-      logger.warn("Failed to load labels for search interpretation", {
-        timedOut: timeout.signal.aborted,
-        errorName: errorName(error),
-      });
-      logger.trace("Label load error", { error });
-      return [] as string[];
-    }),
-  ]).finally(() => clearTimeout(timer));
-  if (!parts) return null;
+    })
+    .finally(() => clearTimeout(timer));
+  const intent = parts
+    ? toSearchIntent(parts, {
+        now,
+        timeZone: accountTimeZone(emailAccount.timezone),
+        provider,
+        labelNames,
+      })
+    : null;
 
-  return toSearchIntent(parts, {
-    now,
-    timeZone: accountTimeZone(emailAccount.timezone),
-    provider: emailProvider.name,
-    labelNames,
+  // Counts and timings only: the typed search and what it found stay out.
+  logger.info("Search intent call", {
+    latencyMs: Date.now() - startedAt,
+    outcome: parts ? "read" : "failed",
+    timedOut: timeout.signal.aborted,
+    provider: call?.provider,
+    model: call?.model,
+    inputTokens: call?.usage.inputTokens,
+    outputTokens: call?.usage.outputTokens,
+    estimatedCost: call
+      ? calculateUsageCost({
+          provider: call.provider,
+          model: call.model,
+          usage: call.usage,
+        })
+      : undefined,
+    queryCount: intent?.searches.length ?? 0,
   });
+  return intent;
 }
+
+type SearchIntentCall = {
+  provider: string;
+  model: string;
+  usage: LanguageModelUsage;
+};
 
 export async function aiInterpretSearch({
   emailAccount,
   query,
   now,
   abortSignal,
+  onCompleted,
 }: {
   emailAccount: EmailAccountWithAI;
   query: string;
   now: Date;
   abortSignal?: AbortSignal;
+  /** Which model answered and what it used, for the call's telemetry. */
+  onCompleted?: (call: SearchIntentCall) => void;
 }): Promise<SearchIntentParts> {
   const modelOptions = getModelForUseCase(
     emailAccount.user,
@@ -142,6 +171,11 @@ export async function aiInterpretSearch({
       timeZone: accountTimeZone(emailAccount.timezone),
     }),
     schema: searchIntentSchema,
+  });
+  onCompleted?.({
+    provider: modelOptions.provider,
+    model: result.response?.modelId ?? modelOptions.modelName,
+    usage: result.usage,
   });
   return result.object;
 }
@@ -184,6 +218,7 @@ export function toSearchIntent(
     unreadOnly: parts.unread && context.provider === "microsoft",
     explanation: parts.explanation.trim(),
     isQuestion: parts.isQuestion,
+    timeZone: context.timeZone,
   };
 }
 

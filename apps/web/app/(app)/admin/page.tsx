@@ -45,6 +45,9 @@ export default async function AdminPage() {
             <Link href="/admin/feedback">Feedback</Link>
           </Button>
           <Button asChild variant="outline" size="sm">
+            <Link href="/admin/drafts">Draft funnel</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
             <Link href="/admin/access">Access requests</Link>
           </Button>
         </div>

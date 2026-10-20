@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { type ActionType, SystemType } from "@/generated/prisma/enums";
-import { isDraftRepliesEnabled } from "@/utils/rule/draft-replies-enabled";
+import { getDraftRepliesSetting } from "@/utils/rule/draft-replies-enabled";
 
 const mockEnv = vi.hoisted(() => ({ autoDraftDisabled: false }));
 
@@ -17,7 +17,7 @@ describe("INITIAL_REPLY_TRACKING_RULES", () => {
     const rules = await loadInitialRules(false);
     const toReply = rules.find((r) => r.systemType === SystemType.TO_REPLY);
 
-    expect(isDraftRepliesEnabled(asSavedRule(toReply))).toBe(true);
+    expect(getDraftRepliesSetting(asSavedRule(toReply))).toBe("on");
   });
 
   it("drafts only on To Reply, never labelling or moving mail", async () => {

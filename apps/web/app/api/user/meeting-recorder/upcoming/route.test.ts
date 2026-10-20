@@ -42,6 +42,7 @@ describe("meeting recorder upcoming route", () => {
       meetingRecorderJoinRule: MeetingJoinRule.ALL,
     } as never);
     prisma.meeting.findMany.mockResolvedValue([]);
+    prisma.emailAccount.findMany.mockResolvedValue([]);
     fetchEventsMock.mockResolvedValue({
       complete: true,
       events: [

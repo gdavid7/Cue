@@ -134,7 +134,7 @@ vi.mock("@inboxzero/tinybird", () => ({
 }));
 
 vi.mock("@/utils/ai/choose-rule/draft-management", () => ({
-  updateExecutedActionWithDraftId: vi.fn().mockResolvedValue(undefined),
+  markReplySuggestionPending: vi.fn().mockResolvedValue(undefined),
   handlePreviousDraftDeletion: vi.fn().mockResolvedValue(undefined),
 }));
 

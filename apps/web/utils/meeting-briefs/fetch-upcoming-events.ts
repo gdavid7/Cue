@@ -11,7 +11,7 @@ const MAX_EVENTS_PER_PROVIDER = 20;
 // window opens and closes between two cron ticks is still picked up at the
 // last tick before it starts. Duplicate sends are prevented by the
 // meetingBriefing unique-constraint claim in process.ts.
-const CRON_INTERVAL_MINUTES = 15;
+export const CRON_INTERVAL_MINUTES = 15;
 
 export async function fetchUpcomingEvents({
   emailAccountId,

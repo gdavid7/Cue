@@ -49,7 +49,10 @@ import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { CueFoundSection } from "@/app/(app)/[emailAccountId]/mail/CueFoundSection";
 import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
-import { withoutPlainDuplicates } from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import {
+  CUE_FOUND_VISIBLE_ROWS,
+  withoutPlainDuplicates,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import { usePremium } from "@/hooks/usePremium";
 import { preloadEmailThread } from "@/components/email-list/EmailThreadLazy";
 import { useWarmComposer } from "@/app/(app)/[emailAccountId]/compose/use-warm-composer";
@@ -74,6 +77,7 @@ import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
+import { DraftRepliesCard } from "@/app/(app)/[emailAccountId]/mail/DraftRepliesCard";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
@@ -759,7 +763,34 @@ export function MailShell() {
     isAllAccounts,
     searchQuery,
   ]);
-  const orderedIds = useStableOrderedIds(threads);
+  const cueSearch = useCueSearch({
+    emailAccountId,
+    query: searchParam,
+    enabled: hasAiAccess && !isAllAccounts,
+  });
+  // Like the answer card, it stays while the search is edited, so picking
+  // one of its searches to edit doesn't pull it out from under the pointer.
+  const showCueFound = cueSearch.stage !== "off";
+  const cueFoundThreads = useMemo(
+    () => withoutPlainDuplicates(cueSearch.threads, threads),
+    [cueSearch.threads, threads],
+  );
+  const [cueShowAllFor, setCueShowAllFor] = useState<string | null>(null);
+  const cueShowAll = cueShowAllFor === searchParam;
+  const cueRows = useMemo(() => {
+    if (!showCueFound) return EMPTY_SEARCH_THREADS;
+    return cueShowAll
+      ? cueFoundThreads
+      : cueFoundThreads.slice(0, CUE_FOUND_VISIBLE_ROWS);
+  }, [showCueFound, cueShowAll, cueFoundThreads]);
+  const cueRowCount = cueRows.length;
+  // J/K, selection and actions run over the rows Cue found, then the plain
+  // results, in the order they sit on screen.
+  const navThreads = useMemo(
+    () => (cueRowCount ? [...cueRows, ...threads] : threads),
+    [cueRows, cueRowCount, threads],
+  );
+  const orderedIds = useStableOrderedIds(navThreads);
   const previousSearchFocus = useRef<
     ReturnType<typeof getSearchFocus> | undefined
   >(undefined);
@@ -773,11 +804,6 @@ export function MailShell() {
     previousSearchFocus.current = next;
     if (next.index !== focusedIndex) setFocusedIndex(next.index);
   }, [orderedIds, focusedIndex, searchQuery, searchViewIdentity]);
-  const cueSearch = useCueSearch({
-    emailAccountId,
-    query: searchParam,
-    enabled: hasAiAccess && !isAllAccounts,
-  });
   const { data: searchAnswer } = useSearchAnswer(
     emailAccountId,
     cueSearch.answerRequest,
@@ -800,25 +826,18 @@ export function MailShell() {
   // mail, and with no answer it offers to ask in chat instead.
   if ((searchAnswer || searchFoundNothing) && isSearchCommitted)
     emptySearchMessage = "";
-  // Like the answer card, it stays while the search is edited, so picking
-  // one of its searches to edit doesn't pull it out from under the pointer.
-  const showCueFound = cueSearch.stage !== "off";
   // Nothing matched only once Cue's own searches have found nothing too.
   const searchFoundNothingAtAll =
     searchFoundNothing &&
     isSearchCommitted &&
     (!showCueFound || cueSearch.foundNothing);
-  const cueFoundThreads = useMemo(
-    () => withoutPlainDuplicates(cueSearch.threads, threads),
-    [cueSearch.threads, threads],
-  );
 
   const selection = useThreadSelection(orderedIds);
 
   const clampIndex = useCallback(
     (index: number) =>
-      Math.min(Math.max(0, index), Math.max(0, threads.length - 1)),
-    [threads.length],
+      Math.min(Math.max(0, index), Math.max(0, navThreads.length - 1)),
+    [navThreads.length],
   );
   const openThreadSelection = useMemo<ThreadSelection | null>(() => {
     if (!openThreadId) return null;
@@ -861,9 +880,9 @@ export function MailShell() {
     focusedIndex,
     openThreadId: openThreadKey,
   });
-  const focusedThread = threads[clampedIndex];
+  const focusedThread = navThreads[clampedIndex];
   const openThread = openThreadKey
-    ? threads.find((thread) => getListThreadKey(thread) === openThreadKey)
+    ? navThreads.find((thread) => getListThreadKey(thread) === openThreadKey)
     : undefined;
   const readAttemptedForOpenThread = useRef<string | null>(null);
   useWarmNeighbourThreads({ threads, openThreadKey, emailAccountId });
@@ -1003,7 +1022,7 @@ export function MailShell() {
       !selection.hasSelection
     )
       return [];
-    const listTargets = threads.map((thread) => ({
+    const listTargets = navThreads.map((thread) => ({
       key: getListThreadKey(thread),
       messages: thread.messages,
       selection: getListThreadSelection(thread, emailAccountId),
@@ -1035,7 +1054,7 @@ export function MailShell() {
     openThreadSelection,
     readerTarget,
     selection.selectedIds,
-    threads,
+    navThreads,
   ]);
   const {
     archive,
@@ -1052,7 +1071,7 @@ export function MailShell() {
   } = useThreadActions({
     emailAccountId,
     readerTarget,
-    threads,
+    threads: navThreads,
   });
   const markRead = useCallback(
     (threadKeys: string[]) => setReadState(threadKeys, true, false),
@@ -1062,7 +1081,7 @@ export function MailShell() {
   // Gmail's "select all conversations that match": past the loaded page, a
   // bulk action runs as a server job per account.
   const allPageSelected =
-    threads.length > 0 && selection.selectedCount === threads.length;
+    navThreads.length > 0 && selection.selectedCount === navThreads.length;
   const matchingAccounts = useMemo(() => {
     if (isAllAccounts) {
       let scope: MatchingScope | null = null;
@@ -1251,7 +1270,7 @@ export function MailShell() {
         direction,
       });
       setFocusedIndex(nextThread?.index ?? 0);
-      const nextRow = threads.find(
+      const nextRow = navThreads.find(
         (thread) => getListThreadKey(thread) === nextThread?.id,
       );
       setOpenThread(
@@ -1298,7 +1317,7 @@ export function MailShell() {
   );
 
   const openAt = useStableCallback((index: number) => {
-    const thread = threads[index];
+    const thread = navThreads[index];
     if (!thread) return;
     setFocusedIndex(index);
     setReplyToMessageId(undefined);
@@ -1310,16 +1329,10 @@ export function MailShell() {
     if (layout === "list" && nextKey) focusReaderWhenShown(nextKey);
     setOpenThread(nextSelection);
   });
-  // A row Cue found may not be in the list, so the cursor stays where it is.
-  const openCueFoundThread = useStableCallback((thread: ListThread) => {
-    setReplyToMessageId(undefined);
-    setForwardToMessageId(undefined);
-    selection.clear();
-    const nextSelection = getListThreadSelection(thread, emailAccountId);
-    const nextKey = getThreadSelectionKey(nextSelection);
-    if (layout === "list" && nextKey) focusReaderWhenShown(nextKey);
-    setOpenThread(nextSelection);
-  });
+  // The plain list counts its rows from its own first, after Cue's.
+  const openPlainAt = useStableCallback((index: number) =>
+    openAt(index + cueRowCount),
+  );
   // Puts one of Cue's searches in the box to edit, without running it yet.
   const editCueSearch = useStableCallback((search: string) => {
     onSearchChange(search);
@@ -1337,6 +1350,12 @@ export function MailShell() {
     setFocusedIndex(index);
     selection.selectRangeTo(index);
   });
+  const toggleSelectPlainAt = useStableCallback((index: number) =>
+    toggleSelectAt(index + cueRowCount),
+  );
+  const selectRangePlainAt = useStableCallback((index: number) =>
+    selectRangeAt(index + cueRowCount),
+  );
 
   const move = useCallback(
     (delta: number) => {
@@ -1345,7 +1364,7 @@ export function MailShell() {
       // Once a reader is open, navigation keeps its content and position in
       // step. A closed list view still lets J/K move the row cursor alone —
       // there the cursor still signals intent, so warm the row for Enter.
-      const nextThread = threads[next];
+      const nextThread = navThreads[next];
       if ((layout === "split" || openThreadId) && nextThread) {
         setReplyToMessageId(undefined);
         setForwardToMessageId(undefined);
@@ -1355,7 +1374,7 @@ export function MailShell() {
     [
       clampIndex,
       clampedIndex,
-      threads,
+      navThreads,
       layout,
       openThreadId,
       setOpenThread,
@@ -1603,7 +1622,7 @@ export function MailShell() {
       return;
     }
 
-    const targetIndex = threads.findIndex(
+    const targetIndex = navThreads.findIndex(
       (thread) => getListThreadKey(thread) === singleActionTarget.key,
     );
     const targetThreadKey = getThreadSelectionKey(singleActionTarget.selection);
@@ -1844,13 +1863,13 @@ export function MailShell() {
       selectNone: selection.clear,
       selectRead: () =>
         selection.selectOnly(
-          threads
+          navThreads
             .filter((thread) => !isThreadUnread(thread.messages))
             .map(getListThreadKey),
         ),
       selectUnread: () =>
         selection.selectOnly(
-          threads
+          navThreads
             .filter((thread) => isThreadUnread(thread.messages))
             .map(getListThreadKey),
         ),
@@ -1949,6 +1968,22 @@ export function MailShell() {
   });
 
   useShortcuts(handlers, { isDesktopApp });
+
+  // The list scrolls its own focused row into view and takes DOM focus along.
+  // Cue's rows sit outside it, so when the cursor crosses between the two the
+  // row holding DOM focus is handed over here, or Enter would open the old one.
+  useLayoutEffect(() => {
+    const section = listSectionRef.current;
+    const active = document.activeElement;
+    if (!section || !(active instanceof HTMLElement)) return;
+    if (!active.matches("[data-mail-thread-row]")) return;
+    const row = section.querySelector<HTMLElement>(
+      '[data-mail-thread-row][tabindex="0"]',
+    );
+    if (!row || row === active) return;
+    row.focus({ preventScroll: true });
+    row.scrollIntoView?.({ block: "nearest" });
+  }, [clampedIndex, listSectionRef]);
 
   // Senders the reader actually corresponds with, so "Describe it" can turn a
   // person's name into an address instead of guessing a domain.
@@ -2354,6 +2389,9 @@ export function MailShell() {
                 />
               )}
               {showSplitTabs && !isAllAccounts && <CueLabelsCard />}
+              {!isAllAccounts && (
+                <DraftRepliesCard inboxStyleCardShown={showSplitTabs} />
+              )}
               {!isAllAccounts && <ReplyTrackingNotice />}
               {!isAllAccounts && (
                 <SampleThread
@@ -2443,9 +2481,19 @@ export function MailShell() {
                   key={searchParam}
                   layout={layout}
                   onEditSearch={editCueSearch}
-                  onOpenThread={openCueFoundThread}
+                  focusedIndex={clampedIndex}
+                  hasAnySelection={selection.hasSelection}
+                  isSelected={selection.isSelected}
+                  onOpen={openAt}
+                  onSelectRangeTo={selectRangeAt}
+                  onToggleSelect={toggleSelectAt}
+                  onToggleShowAll={() =>
+                    setCueShowAllFor(cueShowAll ? null : searchParam)
+                  }
+                  showAll={cueShowAll}
                   stage={cueSearch.stage}
-                  threads={cueFoundThreads}
+                  threads={cueRows}
+                  totalCount={cueFoundThreads.length}
                   userEmail={userEmail}
                   userLabels={userLabels}
                   widerSearches={cueSearch.widerSearches}
@@ -2494,12 +2542,12 @@ export function MailShell() {
                       userLabels={isAllAccounts ? NO_LABELS : userLabels}
                       labelsByAccount={labelsByAccount}
                       accountColorIndexById={accountColorIndexById}
-                      focusedIndex={clampedIndex}
+                      focusedIndex={clampedIndex - cueRowCount}
                       isSelected={selection.isSelected}
                       selectedCount={selection.selectedCount}
-                      onOpenThread={openAt}
-                      onToggleSelect={toggleSelectAt}
-                      onSelectRangeTo={selectRangeAt}
+                      onOpenThread={openPlainAt}
+                      onToggleSelect={toggleSelectPlainAt}
+                      onSelectRangeTo={selectRangePlainAt}
                       showLoadMore={hasMore}
                       isLoadingMore={isLoadingMore}
                       onLoadMore={loadMore}

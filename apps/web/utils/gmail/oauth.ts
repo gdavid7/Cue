@@ -9,6 +9,7 @@ const GOOGLE_GMAIL_API_ROOT_URL = "https://gmail.googleapis.com/";
 const GOOGLE_GMAIL_BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1";
 const GOOGLE_PEOPLE_API_ROOT_URL = "https://people.googleapis.com/";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 const GOOGLE_TOKEN_INFO_URL = "https://www.googleapis.com/oauth2/v1/tokeninfo";
 const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 
@@ -43,6 +44,11 @@ export function getGoogleOauthTokenUrl() {
   return baseUrl ? `${baseUrl}/oauth2/token` : GOOGLE_TOKEN_URL;
 }
 
+export function getGoogleOauthRevokeUrl() {
+  const baseUrl = getGoogleOauthBaseUrl();
+  return baseUrl ? `${baseUrl}/oauth2/revoke` : GOOGLE_REVOKE_URL;
+}
+
 export function getGoogleOauthClientOptions(redirectUri?: string) {
   const baseUrl = getGoogleOauthBaseUrl();
 
@@ -54,7 +60,7 @@ export function getGoogleOauthClientOptions(redirectUri?: string) {
       endpoints: {
         oauth2AuthBaseUrl: `${baseUrl}/o/oauth2/v2/auth`,
         oauth2TokenUrl: getGoogleOauthTokenUrl(),
-        oauth2RevokeUrl: `${baseUrl}/oauth2/revoke`,
+        oauth2RevokeUrl: getGoogleOauthRevokeUrl(),
       },
       issuers: [baseUrl],
     }),

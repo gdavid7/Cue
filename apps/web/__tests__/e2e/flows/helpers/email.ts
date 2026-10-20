@@ -219,6 +219,29 @@ export async function assertDraftExists(options: {
 }
 
 /**
+ * Assert the mailbox holds no draft in the thread: a rule's reply waits in
+ * Cue until the user edits it.
+ */
+export async function assertNoThreadDrafts(options: {
+  provider: EmailProvider;
+  threadId: string;
+}): Promise<void> {
+  const { provider, threadId } = options;
+
+  logStep("Checking the thread has no mailbox draft", { threadId });
+
+  const drafts = await provider.getDrafts({ maxResults: 50 });
+  const threadDrafts = drafts.filter((d) => d.threadId === threadId);
+  if (threadDrafts.length > 0) {
+    throw new Error(
+      `Expected no mailbox draft for thread ${threadId}, found ${threadDrafts.length}`,
+    );
+  }
+
+  logAssertion("No mailbox draft", true);
+}
+
+/**
  * Assert that a draft does not exist (was deleted)
  */
 export async function assertDraftDeleted(options: {

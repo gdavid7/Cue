@@ -8,7 +8,7 @@ import {
 } from "@/generated/prisma/enums";
 import type { Logger } from "@/utils/logger";
 import type { ParsedMessage } from "@/utils/types";
-import { updateExecutedActionWithDraftId } from "@/utils/ai/choose-rule/draft-management";
+import { markReplySuggestionPending } from "@/utils/ai/choose-rule/draft-management";
 import type { EmailProvider } from "@/utils/email/types";
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import type { ActionExecutionEmailAccount } from "@/utils/ai/types";
@@ -127,21 +127,13 @@ export async function executeAct({
         });
       }
 
-      const draftId =
-        action.type === ActionType.DRAFT_EMAIL
-          ? getDraftId(actionResult)
-          : null;
-
-      if (draftId) {
-        await updateExecutedActionWithDraftId({
-          actionId: action.id,
-          draftId,
-          logger,
-        });
-      } else if (action.type === ActionType.DRAFT_EMAIL) {
-        log.warn("Draft action completed without a draft ID", {
-          actionId: action.id,
-        });
+      if (
+        action.type === ActionType.DRAFT_EMAIL &&
+        !actionResultError &&
+        action.content?.trim() &&
+        isReplySuggestion(actionResult)
+      ) {
+        await markReplySuggestionPending({ actionId: action.id, logger: log });
       }
     } catch (error) {
       await persistExecutedActionOutcome({
@@ -238,15 +230,11 @@ function buildFailureReason(
   return `${existingReason}\n${failureReason}`;
 }
 
-function getDraftId(actionResult: unknown): string | null {
-  if (
-    !actionResult ||
-    typeof actionResult !== "object" ||
-    !("draftId" in actionResult) ||
-    typeof actionResult.draftId !== "string"
-  ) {
-    return null;
-  }
-
-  return actionResult.draftId;
+function isReplySuggestion(actionResult: unknown) {
+  return (
+    typeof actionResult === "object" &&
+    actionResult !== null &&
+    "replySuggestion" in actionResult &&
+    actionResult.replySuggestion === true
+  );
 }

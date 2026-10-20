@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearLocalMailboxCookie,
+  forgetLocalMailbox,
   hasLocalMailbox,
   isLocalMailboxStale,
   LOCAL_MAILBOX_COOKIE,
@@ -86,6 +87,18 @@ describe("local mailbox cookie", () => {
     clearLocalMailboxCookie();
 
     expect(hasLocalMailbox(readCookie(), "acc-1")).toBe(false);
+  });
+
+  it("forgets one account when its mail is removed from this browser", () => {
+    const syncedAt = Date.parse("2026-10-19T20:00:00Z");
+    markLocalMailboxSynced("acc-1");
+    markLocalMailboxSynced("acc-2", syncedAt);
+
+    forgetLocalMailbox("acc-1");
+
+    expect(hasLocalMailbox(readCookie(), "acc-1")).toBe(false);
+    // The other account keeps when it last caught up.
+    expect(localMailboxSyncedAt(readCookie(), "acc-2")).toBe(syncedAt);
   });
 
   it("treats a missing or malformed cookie as no local mailbox", () => {

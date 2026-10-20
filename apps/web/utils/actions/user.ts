@@ -30,7 +30,10 @@ import {
 } from "@/utils/ai/draft-cleanup";
 import { isDuplicateError, isNotFoundError } from "@/utils/prisma-helpers";
 import { type Logger, toLogJson } from "@/utils/logger";
-import { getMoveSharedConnectionsOperations } from "@/utils/user/move-shared-connections";
+import {
+  getMoveSharedConnectionsOperations,
+  remainingEmailAccountQuery,
+} from "@/utils/user/move-shared-connections";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
 import { prepareMemberRemovalNotifications } from "@/utils/team-comments/member-removal";
 import {
@@ -44,6 +47,10 @@ import {
   isOrganizationOwnerInvariantError,
 } from "@/utils/organizations/ownership";
 import { invalidateAccountOwnership } from "@/utils/redis/account-validation";
+import {
+  getGoogleGrants,
+  revokeGoogleGrants,
+} from "@/utils/user/revoke-google-grants";
 
 export const saveAboutAction = actionClient
   .metadata({ name: "saveAbout" })
@@ -171,8 +178,10 @@ export const deleteEmailAccountAction = actionClientUser
       // The oldest other mailbox: the next primary, and where shared
       // connections move.
       const remainingEmailAccount = await prisma.emailAccount.findFirst({
-        where: { userId, id: { not: emailAccountId } },
-        orderBy: { createdAt: "asc" },
+        ...remainingEmailAccountQuery({
+          userId,
+          removedEmailAccountId: emailAccountId,
+        }),
         select: { id: true, email: true, name: true, image: true },
       });
 
@@ -189,17 +198,23 @@ export const deleteEmailAccountAction = actionClientUser
         logger,
       });
 
+      await stopWatchingEmailAccount({
+        emailAccountId,
+        provider: emailAccount.account.provider,
+        subscriptionId: emailAccount.watchEmailsSubscriptionId,
+        logger,
+      });
+
+      // Read before the delete removes them; revoked only once it commits.
+      const googleGrants = await getGoogleGrants({
+        where: { id: emailAccount.accountId, userId },
+        logger,
+      });
+
       if (isPrimaryAccount && remainingEmailAccount) {
         // Promote the next email account to primary
         const newPrimaryAccount = remainingEmailAccount;
         const oldEmail = emailAccount.user.email;
-
-        await stopWatchingEmailAccount({
-          emailAccountId,
-          provider: emailAccount.account.provider,
-          subscriptionId: emailAccount.watchEmailsSubscriptionId,
-          logger,
-        });
 
         await runDeleteEmailAccountTransaction(
           userId,
@@ -241,13 +256,6 @@ export const deleteEmailAccountAction = actionClientUser
           });
         });
       } else {
-        await stopWatchingEmailAccount({
-          emailAccountId,
-          provider: emailAccount.account.provider,
-          subscriptionId: emailAccount.watchEmailsSubscriptionId,
-          logger,
-        });
-
         await runDeleteEmailAccountTransaction(
           userId,
           [
@@ -269,6 +277,8 @@ export const deleteEmailAccountAction = actionClientUser
           { emailAccountId, logger, userEmail },
         );
       }
+
+      await revokeGoogleGrants({ grants: googleGrants, logger });
 
       after(() =>
         deleteTinybirdEmailData([emailAccount.email]).catch((error) => {

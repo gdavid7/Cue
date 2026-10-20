@@ -1,4 +1,5 @@
 import { TZDate } from "@date-fns/tz";
+import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
 import { startOfDay } from "date-fns";
 import {
   ActionType,
@@ -52,7 +53,6 @@ const HOME_BUDGET_MS = 10_000;
 const HANDLED_WINDOW_DAYS = 7;
 // Older pending drafts were most likely deleted in the mail app, and a rule
 // still "applying" after this long has crashed; neither is work in progress.
-const DRAFT_WINDOW_DAYS = 7;
 const RUNNING_WINDOW_MINUTES = 30;
 // A day's filing actions; far more than one inbox gets in a day.
 const FILED_ACTIONS_LIMIT = 2000;
@@ -407,8 +407,8 @@ async function getAgentTasks({
     prisma.executedAction.findMany({
       where: {
         type: ActionType.DRAFT_EMAIL,
+        // A mailbox draft from before, or a suggestion waiting in Cue.
         draftStatus: DraftEmailStatus.PENDING,
-        draftId: { not: null },
         // Scoped through the rule, whose [emailAccountId, createdAt] index this uses.
         executedRule: {
           emailAccountId,
@@ -469,8 +469,8 @@ async function getAgentTasks({
       id: d.id,
       kind: "draft" as const,
       threadId: d.executedRule.threadId,
-      title: d.subject ? `Reply draft: ${d.subject}` : "Reply draft",
-      detail: "Draft ready for your review",
+      title: d.subject ? `Suggested reply: ${d.subject}` : "Suggested reply",
+      detail: "Ready for your review",
       at: d.createdAt.toISOString(),
     })),
     ...scheduled.map((s) => ({

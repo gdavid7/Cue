@@ -51,7 +51,8 @@ async function openSignedInMail(page: Page) {
 }
 
 async function expectSignedOut(page: Page, clickedAt: number) {
-  await expect(page.getByText("Signing out…")).toBeVisible({ timeout: 1000 });
+  // "Signing out…" is transient: on a fast runner the page is already on
+  // /login, so the redirect and the cleared session are the real outcome.
   await expect(page).toHaveURL(/\/login(\?|$)/, {
     timeout: SIGN_OUT_BUDGET_MS,
   });
@@ -74,13 +75,28 @@ function accountMenuButton(page: Page) {
 async function signIn(page: Page) {
   await page.goto("/login", { waitUntil: "domcontentloaded" });
   const { url } = await page.evaluate(async (provider) => {
-    const response = await fetch("/api/auth/sign-in/social", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ provider, callbackURL: "/welcome-redirect" }),
-    });
-    if (!response.ok) throw new Error(`Sign-in failed: ${response.status}`);
-    return (await response.json()) as { url: string };
+    // Better Auth allows three sign-ins per IP every 10 seconds, and a retried
+    // test signs in again, so wait out a 429 instead of failing on it.
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch("/api/auth/sign-in/social", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, callbackURL: "/welcome-redirect" }),
+      });
+      if (response.status === 429 && attempt < 3) {
+        const retryAfterHeader = Number(response.headers.get("X-Retry-After"));
+        const retryAfterSeconds =
+          Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+            ? retryAfterHeader
+            : 10;
+        await new Promise((resolve) =>
+          setTimeout(resolve, (retryAfterSeconds + 1) * 1000),
+        );
+        continue;
+      }
+      if (!response.ok) throw new Error(`Sign-in failed: ${response.status}`);
+      return (await response.json()) as { url: string };
+    }
   }, playwrightMailProvider);
   await page.goto(url);
   await page.getByRole("button", { name: PLAYWRIGHT_TEST_EMAIL }).click();

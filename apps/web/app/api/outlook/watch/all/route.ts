@@ -92,7 +92,7 @@ async function watchAllEmails(logger: Logger) {
           new Date(emailAccount.watchEmailsExpirationDate) < new Date()
         ) {
           await prisma.emailAccount.update({
-            where: { email: emailAccount.email },
+            where: { id: emailAccount.id },
             data: {
               watchEmailsExpirationDate: null,
               watchEmailsSubscriptionId: null,

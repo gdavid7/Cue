@@ -13,3 +13,29 @@ export const saveSuggestedReplyBody = z.object({
    */
   suggested: z.string().trim().min(1).max(10_000).optional(),
 });
+
+export const recordSuggestedReplyDraftBody = z
+  .object({
+    threadId: z.string().trim().min(1).max(512),
+    /** The message the reply answers. */
+    messageId: z.string().trim().min(1).max(512),
+    /** The mailbox draft the user's first edit of the suggestion became. */
+    draftId: z.string().trim().min(1).max(512),
+    /** A rule's suggestion: the server reads its text itself. */
+    executedActionId: z.string().trim().min(1).max(64).optional(),
+    /** A suggestion only this browser kept (RD-3), as Cue wrote it. */
+    suggested: z.string().trim().min(1).max(10_000).optional(),
+  })
+  .refine((body) => body.executedActionId || body.suggested, {
+    message: "Which suggestion the draft started from is required.",
+  });
+
+export const dismissReplySuggestionBody = z.object({
+  executedActionId: z.string().trim().min(1).max(64),
+});
+
+export const recordReplySuggestionStageBody = z.object({
+  executedActionId: z.string().trim().min(1).max(64),
+  /** The stages only the reader sees; the server records the rest itself. */
+  stage: z.enum(["shown", "opened"]),
+});

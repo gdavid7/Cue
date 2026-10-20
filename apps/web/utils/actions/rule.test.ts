@@ -22,14 +22,20 @@ vi.mock("@/utils/prisma");
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: createEmailProviderMock,
 }));
-vi.mock("@/utils/rule/rule-history", () => ({
+vi.mock("@/utils/rule/rule-history", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/rule/rule-history")>()),
   createRuleHistory: createRuleHistoryMock,
+}));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (task: () => unknown) => task(),
 }));
 vi.mock("@/utils/auth", () => ({
   auth: vi.fn(async () => ({ user: { id: "u1", email: "owner@example.com" } })),
 }));
 
 import prisma from "@/utils/__mocks__/prisma";
+import { Prisma } from "@/generated/prisma/client";
 import { createEmailProvider } from "@/utils/email/provider";
 import {
   deleteRuleAction,
@@ -83,6 +89,84 @@ describe("enableDraftRepliesAction", () => {
     });
   });
 
+  // The founder's call: turning drafts on must not touch Gmail. A mailbox
+  // without To Reply gets a draft-only rule, as new mailboxes do.
+  it("creates a draft-only to-reply rule without creating a Gmail label", async () => {
+    mockAccount();
+    prisma.rule.findUnique.mockResolvedValue(null);
+    prisma.rule.create.mockResolvedValue({
+      id: "rule-new",
+      actions: [{ type: ActionType.DRAFT_EMAIL }],
+    } as never);
+
+    const result = await enableDraftRepliesAction(
+      "ea_1" as never,
+      { enable: true } as never,
+    );
+
+    expect(result?.serverError).toBeUndefined();
+    expect(createEmailProvider).not.toHaveBeenCalled();
+    expect(prisma.rule.create).toHaveBeenCalledTimes(1);
+    const { data } = prisma.rule.create.mock.calls[0][0];
+    expect(data).toMatchObject({
+      emailAccountId: "ea_1",
+      systemType: SystemType.TO_REPLY,
+      enabled: true,
+      actions: { create: [{ type: ActionType.DRAFT_EMAIL }] },
+    });
+    expect(prisma.action.create).not.toHaveBeenCalled();
+    expect(createRuleHistoryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "created" }),
+    );
+  });
+
+  it("reports a rule of the user's own that already has the To Reply name", async () => {
+    mockAccount();
+    prisma.rule.findUnique.mockResolvedValue(null);
+    prisma.rule.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+        code: "P2002",
+        clientVersion: "test",
+        meta: { target: ["name", "emailAccountId"] },
+      }),
+    );
+
+    const result = await enableDraftRepliesAction(
+      "ea_1" as never,
+      { enable: true } as never,
+    );
+
+    expect(result?.serverError).toBe(
+      'You already have a rule named "To Reply". Rename it and try again.',
+    );
+    expect(prisma.action.create).not.toHaveBeenCalled();
+  });
+
+  // Older mailboxes' To Reply labels; turning drafts on leaves that alone.
+  it("keeps an enabled to-reply rule's label and only adds the draft", async () => {
+    mockAccount();
+    prisma.rule.findUnique.mockResolvedValue({
+      id: "rule-1",
+      enabled: true,
+      systemType: SystemType.TO_REPLY,
+      actions: [{ id: "label-1", type: ActionType.LABEL }],
+    } as never);
+
+    await enableDraftRepliesAction("ea_1" as never, { enable: true } as never);
+
+    expect(createEmailProvider).not.toHaveBeenCalled();
+    expect(setRuleEnabledMock).not.toHaveBeenCalled();
+    expect(prisma.rule.create).not.toHaveBeenCalled();
+    expect(prisma.action.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.action.create).toHaveBeenCalledTimes(1);
+    expect(prisma.action.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ruleId: "rule-1",
+        type: ActionType.DRAFT_EMAIL,
+      }),
+    });
+  });
+
   it("disables the existing to-reply rule when draft replies are turned off", async () => {
     (
       prisma.emailAccount.findUnique as ReturnType<typeof vi.fn>
@@ -119,6 +203,15 @@ describe("enableDraftRepliesAction", () => {
     });
   });
 });
+
+function mockAccount() {
+  (
+    prisma.emailAccount.findUnique as ReturnType<typeof vi.fn>
+  ).mockResolvedValue({
+    email: "owner@example.com",
+    account: { userId: "u1", provider: "google" },
+  });
+}
 
 describe("deleteRuleAction", () => {
   beforeEach(() => {

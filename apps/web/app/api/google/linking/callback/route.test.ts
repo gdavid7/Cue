@@ -212,16 +212,18 @@ describe("google linking callback route", () => {
     expect(mockSetOAuthCodeResult).toHaveBeenCalledWith("valid-auth-code", {
       success: "tokens_updated",
     });
+    expect(mockSetOAuthCodeResult.mock.invocationCallOrder[0]).toBeLessThan(
+      mockAfter.mock.invocationCallOrder.at(-1)!,
+    );
+    // The redirect doesn't wait on the calendar or the watch.
+    expect(connectCalendarAtSignIn).not.toHaveBeenCalled();
+    expect(mockEnsureEmailAccountsWatched).not.toHaveBeenCalled();
+
+    await runScheduledAfterCallbacks();
     expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
       accountId: "existing-account-123",
       logger: expect.anything(),
     });
-    expect(mockSetOAuthCodeResult.mock.invocationCallOrder[0]).toBeLessThan(
-      mockAfter.mock.invocationCallOrder[0],
-    );
-    expect(mockEnsureEmailAccountsWatched).not.toHaveBeenCalled();
-
-    await runScheduledAfterCallback();
     expect(
       mockEnsureEmailAccountsWatched.mock.invocationCallOrder[0],
     ).toBeLessThan(
@@ -382,8 +384,11 @@ describe("google linking callback route", () => {
     expectReplyTrackingOn(
       prisma.account.create.mock.calls[0]?.[0].data.emailAccount?.create?.rules,
     );
-    expect(recordFirstSignIn).toHaveBeenCalledWith("email-account-new");
     expect(prisma.account.update).not.toHaveBeenCalled();
+    expect(connectCalendarAtSignIn).not.toHaveBeenCalled();
+
+    await runScheduledAfterCallbacks();
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email-account-new");
     expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
       accountId: "account-123",
       logger: expect.anything(),
@@ -493,8 +498,7 @@ describe("google linking callback route", () => {
   });
 });
 
-async function runScheduledAfterCallback() {
-  const callback = mockAfter.mock.calls.at(-1)?.[0];
-  expect(callback).toBeTypeOf("function");
-  await callback();
+async function runScheduledAfterCallbacks() {
+  expect(mockAfter).toHaveBeenCalled();
+  for (const [callback] of mockAfter.mock.calls) await callback();
 }

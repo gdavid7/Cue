@@ -27,6 +27,7 @@ import {
   getLatestDraftMessageId,
   getReplyDraftMode,
   getReplyDraftSessionId,
+  getReplyDraftSessionIds,
   type ReplyDraftMode,
   type StoredReplyDraft,
 } from "@/utils/mail-engine/reply-drafts";
@@ -48,6 +49,7 @@ export function EmailThread({
   showReplyButton,
   autoOpenReplyForMessageId,
   autoOpenReplyAll = false,
+  ownReplyForMessageId,
   autoOpenForwardForMessageId,
   focusAutoOpenedReply = true,
   topRightComponent,
@@ -77,6 +79,11 @@ export function EmailThread({
   autoOpenReplyForMessageId?: string;
   /** Addresses the auto-opened reply to everyone on the message. */
   autoOpenReplyAll?: boolean;
+  /**
+   * The message the user's own Reply is for, as opposed to a reply Cue
+   * opened: that reply answers the sender, not whoever Cue's reply is to.
+   */
+  ownReplyForMessageId?: string;
   autoOpenForwardForMessageId?: string;
   /** False when Cue, not the user, opened the reply, so it leaves focus alone. */
   focusAutoOpenedReply?: boolean;
@@ -213,8 +220,12 @@ export function EmailThread({
   );
   const isDraftShown = (sessionMessageId: string) =>
     !dismissedDraftIds.has(sessionMessageId) &&
-    getReplyDraftSessionId(sessionMessageId, "reply") !==
-      poppedOutDraftSessionId;
+    !(
+      poppedOutDraftSessionId &&
+      getReplyDraftSessionIds(sessionMessageId).includes(
+        poppedOutDraftSessionId,
+      )
+    );
   const shownDraftsOf = (draftMessages: ThreadMessage[]) =>
     draftMessages
       .map((draft) => ({
@@ -563,6 +574,12 @@ export function EmailThread({
                 focusComposer={focusOpenComposer}
                 defaultComposeMode={defaultComposeMode}
                 defaultReplyAll={autoOpenMode === "reply" && autoOpenReplyAll}
+                // A reply the user already started here is theirs to return to.
+                ownReplyRequested={
+                  (autoOpenMode === "reply" &&
+                    ownReplyForMessageId === message.id) ||
+                  localDraftModeFor(message) === "reply"
+                }
                 draftMessages={draftMessages}
                 expanded={expanded(
                   message.id,

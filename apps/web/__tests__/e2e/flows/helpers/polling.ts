@@ -90,6 +90,7 @@ export async function waitForExecutedRule(options: {
     id: string;
     type: string;
     draftId: string | null;
+    draftStatus: string | null;
     labelId: string | null;
   }>;
 }> {
@@ -117,6 +118,7 @@ export async function waitForExecutedRule(options: {
                 id: true,
                 type: true,
                 draftId: true,
+                draftStatus: true,
                 labelId: true,
               },
             },
@@ -149,6 +151,7 @@ export async function waitForExecutedRule(options: {
             id: a.id,
             type: a.type,
             draftId: a.draftId,
+            draftStatus: a.draftStatus,
             labelId: a.labelId,
           })),
         };
@@ -219,6 +222,83 @@ export async function waitForDraft(options: {
     {
       timeout,
       description: `Draft for thread ${threadId}`,
+    },
+  );
+}
+
+/**
+ * Wait for the reply a rule wrote: a suggestion kept in Cue (pending, no
+ * mailbox draft). It becomes a mailbox draft only once the user edits it.
+ */
+export async function waitForReplySuggestion(options: {
+  threadId: string;
+  emailAccountId: string;
+  timeout?: number;
+}): Promise<{ executedActionId: string; content: string }> {
+  const {
+    threadId,
+    emailAccountId,
+    timeout = TIMEOUTS.WEBHOOK_PROCESSING,
+  } = options;
+
+  logStep("Waiting for reply suggestion", { threadId, emailAccountId });
+
+  return pollUntil(
+    async () => {
+      const action = await prisma.executedAction.findFirst({
+        where: {
+          executedRule: { emailAccountId, threadId },
+          type: "DRAFT_EMAIL",
+          draftStatus: DraftEmailStatus.PENDING,
+          content: { not: null },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, content: true, draftId: true },
+      });
+      if (!action?.content) return null;
+      if (action.draftId)
+        throw new Error(
+          `Reply suggestion ${action.id} has a mailbox draft: rule replies must stay in Cue`,
+        );
+      return { executedActionId: action.id, content: action.content };
+    },
+    {
+      timeout,
+      description: `Reply suggestion for thread ${threadId}`,
+    },
+  );
+}
+
+/**
+ * Wait for a rule's suggestion to settle: used, written without it, or
+ * superseded by a newer message.
+ */
+export async function waitForSuggestionStatus(options: {
+  executedActionId: string;
+  statuses: DraftEmailStatus[];
+  timeout?: number;
+}): Promise<DraftEmailStatus> {
+  const {
+    executedActionId,
+    statuses,
+    timeout = TIMEOUTS.WEBHOOK_PROCESSING,
+  } = options;
+
+  logStep("Waiting for suggestion status", { executedActionId, statuses });
+
+  return pollUntil(
+    async () => {
+      const action = await prisma.executedAction.findUnique({
+        where: { id: executedActionId },
+        select: { draftStatus: true },
+      });
+      return action?.draftStatus && statuses.includes(action.draftStatus)
+        ? action.draftStatus
+        : null;
+    },
+    {
+      timeout,
+      description: `Suggestion ${executedActionId} to be ${statuses.join(" or ")}`,
     },
   );
 }

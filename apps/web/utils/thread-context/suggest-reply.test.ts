@@ -504,7 +504,7 @@ describe("suggestReply when auto draft replies are off", () => {
     });
     prisma.emailAccount.findUnique.mockResolvedValue({
       webLookupEnabled: true,
-      rules: [{ enabled: true, actions: [{ type: ActionType.LABEL }] }],
+      rules: [{ enabled: false, actions: [{ type: ActionType.LABEL }] }],
     } as never);
 
     const result = await suggestReply({
@@ -517,6 +517,52 @@ describe("suggestReply when auto draft replies are off", () => {
 
     expect(result).toEqual({ status: "unavailable" });
     expect(getEmailAccountWithAi).not.toHaveBeenCalled();
+  });
+
+  // Mailboxes from before drafting was the default never chose: the reader
+  // only asks for these when the user presses "Draft a reply".
+  it("answers a mailbox that never chose", async () => {
+    const latest = getMockMessage({
+      id: "m4",
+      threadId: "t4",
+      from: "sarah@example.com",
+    });
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t4", messages: [latest], snippet: "" },
+      items: [],
+    });
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: false,
+        missing: "Which Friday.",
+        webQuery: "",
+        reply: "",
+        claims: [],
+      },
+    });
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      webLookupEnabled: true,
+      rules: [{ enabled: true, actions: [{ type: ActionType.LABEL }] }],
+    } as never);
+
+    const result = await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t4",
+      emailProvider: {} as EmailProvider,
+      logger,
+    });
+
+    expect(result).toMatchObject({ status: "insufficient" });
+    expect(getEmailAccountWithAi).toHaveBeenCalled();
   });
 
   it("suggests nothing when the To Reply rule is turned off", async () => {

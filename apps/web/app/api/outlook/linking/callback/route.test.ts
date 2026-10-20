@@ -325,15 +325,17 @@ describe("outlook linking callback route", () => {
     expectReplyTrackingOn(
       prisma.account.create.mock.calls[0]?.[0].data.emailAccount?.create?.rules,
     );
-    expect(recordFirstSignIn).toHaveBeenCalledWith("email-account-new");
     expect(mockSetOAuthCodeResult).toHaveBeenCalledWith("valid-auth-code", {
       success: "account_created_and_linked",
     });
+    // The redirect doesn't wait on the calendar.
+    expect(connectCalendarAtSignIn).not.toHaveBeenCalled();
+    await expectWatchScheduledForUser("user-123");
+    expect(recordFirstSignIn).toHaveBeenCalledWith("email-account-new");
     expect(connectCalendarAtSignIn).toHaveBeenCalledWith({
       accountId: "account-123",
       logger: expect.anything(),
     });
-    await expectWatchScheduledForUser("user-123");
   });
 
   // Parallel auth URLs all pass the check there, so each callback checks again
@@ -957,9 +959,8 @@ function createFetchFailedError(code: string) {
 
 async function expectWatchScheduledForUser(userId: string) {
   expect(mockEnsureEmailAccountsWatched).not.toHaveBeenCalled();
-  const callback = mockAfter.mock.calls.at(-1)?.[0];
-  expect(callback).toBeTypeOf("function");
-  await callback();
+  expect(mockAfter).toHaveBeenCalled();
+  for (const [callback] of mockAfter.mock.calls) await callback();
   expect(mockEnsureEmailAccountsWatched).toHaveBeenCalledWith({
     userIds: [userId],
     logger: expect.anything(),

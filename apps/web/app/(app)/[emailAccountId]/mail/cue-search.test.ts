@@ -5,7 +5,6 @@ import {
   getSearchAnswerRequest,
   getWiderSearches,
   keepFrozenRows,
-  PLAIN_ROWS_IN_VIEW,
   shouldWidenCueSearch,
   withoutPlainDuplicates,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
@@ -16,6 +15,7 @@ const INTENT: CueSearchIntent = {
   unreadOnly: false,
   explanation: "Mail from Sarah with attachments mentioning lease or contract",
   isQuestion: false,
+  timeZone: "UTC",
 };
 const IDLE = { settled: false, count: 0 };
 const EMPTY = { settled: true, count: 0 };
@@ -222,14 +222,11 @@ describe("keepFrozenRows", () => {
 });
 
 describe("withoutPlainDuplicates", () => {
-  it("hides rows the plain results already show on screen, and only those", () => {
-    const plain = Array.from({ length: PLAIN_ROWS_IN_VIEW + 2 }, (_, i) =>
-      row(`p${i}`),
-    );
-    const cue = [row("p0"), row("new"), row(`p${PLAIN_ROWS_IN_VIEW}`)];
+  it("hides rows anywhere in the loaded plain results, and only those", () => {
+    const plain = Array.from({ length: 8 }, (_, i) => row(`p${i}`));
+    const cue = [row("p0"), row("new"), row("p6")];
     expect(withoutPlainDuplicates(cue, plain).map((t) => t.id)).toEqual([
       "new",
-      `p${PLAIN_ROWS_IN_VIEW}`,
     ]);
     // The plain list is left as it is.
     expect(plain.map((t) => t.id)[0]).toBe("p0");

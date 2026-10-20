@@ -4,7 +4,7 @@ import {
   attachmentSourceInputSchema,
   selectedAttachmentSchema,
 } from "@/utils/attachments/source-schema";
-import { resolveDraftAttachments } from "@/utils/attachments/draft-attachments";
+import { resolveDraftAttachmentsWithFailures } from "@/utils/attachments/draft-attachments";
 import type {
   ActionExecutionEmailAccount,
   ActionItem,
@@ -13,15 +13,7 @@ import type {
 } from "@/utils/ai/types";
 import type { Logger } from "@/utils/logger";
 
-export async function resolveActionAttachments({
-  email,
-  emailAccount,
-  executedRule,
-  logger,
-  staticAttachments,
-  selectedAttachments,
-  includeAiSelectedAttachments,
-}: {
+type ResolveActionAttachmentsOptions = {
   email: EmailForAction;
   emailAccount: ActionExecutionEmailAccount;
   executedRule: ExecutedRuleForAction;
@@ -29,7 +21,28 @@ export async function resolveActionAttachments({
   staticAttachments?: ActionItem["staticAttachments"];
   selectedAttachments?: ActionItem["selectedAttachments"];
   includeAiSelectedAttachments: boolean;
-}) {
+};
+
+export async function resolveActionAttachments(
+  options: ResolveActionAttachmentsOptions,
+) {
+  return (await resolveActionAttachmentsWithFailures(options)).attachments;
+}
+
+/**
+ * The action's files, and the names of those that couldn't be fetched. With
+ * `onlyFilenames`, just the files of those names: the ones the user kept.
+ */
+export async function resolveActionAttachmentsWithFailures({
+  email,
+  emailAccount,
+  executedRule,
+  logger,
+  staticAttachments,
+  selectedAttachments,
+  includeAiSelectedAttachments,
+  onlyFilenames,
+}: ResolveActionAttachmentsOptions & { onlyFilenames?: string[] }) {
   const staticSelectedAttachments = parseStaticAttachments(staticAttachments);
   const aiSelectedAttachments = includeAiSelectedAttachments
     ? parseSelectedAttachments(selectedAttachments)
@@ -39,10 +52,10 @@ export async function resolveActionAttachments({
     staticSelectedAttachments.length === 0 &&
     aiSelectedAttachments.length === 0
   ) {
-    return [];
+    return { attachments: [], failedFilenames: [] };
   }
 
-  const allSelected = [
+  const deduplicated = [
     ...new Map(
       [...aiSelectedAttachments, ...staticSelectedAttachments].map(
         (attachment) => [
@@ -52,10 +65,15 @@ export async function resolveActionAttachments({
       ),
     ).values(),
   ];
+  const allSelected = onlyFilenames
+    ? deduplicated.filter((attachment) =>
+        onlyFilenames.includes(attachment.filename.trim()),
+      )
+    : deduplicated;
 
-  if (allSelected.length === 0) return [];
+  if (allSelected.length === 0) return { attachments: [], failedFilenames: [] };
 
-  const attachments = await resolveDraftAttachments({
+  const { attachments, failed } = await resolveDraftAttachmentsWithFailures({
     emailAccountId: emailAccount.id,
     userId: emailAccount.userId,
     selectedAttachments: allSelected,
@@ -70,7 +88,10 @@ export async function resolveActionAttachments({
     });
   }
 
-  return attachments;
+  return {
+    attachments,
+    failedFilenames: failed.map((attachment) => attachment.filename),
+  };
 }
 
 function parseStaticAttachments(raw: unknown): SelectedAttachment[] {

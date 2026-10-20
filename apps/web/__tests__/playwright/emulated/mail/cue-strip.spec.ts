@@ -91,7 +91,7 @@ test.beforeEach(async ({ page }) => {
     match: `<subject>${UNSORTED_SUBJECT}</subject>`,
     object: { summary: UNSORTED_SUMMARY, keyPoints: [] },
   });
-  // FYI, not To Reply: Draft reply works for any email from a person, and
+  // FYI, not To Reply: Draft a reply works for any email from a person, and
   // nothing drafts on its own before the user asks.
   const [fyi, newsletter] = await Promise.all([
     ensureLabel(page, "FYI"),
@@ -179,13 +179,19 @@ test("sums up a conversation with a person, not a newsletter, and drafts the rep
   expect(await countBriefModelCalls()).toBe(briefModelCalls);
   await expect(editor).toHaveCount(0);
 
-  await strip.getByRole("button", { name: "Draft reply" }).click();
+  // Offered once, under the reply actions; the strip has no draft button.
+  await expect(strip.getByRole("button", { name: /draft/i })).toHaveCount(0);
+  await page
+    .getByTestId("thread-reader")
+    .getByRole("button", { name: "Draft a reply" })
+    .click();
   await expect(editor).toContainText(REPLY, { timeout: 60_000 });
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-draft-reply");
 });
 
 // The strip's space is held from the first frame whenever it could show, so a
-// summary that lands late never pushes the conversation down.
+// summary that lands late never pushes the conversation down, and nothing else
+// in the reader moves it either.
 test("the conversation doesn't move when the strip settles", async ({
   page,
 }, testInfo) => {
@@ -219,7 +225,7 @@ test("the conversation doesn't move when the strip settles", async ({
     (window as unknown as { __messageTops: string[] }).__messageTops = tops;
     // Measured from the subject above it, so the page settling around the
     // reader (banners, the list loading) doesn't count; only what sits
-    // between the subject and the first message, which is the strip.
+    // between the subject and the first message.
     const sample = () => {
       const subject = document.querySelector("[data-mail-reader-subject]");
       const message = document.querySelector("[data-thread-message-id]");
@@ -230,11 +236,17 @@ test("the conversation doesn't move when the strip settles", async ({
             subject.getBoundingClientRect().top,
         );
         // The strip's state, height and busy flag ride along, to tell its
-        // changes from the reader's; the subject's height explains a wrap.
+        // changes from the reader's; the subject's height explains a wrap,
+        // and the rows listed above the message one held there for it.
         const busy =
           strip?.querySelector("[aria-busy]")?.getAttribute("aria-busy") ??
           "none";
-        const entry = `${offset}:${strip?.getAttribute("data-cue-strip-state") ?? "none"}:${Math.round(strip?.getBoundingClientRect().height ?? 0)}:${busy}:${Math.round(subject.getBoundingClientRect().height)}`;
+        let rowsAbove = 0;
+        for (let row = message.previousElementSibling; row; ) {
+          rowsAbove++;
+          row = row.previousElementSibling;
+        }
+        const entry = `${offset}:${strip?.getAttribute("data-cue-strip-state") ?? "none"}:${Math.round(strip?.getBoundingClientRect().height ?? 0)}:${busy}:${Math.round(subject.getBoundingClientRect().height)}:${rowsAbove}`;
         if (tops.at(-1) !== entry) tops.push(entry);
       }
       requestAnimationFrame(sample);
@@ -252,32 +264,20 @@ test("the conversation doesn't move when the strip settles", async ({
   const samples = await page.evaluate(
     () => (window as unknown as { __messageTops: string[] }).__messageTops,
   );
-  // The strip is held from its first frame at the height it settles at, and
-  // none of its own changes (deciding, showing, its summary landing) moves
-  // the message: wherever the strip changes, the offset before is the offset
-  // after. The reader's own first layout may move things on frames where the
-  // strip is unchanged; that isn't the strip's doing. With Cue's note kept in
-  // this browser, the strip shows from the first frame, so that first layout
-  // now falls after it shows.
+  // Nothing between the subject and the message moves it, from the first
+  // frame both are on screen to the summary landing: the strip is held at the
+  // height it settles at, and the reader holds no row it later takes back
+  // (RV-1: an earlier-messages row held for a fill that found nothing).
   const parsed = samples.map((sample) => {
-    const [offset, state, height, busy] = sample.split(":");
-    return { offset, state, height, busy };
+    const [offset, state, height] = sample.split(":");
+    return { offset, state, height };
   });
   const trail = samples.join(" → ");
-  const firstShown = parsed.findIndex((sample) => sample.state === "show");
-  expect(firstShown, trail).toBeGreaterThanOrEqual(0);
-  const stripMoves = parsed.flatMap((sample, index) => {
-    const before = parsed[index - 1];
-    const stripChanged =
-      before &&
-      (before.state !== sample.state ||
-        before.height !== sample.height ||
-        before.busy !== sample.busy);
-    return stripChanged && before.offset !== sample.offset
-      ? [`${samples[index - 1]} → ${samples[index]}`]
-      : [];
-  });
-  expect(stripMoves, trail).toEqual([]);
+  expect(
+    parsed.findIndex((sample) => sample.state === "show"),
+    trail,
+  ).toBeGreaterThanOrEqual(0);
+  expect(new Set(parsed.map((sample) => sample.offset)).size, trail).toBe(1);
   const held = parsed.filter((sample) => sample.state !== "none");
   expect(new Set(held.map((sample) => sample.height)).size, trail).toBe(1);
   await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-settled-late");

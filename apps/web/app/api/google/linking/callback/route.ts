@@ -37,8 +37,21 @@ import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels"
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
+import {
+  deferCallbackStep,
+  runWithCallbackTimings,
+  timeCallbackStep,
+} from "@/utils/oauth/callback-timings";
+import type { RequestWithLogger } from "@/utils/middleware";
 
-export const GET = withError("google/linking/callback", async (request) => {
+export const GET = withError("google/linking/callback", (request) =>
+  runWithCallbackTimings(
+    { flow: "link", provider: "google", logger: request.logger },
+    () => handleGoogleLinkingCallback(request),
+  ),
+);
+
+async function handleGoogleLinkingCallback(request: RequestWithLogger) {
   const actorSession = await auth(request.headers);
   const actorUserId = actorSession?.user.id ?? null;
   let logger = request.logger.with({
@@ -113,12 +126,12 @@ export const GET = withError("google/linking/callback", async (request) => {
   const googleAuth = getLinkingOAuth2Client();
 
   try {
-    const { tokens } = await googleAuth.getToken(code);
-    const payload = await getGoogleProfilePayload({
-      googleAuth,
-      tokens,
-      logger,
-    });
+    const { tokens } = await timeCallbackStep("tokenExchange", () =>
+      googleAuth.getToken(code),
+    );
+    const payload = await timeCallbackStep("profile", () =>
+      getGoogleProfilePayload({ googleAuth, tokens, logger }),
+    );
 
     const providerAccountId = payload.sub;
     const providerEmail = payload.email;
@@ -292,8 +305,13 @@ export const GET = withError("google/linking/callback", async (request) => {
         });
 
         linkedAccountId = newAccount.id;
-        if (newAccount.emailAccount)
-          await recordFirstSignIn(newAccount.emailAccount.id);
+        const newEmailAccountId = newAccount.emailAccount?.id;
+        if (newEmailAccountId)
+          deferCallbackStep(
+            "firstSignInEvent",
+            () => recordFirstSignIn(newEmailAccountId),
+            logger,
+          );
         logger.info("Successfully created and linked new Google account", {
           email: providerEmail,
           targetUserId,
@@ -456,7 +474,7 @@ export const GET = withError("google/linking/callback", async (request) => {
       logger,
     });
   }
-});
+}
 
 interface GoogleTokens {
   access_token?: string | null;
@@ -480,15 +498,20 @@ async function completeGoogleAccountLinking({
   success: "account_created_and_linked" | "account_merged" | "tokens_updated";
   targetUserId: string;
 }) {
-  await connectCalendarAtSignIn({ accountId, logger });
-  await shareChannelsAcrossMailboxes({ userId: targetUserId, logger }).catch(
-    (error) => {
-      logger.error("Failed to share messaging channels with mailbox", {
-        error,
-      });
-    },
+  // The page the person lands on needs neither, so they don't wait on them.
+  deferCallbackStep(
+    "calendarConnect",
+    () => connectCalendarAtSignIn({ accountId, logger }),
+    logger,
   );
-  await setOAuthCodeResult(code, { success });
+  deferCallbackStep(
+    "shareChannels",
+    () => shareChannelsAcrossMailboxes({ userId: targetUserId, logger }),
+    logger,
+  );
+  await timeCallbackStep("saveCodeResult", () =>
+    setOAuthCodeResult(code, { success }),
+  );
 
   scheduleWatchAfterLinking({ targetUserId, logger });
 
