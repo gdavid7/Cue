@@ -1832,9 +1832,22 @@ describe("filterConversationStatusRules", () => {
   });
 });
 
-function getProvider({ isThread = false }: { isThread?: boolean } = {}) {
+function getProvider({
+  isThread = false,
+  threadMessages = [],
+}: {
+  isThread?: boolean;
+  threadMessages?: { id: string; from: string }[];
+} = {}) {
   return {
     isReplyInThread: vi.fn().mockReturnValue(isThread),
+    getThread: vi.fn().mockResolvedValue({
+      id: "thread",
+      snippet: "",
+      messages: threadMessages.map(({ id, from }) =>
+        getMessage({ id, headers: getHeaders({ from }) }),
+      ),
+    }),
   } as unknown as EmailProvider;
 }
 
@@ -2876,6 +2889,153 @@ describe("findMatchingRules - Integration Tests", () => {
       expect(result.matches).toHaveLength(1);
       expect(result.matches[0]?.rule.id).toBe("thread-ok");
     });
+  });
+
+  describe("Thread carryover when the sender changes", () => {
+    const notificationRule = getRule({
+      id: "notification-rule",
+      name: "Notification",
+      runOnThreads: false,
+      instructions: "Automated notifications",
+    });
+    const marketingRule = getRule({
+      id: "marketing-rule",
+      name: "Marketing",
+      runOnThreads: false,
+      instructions: "Promotional emails",
+    });
+    const conversationsRule = getRule({
+      id: "conversations-rule",
+      name: "Conversations",
+      runOnThreads: true,
+      instructions: "Conversations with people",
+    });
+    const rules = [notificationRule, marketingRule, conversationsRule];
+    const threadMessages = [
+      { id: "first", from: "Service Alerts <alerts@service.com>" },
+      { id: "reply", from: "Dana <dana@example.com>" },
+    ];
+
+    beforeEach(() => {
+      vi.mocked(aiChooseRule).mockResolvedValue({ rules: [], reason: "" });
+    });
+
+    it("gives a reply from a different sender the full candidate list", async () => {
+      mockAppliedThreadRules([
+        { ruleId: "notification-rule", messageId: "first" },
+      ]);
+
+      const result = await findMatchingRules({
+        rules,
+        message: getThreadReply("Dana <dana@example.com>"),
+        emailAccount: getEmailAccount(),
+        provider: getProvider({ isThread: true, threadMessages }),
+        modelType: "default",
+        logger,
+      });
+
+      expect(getAiCandidateNames()).toEqual([
+        "Notification",
+        "Marketing",
+        "Conversations",
+      ]);
+      expect(result.selectionMetadata).toMatchObject({
+        skippedThreadRuleNames: [],
+        continuedThreadRuleNames: [],
+      });
+    });
+
+    it("keeps carrying the rule for a follow-up from the same sender", async () => {
+      mockAppliedThreadRules([
+        { ruleId: "notification-rule", messageId: "first" },
+      ]);
+
+      const result = await findMatchingRules({
+        rules,
+        message: getThreadReply("Alerts <ALERTS@service.com>"),
+        emailAccount: getEmailAccount(),
+        provider: getProvider({ isThread: true, threadMessages }),
+        modelType: "default",
+        logger,
+      });
+
+      expect(getAiCandidateNames()).toEqual(["Notification", "Conversations"]);
+      expect(result.selectionMetadata).toMatchObject({
+        skippedThreadRuleNames: ["Marketing"],
+        continuedThreadRuleNames: ["Notification"],
+      });
+    });
+
+    it("keeps a Conversations thread on its thread rules without a mailbox lookup", async () => {
+      mockAppliedThreadRules([
+        { ruleId: "conversations-rule", messageId: "first" },
+      ]);
+      const threadProvider = getProvider({ isThread: true, threadMessages });
+
+      const result = await findMatchingRules({
+        rules,
+        message: getThreadReply("Dana <dana@example.com>"),
+        emailAccount: getEmailAccount(),
+        provider: threadProvider,
+        modelType: "default",
+        logger,
+      });
+
+      expect(getAiCandidateNames()).toEqual(["Conversations"]);
+      expect(result.selectionMetadata).toMatchObject({
+        skippedThreadRuleNames: ["Notification", "Marketing"],
+        continuedThreadRuleNames: [],
+      });
+      expect(threadProvider.getThread).not.toHaveBeenCalled();
+    });
+
+    it("keeps carrying the rule when the thread cannot be read", async () => {
+      mockAppliedThreadRules([
+        { ruleId: "notification-rule", messageId: "first" },
+      ]);
+      const threadProvider = getProvider({ isThread: true });
+      vi.mocked(threadProvider.getThread).mockRejectedValue(
+        new Error("Mailbox unavailable"),
+      );
+
+      await findMatchingRules({
+        rules,
+        message: getThreadReply("Dana <dana@example.com>"),
+        emailAccount: getEmailAccount(),
+        provider: threadProvider,
+        modelType: "default",
+        logger,
+      });
+
+      expect(getAiCandidateNames()).toEqual(["Notification", "Conversations"]);
+    });
+
+    function mockAppliedThreadRules(
+      rows: { ruleId: string; messageId: string }[],
+    ) {
+      prisma.executedRule.findMany.mockImplementation((async (args: {
+        where?: { ruleId?: { in?: string[] } };
+      }) => {
+        const ruleIds = args?.where?.ruleId?.in;
+        return ruleIds
+          ? rows.filter((row) => ruleIds.includes(row.ruleId))
+          : rows;
+      }) as any);
+    }
+
+    function getThreadReply(from: string) {
+      return getMessage({
+        id: "reply",
+        threadId: "first",
+        headers: getHeaders({ from }),
+      });
+    }
+
+    function getAiCandidateNames() {
+      return vi
+        .mocked(aiChooseRule)
+        .mock.calls[0]?.[0].rules.map((rule) => rule.name);
+    }
   });
 
   it("should handle invalid regex patterns gracefully", () => {

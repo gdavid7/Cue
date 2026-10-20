@@ -22,6 +22,7 @@ import type {
   RuleSelectionMetadata,
 } from "@/utils/ai/choose-rule/types";
 import {
+  canonicalizeEmailAddress,
   extractEmailAddress,
   extractEmailAddresses,
   extractNameFromEmail,
@@ -340,10 +341,16 @@ async function findPotentialMatchingRules({
     [];
 
   const learnedPatternsLoader = new LearnedPatternsLoader();
-  const previousRulesLoader = new PreviousThreadRulesLoader({
+  const threadCarryoverLoader = new ThreadCarryoverLoader({
     emailAccountId,
-    threadId: message.threadId,
+    message,
+    provider,
+    threadGatedRuleIds: rules
+      .filter((rule) => !rule.runOnThreads)
+      .map((rule) => rule.id),
+    logger,
   });
+  let threadSenderChanged = false;
 
   // Go through all rules and collect matches and potential AI matches
   for (const rule of rules) {
@@ -363,17 +370,19 @@ async function findPotentialMatchingRules({
 
     // Skip rules with runOnThreads=false, unless this rule was previously applied in the thread
     // This ensures thread continuity (e.g., notifications continue to be labeled as notifications)
+    // Carrying a rule is only plausible while the same sender continues the thread. When someone
+    // else replies (e.g. a person answering an automated message) it is classified like a new thread.
     // Must be checked before learned patterns to prevent pattern matches from bypassing this guard
     if (isThread && !rule.runOnThreads) {
-      const previousRuleIds = await previousRulesLoader.getRuleIds();
-      const wasPreviouslyApplied = previousRuleIds.has(rule.id);
+      const carryover = await threadCarryoverLoader.get();
+      threadSenderChanged = carryover.senderChanged;
 
-      if (!wasPreviouslyApplied) {
+      if (carryover.carriedRuleIds.has(rule.id)) {
+        continuedThreadRuleNames.push(rule.name);
+      } else if (!carryover.senderChanged) {
         skippedThreadRuleNames.push(rule.name);
         continue;
       }
-
-      continuedThreadRuleNames.push(rule.name);
     }
 
     // Learned patterns (groups)
@@ -465,6 +474,7 @@ async function findPotentialMatchingRules({
     potentialAiMatches.length ||
     skippedThreadRuleNames.length ||
     continuedThreadRuleNames.length ||
+    threadSenderChanged ||
     learnedPatternExcludedRules.length ||
     conversationStatusFilter.filteredRuleNames.length ||
     !matches.length
@@ -485,6 +495,7 @@ async function findPotentialMatchingRules({
       skippedThreadRuleNames: joinLogValues(skippedThreadRuleNames),
       continuedThreadRuleCount: continuedThreadRuleNames.length,
       continuedThreadRuleNames: joinLogValues(continuedThreadRuleNames),
+      threadSenderChanged,
       learnedPatternExcludedRuleCount: learnedPatternExcludedRules.length,
       filteredConversationRuleCount:
         conversationStatusFilter.filteredRuleNames.length,
@@ -584,30 +595,17 @@ class LearnedPatternsLoader {
 }
 
 // Lazy load previously executed rules in thread when needed
-class PreviousThreadRulesLoader {
-  private ruleIds?: Set<string>;
-  private readonly emailAccountId: string;
-  private readonly threadId: string;
+class ThreadCarryoverLoader {
+  private carryover?: Promise<ThreadCarryover>;
+  private readonly options: Parameters<typeof getThreadCarryover>[0];
 
-  constructor({
-    emailAccountId,
-    threadId,
-  }: {
-    emailAccountId: string;
-    threadId: string;
-  }) {
-    this.emailAccountId = emailAccountId;
-    this.threadId = threadId;
+  constructor(options: Parameters<typeof getThreadCarryover>[0]) {
+    this.options = options;
   }
 
-  async getRuleIds(): Promise<Set<string>> {
-    if (this.ruleIds === undefined) {
-      this.ruleIds = await getPreviouslyExecutedRuleIds({
-        emailAccountId: this.emailAccountId,
-        threadId: this.threadId,
-      });
-    }
-    return this.ruleIds;
+  get(): Promise<ThreadCarryover> {
+    this.carryover ??= getThreadCarryover(this.options);
+    return this.carryover;
   }
 }
 
@@ -942,27 +940,99 @@ export function filterMultipleSystemRules<
  * This allows us to continue applying the same rules to a thread for consistency,
  * even if `runOnThreads` is false.
  */
-async function getPreviouslyExecutedRuleIds({
+type ThreadCarryover = {
+  carriedRuleIds: Set<string>;
+  // Rules were applied earlier in the thread, but none to mail from this sender.
+  senderChanged: boolean;
+};
+
+async function getThreadCarryover({
   emailAccountId,
-  threadId,
+  message,
+  provider,
+  threadGatedRuleIds,
+  logger,
 }: {
   emailAccountId: string;
-  threadId: string;
-}): Promise<Set<string>> {
+  message: ParsedMessage;
+  provider: EmailProvider;
+  threadGatedRuleIds: string[];
+  logger: Logger;
+}): Promise<ThreadCarryover> {
   const previousRules = await prisma.executedRule.findMany({
     where: {
       emailAccountId,
-      threadId,
+      threadId: message.threadId,
       status: ExecutedRuleStatus.APPLIED,
-      ruleId: { not: null },
+      ruleId: { in: threadGatedRuleIds },
     },
-    select: { ruleId: true },
-    distinct: ["ruleId"],
+    select: { ruleId: true, messageId: true },
   });
 
-  return new Set(
-    previousRules.map((r) => r.ruleId).filter((id): id is string => !!id),
-  );
+  const messageIdsByRuleId = new Map<string, Set<string>>();
+  for (const { ruleId, messageId } of previousRules) {
+    if (!ruleId) continue;
+    const messageIds = messageIdsByRuleId.get(ruleId) ?? new Set<string>();
+    messageIds.add(messageId);
+    messageIdsByRuleId.set(ruleId, messageIds);
+  }
+
+  const keepPreviousRules: ThreadCarryover = {
+    carriedRuleIds: new Set(messageIdsByRuleId.keys()),
+    senderChanged: false,
+  };
+
+  const sender = canonicalizeEmailAddress(message.headers.from);
+  if (!messageIdsByRuleId.size || !sender) return keepPreviousRules;
+
+  const senderByMessageId = await getThreadSenderByMessageId({
+    message,
+    provider,
+    logger,
+  });
+  if (!senderByMessageId) return keepPreviousRules;
+
+  const carriedRuleIds = new Set<string>();
+  for (const [ruleId, messageIds] of messageIdsByRuleId) {
+    const previousSenders = [...messageIds]
+      .map((messageId) => senderByMessageId.get(messageId))
+      .filter((previousSender): previousSender is string => !!previousSender);
+
+    // An earlier message that is no longer in the thread can't be compared, so keep its rule.
+    if (!previousSenders.length || previousSenders.includes(sender)) {
+      carriedRuleIds.add(ruleId);
+    }
+  }
+
+  return { carriedRuleIds, senderChanged: carriedRuleIds.size === 0 };
+}
+
+async function getThreadSenderByMessageId({
+  message,
+  provider,
+  logger,
+}: {
+  message: ParsedMessage;
+  provider: EmailProvider;
+  logger: Logger;
+}): Promise<Map<string, string> | null> {
+  try {
+    const thread = await provider.getThread(message.threadId, {
+      messageFormat: "metadata",
+    });
+
+    return new Map(
+      thread.messages.map((threadMessage) => [
+        threadMessage.id,
+        canonicalizeEmailAddress(threadMessage.headers.from),
+      ]),
+    );
+  } catch (error) {
+    logger.warn("Could not read thread senders for rule carryover", {
+      error,
+    });
+    return null;
+  }
 }
 
 function normalizeEmailHeaderForRuleMatching(
