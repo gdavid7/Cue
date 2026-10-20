@@ -4,6 +4,7 @@ import {
   filterConversationStatusRules,
   filterMultipleSystemRules,
   findMatchingRules,
+  hashSenderAddress,
   matchesStaticRule,
 } from "./match-rules";
 import {
@@ -1832,22 +1833,9 @@ describe("filterConversationStatusRules", () => {
   });
 });
 
-function getProvider({
-  isThread = false,
-  threadMessages = [],
-}: {
-  isThread?: boolean;
-  threadMessages?: { id: string; from: string }[];
-} = {}) {
+function getProvider({ isThread = false }: { isThread?: boolean } = {}) {
   return {
     isReplyInThread: vi.fn().mockReturnValue(isThread),
-    getThread: vi.fn().mockResolvedValue({
-      id: "thread",
-      snippet: "",
-      messages: threadMessages.map(({ id, from }) =>
-        getMessage({ id, headers: getHeaders({ from }) }),
-      ),
-    }),
   } as unknown as EmailProvider;
 }
 
@@ -2518,7 +2506,10 @@ describe("findMatchingRules - Integration Tests", () => {
 
       // Rule WAS previously applied to this thread
       prisma.executedRule.findMany.mockResolvedValue([
-        { ruleId: "notif-rule" },
+        {
+          ruleId: "notif-rule",
+          senderHash: hashSenderAddress("alerts@service.com"),
+        },
       ] as any);
 
       const threadProvider = getProvider({ isThread: true });
@@ -2767,7 +2758,10 @@ describe("findMatchingRules - Integration Tests", () => {
 
       // Mock DB to return previously executed rule id
       prisma.executedRule.findMany.mockResolvedValue([
-        { ruleId: "notif-rule" },
+        {
+          ruleId: "notif-rule",
+          senderHash: hashSenderAddress("notif@example.com"),
+        },
       ] as any);
 
       const rules = [notifRule];
@@ -2805,8 +2799,14 @@ describe("findMatchingRules - Integration Tests", () => {
       const threadProvider = getProvider({ isThread: true });
 
       prisma.executedRule.findMany.mockResolvedValue([
-        { ruleId: "rule-a" },
-        { ruleId: "rule-b" },
+        {
+          ruleId: "rule-a",
+          senderHash: hashSenderAddress("multi@example.com"),
+        },
+        {
+          ruleId: "rule-b",
+          senderHash: hashSenderAddress("multi@example.com"),
+        },
       ] as any);
 
       const rules = [ruleA, ruleB];
@@ -2911,34 +2911,19 @@ describe("findMatchingRules - Integration Tests", () => {
       instructions: "Conversations with people",
     });
     const rules = [notificationRule, marketingRule, conversationsRule];
-    const threadMessages = [
-      { id: "first", from: "Service Alerts <alerts@service.com>" },
-      { id: "reply", from: "Dana <dana@example.com>" },
-    ];
+    const alerts = "Service Alerts <alerts@service.com>";
+    const fullCandidates = ["Notification", "Marketing", "Conversations"];
 
     beforeEach(() => {
       vi.mocked(aiChooseRule).mockResolvedValue({ rules: [], reason: "" });
     });
 
     it("gives a reply from a different sender the full candidate list", async () => {
-      mockAppliedThreadRules([
-        { ruleId: "notification-rule", messageId: "first" },
-      ]);
+      mockAppliedThreadRules([{ ruleId: "notification-rule", from: alerts }]);
 
-      const result = await findMatchingRules({
-        rules,
-        message: getThreadReply("Dana <dana@example.com>"),
-        emailAccount: getEmailAccount(),
-        provider: getProvider({ isThread: true, threadMessages }),
-        modelType: "default",
-        logger,
-      });
+      const result = await matchThreadReply("Dana <dana@example.com>");
 
-      expect(getAiCandidateNames()).toEqual([
-        "Notification",
-        "Marketing",
-        "Conversations",
-      ]);
+      expect(getAiCandidateNames()).toEqual(fullCandidates);
       expect(result.selectionMetadata).toMatchObject({
         skippedThreadRuleNames: [],
         continuedThreadRuleNames: [],
@@ -2946,18 +2931,9 @@ describe("findMatchingRules - Integration Tests", () => {
     });
 
     it("keeps carrying the rule for a follow-up from the same sender", async () => {
-      mockAppliedThreadRules([
-        { ruleId: "notification-rule", messageId: "first" },
-      ]);
+      mockAppliedThreadRules([{ ruleId: "notification-rule", from: alerts }]);
 
-      const result = await findMatchingRules({
-        rules,
-        message: getThreadReply("Alerts <ALERTS@service.com>"),
-        emailAccount: getEmailAccount(),
-        provider: getProvider({ isThread: true, threadMessages }),
-        modelType: "default",
-        logger,
-      });
+      const result = await matchThreadReply("Alerts <ALERTS@service.com>");
 
       expect(getAiCandidateNames()).toEqual(["Notification", "Conversations"]);
       expect(result.selectionMetadata).toMatchObject({
@@ -2966,68 +2942,87 @@ describe("findMatchingRules - Integration Tests", () => {
       });
     });
 
-    it("keeps a Conversations thread on its thread rules without a mailbox lookup", async () => {
+    it("carries only the rules applied to mail from this sender", async () => {
       mockAppliedThreadRules([
-        { ruleId: "conversations-rule", messageId: "first" },
+        { ruleId: "notification-rule", from: alerts },
+        { ruleId: "marketing-rule", from: "Deals <deals@shop.example>" },
       ]);
-      const threadProvider = getProvider({ isThread: true, threadMessages });
 
-      const result = await findMatchingRules({
-        rules,
-        message: getThreadReply("Dana <dana@example.com>"),
-        emailAccount: getEmailAccount(),
-        provider: threadProvider,
-        modelType: "default",
-        logger,
+      const result = await matchThreadReply(alerts);
+
+      expect(getAiCandidateNames()).toEqual(["Notification", "Conversations"]);
+      expect(result.selectionMetadata).toMatchObject({
+        skippedThreadRuleNames: ["Marketing"],
+        continuedThreadRuleNames: ["Notification"],
       });
+    });
+
+    it("gives the user's own reply in a notification thread the full candidate list", async () => {
+      mockAppliedThreadRules([{ ruleId: "notification-rule", from: alerts }]);
+
+      await matchThreadReply(`Me <${getEmailAccount().email}>`);
+
+      expect(getAiCandidateNames()).toEqual(fullCandidates);
+    });
+
+    it("does not carry a rule whose earlier message has no recorded sender", async () => {
+      mockAppliedThreadRules([{ ruleId: "notification-rule", from: null }]);
+
+      await matchThreadReply(alerts);
+
+      expect(getAiCandidateNames()).toEqual(fullCandidates);
+    });
+
+    it("does not carry a rule when the reply has no sender", async () => {
+      mockAppliedThreadRules([{ ruleId: "notification-rule", from: alerts }]);
+
+      await matchThreadReply("");
+
+      expect(getAiCandidateNames()).toEqual(fullCandidates);
+    });
+
+    it("keeps a Conversations thread on its thread rules", async () => {
+      mockAppliedThreadRules([
+        { ruleId: "conversations-rule", from: "Dana <dana@example.com>" },
+      ]);
+
+      const result = await matchThreadReply("Sam <sam@example.com>");
 
       expect(getAiCandidateNames()).toEqual(["Conversations"]);
       expect(result.selectionMetadata).toMatchObject({
         skippedThreadRuleNames: ["Notification", "Marketing"],
         continuedThreadRuleNames: [],
       });
-      expect(threadProvider.getThread).not.toHaveBeenCalled();
-    });
-
-    it("keeps carrying the rule when the thread cannot be read", async () => {
-      mockAppliedThreadRules([
-        { ruleId: "notification-rule", messageId: "first" },
-      ]);
-      const threadProvider = getProvider({ isThread: true });
-      vi.mocked(threadProvider.getThread).mockRejectedValue(
-        new Error("Mailbox unavailable"),
-      );
-
-      await findMatchingRules({
-        rules,
-        message: getThreadReply("Dana <dana@example.com>"),
-        emailAccount: getEmailAccount(),
-        provider: threadProvider,
-        modelType: "default",
-        logger,
-      });
-
-      expect(getAiCandidateNames()).toEqual(["Notification", "Conversations"]);
     });
 
     function mockAppliedThreadRules(
-      rows: { ruleId: string; messageId: string }[],
+      rows: { ruleId: string; from: string | null }[],
     ) {
       prisma.executedRule.findMany.mockImplementation((async (args: {
         where?: { ruleId?: { in?: string[] } };
       }) => {
-        const ruleIds = args?.where?.ruleId?.in;
-        return ruleIds
-          ? rows.filter((row) => ruleIds.includes(row.ruleId))
-          : rows;
+        const ruleIds = args?.where?.ruleId?.in ?? [];
+        return rows
+          .filter((row) => ruleIds.includes(row.ruleId))
+          .map((row) => ({
+            ruleId: row.ruleId,
+            senderHash: hashSenderAddress(row.from),
+          }));
       }) as any);
     }
 
-    function getThreadReply(from: string) {
-      return getMessage({
-        id: "reply",
-        threadId: "first",
-        headers: getHeaders({ from }),
+    function matchThreadReply(from: string) {
+      return findMatchingRules({
+        rules,
+        message: getMessage({
+          id: "reply",
+          threadId: "first",
+          headers: getHeaders({ from }),
+        }),
+        emailAccount: getEmailAccount(),
+        provider: getProvider({ isThread: true }),
+        modelType: "default",
+        logger,
       });
     }
 

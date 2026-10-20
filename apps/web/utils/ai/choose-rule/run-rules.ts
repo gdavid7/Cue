@@ -8,7 +8,10 @@ import {
 } from "@/generated/prisma/enums";
 import type { Prisma, Rule } from "@/generated/prisma/client";
 import type { ActionItem } from "@/utils/ai/types";
-import { findMatchingRules } from "@/utils/ai/choose-rule/match-rules";
+import {
+  findMatchingRules,
+  hashSenderAddress,
+} from "@/utils/ai/choose-rule/match-rules";
 import {
   getActionItemsWithAiArgs,
   type EmailAccountForDrafting,
@@ -531,6 +534,7 @@ async function executeMatchedRule(
           status: ExecutedRuleStatus.APPLYING, // Changed from PENDING - rules are now always automated
           reason,
           matchMetadata: serializeMatchReasons(matchReasons),
+          senderHash: hashSenderAddress(message.headers.from),
           rule: rule?.id ? { connect: { id: rule.id } } : undefined,
           emailAccount: { connect: { id: emailAccount.id } },
           createdAt: batchTimestamp, // Use batch timestamp for grouping
