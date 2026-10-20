@@ -695,6 +695,24 @@ describe("a draft kept as its page goes away", () => {
     expect(await after.getReplyDraft(replyIdentity)).toBeUndefined();
   });
 
+  it("restores a kept draft only into the account it was typed in", async () => {
+    const client = createRevisionCheckingClient();
+    const before = await loadPage(client);
+    const otherAccount = { ...replyIdentity, emailAccountId: "other-account" };
+    before.createReplyDraftWriter(replyIdentity).keepUnsaved(lastEdit);
+    before.createReplyDraftWriter(otherAccount).keepUnsaved(content);
+    // Removing the other account leaves this account's kept draft alone.
+    before.clearLocalReplyDrafts(otherAccount.emailAccountId);
+
+    const after = await loadPage(client);
+    expect(
+      (await after.getReplyDraft(otherAccount))?.content?.draft.editableHtml,
+    ).not.toBe("<p>Typed before reload</p>");
+    expect(
+      (await after.getReplyDraft(replyIdentity))?.content?.draft.editableHtml,
+    ).toBe("<p>Typed before reload</p>");
+  });
+
   async function loadPage(
     client: ReturnType<typeof createRevisionCheckingClient>,
   ) {
