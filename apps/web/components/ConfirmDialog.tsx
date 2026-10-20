@@ -15,6 +15,8 @@ import {
 
 interface ConfirmDialogProps {
   cancelText?: string;
+  /** Shown under the description; mounted only while the dialog is open. */
+  children?: ReactNode;
   confirmText?: string;
   description: string;
   onConfirm: () => Promise<void> | void;
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   onConfirm,
   confirmText = "Delete",
   cancelText = "Cancel",
+  children,
 }: ConfirmDialogProps) {
   return (
     <AlertDialog>
@@ -38,6 +41,7 @@ export function ConfirmDialog({
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
+        {children}
         <AlertDialogFooter>
           <AlertDialogCancel>{cancelText}</AlertDialogCancel>
           <AlertDialogAction onClick={onConfirm}>

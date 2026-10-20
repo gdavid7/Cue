@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AttachmentSourceType } from "@/generated/prisma/enums";
-import { resolveActionAttachments } from "@/utils/ai/action-attachments";
+import {
+  resolveActionAttachments,
+  resolveActionAttachmentsWithFailures,
+} from "@/utils/ai/action-attachments";
 import { resolveDraftAttachments } from "@/utils/attachments/draft-attachments";
 import { createTestLogger } from "@/__tests__/helpers";
 
-vi.mock("@/utils/attachments/draft-attachments", () => ({
-  resolveDraftAttachments: vi.fn(),
-}));
+vi.mock("@/utils/attachments/draft-attachments", () => {
+  const resolveDraftAttachments = vi.fn();
+  return {
+    resolveDraftAttachments,
+    resolveDraftAttachmentsWithFailures: async (options: unknown) => ({
+      attachments: (await resolveDraftAttachments(options)) ?? [],
+      failed: [],
+    }),
+  };
+});
 
 const logger = createTestLogger();
 
@@ -41,6 +51,43 @@ describe("resolveActionAttachments", () => {
         contentType: "application/pdf",
       },
     ]);
+  });
+
+  // The reply's composer lets the user drop a rule's file before sending.
+  it("resolves only the files the user kept", async () => {
+    await resolveActionAttachmentsWithFailures({
+      email: email as any,
+      emailAccount,
+      executedRule: executedRule as any,
+      logger,
+      staticAttachments: [
+        {
+          driveConnectionId: "drive-1",
+          name: "lease.pdf",
+          sourceId: "file-1",
+          type: AttachmentSourceType.FILE,
+        },
+        {
+          driveConnectionId: "drive-1",
+          name: "floorplan.pdf",
+          sourceId: "file-2",
+          type: AttachmentSourceType.FILE,
+        },
+      ],
+      includeAiSelectedAttachments: false,
+      onlyFilenames: ["floorplan.pdf"],
+    });
+
+    expect(resolveDraftAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selectedAttachments: [
+          expect.objectContaining({
+            fileId: "file-2",
+            filename: "floorplan.pdf",
+          }),
+        ],
+      }),
+    );
   });
 
   it("returns early when there are no static attachments and AI selection is disabled", async () => {

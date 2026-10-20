@@ -1025,6 +1025,96 @@ function multiAccountHarness(input: {
   };
 }
 
+describe("mail engine sync lane restarts while the queue is busy", () => {
+  it("checks for finished lanes at most once a second between queued jobs", async () => {
+    const harness = busyQueueHarness(
+      Array.from({ length: 5 }, () => ({ kind: "hydrate" as const })),
+    );
+
+    // Jobs are claimed at 0, 300, 600, 900 and 1200 ms.
+    await harness.engine.runUntil(100_000);
+
+    // At 0 and 1200 ms while busy, then once the queue is empty.
+    expect(harness.laneChecks).toEqual([0, 1200, 1200]);
+    await harness.engine.close();
+  });
+
+  it("runs a claimed command without waiting on the lane check", async () => {
+    const harness = busyQueueHarness([{ kind: "command" as const }], {
+      holdLaneChecks: true,
+    });
+
+    const running = harness.engine.runUntil(100_000);
+    await vi.waitFor(() => expect(harness.executed).toEqual(["command-0"]));
+    // The only lane check so far is the one after the queue emptied.
+    expect(harness.laneChecks).toEqual([0]);
+
+    harness.releaseLaneChecks();
+    await running;
+    await harness.engine.close();
+  });
+});
+
+function busyQueueHarness(
+  jobs: Array<{ kind: "hydrate" | "command" }>,
+  options: { holdLaneChecks?: boolean } = {},
+) {
+  let nowMs = 0;
+  let claimed = 0;
+  const laneChecks: number[] = [];
+  const executed: string[] = [];
+  const heldChecks: Array<() => void> = [];
+  const store = {
+    ...idleCatchUpStore([]),
+    async readAccountSyncStates() {
+      laneChecks.push(nowMs);
+      if (options.holdLaneChecks) {
+        await new Promise<void>((resolve) => heldChecks.push(resolve));
+      }
+      return [];
+    },
+    async claimWork() {
+      const job = jobs[claimed];
+      if (!job) return null;
+      const id = `${job.kind}-${claimed}`;
+      claimed += 1;
+      nowMs += 300;
+      if (job.kind === "hydrate") {
+        return { kind: "hydrate", jobId: id, attemptId: id, keys: [] };
+      }
+      return {
+        kind: "command",
+        attemptId: id,
+        operation: { key: { accountId: "acc-1", operationId: id } },
+      };
+    },
+    async completeJob() {},
+    async settleAttempt() {},
+  } as unknown as MailStore;
+  // Claims are timed from the moment each is made.
+  nowMs = -300;
+  const engine = createMailEngine({
+    store,
+    source: idleSource(),
+    executor: {
+      ...idleExecutor(),
+      async execute({ operation }) {
+        executed.push(operation.key.operationId);
+        return { status: "uncertain", receiptId: null };
+      },
+    },
+    runtime: createHostRuntime({ nowMs: () => Math.max(nowMs, 0) }),
+  });
+  return {
+    engine,
+    laneChecks,
+    executed,
+    releaseLaneChecks() {
+      for (const release of heldChecks.splice(0)) release();
+    },
+  };
+}
+
 function countOf(values: string[], value: string) {
   return values.filter((item) => item === value).length;
 }

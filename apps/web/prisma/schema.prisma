@@ -882,16 +882,21 @@ model ExecutedAction {
   integrationArgs     Json? // Resolved tool args used for this execution
 
   // additional fields as a result of the action
-  draftId              String? // Gmail draft ID created by DRAFT_EMAIL action
-  draftStatus          DraftEmailStatus? // Last observed/inferred draft lifecycle status; provider state may be stale or ambiguous.
-  wasDraftSent         Boolean? // @deprecated Use draftStatus. Kept for historical compatibility only.
-  draftModelProvider   String?
-  draftModelName       String?
-  draftPipelineVersion Int?
-  draftContextMetadata Json?
-  draftSendLog         DraftSendLog? // Exists when an outbound reply was compared against this draft
-  digestItems          DigestItem[] // Relation to digest items created by this action
-  scheduledAction      ScheduledAction? // Reverse relation for delayed actions
+  draftId                 String? // Mailbox draft ID from a DRAFT_EMAIL run before replies became suggestions; null for a suggestion kept only in Cue
+  draftStatus             DraftEmailStatus? // Last observed/inferred draft lifecycle status; provider state may be stale or ambiguous. PENDING with no draftId is a suggestion waiting in Cue.
+  wasDraftSent            Boolean? // @deprecated Use draftStatus. Kept for historical compatibility only.
+  draftModelProvider      String?
+  draftModelName          String?
+  draftPipelineVersion    Int?
+  draftContextMetadata    Json?
+  // When a rule's suggestion first showed in the reader, and first opened in
+  // the composer: the draft funnel stages no other record keeps.
+  replySuggestionShownAt  DateTime?
+  replySuggestionOpenedAt DateTime?
+  draftSendLog            DraftSendLog? // Exists when an outbound reply was compared against this draft
+  suggestedReplyDraft     SuggestedReplyDraft? // The mailbox draft the user's first edit of this suggestion became
+  digestItems             DigestItem[] // Relation to digest items created by this action
+  scheduledAction         ScheduledAction? // Reverse relation for delayed actions
 
   @@index([executedRuleId])
   @@index([executionStatus, createdAt])
@@ -1443,6 +1448,10 @@ model SuggestedReplyDraft {
   messageId String // The message the suggestion replies to
   draftId   String
   content   String // The suggestion as Cue wrote it, before the user's edits
+
+  // The rule's suggestion this draft started from, when it was one
+  executedActionId String?         @unique
+  executedAction   ExecutedAction? @relation(fields: [executedActionId], references: [id], onDelete: SetNull)
 
   emailAccountId String
   emailAccount   EmailAccount  @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
@@ -2292,6 +2301,7 @@ enum DraftEmailStatus {
   REPLIED_WITHOUT_DRAFT
   CLEANED_UP_UNUSED
   MISSING_FROM_PROVIDER
+  DISMISSED // The user dismissed Cue's suggestion in the reader
 }
 
 enum ReplyMemoryKind {

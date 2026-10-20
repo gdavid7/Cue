@@ -53,8 +53,21 @@ import { scheduleWatchAfterLinking } from "@/utils/email/watch-after-linking";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
+import {
+  deferCallbackStep,
+  runWithCallbackTimings,
+  timeCallbackStep,
+} from "@/utils/oauth/callback-timings";
+import type { RequestWithLogger } from "@/utils/middleware";
 
-export const GET = withError("outlook/linking/callback", async (request) => {
+export const GET = withError("outlook/linking/callback", (request) =>
+  runWithCallbackTimings(
+    { flow: "link", provider: "microsoft", logger: request.logger },
+    () => handleMicrosoftLinkingCallback(request),
+  ),
+);
+
+async function handleMicrosoftLinkingCallback(request: RequestWithLogger) {
   const actorSession = await auth(request.headers);
   const actorUserId = actorSession?.user.id ?? null;
   let logger = request.logger.with({
@@ -154,15 +167,20 @@ export const GET = withError("outlook/linking/callback", async (request) => {
 
   try {
     // Exchange code for tokens
-    const tokenResponse = await requestMicrosoftToken({
+    const tokenRequest = {
       client_id: env.MICROSOFT_CLIENT_ID,
       client_secret: env.MICROSOFT_CLIENT_SECRET,
       code,
       grant_type: "authorization_code",
       redirect_uri: linkingRedirectUri,
-    });
-
-    const tokens = await tokenResponse.json();
+    };
+    const { tokenResponse, tokens } = await timeCallbackStep(
+      "tokenExchange",
+      async () => {
+        const response = await requestMicrosoftToken(tokenRequest);
+        return { tokenResponse: response, tokens: await response.json() };
+      },
+    );
 
     if (!tokenResponse.ok) {
       const errorDescription =
@@ -190,7 +208,9 @@ export const GET = withError("outlook/linking/callback", async (request) => {
     let legacyProviderAccountIds: string[] = [];
 
     try {
-      const result = await fetchMicrosoftUserProfile(tokens.access_token);
+      const result = await timeCallbackStep("profile", () =>
+        fetchMicrosoftUserProfile(tokens.access_token),
+      );
       profile = result.profile;
       providerEmail = result.email;
 
@@ -367,8 +387,13 @@ export const GET = withError("outlook/linking/callback", async (request) => {
         });
 
         linkedAccountId = newAccount.id;
-        if (newAccount.emailAccount)
-          await recordFirstSignIn(newAccount.emailAccount.id);
+        const newEmailAccountId = newAccount.emailAccount?.id;
+        if (newEmailAccountId)
+          deferCallbackStep(
+            "firstSignInEvent",
+            () => recordFirstSignIn(newEmailAccountId),
+            logger,
+          );
         logger.info("Successfully created and linked new Microsoft account", {
           email: providerEmail,
           targetUserId,
@@ -517,7 +542,7 @@ export const GET = withError("outlook/linking/callback", async (request) => {
       provider: "microsoft",
     });
   }
-});
+}
 
 interface MicrosoftTokens {
   access_token: string;
@@ -581,15 +606,20 @@ async function completeMicrosoftAccountLinking({
   success: "account_created_and_linked" | "account_merged" | "tokens_updated";
   targetUserId: string;
 }) {
-  await connectCalendarAtSignIn({ accountId, logger });
-  await shareChannelsAcrossMailboxes({ userId: targetUserId, logger }).catch(
-    (error) => {
-      logger.error("Failed to share messaging channels with mailbox", {
-        error,
-      });
-    },
+  // The page the person lands on needs neither, so they don't wait on them.
+  deferCallbackStep(
+    "calendarConnect",
+    () => connectCalendarAtSignIn({ accountId, logger }),
+    logger,
   );
-  await setOAuthCodeResult(code, { success });
+  deferCallbackStep(
+    "shareChannels",
+    () => shareChannelsAcrossMailboxes({ userId: targetUserId, logger }),
+    logger,
+  );
+  await timeCallbackStep("saveCodeResult", () =>
+    setOAuthCodeResult(code, { success }),
+  );
 
   scheduleWatchAfterLinking({ targetUserId, logger });
 

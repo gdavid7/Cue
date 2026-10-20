@@ -23,6 +23,7 @@ import { assertHasAiAccess } from "@/utils/premium/limits";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
+import { canWriteRequestedReplies } from "@/utils/rule/draft-replies-enabled";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailAccountWithAi } from "@/utils/user/get";
 
@@ -136,7 +137,7 @@ export async function getInboxInsights({
     events: events.map(toInsightEvent),
     // A suggestion this browser kept shows as "Draft ready" only while
     // drafting is on.
-    draftRepliesEnabled: settings.draftRepliesEnabled,
+    draftRepliesEnabled: canWriteRequestedReplies(settings.draftReplies),
   };
 }
 

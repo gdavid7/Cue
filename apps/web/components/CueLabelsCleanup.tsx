@@ -30,7 +30,7 @@ import { dismissHintAction } from "@/utils/actions/hints";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import { getCueLabelsHintId } from "@/utils/label/cue-default-labels";
-import { getInboxStyleHintId } from "@/utils/split-inbox/inbox-styles";
+import { isInboxStyleCardPending } from "@/utils/split-inbox/inbox-styles";
 import { cn } from "@/utils";
 
 type CueLabel = GetCueLabelsResponse["labels"][number];
@@ -56,7 +56,11 @@ export function CueLabelsCard() {
     isClosed ||
     !user ||
     user.dismissedHints.includes(hintId) ||
-    !user.dismissedHints.includes(getInboxStyleHintId(emailAccountId));
+    isInboxStyleCardPending({
+      provider,
+      emailAccountId,
+      dismissedHints: user.dismissedHints,
+    });
   const { data } = useCueLabels(isHidden ? null : emailAccountId, provider);
   const removal = useCueLabelsRemoval({
     emailAccountId,

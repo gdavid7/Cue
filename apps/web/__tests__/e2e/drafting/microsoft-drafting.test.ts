@@ -1,6 +1,10 @@
 /**
  * E2E tests for Microsoft Outlook drafting operations
  *
+ * These drive the provider's draft calls directly, as the composer and
+ * follow-up reminders do. A rule's reply never makes a mailbox draft: it is a
+ * suggestion kept in Cue until the user edits it (see the flow tests).
+ *
  * Usage:
  * pnpm test-e2e microsoft-drafting
  * pnpm test-e2e microsoft-drafting -t "should create reply draft"  # Run specific test

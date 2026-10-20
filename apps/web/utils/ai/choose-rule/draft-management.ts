@@ -6,6 +6,7 @@ import type { EmailProvider } from "@/utils/email/types";
 import { convertEmailHtmlToText } from "@/utils/mail";
 import type { ParsedMessage } from "@/utils/types";
 import { stripQuotedHtmlContent } from "@/utils/email/parse-message-reply";
+import { logReplySuggestionStage } from "@/utils/reply-tracker/suggestion-funnel";
 
 export type PreviousDraftHandlingResult =
   | {
@@ -136,27 +137,29 @@ export async function handlePreviousDraftDeletion({
 }
 
 /**
- * Updates the ExecutedAction record with the Gmail draft ID.
+ * A rule's reply waits in Cue as a suggestion: pending, with no mailbox draft.
+ * The reader shows it, and outbound tracking compares the sent reply with it.
  */
-export async function updateExecutedActionWithDraftId({
+export async function markReplySuggestionPending({
   actionId,
-  draftId,
   logger,
 }: {
   actionId: string;
-  draftId: string;
   logger: Logger;
 }) {
   try {
     await prisma.executedAction.update({
       where: { id: actionId },
-      data: { draftId, draftStatus: DraftEmailStatus.PENDING },
+      data: { draftStatus: DraftEmailStatus.PENDING },
     });
-    logger.info("Updated executed action with draft ID", { actionId, draftId });
+    logReplySuggestionStage({
+      logger,
+      stage: "generated",
+      executedActionId: actionId,
+    });
   } catch (error) {
-    logger.error("Failed to update executed action with draft ID", {
+    logger.error("Failed to mark reply suggestion pending", {
       actionId,
-      draftId,
       error,
     });
   }

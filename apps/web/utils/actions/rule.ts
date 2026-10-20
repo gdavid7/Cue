@@ -41,6 +41,12 @@ import { isGoogleProvider } from "@/utils/email/provider-types";
 import type { AttachmentSourceInput } from "@/utils/attachments/source-schema";
 import { assertCanUseDigestsIfNeeded } from "@/utils/premium/server";
 import { toCreateOrUpdateRuleCondition } from "@/utils/rule/create-rule-condition";
+import { replyTrackingRuleData } from "@/utils/reply-tracker/initial-rules";
+import {
+  createRuleHistory,
+  ruleHistoryRuleInclude,
+} from "@/utils/rule/rule-history";
+import { after } from "next/server";
 
 export const createRuleAction = actionClient
   .metadata({ name: "createRule" })
@@ -160,69 +166,57 @@ export const updateRuleAction = actionClient
 export const enableDraftRepliesAction = actionClient
   .metadata({ name: "enableDraftReplies" })
   .inputSchema(enableDraftRepliesBody)
-  .action(
-    async ({
-      ctx: { emailAccountId, provider, logger },
-      parsedInput: { enable },
-    }) => {
-      if (env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED && enable) return;
+  .action(async ({ ctx: { emailAccountId }, parsedInput: { enable } }) => {
+    if (env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED && enable) return;
 
-      const existingRule = await prisma.rule.findUnique({
-        where: {
-          emailAccountId_systemType: {
-            emailAccountId,
-            systemType: SystemType.TO_REPLY,
-          },
+    const existingRule = await prisma.rule.findUnique({
+      where: {
+        emailAccountId_systemType: {
+          emailAccountId,
+          systemType: SystemType.TO_REPLY,
         },
-        include: { actions: true },
-      });
+      },
+      include: { actions: true },
+    });
 
-      if (!existingRule && !enable) {
-        return;
-      }
+    if (!existingRule) {
+      if (enable) await createDraftOnlyToReplyRule(emailAccountId);
+      return;
+    }
 
-      const rule = existingRule
-        ? existingRule.enabled === enable
-          ? existingRule
-          : await setRuleEnabled({
-              ruleId: existingRule.id,
-              emailAccountId,
-              enabled: enable,
-            })
-        : await toggleRule({
+    const rule =
+      existingRule.enabled === enable
+        ? existingRule
+        : await setRuleEnabled({
+            ruleId: existingRule.id,
             emailAccountId,
             enabled: enable,
-            systemType: SystemType.TO_REPLY,
-            provider,
-            ruleId: undefined,
-            logger,
           });
 
-      if (enable) {
-        const alreadyDraftingReplies = rule.actions.find(
-          (a) => a.type === ActionType.DRAFT_EMAIL,
-        );
-        if (!alreadyDraftingReplies) {
-          await prisma.action.create({
-            data: addActionOwnershipToInput(
-              {
-                ruleId: rule.id,
-                type: ActionType.DRAFT_EMAIL,
-              },
-              emailAccountId,
-            ),
-          });
-        }
-      } else {
-        await prisma.action.deleteMany({
-          where: {
-            ruleId: rule.id,
-            type: ActionType.DRAFT_EMAIL,
-          },
+    if (enable) {
+      const alreadyDraftingReplies = rule.actions.find(
+        (a) => a.type === ActionType.DRAFT_EMAIL,
+      );
+      if (!alreadyDraftingReplies) {
+        await prisma.action.create({
+          data: addActionOwnershipToInput(
+            {
+              ruleId: rule.id,
+              type: ActionType.DRAFT_EMAIL,
+            },
+            emailAccountId,
+          ),
         });
       }
-    },
-  );
+    } else {
+      await prisma.action.deleteMany({
+        where: {
+          ruleId: rule.id,
+          type: ActionType.DRAFT_EMAIL,
+        },
+      });
+    }
+  });
 
 export const enableMultiRuleSelectionAction = actionClient
   .metadata({ name: "enableMultiRuleSelection" })
@@ -775,3 +769,26 @@ export const importRulesAction = actionClient
       return { createdCount, updatedCount, skippedCount };
     },
   );
+
+/**
+ * To Reply as new mailboxes get it (see INITIAL_REPLY_TRACKING_RULES): Cue
+ * sorts in its own database, so the rule only drafts and never creates or
+ * applies a mailbox label. It also turns reply tracking on, which To Reply is.
+ */
+async function createDraftOnlyToReplyRule(emailAccountId: string) {
+  const data = replyTrackingRuleData(SystemType.TO_REPLY);
+  try {
+    const rule = await prisma.rule.create({
+      data: { ...data, emailAccountId },
+      include: ruleHistoryRuleInclude,
+    });
+    after(() => createRuleHistory({ rule, triggerType: "created" }));
+  } catch (error) {
+    if (isDuplicateError(error, "name")) {
+      throw new SafeError(
+        `You already have a rule named "${data.name}". Rename it and try again.`,
+      );
+    }
+    throw error;
+  }
+}

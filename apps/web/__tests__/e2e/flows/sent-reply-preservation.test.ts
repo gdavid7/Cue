@@ -1,12 +1,13 @@
 /**
  * E2E Flow Test: Sent Reply Preservation
  *
- * Tests that sent replies (originally from AI drafts) are preserved when
- * follow-up messages arrive in the same thread.
+ * Tests that sent replies (sent from Cue's reply suggestion) are preserved
+ * when follow-up messages arrive in the same thread.
  *
  * Scenario:
- * 1. User A sends email to User B - triggers auto-draft creation
- * 2. User B sends the auto-generated draft without editing
+ * 1. User A sends email to User B - the rule keeps a reply suggestion in Cue
+ *    (never a mailbox draft)
+ * 2. User B sends the suggestion without editing
  * 3. User A replies again to the thread (3rd message arrives)
  * 4. Verify: User B's sent reply is preserved in the thread
  *
@@ -19,6 +20,7 @@ import { shouldRunFlowTests, TIMEOUTS } from "./config";
 import { initializeFlowTests, setupFlowTest } from "./setup";
 import { generateTestSummary } from "./teardown";
 import {
+  assertNoThreadDrafts,
   sendTestEmail,
   sendTestReply,
   TEST_EMAIL_SCENARIOS,
@@ -28,8 +30,11 @@ import {
   waitForMessageInInbox,
   waitForReplyInInbox,
   waitForDraftSendLog,
+  waitForReplySuggestion,
+  waitForSuggestionStatus,
   waitForThreadMessageCount,
 } from "./helpers/polling";
+import { DraftEmailStatus } from "@/generated/prisma/enums";
 import { logStep, clearLogs, setTestStartTime } from "./helpers/logging";
 import type { TestAccount } from "./helpers/accounts";
 
@@ -59,7 +64,7 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
 
       // ========================================
       // Step 1: User A (Outlook) sends email to User B (Gmail)
-      // This triggers auto-draft creation in Gmail
+      // This makes the rule keep a reply suggestion in Gmail's Cue account
       // ========================================
       logStep("Step 1: User A sends initial email to User B (Gmail)");
 
@@ -89,9 +94,9 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
       });
 
       // ========================================
-      // Step 2: Wait for AI to process and create draft
+      // Step 2: Wait for the rule's reply suggestion
       // ========================================
-      logStep("Step 2: Waiting for AI draft creation");
+      logStep("Step 2: Waiting for the reply suggestion");
 
       const executedRule = await waitForExecutedRule({
         threadId: gmailReceived.threadId,
@@ -108,34 +113,36 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
         actionItems: executedRule.actionItems.length,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-
-      expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
-      const aiDraftId = draftAction!.draftId!;
-
-      logStep("AI draft created", { draftId: aiDraftId });
-
-      // ========================================
-      // Step 3: User B sends the AI draft WITHOUT editing
-      // ========================================
-      logStep("Step 3: User B sends AI draft WITHOUT editing");
-
-      // Get the draft content for logging
-      const draft = await gmail.emailProvider.getDraft(aiDraftId);
-      expect(draft).toBeDefined();
-
-      logStep("Draft content retrieved", {
-        draftId: aiDraftId,
-        hasContent: !!draft?.textPlain,
-        contentPreview: draft?.textPlain?.slice(0, 100),
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: gmailReceived.threadId,
+        emailAccountId: gmail.id,
+      });
+      await assertNoThreadDrafts({
+        provider: gmail.emailProvider,
+        threadId: gmailReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
       });
 
-      // Actually send the draft via provider API (simulating user clicking send)
-      // This keeps the same message ID which is crucial for reproducing the bug
-      const userBReply = await gmail.emailProvider.sendDraft(aiDraftId);
+      // ========================================
+      // Step 3: User B sends the suggestion WITHOUT editing
+      // ========================================
+      logStep("Step 3: User B sends the suggestion WITHOUT editing");
+
+      logStep("Suggestion content", {
+        contentPreview: suggestion.content.slice(0, 100),
+      });
+
+      // Sent from the reader as it was: the normal send, no draft involved
+      const userBReply = await sendTestReply({
+        from: gmail,
+        to: outlook,
+        threadId: gmailReceived.threadId,
+        originalMessageId: gmailReceived.messageId,
+        body: suggestion.content,
+      });
 
       logStep("User B sent draft (untouched AI draft)", {
         messageId: userBReply.messageId,
@@ -155,10 +162,12 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
         wasSentFromDraft: draftSendLog.wasSentFromDraft,
       });
 
-      // Note: Our test sends a new reply with draft content (can't truly "send the draft")
-      // Real users clicking Send on untouched draft would have similarity ~1.0
-      // Any similarity > 0 indicates the system detected draft-like content
-      expect(draftSendLog.similarityScore).toBeGreaterThan(0);
+      // Sent as it was: the suggestion counts as used.
+      expect(draftSendLog.similarityScore).toBeGreaterThanOrEqual(0.9);
+      await waitForSuggestionStatus({
+        executedActionId: suggestion.executedActionId,
+        statuses: [DraftEmailStatus.LIKELY_SENT],
+      });
 
       // ========================================
       // Step 4: Verify User B's sent reply is in the thread
@@ -335,9 +344,9 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
       });
 
       // ========================================
-      // Step 2: Wait for AI to process and create draft
+      // Step 2: Wait for the rule's reply suggestion
       // ========================================
-      logStep("Step 2: Waiting for AI draft creation");
+      logStep("Step 2: Waiting for the reply suggestion");
 
       const executedRule = await waitForExecutedRule({
         threadId: outlookReceived.threadId,
@@ -354,33 +363,36 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
         actionItems: executedRule.actionItems.length,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-
-      expect(draftAction).toBeDefined();
-      expect(draftAction?.draftId).toBeTruthy();
-      const aiDraftId = draftAction!.draftId!;
-
-      logStep("AI draft created", { draftId: aiDraftId });
-
-      // ========================================
-      // Step 3: User B sends the AI draft WITHOUT editing
-      // ========================================
-      logStep("Step 3: User B sends AI draft WITHOUT editing");
-
-      const draft = await outlook.emailProvider.getDraft(aiDraftId);
-      expect(draft).toBeDefined();
-
-      logStep("Draft content retrieved", {
-        draftId: aiDraftId,
-        hasContent: !!draft?.textPlain,
-        contentPreview: draft?.textPlain?.slice(0, 100),
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: outlookReceived.threadId,
+        emailAccountId: outlook.id,
+      });
+      await assertNoThreadDrafts({
+        provider: outlook.emailProvider,
+        threadId: outlookReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
       });
 
-      // Actually send the draft via provider API (simulating user clicking send)
-      // This keeps the same message ID which is crucial for reproducing the bug
-      const userBReply = await outlook.emailProvider.sendDraft(aiDraftId);
+      // ========================================
+      // Step 3: User B sends the suggestion WITHOUT editing
+      // ========================================
+      logStep("Step 3: User B sends the suggestion WITHOUT editing");
+
+      logStep("Suggestion content", {
+        contentPreview: suggestion.content.slice(0, 100),
+      });
+
+      // Sent from the reader as it was: the normal send, no draft involved
+      const userBReply = await sendTestReply({
+        from: outlook,
+        to: gmail,
+        threadId: outlookReceived.threadId,
+        originalMessageId: outlookReceived.messageId,
+        body: suggestion.content,
+      });
 
       logStep("User B sent draft (untouched AI draft)", {
         messageId: userBReply.messageId,
@@ -400,7 +412,12 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
         wasSentFromDraft: draftSendLog.wasSentFromDraft,
       });
 
-      expect(draftSendLog.similarityScore).toBeGreaterThan(0);
+      // Sent as it was: the suggestion counts as used.
+      expect(draftSendLog.similarityScore).toBeGreaterThanOrEqual(0.9);
+      await waitForSuggestionStatus({
+        executedActionId: suggestion.executedActionId,
+        statuses: [DraftEmailStatus.LIKELY_SENT],
+      });
 
       // ========================================
       // Step 4: Verify User B's sent reply exists before follow-up
@@ -571,19 +588,32 @@ describe.skipIf(!shouldRunFlowTests())("Sent Reply Preservation", () => {
         timeout: TIMEOUTS.WEBHOOK_PROCESSING,
       });
 
-      const draftAction = executedRule.actionItems.find(
-        (a) => a.type === "DRAFT_EMAIL" && a.draftId,
-      );
-      expect(draftAction?.draftId).toBeTruthy();
-      const aiDraftId = draftAction!.draftId!;
+      // The rule's reply waits in Cue; the mailbox holds no draft for it
+      const suggestion = await waitForReplySuggestion({
+        threadId: gmailReceived.threadId,
+        emailAccountId: gmail.id,
+      });
+      await assertNoThreadDrafts({
+        provider: gmail.emailProvider,
+        threadId: gmailReceived.threadId,
+      });
+      logStep("Reply suggestion kept in Cue", {
+        executedActionId: suggestion.executedActionId,
+      });
 
       // ========================================
       // Send untouched draft and follow-up in quick succession
       // ========================================
       logStep("Sending untouched draft via provider API");
 
-      // Actually send the draft via provider API (simulating user clicking send)
-      const userBReply = await gmail.emailProvider.sendDraft(aiDraftId);
+      // Sent from the reader as it was: the normal send, no draft involved
+      const userBReply = await sendTestReply({
+        from: gmail,
+        to: outlook,
+        threadId: gmailReceived.threadId,
+        originalMessageId: gmailReceived.messageId,
+        body: suggestion.content,
+      });
 
       logStep("User B draft sent", { messageId: userBReply.messageId });
 

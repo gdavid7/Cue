@@ -51,6 +51,7 @@ import {
 import { transitionRecording } from "@/utils/meeting-recorder/transition-recording";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import prisma from "@/utils/prisma";
+import { getEmailAccountOwnAddresses } from "@/utils/user/own-addresses";
 
 const STALE_CLAIM_MINUTES = 10;
 const ABANDONED_RECORDING_HOURS = 24;
@@ -91,6 +92,9 @@ export async function reconcileAccount({
     complete,
   });
 
+  const ownAddresses = videoEvents.length
+    ? await getEmailAccountOwnAddresses(emailAccount.id)
+    : [];
   for (const event of videoEvents) {
     const eventLogger = logger.with({ calendarEventId: event.id });
     eventLogger.info("Starting calendar event reconciliation");
@@ -99,6 +103,7 @@ export async function reconcileAccount({
       await reconcileSingleEvent({
         emailAccount,
         event,
+        ownAddresses,
         logger: eventLogger,
       });
       eventLogger.info("Completed calendar event reconciliation");
@@ -140,12 +145,15 @@ export async function reconcileSingleEvent({
   emailAccount,
   event,
   meeting: preloadedMeeting,
+  ownAddresses: preloadedOwnAddresses,
   logger,
 }: {
   emailAccount: RecorderAccount;
   event: CalendarEvent;
   /** Skips the internal upsert when the caller has just upserted the row itself. */
   meeting?: Meeting;
+  /** The user's connected addresses, when the caller already read them. */
+  ownAddresses?: string[];
   logger: Logger;
 }): Promise<void> {
   if (!event.videoConferenceLink) return;
@@ -166,6 +174,9 @@ export async function reconcileSingleEvent({
     event,
     rule: emailAccount.meetingRecorderJoinRule,
     userEmail: emailAccount.email,
+    ownAddresses:
+      preloadedOwnAddresses ??
+      (await getEmailAccountOwnAddresses(emailAccount.id)),
     joinOverride: meeting.joinOverride,
   });
 

@@ -8,7 +8,10 @@ import {
 } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { cancelHeldSendAction } from "@/utils/actions/scheduled-email";
-import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import {
+  getActiveMailClient,
+  observeOperationOnActiveEngine,
+} from "@/utils/mail-engine/active-client";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { OperationStatus } from "@inboxzero/mail-core/operations";
 
@@ -32,7 +35,8 @@ const UNDOABLE_STATUSES = new Set<OperationStatus>([
 
 /** One send's toast, from the hold until the send settles. */
 type TrackedSend = {
-  client: MailClient;
+  /** The engine the send is watched on, which follows a replaced engine. */
+  watch: { readonly client: MailClient };
   operationId: string;
   emailAccountId: string;
   restoreComposer: () => void;
@@ -65,14 +69,14 @@ export function beginUndoSend({
   const duration = holdUntil - Date.now();
   if (duration <= 0) return;
   stopTracking({ dismiss: true });
-  const handle = client.observeOperation({
+  const handle = observeOperationOnActiveEngine(client, {
     accountId: emailAccountId,
     operationId,
   });
   let unsubscribe = () => {};
   const toastId = undoSendToastId(operationId);
   const current: TrackedSend = {
-    client,
+    watch: handle,
     operationId,
     emailAccountId,
     restoreComposer,
@@ -164,9 +168,10 @@ export async function undoPendingSend() {
 
 /**
  * The engine cancels a send it has not dispatched yet, so it is asked first
- * while it is still the one the send was queued on. Once an account switch has
- * replaced or closed that engine, or it stops answering, the server's hold is
- * cancelled directly; the server also refuses the send if it arrives later.
+ * while it is running: the one the send was queued on, or the one that
+ * replaced it on the same mailbox. Once no engine is running, or it stops
+ * answering, the server's hold is cancelled directly; the server also refuses
+ * the send if it arrives later.
  */
 async function cancelSend(current: TrackedSend) {
   const key = {
@@ -174,7 +179,7 @@ async function cancelSend(current: TrackedSend) {
     operationId: current.operationId,
   };
   const active = getActiveMailClient();
-  if (active === current.client) {
+  if (active && active === current.watch.client) {
     const local = await withTimeout(
       active.cancelOperation(key),
       ENGINE_CANCEL_TIMEOUT_MS,
@@ -182,7 +187,7 @@ async function cancelSend(current: TrackedSend) {
     if (local && local.status !== "unavailable") return local.status;
   }
   const status = await cancelOnServer(current);
-  if (status === "cancelled" && active && active !== current.client) {
+  if (status === "cancelled" && active && active !== current.watch.client) {
     // The engine now running owns the queued copy; without this it would
     // dispatch it and record the server's refusal as a failed send.
     active.cancelOperation(key).catch(() => undefined);

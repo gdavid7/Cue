@@ -34,7 +34,7 @@ vi.mock("@/utils/user/get", () => ({
 }));
 vi.mock("@/utils/thread-context/suggest-reply", () => ({
   getSuggestedReplySettings: async () => ({
-    draftRepliesEnabled: true,
+    draftReplies: "on" as const,
     webLookupEnabled: false,
   }),
 }));

@@ -285,6 +285,67 @@ describe("handleRuleNotificationAction", () => {
     expect(editMessage).toHaveBeenCalledTimes(1);
   });
 
+  // Replies are suggestions kept in Cue, so there is no mailbox draft to
+  // send: Slack sends the reply's text, and settles the rule's suggestion.
+  it("sends the reply's text from Slack when the rule's reply has no mailbox draft", async () => {
+    const provider = {
+      sendDraft: vi.fn(),
+      getDraft: vi.fn(),
+      sendEmailWithHtml: vi
+        .fn()
+        .mockResolvedValue({ messageId: "sent-1", threadId: "thread-1" }),
+      getMessage: vi.fn().mockResolvedValue(
+        getMockMessage({
+          id: "message-1",
+          threadId: "thread-1",
+          from: "sender@example.com",
+          to: "user@example.com",
+          subject: "Test subject",
+          textPlain: "Original message body",
+        }),
+      ),
+    };
+    mockCreateEmailProvider.mockResolvedValue(provider);
+    mockNotificationContext({
+      id: "action-1",
+      type: ActionType.DRAFT_MESSAGING_CHANNEL,
+      content: "Thursday works for me.",
+      mailboxDraftAction: {
+        id: "suggestion-action-1",
+        draftId: null,
+        subject: null,
+      },
+    });
+    prisma.executedAction.update.mockResolvedValue({} as never);
+
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+    const { handleRuleNotificationAction } = await import(
+      "./rule-notifications"
+    );
+    await handleRuleNotificationAction({
+      event: createSlackActionEvent({
+        actionId: "rule_draft_send",
+        value: "action-1",
+        editMessage,
+      }),
+      logger,
+    });
+
+    expect(provider.sendDraft).not.toHaveBeenCalled();
+    expect(provider.getDraft).not.toHaveBeenCalled();
+    expect(provider.sendEmailWithHtml).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.stringify(provider.sendEmailWithHtml.mock.calls[0][0]),
+    ).toContain("Thursday works for me.");
+    expect(prisma.executedAction.update).toHaveBeenCalledWith({
+      where: { id: "suggestion-action-1" },
+      data: { draftStatus: DraftEmailStatus.LIKELY_SENT },
+    });
+    expect(JSON.stringify(editMessage.mock.calls[0][2])).toContain(
+      "Status: Reply sent.",
+    );
+  });
+
   it("collapses sibling draft notifications when a draft is sent from Slack", async () => {
     const provider = {
       sendDraft: vi
@@ -2982,7 +3043,7 @@ function getNotificationContext({
   messagingMessageStatus?: MessagingMessageStatus | null;
   mailboxDraftAction?: {
     id: string;
-    draftId: string;
+    draftId: string | null;
     subject: string | null;
   } | null;
   staticAttachments?: unknown;

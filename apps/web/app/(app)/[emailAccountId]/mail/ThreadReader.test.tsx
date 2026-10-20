@@ -79,9 +79,14 @@ vi.mock("@/components/email-list/EmailThread", () => ({
     afterLatestMessage,
     autoOpenReplyForMessageId,
     focusAutoOpenedReply,
+    replyStatus,
     messageHeadingLevel = 2,
+    earlierMessages,
+    onThreadDiscarded,
   }: {
     messageHeadingLevel?: number;
+    earlierMessages?: unknown;
+    onThreadDiscarded?: () => void;
     onMessageExpansionChange?: (controls: {
       allExpanded: boolean;
       canExpand: boolean;
@@ -90,15 +95,21 @@ vi.mock("@/components/email-list/EmailThread", () => ({
     afterLatestMessage?: ReactNode;
     autoOpenReplyForMessageId?: string;
     focusAutoOpenedReply?: boolean;
+    replyStatus?: ReactNode;
   }) => (
     <>
       <ReportsExpansion onChange={onMessageExpansionChange} />
-      <div data-testid="thread-view">
+      <div
+        data-earlier-messages-row={String(Boolean(earlierMessages))}
+        data-leaves-when-discarded={String(Boolean(onThreadDiscarded))}
+        data-testid="thread-view"
+      >
         <div aria-level={messageHeadingLevel} role="heading">
           Message from sender
         </div>
       </div>
       {afterLatestMessage}
+      {replyStatus}
       {autoOpenReplyForMessageId ? (
         <div
           data-focused={String(Boolean(focusAutoOpenedReply))}
@@ -111,18 +122,8 @@ vi.mock("@/components/email-list/EmailThread", () => ({
   ),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/CueStrip", () => ({
-  CueStrip: ({
-    emailAccountId,
-    onDraftReply,
-  }: {
-    emailAccountId: string;
-    onDraftReply: () => void;
-  }) => (
-    <section aria-label="Cue summary" data-account={emailAccountId}>
-      <button onClick={onDraftReply} type="button">
-        Draft reply
-      </button>
-    </section>
+  CueStrip: ({ emailAccountId }: { emailAccountId: string }) => (
+    <section aria-label="Cue summary" data-account={emailAccountId} />
   ),
 }));
 vi.mock(
@@ -154,8 +155,7 @@ vi.mock("@/utils/actions/thread-assist", () => ({
 
 const replyState = {
   canRequest: true,
-  drafts: true,
-  pending: false,
+  offer: true,
   settledFor: undefined as string | undefined,
   request: vi.fn(),
 };
@@ -312,8 +312,38 @@ describe("ThreadReader", () => {
     expect(screen.queryByRole("region", { name: "Related" })).toBeNull();
   });
 
-  describe("Draft reply from the Cue strip", () => {
+  // Most fills find nothing older; a row held for them would go away again
+  // and move the newest message up after it had painted.
+  it("holds no earlier-messages row while a fill looks for older messages", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+      localAvailability: { hasMore: false, filling: true },
+    });
+
+    const view = screen.getByTestId("thread-view");
+    expect(view.getAttribute("data-earlier-messages-row")).toBe("false");
+    // Until the fill settles the conversation may be more than it looks.
+    expect(view.getAttribute("data-leaves-when-discarded")).toBe("false");
+  });
+
+  it("offers earlier messages the conversation is known to have", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+      localAvailability: { hasMore: true, filling: false },
+    });
+
+    expect(
+      screen
+        .getByTestId("thread-view")
+        .getAttribute("data-earlier-messages-row"),
+    ).toBe("true");
+  });
+
+  describe("Draft a reply", () => {
     beforeEach(() => {
+      replyState.offer = true;
       replyState.settledFor = undefined;
       replyState.request.mockClear();
     });
@@ -324,7 +354,7 @@ describe("ThreadReader", () => {
         messages: [createMessage("message-1", "Start date", ["INBOX"])],
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Draft reply" }));
+      fireEvent.click(screen.getByRole("button", { name: "Draft a reply" }));
       expect(replyState.request).toHaveBeenCalledTimes(1);
       expect(screen.queryByTestId("composer")).toBeNull();
 
@@ -334,6 +364,30 @@ describe("ThreadReader", () => {
       const composer = screen.getByTestId("composer");
       expect(composer.textContent).toBe("message-1");
       expect(composer.getAttribute("data-focused")).toBe("true");
+    });
+
+    // One place to ask: the Cue strip has no draft button of its own.
+    it("is offered once, under the reply actions", () => {
+      renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      expect(
+        screen.getAllByRole("button", { name: /draft (a )?reply/i }),
+      ).toHaveLength(1);
+    });
+
+    it("isn't offered when Cue doesn't write replies here", () => {
+      replyState.offer = false;
+      renderReader({
+        refetch: vi.fn(),
+        messages: [createMessage("message-1", "Start date", ["INBOX"])],
+      });
+
+      expect(
+        screen.queryByRole("button", { name: "Draft a reply" }),
+      ).toBeNull();
     });
 
     it("leaves the composer closed when Cue settles a reply nobody asked for", () => {
@@ -367,12 +421,14 @@ function renderReader({
   layout = "split",
   refetch,
   messages = [],
+  localAvailability,
 }: {
   error?: Parameters<typeof ThreadReader>[0]["error"];
   loading?: boolean;
   layout?: "list" | "split";
   refetch: () => void;
   messages?: ThreadMessage[];
+  localAvailability?: { hasMore: boolean; filling: boolean };
 }) {
   const element = () => (
     <NuqsTestingAdapter>
@@ -383,6 +439,16 @@ function renderReader({
         labelHref={() => "/labels"}
         layout={layout}
         loading={loading}
+        localAvailability={
+          localAvailability && {
+            ...localAvailability,
+            missingBodyIds: new Set(),
+            outgoing: [],
+            sendOperationIds: new Map(),
+            loadingMore: false,
+            loadMore: vi.fn(),
+          }
+        }
         messages={messages}
         onArchive={vi.fn()}
         isUnread={false}

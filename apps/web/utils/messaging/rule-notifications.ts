@@ -1591,11 +1591,13 @@ async function getNotificationContext(executedActionId: string) {
               systemType: true,
             },
           },
+          // The rule's reply in the mailbox's own terms: a mailbox draft from
+          // before, or the suggestion waiting in Cue that replaced it. Edits
+          // here follow it, and sending here settles it.
           actionItems: {
             where: {
               id: { not: executedActionId },
               type: ActionType.DRAFT_EMAIL,
-              draftId: { not: null },
             },
             select: {
               id: true,

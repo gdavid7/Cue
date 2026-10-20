@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { ZodError } from "zod";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createScopedLogger } from "@/utils/logger";
 
@@ -27,9 +28,9 @@ vi.mock("@/utils/ai/mail-search/interpret-search", () => ({
   interpretSearch: mocks.interpretSearch,
 }));
 
-import { GET } from "./route";
+import { POST } from "./route";
 
-describe("GET /api/user/search-intent", () => {
+describe("POST /api/user/search-intent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.rateLimitCount.mockResolvedValue(1);
@@ -52,6 +53,43 @@ describe("GET /api/user/search-intent", () => {
     );
   });
 
+  it("reads the search against the labels the browser sent", async () => {
+    await get("receipts from Acme", ["Receipts", "Trips"]);
+
+    expect(mocks.interpretSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        labelNames: ["Receipts", "Trips"],
+      }),
+    );
+  });
+
+  it("rejects an oversize labels array before any model call", async () => {
+    await expect(
+      get(
+        "receipts from Acme",
+        Array.from({ length: 301 }, (_, i) => `l${i}`),
+      ),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(mocks.interpretSearch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a label name that is too long, and a malformed body", async () => {
+    await expect(get("receipts", ["x".repeat(201)])).rejects.toBeInstanceOf(
+      ZodError,
+    );
+    await expect(
+      POST(
+        new NextRequest("http://localhost:3000/api/user/search-intent", {
+          method: "POST",
+          body: JSON.stringify({ q: "receipts", labels: "Receipts" }),
+        }),
+        { params: Promise.resolve({}) },
+      ),
+    ).rejects.toBeInstanceOf(ZodError);
+    expect(mocks.interpretSearch).not.toHaveBeenCalled();
+  });
+
   it("makes no model call for a user over the limit", async () => {
     mocks.rateLimitCount.mockResolvedValue(61);
 
@@ -62,11 +100,12 @@ describe("GET /api/user/search-intent", () => {
   });
 });
 
-async function get(q: string) {
-  const response = await GET(
-    new NextRequest(
-      `http://localhost:3000/api/user/search-intent?q=${encodeURIComponent(q)}`,
-    ),
+async function get(q: string, labels: string[] = []) {
+  const response = await POST(
+    new NextRequest("http://localhost:3000/api/user/search-intent", {
+      method: "POST",
+      body: JSON.stringify({ q, labels }),
+    }),
     { params: Promise.resolve({}) },
   );
   return response.json();

@@ -59,6 +59,25 @@ export function getInboxStyleHintId(emailAccountId: string) {
 }
 
 /**
+ * Whether the inbox style card still has to show for this mailbox. The mail
+ * screen's other one-time cards wait for it, so only one shows at a time.
+ */
+export function isInboxStyleCardPending({
+  provider,
+  emailAccountId,
+  dismissedHints,
+}: {
+  provider: string;
+  emailAccountId: string;
+  dismissedHints: string[];
+}) {
+  return (
+    getInboxStyleOptions(provider).length > 1 &&
+    !dismissedHints.includes(getInboxStyleHintId(emailAccountId))
+  );
+}
+
+/**
  * Puts the style's tabs right after All, where they sit in the inbox the person
  * is used to, and keeps every other split in its current order.
  */

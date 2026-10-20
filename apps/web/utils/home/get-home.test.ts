@@ -389,7 +389,7 @@ describe("getHomeData", () => {
         id: "a1",
         kind: "draft",
         threadId: "sarah",
-        title: "Reply draft: Renewal",
+        title: "Suggested reply: Renewal",
       }),
     ]);
     expect(prisma.executedAction.findMany).toHaveBeenCalledWith(
@@ -616,7 +616,19 @@ describe("getHomeData: what's next", () => {
     });
   });
 
-  it("knows when no calendar is connected", async () => {
+  it.each([
+    { label: "an older mailbox", ageMs: 24 * 60 * 60 * 1000, connected: false },
+    // Sign-in connects the calendar after it redirects.
+    { label: "a mailbox added moments ago", ageMs: 5000, connected: true },
+  ])("knows whether a calendar is connected for $label", async ({
+    ageMs,
+    connected,
+  }) => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      user: { aiApiKey: null, premium: null },
+      rules: [],
+      createdAt: new Date(NOW.getTime() - ageMs),
+    } as never);
     mocks.fetchEvents.mockResolvedValue({
       events: [],
       complete: false,
@@ -625,7 +637,7 @@ describe("getHomeData: what's next", () => {
 
     const home = await run(mockProvider({}));
 
-    expect(home.calendar).toEqual({ connected: false, next: null });
+    expect(home.calendar).toEqual({ connected, next: null });
   });
 
   it("merges the next meetings with work due from connected apps, soonest first", async () => {

@@ -46,6 +46,7 @@ import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import type { HomeLane, HomeThread } from "@/utils/home/get-home";
 import type {
   TodayAccount,
@@ -123,18 +124,18 @@ export function HomeDashboard() {
   // The local engine syncs, and so acts in, only accounts it was told about;
   // the routed one is told on startup. All inboxes tells it the same way.
   useEffect(() => {
-    if (!mailClient?.ensureAccount || !allInboxesAccounts) return;
-    for (const account of allInboxesAccounts) {
-      if (account.id === emailAccountId) continue;
-      mailClient
-        .ensureAccount({
+    if (!mailClient || !allInboxesAccounts) return;
+    registerEngineAccounts(
+      mailClient,
+      allInboxesAccounts
+        .filter((account) => account.id !== emailAccountId)
+        .map((account) => ({
           accountId: account.id,
           provider: isMicrosoftProvider(account.provider)
             ? "microsoft"
             : "google",
-        })
-        .catch(() => undefined);
-    }
+        })),
+    ).catch(() => undefined);
   }, [allInboxesAccounts, emailAccountId, mailClient]);
 
   const lanes = useMemo(() => {

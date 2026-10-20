@@ -9,7 +9,12 @@ import {
 } from "react";
 import dynamic from "next/dynamic";
 import { useMailRoute } from "@/app/(app)/[emailAccountId]/mail/use-mail-route";
-import { AlertCircleIcon, Loader2Icon, MailIcon } from "lucide-react";
+import {
+  AlertCircleIcon,
+  Loader2Icon,
+  MailIcon,
+  SparklesIcon,
+} from "lucide-react";
 import { AddToCalendarButton } from "@/app/(app)/[emailAccountId]/mail/AddToCalendarButton";
 import { CueStrip } from "@/app/(app)/[emailAccountId]/mail/CueStrip";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
@@ -76,6 +81,8 @@ export type ThreadReaderProps = {
     sendOperationIds: Map<string, string>;
     hasMore: boolean;
     loadingMore: boolean;
+    /** Older messages sync hasn't reached may still be on their way. */
+    filling: boolean;
     loadMore: () => unknown;
   };
   userLabels: EmailLabels;
@@ -199,10 +206,10 @@ export function ThreadReader({
     enabled: canAssist,
     onOpenThread: openThread,
   });
-  // The strip's Draft reply opens the composer once Cue's suggestion settles:
+  // "Draft a reply" opens the composer once Cue's suggestion settles:
   // filled when every fact in it is backed, empty with a reason otherwise.
   const [draftRequestedFor, setDraftRequestedFor] = useState<string>();
-  const stripReplyFor =
+  const requestedReplyFor =
     draftRequestedFor && draftRequestedFor === reply.settledFor
       ? draftRequestedFor
       : undefined;
@@ -307,8 +314,6 @@ export function ThreadReader({
           enabled={canAssist}
           messages={receivedMessages}
           onAskCue={onAskCue}
-          onDraftReply={requestDraftReply}
-          reply={reply}
           newestIsIncoming={newestIsIncoming}
           threadId={threadId}
           userLabels={userLabels}
@@ -369,10 +374,13 @@ export function ThreadReader({
               renderMessageMenu={renderMessageMenu}
               enableMessageNavigation={enableMessageNavigation}
               autoOpenReplyForMessageId={
-                autoOpenReplyForMessageId ?? stripReplyFor ?? assist?.messageId
+                autoOpenReplyForMessageId ??
+                requestedReplyFor ??
+                assist?.messageId
               }
+              ownReplyForMessageId={autoOpenReplyForMessageId}
               focusAutoOpenedReply={Boolean(
-                autoOpenReplyForMessageId ?? stripReplyFor,
+                autoOpenReplyForMessageId ?? requestedReplyFor,
               )}
               afterLatestMessage={
                 canAssist && newestIsIncoming && emailAccountId && threadId ? (
@@ -389,7 +397,27 @@ export function ThreadReader({
                   </div>
                 ) : null
               }
-              replyStatus={replyStatus}
+              replyStatus={
+                replyStatus || reply.offer ? (
+                  // Where Cue's progress and answer appear once asked: the
+                  // button gives way to them in place, at the button's height,
+                  // so nothing below moves.
+                  <div className="flex min-h-9 items-center">
+                    {replyStatus ?? (
+                      <Button
+                        onClick={requestDraftReply}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                        className="-ml-2 text-muted-foreground"
+                      >
+                        <SparklesIcon aria-hidden className="mr-2 size-4" />
+                        Draft a reply
+                      </Button>
+                    )}
+                  </div>
+                ) : null
+              }
               earlierMessages={
                 localAvailability?.hasMore
                   ? {
@@ -420,7 +448,9 @@ export function ThreadReader({
               onThreadDiscarded={
                 // A partially loaded conversation can look draft-only, so only
                 // leave once every message is here to say it is.
-                localAvailability?.hasMore ? undefined : onBackToInbox
+                localAvailability?.hasMore || localAvailability?.filling
+                  ? undefined
+                  : onBackToInbox
               }
               showReplyButton
             />

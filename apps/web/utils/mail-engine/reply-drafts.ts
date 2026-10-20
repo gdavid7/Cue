@@ -35,6 +35,22 @@ export type ReplyDraftContent = {
   attachments: ComposeAttachmentReference[];
   sendAt?: string;
   remindAt?: string;
+  /**
+   * Cue's suggestion this reply opened with. Kept with the draft, so however
+   * the composer opens again, a reply still exactly that suggestion is not
+   * saved to the mailbox until the user changes it.
+   */
+  startedFrom?: ReplySuggestionOrigin;
+};
+
+export type ReplySuggestionOrigin = {
+  reply: string;
+  /** Set for a rule's suggestion, which waits in Cue. */
+  executedActionId?: string;
+  /** The recipients and subject it opened with. */
+  values?: { to?: string; cc?: string; bcc?: string; subject?: string };
+  /** The rule's files, which go on the draft or the send with it. */
+  files?: string[];
 };
 
 export type StoredReplyDraft = {
@@ -72,6 +88,23 @@ export function getReplyDraftSessionId(
   mode: ReplyDraftMode,
 ) {
   return `${messageId}:${mode}`;
+}
+
+/**
+ * Cue's reply to someone other than the sender is a draft of its own, apart
+ * from the user's reply to the same message, so switching between the two
+ * keeps what was written in each.
+ */
+export function getCueReplyDraftSessionId(messageId: string) {
+  return `${getReplyDraftSessionId(messageId, "reply")}:cue`;
+}
+
+/** Both reply drafts a message can have: the user's, and Cue's to someone else. */
+export function getReplyDraftSessionIds(messageId: string) {
+  return [
+    getReplyDraftSessionId(messageId, "reply"),
+    getCueReplyDraftSessionId(messageId),
+  ];
 }
 
 export function rememberReplacedDraftMessage(
