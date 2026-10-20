@@ -39,6 +39,11 @@ import {
   splitRecipientList,
 } from "@/utils/email";
 import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
+import {
+  beginRumAction,
+  cancelRumAction,
+  completeRumAction,
+} from "@/utils/analytics/rum-actions";
 import { GmailLabel } from "@/utils/gmail/label";
 import {
   dismissReplySuggestionAction,
@@ -242,6 +247,25 @@ export function useReaderReplySuggestion({
     context: contextWithText(context.data),
   });
   const { suggestion } = replySuggestion;
+  const suggestionAsked = run && Boolean(latestId);
+  useEffect(() => {
+    if (suggestionAsked) beginRumAction("reply_suggestion", { key: latestId });
+    return () => cancelRumAction("reply_suggestion", latestId);
+  }, [suggestionAsked, latestId]);
+  const suggestionError = Boolean(replySuggestion.error);
+  useEffect(() => {
+    if (suggestionError) {
+      completeRumAction("reply_suggestion", {
+        key: latestId,
+        outcome: "error",
+      });
+    } else if (suggestion) {
+      completeRumAction("reply_suggestion", {
+        key: latestId,
+        outcome: suggestion.status === "suggested" ? "ok" : "empty",
+      });
+    }
+  }, [suggestion, suggestionError, latestId]);
   // Gathering the context is the first part of checking the user's mail.
   const phase =
     enabled && run && !ruleSuggestion && !contextSettled

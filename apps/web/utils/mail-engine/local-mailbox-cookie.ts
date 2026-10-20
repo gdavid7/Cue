@@ -74,6 +74,11 @@ export function forgetLocalMailbox(accountId: string) {
   writeEntries(entries);
 }
 
+/** In the browser: whether it holds a synced mailbox for the account. */
+export function isLocalMailboxMarked(accountId: string) {
+  return hasLocalMailbox(readCookie(), accountId);
+}
+
 /** Part of wiping the local mailbox, on sign-out. */
 export function clearLocalMailboxCookie() {
   writeCookie("", 0);

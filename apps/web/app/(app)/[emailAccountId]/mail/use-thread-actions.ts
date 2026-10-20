@@ -21,8 +21,21 @@ import {
 } from "@/utils/mail-engine/mutation-change";
 import { submitConversationChanges } from "@/utils/mail-engine/submit-conversations";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
+import {
+  observeRumConfirmation,
+  recordRumAction,
+  recordRumAfterPaint,
+} from "@/utils/analytics/rum-actions";
 
 const ENGINE_STARTING = "engine_starting";
+
+const RUM_TRIAGE_ACTIONS: Partial<
+  Record<ThreadMutationPayload["kind"], "archive" | "star" | "mark_read">
+> = {
+  archive: "archive",
+  set_starred_state: "star",
+  set_read_state: "mark_read",
+};
 
 type UndoableAction = "archive" | "unarchive" | "trash";
 
@@ -113,6 +126,11 @@ export function useThreadActions({
       if (!client) return { snapshots: [], rejectionCodes: [ENGINE_STARTING] };
       const change = mutationPayloadToChange(payload);
       if (!change) return { snapshots: [], rejectionCodes: [] };
+      const startedAt = performance.now();
+      const rumAction = RUM_TRIAGE_ACTIONS[payload.kind];
+      // The first command registers its optimistic change before its first
+      // await, so the row has changed by the time this frame is painted.
+      if (rumAction) recordRumAfterPaint(`${rumAction}_optimistic`, startedAt);
       const snapshots: ThreadSnapshot[] = [];
       const rejectionCodes: string[] = [];
       for (const [accountId, accountTargets] of Object.entries(
@@ -128,10 +146,25 @@ export function useThreadActions({
         const commandIds = new Map(
           result.accepted.map((item) => [item.conversationId, item.commandId]),
         );
+        // A bulk change is one batch: the account's last command ending is
+        // when the server has all of it, so one observation covers it.
+        const lastCommandId = result.accepted.at(-1)?.commandId;
+        if (rumAction && lastCommandId) {
+          observeRumConfirmation({
+            client,
+            accountId,
+            operationId: lastCommandId,
+            name: `${rumAction}_confirmed`,
+            startedAt,
+          });
+        }
         for (const target of accountTargets) {
           const mutationId = commandIds.get(target.threadId);
           if (mutationId) snapshots.push({ ...target, mutationId });
         }
+      }
+      if (rumAction && rejectionCodes.length) {
+        recordRumAction(`${rumAction}_confirmed`, startedAt, "error");
       }
       return { snapshots, rejectionCodes };
     },

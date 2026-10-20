@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
+import { beginRumAction, cancelRumAction } from "@/utils/analytics/rum-actions";
 import { ComposeModalProvider, useComposeModal } from "./ComposeModalProvider";
 import { EmailAccountProvider, useAccount } from "./EmailAccountProvider";
 
@@ -59,6 +60,11 @@ vi.mock("@/utils/actions/email-account-cookie", () => ({
 }));
 
 vi.mock("@/utils/actions/mail", () => ({ deleteDraftAction: vi.fn() }));
+
+vi.mock("@/utils/analytics/rum-actions", () => ({
+  beginRumAction: vi.fn(),
+  cancelRumAction: vi.fn(),
+}));
 
 // Stands in for the composer, which sends through whichever account it is scoped to.
 vi.mock(
@@ -133,6 +139,42 @@ describe("ComposeModalProvider popped-out reply", () => {
     await act(async () => {});
 
     expect(screen.queryByTestId("composer")).toBeNull();
+  });
+});
+
+describe("ComposeModalProvider open timing", () => {
+  beforeEach(() => {
+    navigation.pathname = "/account-a/mail";
+    navigation.search = "";
+    vi.clearAllMocks();
+    vi.stubGlobal(
+      "matchMedia",
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("drops the open timing when compose closes by any route, such as Escape", async () => {
+    renderProvider();
+    fireEvent.click(await screen.findByRole("button", { name: "Compose" }));
+    await screen.findByTestId("composer");
+    expect(beginRumAction).toHaveBeenCalledWith("compose_open");
+    expect(cancelRumAction).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByTestId("composer")).toBeNull());
+    expect(cancelRumAction).toHaveBeenCalledWith("compose_open");
   });
 });
 

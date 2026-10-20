@@ -16,6 +16,7 @@ const mail = vi.hoisted(() => ({
   client: {
     cancelOperation: vi.fn(),
     getDiagnostics: vi.fn(),
+    observeOperation: vi.fn(),
     submitConversations: vi.fn(),
   },
 }));
@@ -45,6 +46,38 @@ describe("useThreadActions", () => {
       change: { kind: "archive" },
       observedRevision: 1,
     });
+  });
+
+  it("watches one operation per account for a bulk archive, and survives a watcher that fails", async () => {
+    const threads = Array.from({ length: 1200 }, (_, index) =>
+      createThread(["INBOX"], `thread-${index}`),
+    );
+    mail.client.observeOperation.mockReturnValue({
+      getSnapshot: () => ({ data: { status: "queued" } }),
+      subscribe: () => () => {},
+      close: vi.fn(),
+    });
+    const { result } = renderActions({ threads });
+
+    await act(() => result.current.archive(threads.map((t) => t.id)));
+
+    expect(mail.client.submitConversations).toHaveBeenCalledTimes(3);
+    expect(mail.client.observeOperation).toHaveBeenCalledTimes(1);
+    const lastCommandId =
+      mail.client.submitConversations.mock.calls[2][0].commandId;
+    expect(mail.client.observeOperation).toHaveBeenCalledWith({
+      accountId: "account",
+      operationId: lastCommandId,
+    });
+
+    mail.client.observeOperation.mockImplementation(() => {
+      throw new Error("observe failed");
+    });
+    await act(async () => {
+      await result.current.archive([threads[0].id]);
+    });
+    expect(notifications.error).not.toHaveBeenCalled();
+    expect(toastUndo).toHaveBeenCalled();
   });
 
   it("restores trash and spam and toggles importance through the engine", async () => {

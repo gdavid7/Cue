@@ -111,6 +111,13 @@ import { useThreadSelection } from "@/app/(app)/[emailAccountId]/mail/use-thread
 import { useWarmNeighbourThreads } from "@/app/(app)/[emailAccountId]/mail/use-warm-neighbour-threads";
 import { useReaderFocusHandoff } from "@/app/(app)/[emailAccountId]/mail/use-reader-focus-handoff";
 import { useMailPerformanceTelemetry } from "@/app/(app)/[emailAccountId]/mail/use-mail-performance-telemetry";
+import { useRumAppOpen } from "@/app/(app)/[emailAccountId]/mail/use-rum-app-open";
+import {
+  noteRumSearchCommit,
+  useRumSearch,
+} from "@/app/(app)/[emailAccountId]/mail/use-rum-search";
+import { failRumFirstRow } from "@/utils/analytics/rum-actions";
+import { markRumAccountSwitch } from "@/utils/analytics/rum-app-open";
 import {
   isThreadArchived,
   isThreadImportant,
@@ -214,6 +221,11 @@ export function MailShell() {
     useAccount();
   const { data: accountsData } = useAccounts();
   const { hasAiAccess } = usePremium();
+  useRumAppOpen({
+    emailAccountId,
+    provider,
+    accountCount: accountIds.length,
+  });
   const isGoogle = isGoogleProvider(provider);
   const isOutlook = isMicrosoftProvider(provider);
   const { userLabels } = useEmailLabels();
@@ -547,6 +559,7 @@ export function MailShell() {
       const q = value.trim() || null;
       setSearchDraft(undefined);
       setSettledSearch(q);
+      noteRumSearchCommit(q);
       updateLocation((current) => {
         const view = current.view ?? INBOX_VIEW;
         if (q) {
@@ -830,6 +843,25 @@ export function MailShell() {
     searchFoundNothing &&
     isSearchCommitted &&
     (!showCueFound || cueSearch.foundNothing);
+
+  useRumSearch({
+    committedQuery: searchCommitted ? (searchParam?.trim() ?? null) : null,
+    // The committed search's own window has answered, so these rows are not
+    // left over from the typed search before it.
+    plain: {
+      hasRows: threads.length > 0 && !isLoading && hasProviderResponse,
+      empty: searchFoundNothing,
+    },
+    plainError: Boolean(error),
+    cue: {
+      active: cueSearch.natural && cueSearch.stage !== "off",
+      hasRows: cueSearch.threads.length > 0,
+      empty: cueSearch.foundNothing,
+    },
+  });
+  useEffect(() => {
+    if (error && !threads.length) failRumFirstRow();
+  }, [error, threads.length]);
 
   const selection = useThreadSelection(orderedIds);
 
@@ -1733,6 +1765,7 @@ export function MailShell() {
 
   const selectAccount = useCallback(
     (accountId: string) => {
+      markRumAccountSwitch();
       redirectToSafeUrl(
         getMailAccountUrl(accountIds, accountId, window.location),
       );
