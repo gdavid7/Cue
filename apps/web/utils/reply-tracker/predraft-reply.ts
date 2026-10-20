@@ -11,6 +11,7 @@ import { TRIAGE_AI_LABELS } from "@/utils/llms/spend-bucket";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { captureException } from "@/utils/error";
+import { buildDraftReplyBody } from "@/utils/email/reply-body";
 import { runWithGmailQuota } from "@/utils/gmail/quota";
 import {
   claimPredraftMessage,
@@ -156,7 +157,11 @@ async function predraft({
       data: {
         executedRuleId: toReplyRun.id,
         type: ActionType.DRAFT_EMAIL,
-        content: suggestion.reply,
+        // The mailbox's HTML body, as a rule's draft keeps it.
+        content: await buildDraftReplyBody({
+          text: suggestion.reply,
+          emailAccountId: emailAccount.id,
+        }),
         draftId: null,
         draftStatus: DraftEmailStatus.PENDING,
         executionStatus: ExecutedActionStatus.SUCCEEDED,
