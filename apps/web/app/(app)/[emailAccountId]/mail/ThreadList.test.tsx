@@ -51,6 +51,50 @@ describe("mailbox thread list", () => {
     expect(screen.getAllByText(/^t\d+$/)).toHaveLength(50);
   });
 
+  // A list that grows by a new message, an undo or a page keeps its rows:
+  // dropping the bottom ones for a render jumped the scroll and lost focus.
+  it("never renders fewer rows than before when the list grows", () => {
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const { rerender } = render(list(items));
+    expect(screen.getAllByText(/^t\d+$/)).toHaveLength(50);
+    const passes: number[][] = [];
+    const onRenderRow = (index: number) => {
+      if (index === 0) passes.push([]);
+      passes.at(-1)?.push(index);
+    };
+
+    rerender(list([{ id: "new", day: "Today" }, ...items], onRenderRow));
+    rerender(list([...items, { id: "more", day: "Today" }], onRenderRow));
+
+    expect(passes.length).toBeGreaterThan(0);
+    for (const pass of passes) expect(pass.length).toBeGreaterThanOrEqual(51);
+  });
+
+  it("keeps the load-more sentinel while more rows arrive", () => {
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const items: Item[] = Array.from({ length: 50 }, (_, index) => ({
+      id: `t${index}`,
+      day: "Today",
+    }));
+    const { rerender } = render(list(items, undefined, true));
+    const loadMore = screen.getByRole("button", { name: "Load more" });
+
+    rerender(list([...items, { id: "more", day: "Today" }], undefined, true));
+
+    // Unmounted for a render, it would come back as another element.
+    expect(screen.getByRole("button", { name: "Load more" })).toBe(loadMore);
+    vi.unstubAllGlobals();
+  });
+
   // Archiving a conversation must only remove its row. Remounting every
   // later day's rows made each archive re-create most of the list.
   it("keeps later days' rows mounted when an earlier row goes", () => {
@@ -278,7 +322,11 @@ function threadAt(id: string, receivedAtMs: number) {
   } as unknown as ListThread;
 }
 
-function list(items: Item[], onRenderRow?: (index: number) => void) {
+function list(
+  items: Item[],
+  onRenderRow?: (index: number) => void,
+  showLoadMore = false,
+) {
   return (
     <MailboxThreadList<Item>
       focusedIndex={0}
@@ -301,7 +349,7 @@ function list(items: Item[], onRenderRow?: (index: number) => void) {
         );
       }}
       selectedCount={0}
-      showLoadMore={false}
+      showLoadMore={showLoadMore}
     />
   );
 }
