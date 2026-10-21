@@ -7,6 +7,8 @@ export type ListThread = (ThreadListItem | CombinedListThread) & {
    * placeholder message ids, so this is the one to send to the server.
    */
   latestMessageId?: string;
+  /** That message's Message-ID, on rows built from the local mail. */
+  latestInternetMessageId?: string;
   hasAttachments?: boolean;
 };
 export type ListMessage = ListThread["messages"][number];
@@ -37,6 +39,8 @@ export type ActionableThread = {
   account?: { id: string };
   messageIds?: string[];
   messages?: Array<{ id: string }>;
+  /** Copies of the row's message in other accounts, hidden behind it. */
+  copies?: Array<{ accountId: string; threadId: string }>;
 };
 
 export function getListThreadKey(thread: ActionableThread) {

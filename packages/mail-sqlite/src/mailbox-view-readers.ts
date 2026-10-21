@@ -169,6 +169,72 @@ function readCounts(
     : readFilteredCounts(tx, scope);
 }
 
+/**
+ * Counts conversation rows ({account_id, conversation_id, unread}). Across
+ * accounts, All inboxes lists a message delivered to several of them once
+ * (showCopiesOnce in apps/web), so copies count once too: conversations whose
+ * newest message has the same Message-ID form one row per account they're
+ * in, unread if any copy is. Within one account each conversation counts.
+ * Drafts are each account's own and are always counted apart.
+ */
+async function countConversationRows(
+  tx: SqlTransaction,
+  scope: CountScope,
+  rows: { sql: string; bindings: SqlValue[] },
+): Promise<Counts> {
+  const [row] =
+    scope.accountIds.length > 1 && !mentionsDrafts(scope.predicate)
+      ? await tx.query(
+          `WITH scoped AS (${rows.sql}),
+           keyed AS (
+             SELECT s.account_id, s.unread,
+                    COALESCE(
+                      NULLIF((${LATEST_MESSAGE_ID_SQL}), ''),
+                      'conversation:' || s.account_id || char(0) || s.conversation_id
+                    ) AS k
+             FROM scoped s
+           ),
+           per_account AS (
+             SELECT k, COUNT(*) AS n, SUM(unread) AS u
+             FROM keyed GROUP BY k, account_id
+           )
+           SELECT COALESCE(SUM(n), 0) AS n, COALESCE(SUM(u), 0) AS u
+           FROM (SELECT MAX(n) AS n, MAX(u) AS u FROM per_account GROUP BY k)`,
+          rows.bindings,
+        )
+      : await tx.query(
+          `SELECT COUNT(*) AS n, COALESCE(SUM(unread), 0) AS u FROM (${rows.sql})`,
+          rows.bindings,
+        );
+  return { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+}
+
+// The Message-ID of the message a conversation summary names as its latest
+// (readConversationSummaries): the newest that isn't a draft or in the
+// trash, else the newest. Normalised as normalizeInternetMessageId does.
+const LATEST_MESSAGE_ID_SQL = `SELECT lower(trim(trim(trim(m.internet_message_id), '<>')))
+  FROM effective_messages e
+  JOIN messages m ON m.account_id = e.account_id AND m.message_id = e.message_id
+  WHERE e.account_id = s.account_id AND e.conversation_id = s.conversation_id
+  ORDER BY (e.in_draft = 0 AND e.in_trash = 0) DESC, e.received_at_ms DESC, e.message_id DESC
+  LIMIT 1`;
+
+function mentionsDrafts(predicate: MailPredicate): boolean {
+  switch (predicate.kind) {
+    case "all":
+    case "any":
+      return predicate.predicates.some(mentionsDrafts);
+    case "not":
+      return mentionsDrafts(predicate.predicate);
+    case "role":
+      return predicate.role === "draft";
+    case "mailbox":
+      return predicate.mailbox === "drafts";
+    default:
+      return false;
+  }
+}
+
 function filteredScope(scope: CountScope) {
   const mailbox =
     scope.predicate.kind === "mailbox" ? scope.predicate.mailbox : null;
@@ -244,17 +310,15 @@ async function readFilteredCounts(
   // A snoozed conversation counts as unread only through an unread message
   // that is itself snoozed.
   const snoozed = mailbox === "snoozed";
-  const [row] = await tx.query(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(unread), 0) AS u FROM (
-       SELECT MAX(CASE WHEN e.read = 0${snoozed ? " AND IFNULL(e.snoozed_until_ms, 0) > ?" : ""} THEN 1 ELSE 0 END) AS unread
-       FROM ${from}
-       WHERE ${where}
-       GROUP BY e.account_id, e.conversation_id
-       ${having.sql ? `HAVING ${having.sql}` : ""}
-     )`,
-    [...(snoozed ? [Date.now()] : []), ...bindings],
-  );
-  return { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  return countConversationRows(tx, scope, {
+    sql: `SELECT e.account_id, e.conversation_id,
+            MAX(CASE WHEN e.read = 0${snoozed ? " AND IFNULL(e.snoozed_until_ms, 0) > ?" : ""} THEN 1 ELSE 0 END) AS unread
+          FROM ${from}
+          WHERE ${where}
+          GROUP BY e.account_id, e.conversation_id
+          ${having.sql ? `HAVING ${having.sql}` : ""}`,
+    bindings: [...(snoozed ? [Date.now()] : []), ...bindings],
+  });
 }
 
 function mailboxConversationHaving(mailbox: WellKnownMailbox | null): {
@@ -366,12 +430,11 @@ async function readIndexedCounts(
   index: ConversationIndex,
 ): Promise<Counts> {
   const { where, whereBindings } = indexedScope(scope, index);
-  const [row] = await tx.query(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(c.unread = 1), 0) AS u
-     FROM ${index.source} c WHERE ${where}`,
-    whereBindings,
-  );
-  return { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  return countConversationRows(tx, scope, {
+    sql: `SELECT c.account_id, c.conversation_id, (c.unread = 1) AS unread
+          FROM ${index.source} c WHERE ${where}`,
+    bindings: whereBindings,
+  });
 }
 
 function indexedScope(

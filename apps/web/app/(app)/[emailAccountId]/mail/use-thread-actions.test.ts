@@ -103,6 +103,76 @@ describe("useThreadActions", () => {
     );
   });
 
+  describe("a row standing for one message in two accounts", () => {
+    // All inboxes shows the message once; reading, archiving and starring it
+    // reach every copy, each in its own account, while the rest of the
+    // actions stay with the copy shown.
+    const row = {
+      ...createThread(["INBOX", "UNREAD"], "shown"),
+      account: { id: "one", email: "one@example.com", name: null, image: null },
+      copies: [{ accountId: "two", threadId: "hidden" }],
+    } as ListThread;
+
+    function submitted() {
+      return mail.client.submitConversations.mock.calls.map(([call]) => [
+        call.accountId,
+        call.conversations.map(
+          (conversation: { conversationId: string }) =>
+            conversation.conversationId,
+        ),
+        call.change.kind,
+      ]);
+    }
+
+    it.each([
+      ["archive", (actions: Actions) => actions.archive(["one:shown"])],
+      ["read", (actions: Actions) => actions.setReadState(["one:shown"], true)],
+      [
+        "star",
+        (actions: Actions) => actions.setStarredState(["one:shown"], true),
+      ],
+    ])("%s changes every copy, counted as one conversation", async (_, act_) => {
+      const { result } = renderActions({ threads: [row] });
+      let changed: string[] = [];
+      await act(async () => {
+        changed = await act_(result.current);
+      });
+
+      expect(submitted().map(([accountId, ids]) => [accountId, ids])).toEqual([
+        ["one", ["shown"]],
+        ["two", ["hidden"]],
+      ]);
+      expect(changed).toEqual(["one:shown"]);
+      expect(notifications.error).not.toHaveBeenCalled();
+    });
+
+    it("says one conversation was archived, and its undo restores every copy", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.archive(["one:shown"]));
+      expect(toastUndo).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Archived" }),
+      );
+
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+
+      expect(restored).toEqual(["one:shown"]);
+      expect(
+        mail.client.cancelOperation.mock.calls.map(([call]) => call.accountId),
+      ).toEqual(["one", "two"]);
+      expect(notifications.success).toHaveBeenLastCalledWith("Restored");
+    });
+
+    it("deletes only the copy shown", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.trash(["one:shown"]));
+
+      expect(submitted()).toEqual([["one", ["shown"], "trash"]]);
+    });
+  });
+
   it("archives a multi-thread selection as one engine command", async () => {
     const threads = [
       createThread(["INBOX"], "one"),
@@ -407,6 +477,8 @@ describe("useThreadActions", () => {
     expect(onRestored).toHaveBeenCalledWith(["today-thread"]);
   });
 });
+
+type Actions = ReturnType<typeof useThreadActions>;
 
 function renderActions({
   threads = [createThread(["INBOX", "UNREAD"])],

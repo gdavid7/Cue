@@ -48,8 +48,8 @@ test("Cue found in All inboxes searches every included account and opens each ro
 }, testInfo) => {
   const { emailAccountId: primaryId } = await openMail(page);
   const primary = await getEmailAccount(page);
-  // Every account here has its own mailbox; the message below is delivered
-  // to two of them, so it is found once in each account Cue searches.
+  // Every account here has its own mailbox; each included one gets a match
+  // below, so Cue finds one row in each account it searches.
   const included = await createSecondEmailAccount(primaryId);
   const excluded = await createSecondEmailAccount(primaryId);
   extraAccounts = [included, excluded];
@@ -62,7 +62,8 @@ test("Cue found in All inboxes searches every included account and opens each ro
 
   const cueToken = randomToken();
   const subject = `Harvest invoice ${cueToken}`;
-  // Delivered to both included accounts, each its own copy.
+  // Two separate messages, one per included account, each with its own
+  // Message-ID; copies of one message would show as a single row.
   const primaryEmail = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!primaryEmail) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   await insertInboxMail(page, subject, {

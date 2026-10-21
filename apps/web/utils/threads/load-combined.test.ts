@@ -413,6 +413,59 @@ describe("loadCombinedThreads", () => {
     ).toEqual([["account-1", "account-2"]]);
   });
 
+  // Providers list a thread's messages in their own order.
+  it("matches copies by the newest message, wherever the provider lists it", async () => {
+    const result = await loadCombinedThreads({
+      accounts: [account("account-1"), account("account-2")],
+      cursor: null,
+      limit: 20,
+      loadPage: vi.fn(async ({ account }) => {
+        const newest = thread(
+          `${account.id}-copy`,
+          "2026-08-13T10:00:00.000Z",
+          "<latest@example.com>",
+        );
+        const older = thread(
+          `${account.id}-copy`,
+          "2026-08-12T10:00:00.000Z",
+          `<${account.id}-earlier@example.com>`,
+        );
+        const messages =
+          account.id === "account-1"
+            ? [...newest.messages, ...older.messages]
+            : [...older.messages, ...newest.messages];
+        return { threads: [{ ...newest, messages }], nextPageToken: null };
+      }),
+      logger,
+    });
+
+    expect(result.threads).toHaveLength(1);
+  });
+
+  it("shows the routed account's copy when the copies arrived together", async () => {
+    const result = await loadCombinedThreads({
+      accounts: [account("account-1"), account("account-2")],
+      preferAccountId: "account-2",
+      cursor: null,
+      limit: 20,
+      loadPage: vi.fn(async ({ account }) => ({
+        threads: [
+          thread(
+            `${account.id}-copy`,
+            "2026-08-13T10:00:00.000Z",
+            "<same@example.com>",
+          ),
+        ],
+        nextPageToken: null,
+      })),
+      logger,
+    });
+
+    expect(
+      result.threads.map((item) => [item.account.id, item.alsoIn?.[0]?.id]),
+    ).toEqual([["account-2", "account-1"]]);
+  });
+
   it("keeps rows of one account apart, even when they share a Message-ID", async () => {
     const result = await loadCombinedThreads({
       accounts: [account("account-1")],

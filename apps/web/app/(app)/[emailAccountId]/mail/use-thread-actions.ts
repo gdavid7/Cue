@@ -45,9 +45,24 @@ type ThreadSnapshot = {
   messageIds: string[];
   mutationId: string;
   threadId: string;
+  /** The row a hidden copy stands behind; unset for the row's own copy. */
+  rowKey?: string;
 };
 
-type ThreadActionTarget = Omit<ThreadSnapshot, "mutationId">;
+type ThreadActionTarget = Omit<ThreadSnapshot, "mutationId"> & {
+  copies?: ActionableThread["copies"];
+};
+
+// Reading, archiving (and its inverse) and starring a row that stands for one
+// message in several accounts reach every copy, each in its own account, so
+// the row doesn't come back from another account; deleting, labelling and
+// moving it stay with the copy shown, as changes the user should make there.
+const REACHES_COPIES = new Set<ThreadMutationPayload["kind"]>([
+  "archive",
+  "unarchive",
+  "set_read_state",
+  "set_starred_state",
+]);
 
 type UndoableBatch = {
   action: UndoableAction;
@@ -97,6 +112,7 @@ export function useThreadActions({
         key,
         messageIds,
         threadId: thread.id,
+        copies: thread.copies,
       });
     }
   }, [emailAccountId, readerTarget, threads]);
@@ -117,15 +133,24 @@ export function useThreadActions({
 
   const enqueueTargets = useCallback(
     async (
-      targets: ReturnType<typeof resolveTargets>,
+      rowTargets: ReturnType<typeof resolveTargets>,
       payload: ThreadMutationPayload,
     ) => {
-      if (!targets.length) return { snapshots: [], rejectionCodes: [] };
+      const targets = REACHES_COPIES.has(payload.kind)
+        ? rowTargets.flatMap((target) => [target, ...copyTargets(target)])
+        : rowTargets;
+      if (!targets.length)
+        return { snapshots: [], rows: [], rejectionCodes: [] };
       // The mail screen shows while the engine starts, so a triage can come
       // before there is anything to queue it on.
-      if (!client) return { snapshots: [], rejectionCodes: [ENGINE_STARTING] };
+      if (!client)
+        return {
+          snapshots: [],
+          rows: [],
+          rejectionCodes: [ENGINE_STARTING],
+        };
       const change = mutationPayloadToChange(payload);
-      if (!change) return { snapshots: [], rejectionCodes: [] };
+      if (!change) return { snapshots: [], rows: [], rejectionCodes: [] };
       const startedAt = performance.now();
       const rumAction = RUM_TRIAGE_ACTIONS[payload.kind];
       // The first command registers its optimistic change before its first
@@ -158,7 +183,7 @@ export function useThreadActions({
             startedAt,
           });
         }
-        for (const target of accountTargets) {
+        for (const { copies: _copies, ...target } of accountTargets) {
           const mutationId = commandIds.get(target.threadId);
           if (mutationId) snapshots.push({ ...target, mutationId });
         }
@@ -166,7 +191,7 @@ export function useThreadActions({
       if (rumAction && rejectionCodes.length) {
         recordRumAction(`${rumAction}_confirmed`, startedAt, "error");
       }
-      return { snapshots, rejectionCodes };
+      return { snapshots, rows: rowKeys(snapshots), rejectionCodes };
     },
     [client],
   );
@@ -213,14 +238,16 @@ export function useThreadActions({
               throw new Error(admission.code);
             }
           }
-          return snapshots.map((snapshot) => snapshot.key);
+          return snapshots;
         },
       ),
     );
-    const restoredKeys = results.flatMap((result) =>
-      result.status === "fulfilled" ? result.value : [],
+    const restoredKeys = rowKeys(
+      results.flatMap((result) =>
+        result.status === "fulfilled" ? result.value : [],
+      ),
     );
-    const failedCount = snapshots.length - restoredKeys.length;
+    const failedCount = rowKeys(snapshots).length - restoredKeys.length;
 
     if (restoredKeys.length) {
       notifyRestored(restoredKeys);
@@ -228,9 +255,9 @@ export function useThreadActions({
     }
     if (failedCount) {
       toast.error(
-        failedCount === snapshots.length
+        failedCount === rowKeys(snapshots).length
           ? "Couldn't restore"
-          : `Couldn't restore ${failedCount} of ${snapshots.length}`,
+          : `Couldn't restore ${failedCount} of ${rowKeys(snapshots).length}`,
       );
     }
     if (!restoredKeys.length) {
@@ -262,11 +289,11 @@ export function useThreadActions({
         undone: false,
       };
       lastAction.current = batch;
-      const { snapshots, rejectionCodes } = await enqueued.catch((error) => {
+      const { rows, rejectionCodes } = await enqueued.catch((error) => {
         if (lastAction.current === batch) lastAction.current = previous;
         throw error;
       });
-      if (!snapshots.length) {
+      if (!rows.length) {
         if (lastAction.current === batch) lastAction.current = previous;
         if (threadKeys.length) {
           toast.error(
@@ -279,9 +306,9 @@ export function useThreadActions({
         return [];
       }
 
-      const failedCount = threadKeys.length - snapshots.length;
+      const failedCount = threadKeys.length - rows.length;
       toastUndo({
-        message: UNDOABLE_COPY[action].done(snapshots.length),
+        message: UNDOABLE_COPY[action].done(rows.length),
         shortcut: getShortcutHint("undo"),
         onUndo: () => {
           undoBatch(batch);
@@ -295,7 +322,7 @@ export function useThreadActions({
           ),
         );
       }
-      return snapshots.map((snapshot) => snapshot.key);
+      return rows;
     },
     [enqueueTargets, resolveTargets, undoBatch],
   );
@@ -303,16 +330,16 @@ export function useThreadActions({
   const setReadState = useCallback(
     async (threadKeys: string[], read: boolean, notifySuccess = true) => {
       const targets = resolveTargets(threadKeys);
-      const { snapshots, rejectionCodes } = await enqueueTargets(targets, {
+      const { rows, rejectionCodes } = await enqueueTargets(targets, {
         kind: "set_read_state",
         read,
       });
-      const failedCount = threadKeys.length - snapshots.length;
-      if (snapshots.length && notifySuccess) {
+      const failedCount = threadKeys.length - rows.length;
+      if (rows.length && notifySuccess) {
         toast.success(
-          snapshots.length === 1
+          rows.length === 1
             ? `Marked as ${read ? "read" : "unread"}`
-            : `Marked ${snapshots.length} conversations as ${read ? "read" : "unread"}`,
+            : `Marked ${rows.length} conversations as ${read ? "read" : "unread"}`,
         );
       }
       if (failedCount) {
@@ -325,21 +352,21 @@ export function useThreadActions({
           ),
         );
       }
-      return snapshots.map((snapshot) => snapshot.key);
+      return rows;
     },
     [enqueueTargets, resolveTargets],
   );
 
   const setStarredState = useCallback(
     async (threadKeys: string[], starred: boolean) => {
-      const { snapshots, rejectionCodes } = await enqueueTargets(
+      const { rows, rejectionCodes } = await enqueueTargets(
         resolveTargets(threadKeys),
         {
           kind: "set_starred_state",
           starred,
         },
       );
-      if (snapshots.length < threadKeys.length) {
+      if (rows.length < threadKeys.length) {
         toast.error(
           enqueueFailureCopy(
             "Couldn’t update stars for all conversations",
@@ -347,7 +374,7 @@ export function useThreadActions({
           ),
         );
       }
-      return snapshots.map((snapshot) => snapshot.key);
+      return rows;
     },
     [enqueueTargets, resolveTargets],
   );
@@ -528,6 +555,23 @@ const UNDOABLE_COPY: Record<
     noun: "deletion",
   },
 };
+
+function copyTargets(target: ThreadActionTarget): ThreadActionTarget[] {
+  return (target.copies ?? []).map((copy) => ({
+    emailAccountId: copy.accountId,
+    key: `${copy.accountId}:${copy.threadId}`,
+    messageIds: [],
+    threadId: copy.threadId,
+    rowKey: target.key,
+  }));
+}
+
+/** The rows changed: a row's hidden copies count with it. */
+function rowKeys(snapshots: Pick<ThreadSnapshot, "key" | "rowKey">[]) {
+  return [
+    ...new Set(snapshots.map((snapshot) => snapshot.rowKey ?? snapshot.key)),
+  ];
+}
 
 function summarise(verb: string, count: number) {
   return count === 1 ? verb : `${verb} ${count} conversations`;

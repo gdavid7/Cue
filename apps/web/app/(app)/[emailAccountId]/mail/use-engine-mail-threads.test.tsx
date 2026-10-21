@@ -461,24 +461,42 @@ describe("useEngineMailThreads in All inboxes", () => {
     await waitFor(() => expect(result.current.threads).toHaveLength(2));
   });
 
-  it("archives only the shown copy, so the other account's copy then shows", async () => {
+  // The row's actions archive every copy (useThreadActions), each in its own
+  // account, so the message doesn't come back from the other account.
+  it("stays gone once every copy is archived", async () => {
     const { client, result } = renderAllInboxes([
       copy("acc-2", "c-new", "<shared@example.com>", 2),
       copy("acc-1", "c-old", "<shared@example.com>", 1),
     ]);
     await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(
+      isCombinedListThread(result.current.threads[0]) &&
+        result.current.threads[0].copies,
+    ).toEqual([{ accountId: "acc-1", threadId: "c-old" }]);
 
     act(() => {
-      beginOptimisticTriage(client, {
-        accountId: "acc-2",
-        conversationIds: ["c-new"],
-        change: { kind: "archive" },
-      });
+      for (const [accountId, conversationId] of [
+        ["acc-2", "c-new"],
+        ["acc-1", "c-old"],
+      ])
+        beginOptimisticTriage(client, {
+          accountId,
+          conversationIds: [conversationId],
+          change: { kind: "archive" },
+        });
     });
 
-    expect(rows(result.current.threads)).toEqual([
-      { key: "acc-1:c-old", alsoIn: [] },
+    expect(result.current.threads).toEqual([]);
+  });
+
+  it("reads as unread while any copy is unread", async () => {
+    const { result } = renderAllInboxes([
+      { ...copy("acc-2", "c-new", "<shared@example.com>", 2), unread: false },
+      { ...copy("acc-1", "c-old", "<shared@example.com>", 1), unread: true },
     ]);
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(result.current.threads[0].messages[0].labelIds).toContain("UNREAD");
   });
 });
 

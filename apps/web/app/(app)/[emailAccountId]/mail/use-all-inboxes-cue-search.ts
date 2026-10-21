@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
@@ -415,7 +416,7 @@ export function useAllInboxesCueSearch({
     () => new Set(windowThreads.map(getListThreadKey)),
     [windowThreads],
   );
-  const widerNew = useMemo(
+  const widerFound = useMemo(
     () =>
       widerThreads.filter(
         (thread) =>
@@ -424,6 +425,14 @@ export function useAllInboxesCueSearch({
       ),
     [widerThreads, primaryKeys, widenedIds],
   );
+  // A message delivered to several accounts shows once (showCopiesOnce): a
+  // wider tier's copy of one the first searches show adds nothing.
+  const widerNew = useMemo(() => {
+    const shown = new Set(windowThreads.flatMap(messageIdOf));
+    return widerFound.filter((thread) =>
+      messageIdOf(thread).every((id) => !shown.has(id)),
+    );
+  }, [windowThreads, widerFound]);
 
   // Each account climbs its own ladder on its own mail: one account finding
   // plenty never stops another that found too little from widening.
@@ -438,7 +447,7 @@ export function useAllInboxesCueSearch({
   const isDone = (id: string) =>
     phases[id] === "finished" || phases[id] === "timedOut";
   const primaryCounts = countByAccount(windowThreads);
-  const widerCounts = countByAccount(widerNew);
+  const widerCounts = countByAccount(widerFound);
   // A window holds one page shared by every account, so a busy account can
   // push another's mail past it. An account with too little in a full
   // window hasn't answered yet: it may have more just past the page.
@@ -673,13 +682,24 @@ function accountIdOf(thread: ListThread) {
   return "account" in thread && thread.account ? thread.account.id : "";
 }
 
+// Each account's own matches, counting the copies a row shows once for
+// other accounts, so collapsing them never makes an account widen.
 function countByAccount(threads: ListThread[]) {
   const counts = new Map<string, number>();
   for (const thread of threads) {
-    const id = accountIdOf(thread);
-    counts.set(id, (counts.get(id) ?? 0) + 1);
+    const copies = "copies" in thread ? (thread.copies ?? []) : [];
+    for (const id of [
+      accountIdOf(thread),
+      ...copies.map((copy) => copy.accountId),
+    ])
+      counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   return counts;
+}
+
+function messageIdOf(thread: ListThread) {
+  const id = normalizeInternetMessageId(thread.latestInternetMessageId);
+  return id ? [id] : [];
 }
 
 function isPending(phase: AccountSearchPhase | undefined) {

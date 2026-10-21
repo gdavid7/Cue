@@ -232,7 +232,6 @@ type PreviousThreads = {
     {
       summary: string;
       account: CombinedListThread["account"] | undefined;
-      alsoIn: string;
       thread: ListThread;
     }
   >;
@@ -249,9 +248,9 @@ function reuseUnchangedThreads(
   routedAccountId: string,
 ): ListThread[] {
   const rows: PreviousThreads["rows"] = new Map();
-  // All inboxes shows a message delivered to two accounts once. Archive, read
-  // and star on that row change its own account's copy only, as the row and
-  // its keys are that copy's; the other copy then shows on its own.
+  // All inboxes shows a message delivered to several accounts once. The row
+  // carries the copies it hides, which reading, archiving and starring it
+  // also change (useThreadActions), and reads unread while any copy is.
   const shown = showsCopiesOnce
     ? showCopiesOnce(
         conversations,
@@ -262,23 +261,17 @@ function reuseUnchangedThreads(
         }),
         routedAccountId,
       )
-    : conversations.map((row) => ({ row, alsoIn: [] }));
-  const threads = shown.map(({ row: conversation, alsoIn: alsoInIds }) => {
+    : conversations.map((row) => ({ row, copies: [] }));
+  const threads = shown.map(({ row: conversation, copies }) => {
     const key = `${conversation.key.accountId}:${conversation.key.conversationId}`;
     const account = accounts?.[conversation.key.accountId];
-    const summary = JSON.stringify(conversation);
-    const alsoIn = alsoInIds.join("\n");
+    const summary = JSON.stringify([conversation, copies]);
     const cached = previous.rows.get(key);
     const thread =
-      cached?.summary === summary &&
-      cached.account === account &&
-      cached.alsoIn === alsoIn
+      cached?.summary === summary && cached.account === account
         ? cached.thread
-        : withAlsoIn(
-            conversationSummaryToListThread(conversation, account),
-            alsoInIds.flatMap((id) => accounts?.[id] ?? []),
-          );
-    rows.set(key, { summary, account, alsoIn, thread });
+        : collapsedThread(conversation, copies, account, accounts);
+    rows.set(key, { summary, account, thread });
     return thread;
   });
   const unchanged =
@@ -289,11 +282,29 @@ function reuseUnchangedThreads(
   return previous.threads;
 }
 
-function withAlsoIn(
-  thread: ListThread,
-  alsoIn: CombinedListThread["account"][],
+function collapsedThread(
+  conversation: ConversationSummary,
+  copies: ConversationSummary[],
+  account: CombinedListThread["account"] | undefined,
+  accounts: Record<string, CombinedListThread["account"]> | undefined,
 ): ListThread {
-  return alsoIn.length ? { ...thread, alsoIn } : thread;
+  if (!copies.length)
+    return conversationSummaryToListThread(conversation, account);
+  const thread = conversationSummaryToListThread(
+    {
+      ...conversation,
+      unread: conversation.unread || copies.some((copy) => copy.unread),
+    },
+    account,
+  );
+  return {
+    ...thread,
+    alsoIn: copies.flatMap((copy) => accounts?.[copy.key.accountId] ?? []),
+    copies: copies.map((copy) => ({
+      accountId: copy.key.accountId,
+      threadId: copy.key.conversationId,
+    })),
+  };
 }
 
 async function readFailedAccountIds(
