@@ -40,7 +40,9 @@
     "app/(app)/[emailAccountId]/home/AllClear.tsx",
     "utils/weather/open-meteo.ts",
     "utils/actions/today-weather.ts",
-    "utils/home/next-up.ts"
+    "utils/home/next-up.ts",
+    "app/(app)/settings/TodayWeatherSetting.tsx",
+    "hooks/useTodayWeather.ts"
   ],
   "today-all-accounts.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
