@@ -2432,7 +2432,9 @@ function ComposeEmailFormContent({
         )}
       >
         <div className="flex flex-wrap items-center gap-1">
+          {/* The send check above takes the tooltip's place. */}
           <Tooltip
+            hide={Boolean(preSend)}
             shortcuts={onMarkDone ? ["send", "sendAndMarkDone"] : ["send"]}
           >
             <Button disabled={isSubmitting} type="submit">
