@@ -32,6 +32,7 @@ describe("queued sender archive resume", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.newsletter.findFirst.mockResolvedValue({
+      id: "sender-1",
       email: "news@example.com",
       status: NewsletterStatus.AUTO_ARCHIVED,
     } as never);
@@ -60,6 +61,7 @@ describe("queued sender archive resume", () => {
         emailAccountId: "account-1",
         senderEmail: "news@example.com",
         ownerEmail: "user@example.com",
+        newsletterId: "sender-1",
         startedAt: 1_700_000_000_000,
         deferrals: 2,
       }),

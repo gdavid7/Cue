@@ -136,6 +136,25 @@ describe("cleanThread", () => {
     } as never);
   });
 
+  it("does nothing once the clean job is gone, rather than cleaning without its instructions", async () => {
+    prisma.cleanupJob.findFirst.mockResolvedValue(null);
+    mockGetThreadMessages.mockResolvedValue([
+      getMockMessage({
+        id: "msg-1",
+        from: "store@example.com",
+        to: "user@example.com",
+        subject: "Payment confirmation",
+        labelIds: [],
+      }),
+    ]);
+
+    await cleanThread(getDefaultParams());
+
+    expect(mockAiClean).not.toHaveBeenCalled();
+    expect(mockPublishToQstash).not.toHaveBeenCalled();
+    expect(mockGetThreadMessages).not.toHaveBeenCalled();
+  });
+
   it("reads the job's instructions from its row, since the queued job omits them", async () => {
     prisma.cleanupJob.findFirst.mockResolvedValue({
       instructions: "Keep anything about the school trip",

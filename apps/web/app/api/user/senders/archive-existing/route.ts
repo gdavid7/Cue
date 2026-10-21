@@ -55,7 +55,7 @@ export const POST = withError(
               emailAccountId,
               email: { equals: senderEmail, mode: "insensitive" },
             },
-        select: { email: true, status: true },
+        select: { id: true, email: true, status: true },
       }),
       prisma.emailAccount.findUnique({
         where: { id: emailAccountId },
@@ -81,6 +81,7 @@ export const POST = withError(
       emailProvider,
       senderEmail: sender.email,
       ownerEmail: emailAccount.email,
+      newsletterId: sender.id,
       logger,
       startedAt,
       deferrals,

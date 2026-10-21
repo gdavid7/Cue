@@ -72,6 +72,17 @@ export async function cleanThread({
   if (!premium) throw new SafeError("User not premium");
   if (!isActivePremium(premium)) throw new SafeError("Premium not active");
 
+  // The job's instructions decide what may be archived, so a job that is gone
+  // is not cleaned under the default policy instead.
+  const cleanupJob = await prisma.cleanupJob.findFirst({
+    where: { id: jobId, emailAccountId },
+    select: { instructions: true },
+  });
+  if (!cleanupJob) {
+    logger.info("Clean job no longer exists; not cleaning thread");
+    return;
+  }
+
   const gmail = await getGmailClientWithRefresh({
     accessToken: emailAccount.tokens.access_token,
     refreshToken: emailAccount.tokens.refresh_token,
@@ -196,16 +207,11 @@ export async function cleanThread({
     return;
   }
 
-  const cleanupJob = await prisma.cleanupJob.findFirst({
-    where: { id: jobId, emailAccountId },
-    select: { instructions: true },
-  });
-
   const aiResult = await aiClean({
     emailAccount,
     messageId: lastMessage.id,
     messages: messages.map((m) => getEmailForLLM(m)),
-    instructions: cleanupJob?.instructions ?? undefined,
+    instructions: cleanupJob.instructions ?? undefined,
     skips,
   });
 

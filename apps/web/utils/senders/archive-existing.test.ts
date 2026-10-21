@@ -194,6 +194,52 @@ describe("archiveExistingSenderMail when the Gmail quota gate defers it", () => 
     expect(publishToQstashAt).not.toHaveBeenCalled();
   });
 
+  it("resumes by the sender row it was given without looking it up again", async () => {
+    const emailProvider = provider();
+    emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(
+      new GmailCallDeferredError(30_000, "background"),
+    );
+
+    await runQueuedSenderArchive({
+      emailAccountId: "account-1",
+      emailProvider: emailProvider as never,
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      newsletterId: "sender-9",
+      logger,
+      startedAt: 1_700_000_000_000,
+      deferrals: 1,
+    });
+
+    expect(prisma.newsletter.findFirst).not.toHaveBeenCalled();
+    expect(vi.mocked(publishToQstashAt).mock.calls[0][0].body).toMatchObject({
+      newsletterId: "sender-9",
+    });
+  });
+
+  it("does not mistake a failed sender lookup for a missing sender", async () => {
+    prisma.newsletter.findFirst.mockRejectedValue(new Error("db down"));
+    const emailProvider = provider();
+    emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(
+      new GmailCallDeferredError(30_000, "background"),
+    );
+    const errorSpy = vi.spyOn(logger, "error");
+
+    await runQueuedSenderArchive({
+      emailAccountId: "account-1",
+      emailProvider: emailProvider as never,
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      logger,
+      startedAt: 1_700_000_000_000,
+      deferrals: 0,
+    });
+
+    expect(publishToQstashAt).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it("gives up after repeated deferrals", async () => {
     const emailProvider = provider();
     emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(

@@ -69,6 +69,7 @@ export async function runQueuedSenderArchive({
   emailProvider,
   senderEmail,
   ownerEmail,
+  newsletterId,
   logger,
   startedAt,
   deferrals,
@@ -77,6 +78,8 @@ export async function runQueuedSenderArchive({
   emailProvider: EmailProvider;
   senderEmail: string;
   ownerEmail: string;
+  /** The sender's row, when the caller already has it. */
+  newsletterId?: string;
   logger: Logger;
   /** When the first run of this archive started. */
   startedAt: number;
@@ -96,16 +99,26 @@ export async function runQueuedSenderArchive({
 
     // The resume names the sender by its row so the queue never holds the
     // sender's or the owner's address (founder rule R-1).
-    const sender = await prisma.newsletter
-      .findFirst({
-        where: {
-          emailAccountId,
-          email: { equals: senderEmail, mode: "insensitive" },
-        },
-        select: { id: true },
-      })
-      .catch(() => null);
-    if (!sender) {
+    let senderId = newsletterId;
+    if (!senderId) {
+      try {
+        const sender = await prisma.newsletter.findFirst({
+          where: {
+            emailAccountId,
+            email: { equals: senderEmail, mode: "insensitive" },
+          },
+          select: { id: true },
+        });
+        senderId = sender?.id;
+      } catch (lookupError) {
+        logger.error(
+          "Failed to look up the sender to resume archiving existing mail",
+          { error: lookupError },
+        );
+        return;
+      }
+    }
+    if (!senderId) {
       logger.warn(
         "Deferred archiving existing sender mail and found no sender row to resume it by",
       );
@@ -118,11 +131,11 @@ export async function runQueuedSenderArchive({
       body: {
         emailAccountId,
         provider: emailProvider.name,
-        newsletterId: sender.id,
+        newsletterId: senderId,
         startedAt,
       },
       deferrals,
-      jobKey: `archive-existing-${emailAccountId}-${sender.id}-${startedAt}`,
+      jobKey: `archive-existing-${emailAccountId}-${senderId}-${startedAt}`,
       job: "archiving existing sender mail",
       logger,
     });
