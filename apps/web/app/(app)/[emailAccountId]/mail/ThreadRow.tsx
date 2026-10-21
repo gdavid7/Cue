@@ -194,7 +194,7 @@ export const ThreadRow = memo(function ThreadRow({
       onPointerEnter={(event) => {
         // Touch has no hover, and a tap opens the row at once anyway.
         if (event.pointerType === "mouse")
-          onHoverIntent?.({ thread, insightData, userLabels, accountEmail });
+          onHoverIntent?.({ thread, insightData, userLabels });
       }}
       onPointerLeave={() => onHoverIntentEnd?.(thread.id)}
       onPointerCancel={(event) => {

@@ -13,44 +13,37 @@ const LABELS: EmailLabels = {
 const ME = "me@example.com";
 
 describe("getReaderPrefetchPlan", () => {
-  it("prefetches the brief and context for a conversation waiting on the user", () => {
+  it("prefetches the brief of a conversation waiting on the user", () => {
     expect(plan({ labels: ["INBOX", "Label_reply"] })).toEqual({
       messageId: "m-real",
-      brief: true,
-      context: true,
     });
   });
 
   it("prefetches the brief when Cue's note asks the user to reply", () => {
-    expect(plan({ insight: { action: "reply" } })?.brief).toBe(true);
+    expect(plan({ insight: { action: "reply" } })?.messageId).toBe("m-real");
   });
 
   it("skips the brief, a model call, for bulk mail whatever the note says", () => {
     expect(
-      plan({ labels: ["Label_news"], insight: { action: "reply" } })?.brief,
-    ).toBe(false);
+      plan({ labels: ["Label_news"], insight: { action: "reply" } }),
+    ).toBeNull();
   });
 
   it("skips the brief until the row's note has come", () => {
-    expect(plan({ insightData: undefined })?.brief).toBe(false);
+    expect(plan({ insightData: undefined })).toBeNull();
   });
 
   it("skips the brief when Cue's note doesn't ask for anything", () => {
-    expect(plan({ insight: { action: "none" } })?.brief).toBe(false);
+    expect(plan({ insight: { action: "none" } })).toBeNull();
   });
 
   it("without AI access, prefetches the brief only for a conversation category", () => {
     expect(
-      plan({ insight: { action: "reply" }, hasAiAccess: false })?.brief,
-    ).toBe(false);
-    expect(plan({ labels: ["Label_reply"], hasAiAccess: false })?.brief).toBe(
-      true,
-    );
-  });
-
-  it("skips related context once the user wrote the newest message", () => {
-    expect(plan({ from: `Me <${ME}>` })?.context).toBe(false);
-    expect(plan({ labels: ["SENT"] })?.context).toBe(false);
+      plan({ insight: { action: "reply" }, hasAiAccess: false }),
+    ).toBeNull();
+    expect(
+      plan({ labels: ["Label_reply"], hasAiAccess: false })?.messageId,
+    ).toBe("m-real");
   });
 
   it("prefetches nothing for a conversation with a draft", () => {
@@ -91,7 +84,6 @@ function plan({
     thread,
     insightData,
     userLabels: LABELS,
-    accountEmail: ME,
     hasAiAccess,
   });
 }

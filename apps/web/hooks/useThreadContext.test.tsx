@@ -3,16 +3,8 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  contextWithText,
-  getThreadContextKey,
-  useThreadContext,
-} from "@/hooks/useThreadContext";
+import { contextWithText, useThreadContext } from "@/hooks/useThreadContext";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
-import {
-  getReaderPrefetcher,
-  PREFETCH_INTENT_DELAY_MS,
-} from "@/utils/reader-prefetch";
 
 vi.mock("@/env", () => ({ env: {} }));
 
@@ -40,33 +32,6 @@ describe("useThreadContext", () => {
     const second = render();
 
     expect(second.current.data).toEqual(CONTEXT);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
-
-  // PF-3: hovering the row started the request; opening it must not ask again.
-  it("takes over the request a hover on the row already started", async () => {
-    let answer: (value: typeof CONTEXT) => void = () => {};
-    fetcher.mockReturnValue(
-      new Promise((resolve) => {
-        answer = resolve;
-      }),
-    );
-    const key = getThreadContextKey("thread-1", "a1");
-    getReaderPrefetcher().intend({
-      accountId: "a1",
-      threadId: "thread-1",
-      requests: () => [
-        { kind: "context", key, run: () => fetcher(key) as Promise<unknown> },
-      ],
-    });
-    await new Promise((resolve) =>
-      setTimeout(resolve, PREFETCH_INTENT_DELAY_MS + 50),
-    );
-
-    const opened = render();
-    answer(CONTEXT);
-
-    await waitFor(() => expect(opened.current.data).toEqual(CONTEXT));
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 

@@ -98,14 +98,16 @@ export async function getThreadBrief({
 /** The account that would write the brief, if it may use AI. */
 async function getBriefWriter(emailAccountId: string) {
   const emailAccount = await getEmailAccountWithAi({ emailAccountId });
-  if (!emailAccount) return null;
+  if (!emailAccount) return { status: "no-account" as const };
   const hasAccess = await assertHasAiAccess({
     userId: emailAccount.userId,
     hasUserApiKey: !!emailAccount.user.aiApiKey,
   })
     .then(() => true)
     .catch(() => false);
-  return hasAccess ? emailAccount : ("no-access" as const);
+  return hasAccess
+    ? { status: "ok" as const, emailAccount }
+    : { status: "no-access" as const };
 }
 
 async function aiBrief({
@@ -115,9 +117,9 @@ async function aiBrief({
   writer: Awaited<ReturnType<typeof getBriefWriter>>;
   messages: ParsedMessage[];
 }): Promise<ThreadBrief | { aiUnavailable: true } | null> {
-  if (!writer) return null;
-  if (writer === "no-access") return { aiUnavailable: true };
-  const emailAccount = writer;
+  if (writer.status === "no-account") return null;
+  if (writer.status === "no-access") return { aiUnavailable: true };
+  const { emailAccount } = writer;
 
   const modelOptions = getModelForUseCase(
     emailAccount.user,

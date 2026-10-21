@@ -65,7 +65,7 @@ export type ThreadListProps = {
   insightsPaused?: boolean;
   /**
    * Where opening a row shows it in the reader: a row the mouse rests on
-   * starts the reader's brief and related context (see reader-prefetch).
+   * starts Cue's brief of it (see reader-prefetch).
    */
   prefetchReaderOnHover?: boolean;
   /** The row the reader shows, which asks for itself. */
@@ -102,6 +102,7 @@ export const ThreadList = memo(function ThreadList({
   const { onRowHover, onRowHoverEnd } = useReaderRowPrefetch({
     emailAccountId,
     openThreadKey,
+    listKey,
   });
   const isMobile = useIsMobile();
   const dayStart = useDayStart();

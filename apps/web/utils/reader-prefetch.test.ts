@@ -82,7 +82,7 @@ describe("createReaderPrefetcher", () => {
       "brief",
     );
     expect(prefetcher.take(["/brief?t1", "account-1"])).toBeUndefined();
-    expect(report).toHaveBeenCalledWith("brief", "used");
+    expect(report).toHaveBeenCalledWith("used");
   });
 
   it("doesn't hand over a failed prefetch, so the reader asks again", async () => {
@@ -91,7 +91,7 @@ describe("createReaderPrefetcher", () => {
     await vi.runAllTimersAsync();
 
     expect(prefetcher.take(["/brief?t1", "account-1"])).toBeUndefined();
-    expect(report).toHaveBeenCalledWith("brief", "failed");
+    expect(report).toHaveBeenCalledWith("failed");
   });
 
   it("asks once for a row hovered again while its prefetch is kept", async () => {
@@ -113,7 +113,31 @@ describe("createReaderPrefetcher", () => {
     clock += 60_000;
 
     expect(prefetcher.take(["/brief?t1", "account-1"])).toBeUndefined();
-    expect(report).toHaveBeenCalledWith("brief", "unused");
+    expect(report).toHaveBeenCalledWith("unused");
+  });
+
+  it("starts at most six prefetches a minute for an account", async () => {
+    const run = vi.fn(() => Promise.resolve("brief"));
+    for (let i = 0; i < 8; i++) {
+      prefetcher.intend(intent(`t${i}`, run));
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    }
+    expect(run).toHaveBeenCalledTimes(6);
+
+    clock += 60_000;
+    prefetcher.intend(intent("t9", run));
+    vi.advanceTimersByTime(300);
+    expect(run).toHaveBeenCalledTimes(7);
+  });
+
+  it("drops a pending intent when the list goes away", () => {
+    const run = vi.fn(() => Promise.resolve("brief"));
+    prefetcher.intend(intent("t1", run));
+    prefetcher.cancelPending();
+    vi.advanceTimersByTime(1000);
+
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("counts what is left as unused when the page goes away", async () => {
@@ -122,7 +146,7 @@ describe("createReaderPrefetcher", () => {
     await Promise.resolve();
     prefetcher.flush();
 
-    expect(report).toHaveBeenCalledWith("brief", "unused");
+    expect(report).toHaveBeenCalledWith("unused");
   });
 });
 
@@ -134,8 +158,6 @@ function intent(
   return {
     accountId,
     threadId,
-    requests: () => [
-      { kind: "brief" as const, key: [`/brief?${threadId}`, accountId], run },
-    ],
+    request: () => ({ key: [`/brief?${threadId}`, accountId], run }),
   };
 }
