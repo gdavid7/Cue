@@ -53,6 +53,12 @@ test("links a long bare URL in an HTML message", async ({ page }) => {
     'li[data-thread-message-id="msg_playwright_html_links"]',
   );
   await expect(htmlMessage).toBeVisible({ timeout: 60_000 });
+  // The test above may already have opened the thread and marked it read,
+  // which leaves this earlier message collapsed.
+  const toggle = htmlMessage.locator("[data-message-toggle][aria-expanded]");
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
   const link = htmlMessage
     .frameLocator("iframe")
     .getByRole("link", { name: LONG_HTML_URL, exact: true });
