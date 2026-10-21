@@ -56,7 +56,7 @@ export default function DocxAttachmentPreview({
     }).then(
       () => {
         if (cancelled) return;
-        fitDocxToFrame(doc);
+        // Observing reports the frame's current size, which runs the first fit.
         if (frame) resizeObserver.observe(frame);
         setStatus("ready");
       },

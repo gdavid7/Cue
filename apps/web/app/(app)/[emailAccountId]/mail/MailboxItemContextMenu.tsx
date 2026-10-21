@@ -129,7 +129,9 @@ export function MailboxItemContextMenu({
   const [color, setColor] = useState<EmailLabelColor | null>(null);
   // Opening a dialog from the options menu keeps focus in the dialog rather
   // than letting the closing menu hand it back to its button.
-  const openedDialogFromMenu = useRef(false);
+  const dialogFromOptionsMenu = useRef(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const optionsButtonRef = useRef<HTMLButtonElement>(null);
   const showsName = editMode !== "color";
   const showsColor = editMode !== "name";
 
@@ -211,17 +213,27 @@ export function MailboxItemContextMenu({
     }
   };
 
-  const menuItems = (parts: MenuParts) => (
+  // The menu item that opened a dialog is gone when it closes, so focus
+  // goes back to the row instead of falling to the page.
+  const returnFocusToRow = (event: Event) => {
+    event.preventDefault();
+    (
+      optionsButtonRef.current ??
+      rowRef.current?.querySelector<HTMLElement>("a[href], [tabindex]")
+    )?.focus();
+  };
+
+  const menuItems = (parts: MenuParts, fromOptionsMenu: boolean) => (
     <MailboxItemMenuItems
       parts={parts}
       typeName={typeName}
       visibility={visibility}
       onEdit={() => {
-        openedDialogFromMenu.current = true;
+        dialogFromOptionsMenu.current = fromOptionsMenu;
         openEditor();
       }}
       onDelete={() => {
-        openedDialogFromMenu.current = true;
+        dialogFromOptionsMenu.current = fromOptionsMenu;
         setIsDeleteOpen(true);
       }}
       onVisibilityChange={updateVisibility}
@@ -230,50 +242,56 @@ export function MailboxItemContextMenu({
 
   return (
     <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            className={cn(
-              "group/mailbox-item relative",
-              // Touch has no hover to reveal the options button, so it stays
-              // visible and the row's count moves clear of it.
-              showOptionsButton && "[@media(hover:none)]:[&_a]:pr-9",
-            )}
+      <div
+        className={cn(
+          "group/mailbox-item relative",
+          // Touch has no hover to reveal the options button, so it stays
+          // visible and the row's count moves clear of it.
+          showOptionsButton && "[@media(hover:none)]:[&_a]:pr-9",
+        )}
+      >
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div ref={rowRef}>{children}</div>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-48">
+            {menuItems(CONTEXT_MENU_PARTS, false)}
+          </ContextMenuContent>
+        </ContextMenu>
+        {showOptionsButton && (
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) dialogFromOptionsMenu.current = false;
+            }}
           >
-            {children}
-            {showOptionsButton && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={`${capitalize(typeName)} options for ${item.name}`}
-                    className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground data-[state=open]:opacity-100 group-focus-within/mailbox-item:opacity-100 group-hover/mailbox-item:opacity-100 pointer-coarse:after:absolute pointer-coarse:after:-inset-2 pointer-coarse:after:content-[''] [@media(hover:hover)]:bg-sidebar-accent [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-has-[[aria-current=page]]/mailbox-item:bg-card [@media(hover:hover)]:group-has-[[data-highlighted]]/mailbox-item:bg-card"
-                  >
-                    <MoreHorizontalIcon className="size-4" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="w-48"
-                  onCloseAutoFocus={(event) => {
-                    if (!openedDialogFromMenu.current) return;
-                    openedDialogFromMenu.current = false;
-                    event.preventDefault();
-                  }}
-                >
-                  {menuItems(DROPDOWN_MENU_PARTS)}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-48">
-          {menuItems(CONTEXT_MENU_PARTS)}
-        </ContextMenuContent>
-      </ContextMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                ref={optionsButtonRef}
+                type="button"
+                aria-label={`${typeName.charAt(0).toUpperCase()}${typeName.slice(1)} options for ${item.name}`}
+                className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground data-[state=open]:opacity-100 group-focus-within/mailbox-item:opacity-100 group-hover/mailbox-item:opacity-100 pointer-coarse:after:absolute pointer-coarse:after:-inset-2 pointer-coarse:after:content-[''] [@media(hover:hover)]:bg-sidebar-accent [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-has-[[aria-current=page]]/mailbox-item:bg-card [@media(hover:hover)]:group-has-[[data-highlighted]]/mailbox-item:bg-card"
+              >
+                <MoreHorizontalIcon className="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="w-48"
+              onCloseAutoFocus={(event) => {
+                if (dialogFromOptionsMenu.current) event.preventDefault();
+              }}
+            >
+              {menuItems(DROPDOWN_MENU_PARTS, true)}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
 
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent aria-describedby={undefined}>
+        <DialogContent
+          aria-describedby={undefined}
+          onCloseAutoFocus={returnFocusToRow}
+        >
           <DialogHeader>
             <DialogTitle>Edit {typeName}</DialogTitle>
           </DialogHeader>
@@ -343,7 +361,7 @@ export function MailboxItemContextMenu({
       </Dialog>
 
       <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={returnFocusToRow}>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {typeName}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -371,6 +389,8 @@ export function MailboxItemContextMenu({
   );
 }
 
+// Radix's ContextMenu and DropdownMenu parts share the same item, label,
+// radio and separator props, so one list of items renders in either.
 type MenuParts = {
   Item: ComponentType<{
     className?: string;
@@ -479,8 +499,4 @@ function MailboxItemMenuItems({
       )}
     </>
   );
-}
-
-function capitalize(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

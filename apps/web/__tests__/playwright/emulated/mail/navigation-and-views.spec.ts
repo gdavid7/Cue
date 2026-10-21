@@ -311,6 +311,7 @@ test("creates and edits a label and shows every keyboard workflow", async ({
     await editDialog.getByRole("button", { name: "Save" }).click();
     await expect(editDialog).toBeHidden();
     await page.reload();
+    await page.getByRole("link", { name: labelName, exact: true }).hover();
     await page
       .getByRole("button", {
         name: `Category options for ${labelName}`,
