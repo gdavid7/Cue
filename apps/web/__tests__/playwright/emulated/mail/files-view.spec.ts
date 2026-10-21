@@ -148,6 +148,61 @@ test("previews a file, downloads it, and opens its conversation", async ({
   await capturePlaywrightCheckpoint(page, testInfo, "files-view-conversation");
 });
 
+test("attaches a file from mail in the composer without a download", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000);
+  await openFiles(page);
+  const { pdf, token } = requireSeeded();
+
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const compose = page.getByRole("dialog", { name: "New Message" });
+  await compose
+    .getByRole("combobox", { name: "To", exact: true })
+    .fill(SENDER.address);
+  await page.keyboard.press("Enter");
+  await compose.getByRole("button", { name: "Attach from mail" }).click();
+
+  const picker = page.getByRole("dialog", { name: "Attach from mail" });
+  const option = picker.getByRole("option", {
+    name: new RegExp(escapeRegExp(pdf)),
+  });
+  await expect(option).toBeVisible({ timeout: 60_000 });
+  // The Outlook emulator sends created mail from the account itself, which
+  // isn't a recipient, so only Gmail lists the recipient's own files first.
+  if (!isMicrosoftPlaywright())
+    await expect(
+      picker
+        // The recipient reads by name once the address matches a contact.
+        .getByRole("group", {
+          name: new RegExp(
+            `^Files from (${SENDER.name}|${escapeRegExp(SENDER.address)})$`,
+          ),
+        })
+        .getByRole("option", { name: new RegExp(escapeRegExp(pdf)) }),
+    ).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "attach-from-mail-picker");
+
+  await picker
+    .getByRole("combobox", { name: "Search file names" })
+    .fill(`contract ${token}`);
+  await expect(picker.getByRole("option")).toHaveCount(1);
+  await page.keyboard.press("ArrowDown");
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+
+  await expect(picker).toBeHidden({ timeout: 60_000 });
+  const attachments = compose.getByRole("list", { name: "Attachments" });
+  await expect(attachments).toContainText(pdf);
+  await expect(attachments.locator("li[aria-busy]")).toHaveCount(0, {
+    timeout: 90_000,
+  });
+  await capturePlaywrightCheckpoint(page, testInfo, "attach-from-mail-chip");
+
+  await compose.getByRole("button", { name: "Discard draft" }).click();
+  await expect(compose).toBeHidden();
+});
+
 test("fits a phone screen", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openMail(page);

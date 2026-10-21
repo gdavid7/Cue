@@ -362,6 +362,9 @@
   ],
   "files-view.spec.ts": [
     "app/(app)/[emailAccountId]/mail/FilesView.tsx",
+    "app/(app)/[emailAccountId]/compose/AttachFromMailDialog.tsx",
+    "app/(app)/[emailAccountId]/compose/attach-from-mail.ts",
+    "components/mail-files.ts",
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "components/email-list/EmailAttachments.tsx",
     "utils/attachments/download.ts",

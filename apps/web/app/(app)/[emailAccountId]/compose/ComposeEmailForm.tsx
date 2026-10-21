@@ -18,6 +18,7 @@ import {
 import {
   ChevronDownIcon,
   CircleAlertIcon,
+  FileSearchIcon,
   ImageIcon,
   Loader2Icon,
   PaperclipIcon,
@@ -183,6 +184,8 @@ import {
   resolveDraftId,
   uploadDraftAttachment,
 } from "./upload-draft-attachment";
+import { AttachFromMailDialog } from "./AttachFromMailDialog";
+import { attachFromMailSenders } from "./attach-from-mail";
 import { useComposeDraftAttachments } from "./useComposeDraftAttachments";
 import {
   type ComposeAttachment,
@@ -615,6 +618,9 @@ function ComposeEmailFormContent({
   const inlineReplySummaryButtonRef = useRef<HTMLButtonElement>(null);
   const collapseInlineReplyFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [attachFromMailOpen, setAttachFromMailOpen] = useState(false);
+  // The Files view's local listing; a window without the mail engine has none.
+  const canAttachFromMail = Boolean(useOptionalMailClient()?.queryFiles);
   const inlineImageInputRef = useRef<HTMLInputElement>(null);
   const sendAndMarkDoneButtonRef = useRef<HTMLButtonElement>(null);
   const deliveryOptionsRef = useRef<DeliveryOptionsHandle>(null);
@@ -1191,6 +1197,43 @@ function ComposeEmailFormContent({
     captureDraft();
   };
 
+  const attachmentsCountedTowardLimits = () => [
+    ...forwardedAttachments.map((attachment) => ({
+      ...attachment,
+      disposition: "attachment" as const,
+    })),
+    ...attachmentsRef.current.filter((item) => item.status !== "failed"),
+  ];
+
+  // Mail's files are checked before they download, the same way they're
+  // checked again once they arrive.
+  const refuseFileFromMail = ({
+    filename,
+    mimeType,
+    size,
+  }: {
+    filename: string;
+    mimeType: string;
+    size: number;
+  }) => {
+    const fit = fitComposeAttachments({
+      existing: attachmentsCountedTowardLimits(),
+      candidates: [
+        {
+          id: "attach-from-mail",
+          filename,
+          mimeType,
+          size,
+          disposition: "attachment" as const,
+        },
+      ],
+      maxTotalBytes: attachmentLimitBytes,
+    });
+    return fit.error
+      ? describeUnattachedFiles(fit.rejected, fit.error)
+      : undefined;
+  };
+
   const addFiles = async ({
     inline = [],
     attachments: attached = [],
@@ -1219,13 +1262,7 @@ function ComposeEmailFormContent({
     });
     if (!created.length) return;
     const fit = fitComposeAttachments({
-      existing: [
-        ...forwardedAttachments.map((attachment) => ({
-          ...attachment,
-          disposition: "attachment" as const,
-        })),
-        ...attachmentsRef.current.filter((item) => item.status !== "failed"),
-      ],
+      existing: attachmentsCountedTowardLimits(),
       candidates: created.map(({ attachment }) => attachment),
       maxTotalBytes: attachmentLimitBytes,
     });
@@ -2532,6 +2569,40 @@ function ComposeEmailFormContent({
               <PaperclipIcon className="size-4" />
             </Button>
           </Tooltip>
+          {canAttachFromMail && (
+            <>
+              <Tooltip content="Attach from mail">
+                <Button
+                  aria-label="Attach from mail"
+                  className="hover:bg-transparent"
+                  disabled={isSubmitting}
+                  onClick={() => setAttachFromMailOpen(true)}
+                  size="icon"
+                  type="button"
+                  variant="ghostMuted"
+                >
+                  <FileSearchIcon className="size-4" />
+                </Button>
+              </Tooltip>
+              <AttachFromMailDialog
+                checkFits={refuseFileFromMail}
+                emailAccountId={selectedEmailAccountId}
+                onAttach={(file) => {
+                  addFiles({ attachments: [file] }).catch(() =>
+                    toastError({
+                      description: "One of the files could not be read.",
+                    }),
+                  );
+                }}
+                onOpenChange={setAttachFromMailOpen}
+                open={attachFromMailOpen}
+                senders={attachFromMailSenders({
+                  fields: [watch("to"), watch("cc"), watch("bcc")],
+                  ownAddresses: ownEmails,
+                })}
+              />
+            </>
+          )}
           <input
             accept={EMAIL_INLINE_IMAGE_MIME_TYPES.join(",")}
             className="hidden"

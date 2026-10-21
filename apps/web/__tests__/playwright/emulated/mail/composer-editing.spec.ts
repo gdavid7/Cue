@@ -46,6 +46,7 @@ test("keeps keyboard focus in the composer and follows the message field order",
     dialog.getByRole("button", { name: "Send later" }),
     dialog.getByRole("button", { name: "Remind me" }),
     dialog.getByRole("button", { name: "Attach files" }),
+    dialog.getByRole("button", { name: "Attach from mail" }),
     dialog.getByRole("button", { name: "Insert inline images" }),
     dialog.getByRole("button", { name: "Discard draft" }),
   ]) {
