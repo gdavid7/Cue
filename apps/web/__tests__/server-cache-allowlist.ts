@@ -263,7 +263,7 @@ export const SERVER_CACHE_WRITES: Record<
       {
         key: "BullMQ queues (self-hosted QUEUE_BACKEND=bullmq only)",
         holds:
-          "job payloads; production queues through QStash. Audit payloads before enabling BullMQ (RD-3 follow-up)",
+          "job payloads from enqueueBackgroundJob: account, run, meeting, invoice and message ids only (audited in RD-3b)",
         ttl: "BullMQ defaults",
       },
     ],
