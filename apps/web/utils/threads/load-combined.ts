@@ -97,12 +97,18 @@ export async function loadCombinedThreads({
   const accountsById = new Map(
     items.map((item) => [item.account.id, item.account]),
   );
-  const threads = showCopiesOnce(items, (thread) => ({
-    accountId: thread.account.id,
-    messageId: thread.messages.findLast(
-      (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
-    )?.headers["message-id"],
-  })).map(({ row, alsoIn }) =>
+  // The route has no account the user is in; the first connected one stands.
+  const threads = showCopiesOnce(
+    items,
+    (thread) => ({
+      accountId: thread.account.id,
+      messageId: thread.messages.findLast(
+        (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+      )?.headers["message-id"],
+      at: getThreadTimestamp(thread),
+    }),
+    accounts[0]?.id,
+  ).map(({ row, alsoIn }) =>
     alsoIn.length
       ? {
           ...row,

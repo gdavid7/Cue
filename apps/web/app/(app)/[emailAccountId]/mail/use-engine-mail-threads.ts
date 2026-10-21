@@ -145,8 +145,16 @@ export function useEngineMailThreads({
       conversations,
       accounts,
       showsCopiesOnce,
+      emailAccountId,
     );
-  }, [accounts, client, enabled, conversations, showsCopiesOnce]);
+  }, [
+    accounts,
+    client,
+    enabled,
+    conversations,
+    showsCopiesOnce,
+    emailAccountId,
+  ]);
 
   // The mail screen shows while the engine starts, and has no answer yet.
   const engineStarting = enabled && !client;
@@ -238,16 +246,22 @@ function reuseUnchangedThreads(
   conversations: ConversationSummary[],
   accounts: Record<string, CombinedListThread["account"]> | undefined,
   showsCopiesOnce: boolean,
+  routedAccountId: string,
 ): ListThread[] {
   const rows: PreviousThreads["rows"] = new Map();
   // All inboxes shows a message delivered to two accounts once. Archive, read
   // and star on that row change its own account's copy only, as the row and
   // its keys are that copy's; the other copy then shows on its own.
   const shown = showsCopiesOnce
-    ? showCopiesOnce(conversations, (conversation) => ({
-        accountId: conversation.key.accountId,
-        messageId: conversation.latestInternetMessageId,
-      }))
+    ? showCopiesOnce(
+        conversations,
+        (conversation) => ({
+          accountId: conversation.key.accountId,
+          messageId: conversation.latestInternetMessageId,
+          at: conversation.latestMessageAtMs,
+        }),
+        routedAccountId,
+      )
     : conversations.map((row) => ({ row, alsoIn: [] }));
   const threads = shown.map(({ row: conversation, alsoIn: alsoInIds }) => {
     const key = `${conversation.key.accountId}:${conversation.key.conversationId}`;

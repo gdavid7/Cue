@@ -390,6 +390,29 @@ describe("loadCombinedThreads", () => {
     ]);
   });
 
+  it("shows the first account's copy when the copies arrived together", async () => {
+    const result = await loadCombinedThreads({
+      accounts: [account("account-1"), account("account-2")],
+      cursor: null,
+      limit: 20,
+      loadPage: vi.fn(async ({ account }) => ({
+        threads: [
+          thread(
+            `${account.id}-copy`,
+            "2026-08-13T10:00:00.000Z",
+            "<same@example.com>",
+          ),
+        ],
+        nextPageToken: null,
+      })),
+      logger,
+    });
+
+    expect(
+      result.threads.map((item) => [item.account.id, item.alsoIn?.[0]?.id]),
+    ).toEqual([["account-1", "account-2"]]);
+  });
+
   it("keeps rows of one account apart, even when they share a Message-ID", async () => {
     const result = await loadCombinedThreads({
       accounts: [account("account-1")],
@@ -436,6 +459,7 @@ function thread(
   return {
     id,
     messageIds: [`${id}-message`],
+    participantMessages: undefined,
     snippet: id,
     plan: undefined,
     plans: [],

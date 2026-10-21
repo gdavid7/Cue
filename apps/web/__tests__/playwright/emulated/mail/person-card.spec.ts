@@ -11,7 +11,6 @@ import {
   openMail,
   openThreadIdFromUrl,
   readLatestMailMutation,
-  readProviderAccessToken,
 } from "./mail-test-helpers";
 
 const THREAD_ID = "thr_playwright_reader_html";
@@ -132,6 +131,7 @@ test("in All inboxes, writes to them from the account the message came to", asyn
       from: "Dana Example <dana@example.com>",
       to: secondAccount.email,
       subject,
+      token: secondAccount.accessToken,
     });
 
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
@@ -176,15 +176,19 @@ test("in All inboxes, writes to them from the account the message came to", asyn
 
 async function insertMessage(
   page: Page,
-  input: { from: string; to: string; subject: string },
+  {
+    token,
+    ...input
+  }: { from: string; to: string; subject: string; token: string | undefined },
 ) {
   const baseUrl = process.env.GOOGLE_BASE_URL;
   if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  if (!token) throw new Error("The account has no mailbox of its own");
   const inserted = await page.request.post(
     `${baseUrl}/gmail/v1/users/me/messages`,
     {
       headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        Authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
       data: {

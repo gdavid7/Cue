@@ -8,7 +8,7 @@ import {
 } from "./account-test-helpers";
 import { openMail, toggleMailLayout, withClient } from "./mail-test-helpers";
 
-// Both accounts read the same seeded mailbox. A Needs reply tracker in each
+// Each account has its own copy of the seeded mail. A Needs reply tracker in each
 // account puts a different conversation in each account's lane.
 const PRIMARY_THREAD = "thr_playwright_1";
 const SECOND_THREAD = "thr_playwright_archive";

@@ -383,6 +383,40 @@ describe("useEngineMailThreads in All inboxes", () => {
     ]);
   });
 
+  // The account the user is in stands for a message that reached several at
+  // once, whichever the store happens to list first.
+  it("shows the routed account's copy when the copies arrived together", async () => {
+    const { result } = renderAllInboxes(
+      [
+        copy("acc-1", "c-1", "<same@example.com>", 2),
+        copy("acc-2", "c-2", "<same@example.com>", 2),
+      ],
+      INBOX_QUERY,
+      "acc-2",
+    );
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-2:c-2", alsoIn: ["one@example.com"] },
+    ]);
+  });
+
+  it("keeps the newer copy over the routed account's older one", async () => {
+    const { result } = renderAllInboxes(
+      [
+        copy("acc-1", "c-1", "<same@example.com>", 3),
+        copy("acc-2", "c-2", "<same@example.com>", 2),
+      ],
+      INBOX_QUERY,
+      "acc-2",
+    );
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-1:c-1", alsoIn: ["two@example.com"] },
+    ]);
+  });
+
   it("keeps rows of one account apart, even when they share a Message-ID", async () => {
     const { result } = renderAllInboxes([
       copy("acc-1", "c-1", "<dup@example.com>", 3),
@@ -456,6 +490,7 @@ const ALL_INBOXES_ACCOUNTS = {
 function renderAllInboxes(
   conversations: MailboxView["conversations"],
   query: ThreadsQuery = INBOX_QUERY,
+  emailAccountId = "acc-1",
 ) {
   const snapshot = mailboxSnapshot(conversations);
   const client = {
@@ -465,7 +500,7 @@ function renderAllInboxes(
   const { result } = renderHook(
     () =>
       useEngineMailThreads({
-        emailAccountId: "acc-1",
+        emailAccountId,
         accountIds: ACCOUNT_IDS,
         accounts: ALL_INBOXES_ACCOUNTS,
         query,

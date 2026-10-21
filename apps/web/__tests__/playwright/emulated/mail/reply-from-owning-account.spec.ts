@@ -28,12 +28,15 @@ test("replies all from the account that owns the thread, leaving out the user's 
   const subject = `Owning account reply ${testInfo.retry}-${Date.now()}`;
 
   try {
-    await insertMessage(page, {
+    // Addressed to both accounts, so each mailbox gets its own copy.
+    const message = {
       from: "Dana Example <dana@example.com>",
       to: primaryEmail,
       cc: `${secondAccount.email}, Alex Kim <alex@example.com>`,
       subject,
-    });
+    };
+    await insertMessage(page, message, await readProviderAccessToken());
+    await insertMessage(page, message, secondAccount.accessToken);
 
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
     const conversations = page.getByRole("listbox", { name: "Conversations" });
@@ -104,14 +107,16 @@ test("replies all from the account that owns the thread, leaving out the user's 
 async function insertMessage(
   page: Page,
   input: { from: string; to: string; cc: string; subject: string },
+  token: string | undefined,
 ) {
   const baseUrl = process.env.GOOGLE_BASE_URL;
   if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  if (!token) throw new Error("The account has no mailbox of its own");
   const inserted = await page.request.post(
     `${baseUrl}/gmail/v1/users/me/messages`,
     {
       headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        Authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
       data: {

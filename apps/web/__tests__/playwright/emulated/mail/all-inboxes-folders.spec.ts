@@ -23,8 +23,8 @@ const SENT_MESSAGE_ID = "msg_playwright_sent";
 const INBOX_SUBJECT = "Playwright Test Message";
 const SHARED_SUBJECT = "Draft deletion example";
 
-// Every account here reads the same seeded mailbox, so each message is listed
-// once per account included in All inboxes, marked with its account.
+// Every account here has its own copy of the seeded mail, so each message is
+// listed once per account included in All inboxes, marked with its account.
 test("merges Drafts, Sent and Starred from every included account, each row acting in its own account, with Drafts counted across them", async ({
   page,
 }, testInfo) => {
@@ -36,6 +36,7 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
   const excluded = await createSecondEmailAccount(emailAccountId);
   const subject = `All inboxes draft ${testInfo.retry}-${Date.now()}`;
   let draftId: string | undefined;
+  let secondDraftId: string | undefined;
   const operations: string[] = [];
   page.on("request", (request) => {
     if (request.method() === "PUT" && request.url().includes("/operations/"))
@@ -45,6 +46,7 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
   try {
     await excludeFromAllInboxes(excluded.id);
     draftId = await createMailboxDraft(page, subject);
+    secondDraftId = await createMailboxDraft(page, subject, second.accessToken);
 
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
     const conversations = page.getByRole("listbox", { name: "Conversations" });
@@ -185,14 +187,23 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
   } finally {
     await deletePendingScheduledEmails(second.id).catch(() => undefined);
     await unstarSentMessage(page).catch(() => undefined);
+    await unstarSentMessage(
+      page,
+      second.accessToken,
+      second.seededMessageId(SENT_MESSAGE_ID),
+    ).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
+    if (secondDraftId)
+      await deleteMailboxDraft(page, secondDraftId, second.accessToken).catch(
+        () => undefined,
+      );
     await deleteSecondEmailAccount(excluded.accountId);
     await deleteSecondEmailAccount(second.accountId);
   }
 });
 
-// Both accounts read the same seeded mailbox, and this message carries a
-// Message-ID, so it is one message delivered to two of the user's accounts.
+// The second account reads the primary's own mailbox, so each message there
+// is one message delivered to two of the user's accounts.
 test("shows a message delivered to two accounts once, naming the other account", async ({
   page,
 }, testInfo) => {
@@ -200,7 +211,9 @@ test("shows a message delivered to two accounts once, naming the other account",
   const { emailAccountId } = await openMail(page);
   const primaryEmail = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!primaryEmail) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
-  const second = await createSecondEmailAccount(emailAccountId);
+  const second = await createSecondEmailAccount(emailAccountId, {
+    mailbox: "primary",
+  });
 
   try {
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
@@ -215,16 +228,12 @@ test("shows a message delivered to two accounts once, naming the other account",
     // The second account was never opened in this browser; it syncs here.
     await expect(alsoIn).toHaveCount(1, { timeout: 120_000 });
     await expect(rows).toHaveCount(1);
-    // The seeded copies arrived at the same moment, so either one may stand
-    // for both; the row is that copy's, and names the other account.
-    const [shown, other] =
-      (await alsoIn.innerText()) === `Also in ${second.email}`
-        ? [primaryEmail, second.email]
-        : [second.email, primaryEmail];
-    await expect(alsoIn).toHaveText(`Also in ${other}`);
-    await expect(rows.filter({ has: accountMarker(page, shown) })).toHaveCount(
-      1,
-    );
+    // The copies arrived at the same moment, so the account the page is in
+    // stands for both, and the row names the other.
+    await expect(alsoIn).toHaveText(`Also in ${second.email}`);
+    await expect(
+      rows.filter({ has: accountMarker(page, primaryEmail) }),
+    ).toHaveCount(1);
     await capturePlaywrightCheckpoint(page, testInfo, "all-inboxes-also-in");
 
     // One row, so one stop for the keyboard and one key for selection.
@@ -292,15 +301,15 @@ async function deletePendingScheduledEmails(emailAccountId: string) {
   );
 }
 
-async function providerHeaders() {
+async function providerHeaders(token?: string) {
   return {
-    Authorization: `Bearer ${await readProviderAccessToken()}`,
+    Authorization: `Bearer ${token ?? (await readProviderAccessToken())}`,
     "content-type": "application/json",
   };
 }
 
-async function createMailboxDraft(page: Page, subject: string) {
-  const headers = await providerHeaders();
+async function createMailboxDraft(page: Page, subject: string, token?: string) {
+  const headers = await providerHeaders(token);
   if (isMicrosoftPlaywright()) {
     const created = await page.request.post(
       `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages`,
@@ -333,8 +342,8 @@ async function createMailboxDraft(page: Page, subject: string) {
   return ((await created.json()) as { id: string }).id;
 }
 
-async function deleteMailboxDraft(page: Page, draftId: string) {
-  const headers = await providerHeaders();
+async function deleteMailboxDraft(page: Page, draftId: string, token?: string) {
+  const headers = await providerHeaders(token);
   await page.request.delete(
     isMicrosoftPlaywright()
       ? `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${draftId}`
@@ -344,17 +353,21 @@ async function deleteMailboxDraft(page: Page, draftId: string) {
 }
 
 // Later specs expect the seeded sent message unstarred.
-async function unstarSentMessage(page: Page) {
-  const headers = await providerHeaders();
+async function unstarSentMessage(
+  page: Page,
+  token?: string,
+  messageId = SENT_MESSAGE_ID,
+) {
+  const headers = await providerHeaders(token);
   if (isMicrosoftPlaywright()) {
     await page.request.patch(
-      `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${SENT_MESSAGE_ID}`,
+      `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${messageId}`,
       { headers, data: { flag: { flagStatus: "notFlagged" } } },
     );
     return;
   }
   await page.request.post(
-    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/${SENT_MESSAGE_ID}/modify`,
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/${messageId}/modify`,
     { headers, data: { removeLabelIds: ["STARRED"] } },
   );
 }
