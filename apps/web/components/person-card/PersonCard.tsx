@@ -45,6 +45,7 @@ import { getAttachmentUrl } from "@/utils/attachments/download";
 import { formatShortDate } from "@/utils/date";
 import { getInitials, isSameEmailAddress } from "@/utils/email";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { isUnsupportedMethodError } from "@/utils/mail-engine/worker-protocol";
 import { getRuleLabel } from "@/utils/rule/consts";
 
 const SENDER_ATTRIBUTE = "data-person-card-sender";
@@ -343,7 +344,7 @@ function PersonCardBody({
           </Button>
         ) : null}
       </div>
-      {readCard && !isUnsupported(error) ? (
+      {readCard && !isUnsupportedMethodError(error) ? (
         <LoadingContent
           error={error}
           errorComponent={
@@ -560,13 +561,6 @@ function PersonCardSkeleton() {
       <Skeleton className="h-4 w-5/6" />
       <Skeleton className="h-4 w-4/6" />
     </div>
-  );
-}
-
-// A tab that relays to another tab's engine can reach one too old to answer.
-function isUnsupported(error: unknown) {
-  return (
-    error instanceof Error && error.message.startsWith("unsupported method")
   );
 }
 

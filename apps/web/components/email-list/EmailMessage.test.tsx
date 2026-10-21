@@ -319,6 +319,44 @@ describe("EmailMessage reply", () => {
     expect(screen.getByRole("textbox", { name: "Email message" })).toBeTruthy();
   });
 
+  it("collapses from the header unless the click ends a selection in it", () => {
+    const onToggle = vi.fn();
+    const view = render(
+      <EmailMessage
+        expanded
+        message={createMessage("message-1")}
+        onSendSuccess={vi.fn()}
+        onToggle={onToggle}
+        refetch={vi.fn()}
+        showReplyButton={false}
+      />,
+    );
+    const outside = document.createElement("p");
+    outside.textContent = "Elsewhere on the page";
+    document.body.append(outside);
+    const select = (node: Node) => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+    };
+    const header = screen.getByRole("button", {
+      name: "Show details",
+    }).parentElement as HTMLElement;
+
+    select(outside);
+    fireEvent.click(header);
+    expect(onToggle).toHaveBeenCalledOnce();
+
+    select(header);
+    fireEvent.click(header);
+    expect(onToggle).toHaveBeenCalledOnce();
+
+    window.getSelection()?.removeAllRanges();
+    outside.remove();
+    view.unmount();
+  });
+
   it("copies the other recipients only when replying to all", () => {
     const message = createMessage("message-1");
     render(

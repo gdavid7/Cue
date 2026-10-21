@@ -8,6 +8,7 @@ import {
   observeByKind,
   pageConnectivityOnline,
   requestSyncUnlessOffline,
+  unsupportedMethodMessage,
   type WorkerObserveKind,
 } from "@/utils/mail-engine/worker-protocol";
 
@@ -130,7 +131,7 @@ export function bindTabMailOwner(input: {
       input.bus.post({
         type: "error",
         id: message.id,
-        message: `unsupported method ${message.method}`,
+        message: unsupportedMethodMessage(message.method),
       });
       return;
     }
