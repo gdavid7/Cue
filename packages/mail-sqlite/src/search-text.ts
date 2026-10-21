@@ -81,6 +81,21 @@ export function searchMatchQuery(
   return terms.join(" ");
 }
 
+// What each word of an attachment-name search looks for in one file's name,
+// so a message that matches is narrowed to the files the words name: per
+// word, the stem searchMatchQuery matches it by (or the word), and the word
+// written joined.
+export function attachmentNameForms(value: string): string[][] {
+  return value
+    .split(/\s+/)
+    .filter((part) => TOKEN_CHARACTER.test(part))
+    .map((part) => {
+      const word = part.toLowerCase();
+      const stem = stemPrefix(part)?.slice(1, -2) ?? word;
+      return [...new Set([stem, word.replace(HYPHENS, "")])];
+    });
+}
+
 // The index keeps words as written, so the query matches the word's stem as
 // a prefix, which also covers the word as typed: "invoices" also finds
 // "invoice", "shipping" finds "shipped", "deliveries" finds "delivery". The

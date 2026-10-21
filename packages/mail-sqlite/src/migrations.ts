@@ -6,6 +6,7 @@ import {
   migrateIncrementalConversationIndex,
   migrateMembershipIndex,
 } from "./conversation-index";
+import { migrateFilesIndex } from "./files";
 import { migrateMessageSearchIndex } from "./message-search-index";
 
 export const MAILBOX_SCHEMA_SQL = `
@@ -436,6 +437,7 @@ export async function migrateMailbox(
   await migrateMessageSearchIndex(tx);
   await migrateEmptyMeetingInvitationBodies(tx);
   await migrateContactSuggestions(tx);
+  await migrateFilesIndex(tx);
 }
 
 // Delta sync once stored a meeting invitation's flag without its body. Dropping

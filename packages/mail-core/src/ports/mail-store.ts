@@ -34,6 +34,9 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  FileSender,
+  FilesPage,
+  FilesQuery,
   PersonCard,
   PersonCardQuery,
   QuerySnapshot,
@@ -420,6 +423,8 @@ export interface MailStore {
     nowMs: number,
   ): Promise<"complete" | "preparing" | "incomplete">;
   readDraft(key: DraftKey): Promise<DraftReadResult>;
+  readFileSenders(accountIds: string[]): Promise<FileSender[]>;
+  readFiles(query: FilesQuery): Promise<FilesPage>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
    * only the server can still stop.
