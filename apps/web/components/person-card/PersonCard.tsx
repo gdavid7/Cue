@@ -235,6 +235,7 @@ function PersonCardPopover({
             emailAccountId={previewing.accountId}
             filename={previewing.attachment.filename}
             key={`${previewing.accountId}:${previewing.messageId}:${previewing.attachment.attachmentId}`}
+            mimeType={previewing.attachment.mimeType}
             size={previewing.attachment.size}
             url={getAttachmentUrl({
               accountId: previewing.accountId,
