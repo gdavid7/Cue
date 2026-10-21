@@ -57,6 +57,13 @@ const NO_PLANS: never[] = [];
 // How long the reader waits on a reply before it says it couldn't write one
 // and offers to try again, rather than spinning for as long as Gmail is busy.
 export const REPLY_WAIT_LIMIT_MS = 15_000;
+// The user's rules write their reply to fresh mail while the reader works out
+// its own, and can finish seconds after the reader settled. For mail that
+// just arrived, the reader keeps checking for the rule's reply this often,
+// for this long after it opened, and no longer.
+export const RULE_REPLY_POLL_INTERVAL_MS = 2000;
+export const RULE_REPLY_POLL_LIMIT_MS = 30_000;
+const FRESH_MAIL_MS = 2 * 60 * 1000;
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -108,6 +115,8 @@ export function useReaderReplySuggestion({
     id: string;
     eligible: boolean;
     run: boolean;
+    /** Until when a rule's reply may still be on its way, for fresh mail. */
+    ruleReplyDueBy?: number;
   }>();
   const gate = getReaderReplyGate({
     setting: draftReplies.setting,
@@ -117,7 +126,14 @@ export function useReaderReplySuggestion({
     hasDraft,
   });
   if (latest && decision?.id !== latest.id && !draftReplies.loading) {
-    setDecision({ id: latest.id, eligible: gate.autoEligible, run: false });
+    setDecision({
+      id: latest.id,
+      eligible: gate.autoEligible,
+      run: false,
+      ruleReplyDueBy: isFreshMail(latest)
+        ? Date.now() + RULE_REPLY_POLL_LIMIT_MS
+        : undefined,
+    });
   }
   const current = latest && decision?.id === latest.id ? decision : undefined;
 
@@ -233,7 +249,7 @@ export function useReaderReplySuggestion({
       if (failed) retry();
       return;
     }
-    setDecision({ id: latest.id, eligible: true, run: true });
+    setDecision({ ...current, id: latest.id, eligible: true, run: true });
   };
   // The same context the reader shows, handed to the suggestion so the server
   // doesn't gather it (and read linked pages) again for each pass.
@@ -311,6 +327,28 @@ export function useReaderReplySuggestion({
   const verified =
     latestSuggestion?.status === "suggested" ? latestSuggestion : undefined;
 
+  // Until the rule's reply lands, fetched again on a short, bounded schedule.
+  // Never once the user has a draft or Cue's own checked reply is ready.
+  const ruleReplyDueBy =
+    enabled &&
+    gate.canRequest &&
+    writesReplies &&
+    needsReply &&
+    plansSettled &&
+    !ruleSuggestion &&
+    !verified &&
+    isInInbox(messages)
+      ? current?.ruleReplyDueBy
+      : undefined;
+  useEffect(() => {
+    if (!ruleReplyDueBy) return;
+    const timer = setInterval(() => {
+      if (Date.now() >= ruleReplyDueBy) clearInterval(timer);
+      else mutatePlans();
+    }, RULE_REPLY_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [ruleReplyDueBy, mutatePlans]);
+
   let assist: ReplyAssist | null =
     latest && verified
       ? {
@@ -381,7 +419,8 @@ export function useReaderReplySuggestion({
         {suggestionPhaseLabel(phase)}
       </p>
     );
-  } else if (latest && suggestion?.status === "insufficient") {
+  } else if (latest && !assist && suggestion?.status === "insufficient") {
+    // A rule's reply that landed after Cue declined stands on its own.
     replyStatus = (
       <p className="fade-in animate-in text-muted-foreground text-xs duration-150">
         {abstentionLine(suggestion.missing)}
@@ -485,6 +524,13 @@ function namesFrom(
     const name = record[key];
     return typeof name === "string" && name.trim() ? [name.trim()] : [];
   });
+}
+
+function isFreshMail(message: ThreadMessage) {
+  const receivedAt = message.internalDate
+    ? Number(message.internalDate)
+    : new Date(message.headers.date).getTime();
+  return Number.isFinite(receivedAt) && Date.now() - receivedAt < FRESH_MAIL_MS;
 }
 
 function isInInbox(messages: ThreadMessage[]) {

@@ -10,6 +10,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   REPLY_WAIT_LIMIT_MS,
+  RULE_REPLY_POLL_INTERVAL_MS,
+  RULE_REPLY_POLL_LIMIT_MS,
   useReaderReplySuggestion,
 } from "@/app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion";
 import type { ThreadMessage } from "@/components/email-list/types";
@@ -566,6 +568,122 @@ describe("useReaderReplySuggestion", () => {
     });
   });
 
+  // RS-1: the user's To Reply rule writes its reply while the reader works out
+  // its own, and can finish a few seconds after the reader gave up. The rule's
+  // reply is the one the user set up, so it still shows when it lands.
+  describe("when the rule's reply lands after the reader opened", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: enabled ? declined : undefined,
+      }));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows the rule's reply after Cue's own pass declined, and records it shown", () => {
+      const { result, rerender } = renderSuggestion([
+        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+      ]);
+      expect(result.current.assist).toBeNull();
+      expect(refetchesOver(RULE_REPLY_POLL_INTERVAL_MS)).toBe(1);
+
+      mocks.plans = [ruleSuggestionPlan("ask")];
+      rerender();
+
+      expect(result.current.assist).toMatchObject({
+        messageId: "ask",
+        reply: "Thursday works for me.",
+        executedActionId: "suggestion-1",
+      });
+      expect(mocks.recordStage).toHaveBeenCalledWith("account-1", {
+        executedActionId: "suggestion-1",
+        stage: "shown",
+      });
+      // Found: nothing more to wait for.
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+
+    it("hides why Cue left the reply once the rule's reply shows", () => {
+      // Even were Cue's own answer still at hand, the rule's reply stands.
+      mocks.useReplySuggestion.mockReturnValue({
+        phase: "done",
+        suggestion: declined,
+      });
+      const { result, rerender } = renderSuggestion([
+        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+      ]);
+      render(<div data-testid="before">{result.current.replyStatus}</div>);
+      expect(screen.getByTestId("before").textContent).toContain(
+        "Cue left this reply",
+      );
+
+      mocks.plans = [ruleSuggestionPlan("ask")];
+      rerender();
+
+      expect(result.current.assist?.executedActionId).toBe("suggestion-1");
+      expect(result.current.replyStatus).toBeNull();
+    });
+
+    it("stops checking for the rule's reply once the limit passes", () => {
+      renderSuggestion([
+        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+      ]);
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(
+        RULE_REPLY_POLL_LIMIT_MS / RULE_REPLY_POLL_INTERVAL_MS - 1,
+      );
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+
+    it("stops checking when the reader closes", () => {
+      const { unmount } = renderSuggestion([
+        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+      ]);
+
+      unmount();
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+
+    it("doesn't check for a rule's reply to mail that arrived a while ago", () => {
+      renderSuggestion([incoming("ask", ["INBOX", "Label_to_reply"])]);
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+
+    // A draft in the conversation is the user's own reply under way: a rule's
+    // reply landing now must not take its place.
+    it("doesn't check for a rule's reply once the user has a draft", () => {
+      renderSuggestion([
+        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        {
+          ...incoming("draft", ["DRAFT"]),
+          headers: { from: "user@example.com" },
+        },
+      ] as ThreadMessage[]);
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+
+    it("stops checking once Cue's own checked reply is ready", () => {
+      mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
+        phase: enabled ? "done" : "idle",
+        suggestion: enabled
+          ? { status: "suggested", reply: "Thursday works.", citations: [] }
+          : undefined,
+      }));
+
+      renderSuggestion([
+        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+      ]);
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+  });
+
   describe("asked for with Draft a reply", () => {
     it("writes a reply to mail from a person that isn't labelled To Reply", () => {
       const { result } = renderSuggestion([incoming("ask", ["INBOX"])]);
@@ -636,6 +754,26 @@ function renderSuggestion(messages: ThreadMessage[]) {
       onOpenThread: vi.fn(),
     }),
   );
+}
+
+const declined = {
+  status: "insufficient",
+  missing: "",
+  citations: [],
+} as const;
+
+function arrivedNow(message: ThreadMessage) {
+  return { ...message, internalDate: String(Date.now()) } as ThreadMessage;
+}
+
+/** How many times the thread's plans were fetched again over `ms`. */
+function refetchesOver(ms: number) {
+  mocks.mutatePlans.mockClear();
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+  return mocks.mutatePlans.mock.calls.filter((args) => args.length === 0)
+    .length;
 }
 
 function drafting(setting: "on" | "off", loading = false) {
