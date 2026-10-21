@@ -143,9 +143,13 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       .getByRole("button", { name: /Tomorrow morning/ })
       .click();
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    // No navigation: the open Drafts list must drop the draft by itself, not on
-    // a remount's revalidation.
-    await expect(page).toHaveURL(/\/all-inboxes\/drafts(\/|\?|$)/);
+    // Back to the list without navigating to Drafts again: it must drop the
+    // draft by itself, not on a remount's revalidation.
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(/\/all-inboxes\/drafts(\?|$)/);
+    await expect(
+      draftRows.filter({ has: accountMarker(page, primaryEmail) }),
+    ).toHaveCount(1, { timeout: 30_000 });
     await expect(
       draftRows.filter({ has: accountMarker(page, second.email) }),
     ).toHaveCount(0, { timeout: 30_000 });
