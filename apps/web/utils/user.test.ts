@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   wipeLocalMailbox: vi.fn(),
   redirect: vi.fn(),
   toastLoading: vi.fn(),
+  toastDismiss: vi.fn(),
   clearLastEmailAccount: vi.fn(),
   swrFetcher: vi.fn(),
   clearBrowserCaches: vi.fn(),
@@ -21,7 +22,10 @@ vi.mock("@/utils/mail-engine/wipe-local-mailbox", () => ({
   wipeLocalMailbox: mocks.wipeLocalMailbox,
 }));
 vi.mock("@/utils/redirect", () => ({ redirectToSafeUrl: mocks.redirect }));
-vi.mock("@/components/Toast", () => ({ toastLoading: mocks.toastLoading }));
+vi.mock("@/components/Toast", () => ({
+  toastLoading: mocks.toastLoading,
+  toastDismiss: mocks.toastDismiss,
+}));
 vi.mock("@/utils/actions/email-account-cookie", () => ({
   clearLastEmailAccountAction: mocks.clearLastEmailAccount,
 }));
@@ -197,6 +201,17 @@ describe("logOut", () => {
     expect(isSigningOut()).toBe(false);
     await logOut();
     expect(mocks.signOut).toHaveBeenCalledTimes(2);
+  });
+
+  it("dismisses the signing-out toast when leaving is cancelled, not when the page leaves", async () => {
+    mocks.toastLoading.mockReturnValue("toast-1");
+    const logOut = await loadLogOut();
+
+    await logOut();
+    expect(mocks.toastDismiss).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(mocks.toastDismiss).toHaveBeenCalledExactlyOnceWith("toast-1");
   });
 
   it("stays quiet when the page really leaves", async () => {

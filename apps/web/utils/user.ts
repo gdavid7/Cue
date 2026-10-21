@@ -1,6 +1,6 @@
 "use client";
 
-import { toastLoading } from "@/components/Toast";
+import { toastDismiss, toastLoading } from "@/components/Toast";
 import { signOut } from "@/utils/auth-client";
 import { clearLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
 import { resetSigningOut, startSigningOut } from "@/utils/signing-out";
@@ -32,8 +32,9 @@ export function logOut(callbackUrl = "/login") {
 }
 
 async function signOutAndLeave(callbackUrl: string) {
+  let toastId: string | number | undefined;
   try {
-    toastLoading("Signing out…");
+    toastId = toastLoading("Signing out…");
     startSigningOut();
     clearPersistedSwrCache();
     clearBrowserCaches();
@@ -58,19 +59,20 @@ async function signOutAndLeave(callbackUrl: string) {
   } finally {
     // A failed cleanup step must not strand a page that has stopped talking
     // to the server.
-    resumeIfLeaveIsCancelled();
+    resumeIfLeaveIsCancelled(toastId);
     redirectToSafeUrl(callbackUrl);
   }
 }
 
 // A "Leave site?" prompt that is cancelled fires no event, so a page that is
 // still here this long after leaving was asked to go has stayed.
-function resumeIfLeaveIsCancelled() {
+function resumeIfLeaveIsCancelled(toastId: string | number | undefined) {
   if (typeof window === "undefined") return;
   let left = false;
   window.addEventListener("pagehide", () => (left = true), { once: true });
   setTimeout(() => {
     if (left) return;
+    if (toastId !== undefined) toastDismiss(toastId);
     signingOut = undefined;
     resetSigningOut();
   }, LEAVE_CANCELLED_AFTER_MS);
