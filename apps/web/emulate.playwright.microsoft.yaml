@@ -298,6 +298,19 @@ microsoft:
       parent_folder_id: inbox
       is_read: false
       received_date_time: "2025-12-31T10:30:00.000Z"
+    - id: msg_playwright_html_links
+      conversation_id: thr_playwright_plain_links
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: dana@example.com
+        name: Dana Example
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Plain Text Links Message
+      body_content: "<p>Confirm your booking: https://click.example.com/ls/click?upn=u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9&amp;utm_source=newsletter before Friday.</p>"
+      parent_folder_id: inbox
+      is_read: false
+      received_date_time: "2025-12-30T17:00:00.000Z"
     - id: msg_playwright_plain_links
       conversation_id: thr_playwright_plain_links
       user_email: __PLAYWRIGHT_TEST_EMAIL__
@@ -307,7 +320,7 @@ microsoft:
       to_recipients:
         - address: __PLAYWRIGHT_TEST_EMAIL__
       subject: Plain Text Links Message
-      body_content: "Visit service.new/account\n\nhttps://staging.example.com/verify?token=value"
+      body_content: "Visit service.new/account\n\nhttps://staging.example.com/verify?token=value\n\nReset your password:\n<https://links.example.com/reset/Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-L\nm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_T\nr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2>"
       body_content_type: text
       parent_folder_id: inbox
       is_read: false
