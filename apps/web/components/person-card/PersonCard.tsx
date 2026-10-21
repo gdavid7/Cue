@@ -217,7 +217,7 @@ function PersonCardPopover({
           <PopoverContent
             align="start"
             aria-label={displayName}
-            className="max-h-[min(36rem,var(--radix-popover-content-available-height))] w-80 overflow-y-auto p-0 motion-reduce:animate-none"
+            className="max-h-[min(36rem,var(--radix-popover-content-available-height))] w-[22rem] overflow-y-auto p-0 motion-reduce:animate-none"
             collisionPadding={16}
             data-testid="person-card"
             onKeyDown={stopMailShortcuts}
@@ -317,7 +317,7 @@ function PersonCardBody({
       </header>
       <div className="flex gap-2 px-4 pb-3">
         <Button
-          className="flex-1"
+          className="min-w-0 flex-1"
           onClick={() => {
             onClose();
             composeTo(email);
@@ -330,7 +330,7 @@ function PersonCardBody({
         </Button>
         {scope.onSearch ? (
           <Button
-            className="flex-1"
+            className="min-w-0 flex-1"
             onClick={() => {
               onClose();
               scope.onSearch?.(`from:${email}`);
