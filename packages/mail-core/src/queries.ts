@@ -329,6 +329,23 @@ export type MessageSearchQuery = {
   after: string | null;
 };
 
+/**
+ * A search by meaning: the messages of `accountId` whose on-device vectors
+ * are nearest to `text`, at most one per conversation.
+ */
+export type SemanticSearchQuery = {
+  accountId: string;
+  text: string;
+  limit: number;
+};
+
+export type SemanticMatch = {
+  messageId: string;
+  conversationId: string;
+  /** Cosine similarity to the search, from -1 to 1. */
+  similarity: number;
+};
+
 export type MessageSearchMatch = {
   messageId: string;
   conversationId: string;

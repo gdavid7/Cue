@@ -6,6 +6,14 @@ import {
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
 import { readPersonCard } from "./person-card";
+import {
+  countMessageEmbeddings,
+  deleteAccountMessageEmbeddings,
+  pruneMessageEmbeddings,
+  readEmbeddingBacklog,
+  readSemanticMatches,
+  writeMessageEmbeddings,
+} from "./message-embeddings";
 import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
@@ -183,6 +191,21 @@ export async function createSqliteMailStore(
     indexContactBacklog() {
       return driver.write(indexContactBacklog);
     },
+    readEmbeddingBacklog(input) {
+      return driver.read((tx) => readEmbeddingBacklog(tx, bodyCodec, input));
+    },
+    writeMessageEmbeddings(input) {
+      return driver.write((tx) => writeMessageEmbeddings(tx, input));
+    },
+    pruneMessageEmbeddings(input) {
+      return driver.write((tx) => pruneMessageEmbeddings(tx, input));
+    },
+    countMessageEmbeddings(input) {
+      return driver.read((tx) => countMessageEmbeddings(tx, input));
+    },
+    readSemanticMatches(input) {
+      return driver.read((tx) => readSemanticMatches(tx, input));
+    },
     async ensureAccount(input) {
       return driver.write(async (tx) => {
         const existing = await tx.query(
@@ -252,6 +275,7 @@ export async function createSqliteMailStore(
       return driver.write(async (tx) => {
         await deleteAccountSearchIndex(tx, accountId);
         await deleteAccountContactSuggestions(tx, accountId);
+        await deleteAccountMessageEmbeddings(tx, accountId);
         const existing = await tx.query(
           "SELECT 1 AS n FROM accounts WHERE account_id = ?",
           [accountId],
@@ -2583,6 +2607,7 @@ async function resetAccountForGeneration(
 ) {
   await deleteAccountSearchIndex(tx, input.accountId);
   await deleteAccountContactSuggestions(tx, input.accountId);
+  await deleteAccountMessageEmbeddings(tx, input.accountId);
   const derivedTables = [
     "message_content",
     "effective_messages",

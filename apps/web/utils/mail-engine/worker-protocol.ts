@@ -11,6 +11,16 @@ export type BrowserEngineStart = {
   persist?: boolean;
   maxPendingOperations?: number;
   online?: boolean;
+  /**
+   * How long the semantic index waits after start, and between passes for
+   * new mail; tests shorten it.
+   */
+  semanticIndexIntervalMs?: number;
+  /**
+   * The page has touch and no fine pointer: a phone or tablet, including an
+   * iPad, whose user agent reads as a desktop's.
+   */
+  touchOnly?: boolean;
 };
 
 export function shouldReleaseDeferredOnStart(online?: boolean) {
@@ -135,9 +145,28 @@ export function readPageMaxPendingOperations(): number | undefined {
   return Math.floor(value);
 }
 
+export function readPageTouchOnly(): boolean | undefined {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return;
+  return (
+    navigator.maxTouchPoints > 0 &&
+    !window.matchMedia?.("(pointer: fine)").matches
+  );
+}
+
+/** Set by browser tests that need the semantic index without its delays. */
+export function readPageSemanticIndexIntervalMs(): number | undefined {
+  if (typeof window === "undefined") return;
+  const value = window.__inboxZeroMailSemanticIndexIntervalMs;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return;
+  }
+  return value;
+}
+
 declare global {
   interface Window {
     __inboxZeroMailMaxPendingOperations?: number;
+    __inboxZeroMailSemanticIndexIntervalMs?: number;
   }
 }
 

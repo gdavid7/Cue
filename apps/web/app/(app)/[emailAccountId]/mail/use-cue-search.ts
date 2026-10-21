@@ -1,10 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MailPredicate } from "@inboxzero/mail-core/queries";
+import type { MailClient } from "@inboxzero/mail-core/engine";
+import type {
+  MailPredicate,
+  SemanticMatch,
+  SemanticSearchQuery,
+} from "@inboxzero/mail-core/queries";
+import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import useSWR from "swr";
 import {
   CUE_SEARCH_BUDGET_MS,
+  CUE_SEMANTIC_RESULTS,
   type CueSearchIntent,
   type CueWidening,
   getCueSearchStage,
@@ -35,6 +42,8 @@ import type { ThreadsQuery } from "@/utils/threads/validation";
 
 const SEARCH_INTENT_PATH = "/api/user/search-intent";
 const NO_SEARCHES: string[] = [];
+const NO_MATCHES: SemanticMatch[] = [];
+const NO_THREADS: ListThread[] = [];
 // The predicate carries the searches; the query only names the window.
 const PREDICATE_ONLY_QUERY: ThreadsQuery = { q: "" };
 
@@ -68,6 +77,12 @@ export function useCueSearch({
   enabled: boolean;
 }) {
   const natural = Boolean(enabled && query && looksLikeNaturalLanguage(query));
+  // Runs from commit, beside the model's reading, on the words as typed.
+  const semantic = useSemanticThreads({
+    emailAccountId,
+    query,
+    enabled: natural,
+  });
   // The browser already holds the labels, so they go with the search rather
   // than the route asking the provider for them on every search. They stay
   // out of the key: a label added later doesn't read the search again.
@@ -230,10 +245,15 @@ export function useCueSearch({
 
   const liveThreads = useMemo(
     () =>
-      widening
-        ? rankWithWidened(primary.threads, widerNew, ranking)
+      widening || semantic.threads.length
+        ? rankWithWidened(
+            primary.threads,
+            widening ? widerNew : [],
+            { ...ranking, similarity: semantic.similarity },
+            semantic.threads,
+          )
         : rankCueFoundThreads(primary.threads, ranking),
-    [widening, primary.threads, widerNew, ranking],
+    [widening, primary.threads, widerNew, ranking, semantic],
   );
   useEffect(() => {
     rowKeysRef.current = liveThreads.map(getListThreadKey);
@@ -243,7 +263,9 @@ export function useCueSearch({
     () => keepFrozenRows(liveThreads, frozenKeys),
     [liveThreads, frozenKeys],
   );
-  const settled = widening ? wider.window.settled : primary.window.settled;
+  const settled =
+    (widening ? wider.window.settled : primary.window.settled) &&
+    semantic.settled;
 
   return {
     /** Whether this search takes the AI path at all, even if it comes to nothing. */
@@ -314,4 +336,85 @@ function useCueFoundThreads({
     threads: state.threads,
     window: { settled, count: state.threads.length },
   };
+}
+
+/**
+ * Mail close in meaning to the search, from this device's vectors of recent
+ * mail, with each conversation's similarity. Empty, and settled, where the
+ * engine has no semantic index or the account no vectors yet.
+ */
+function useSemanticThreads({
+  emailAccountId,
+  query,
+  enabled,
+}: {
+  emailAccountId: string;
+  query: string | null;
+  enabled: boolean;
+}) {
+  const client = useOptionalMailClient();
+  const searchSemantic = client?.searchSemantic;
+  const active = Boolean(enabled && query && searchSemantic);
+  const { data } = useSWR(
+    active ? (["cue-semantic", emailAccountId, query] as const) : null,
+    ([, accountId, text]: readonly [string, string, string]) =>
+      searchByMeaning(searchSemantic, {
+        accountId,
+        text,
+        limit: CUE_SEMANTIC_RESULTS,
+      }),
+    { revalidateOnFocus: false, shouldRetryOnError: false },
+  );
+  const matches = data ?? NO_MATCHES;
+  const predicate = useMemo<MailPredicate | undefined>(
+    () =>
+      matches.length
+        ? {
+            kind: "message",
+            ids: matches.map((match) => match.messageId),
+            accountId: emailAccountId,
+          }
+        : undefined,
+    [matches, emailAccountId],
+  );
+  const state = useEngineMailThreads({
+    emailAccountId,
+    query: PREDICATE_ONLY_QUERY,
+    predicate,
+    providerSearch: false,
+    enabled: Boolean(predicate),
+  });
+  const similarity = useMemo(
+    () =>
+      new Map(matches.map((match) => [match.conversationId, match.similarity])),
+    [matches],
+  );
+  const read = !predicate || (state.hasRemoteResponse && !state.isLoading);
+  const threads = predicate ? state.threads : NO_THREADS;
+  return useMemo(
+    () => ({
+      threads,
+      similarity,
+      settled: !active || (data !== undefined && read),
+    }),
+    [threads, similarity, active, data, read],
+  );
+}
+
+/**
+ * The search by meaning, within the search's budget: a model still
+ * downloading, or no vectors, leaves the search as it was.
+ */
+export function searchByMeaning(
+  searchSemantic: MailClient["searchSemantic"],
+  query: SemanticSearchQuery,
+): Promise<SemanticMatch[]> {
+  if (!searchSemantic) return Promise.resolve(NO_MATCHES);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    searchSemantic(query).catch(() => NO_MATCHES),
+    new Promise<SemanticMatch[]>((resolve) => {
+      timer = setTimeout(() => resolve(NO_MATCHES), CUE_SEARCH_BUDGET_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
