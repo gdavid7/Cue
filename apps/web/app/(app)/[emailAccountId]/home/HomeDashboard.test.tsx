@@ -16,6 +16,7 @@ import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
+import type { TodayThread } from "@/utils/home/merge-home";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { HomeDashboard } from "./HomeDashboard";
 
@@ -33,7 +34,15 @@ const mocks = vi.hoisted(() => ({
   markNoReplyNeeded: vi.fn(),
   toastUndo: vi.fn(),
   undoLatestToast: vi.fn(),
+  // The browser's own inbox, as useLocalInboxRows reads it from the engine.
+  localInbox: null as TodayThread[] | null,
+  localInboxArgs: [] as {
+    accounts: { id: string; email: string }[];
+    named: boolean;
+    enabled: boolean;
+  }[],
   home: {
+    isLoading: false,
     data: undefined as GetHomeResponse | undefined,
     error: undefined as { error: string; status?: number } | undefined,
     gaveUp: false,
@@ -67,6 +76,7 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: "account",
     emailAccount: { name: "Ada Lovelace" },
+    userEmail: "ada@example.com",
     accountIds: ["account", "account-b"],
   }),
 }));
@@ -104,7 +114,7 @@ vi.mock("@/hooks/useHome", () => ({
     );
     return {
       data,
-      isLoading: false,
+      isLoading: mocks.home.isLoading && !data,
       error: mocks.home.error,
       gaveUp: mocks.home.gaveUp,
       retry: mocks.home.retry,
@@ -126,6 +136,12 @@ vi.mock("@/utils/actions/rule-feedback", () => ({
 }));
 vi.mock("@/utils/actions/thread-assist", () => ({
   markNeedsReplyAction: mocks.markNeedsReply,
+}));
+vi.mock("./use-local-inbox-rows", () => ({
+  useLocalInboxRows: (args: (typeof mocks.localInboxArgs)[number]) => {
+    mocks.localInboxArgs.push(args);
+    return args.enabled ? mocks.localInbox : null;
+  },
 }));
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
@@ -644,6 +660,107 @@ describe("HomeDashboard states", () => {
   });
 });
 
+describe("HomeDashboard before the server answers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.isLoading = true;
+    mocks.home.data = undefined;
+    mocks.localInboxArgs = [];
+    mocks.localInbox = [
+      thread("local-1", "Dentist on Tuesday"),
+      thread("local-2", "Invoice for October"),
+    ];
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.home.isLoading = false;
+    mocks.localInbox = null;
+  });
+
+  it("first visit: shows the inbox from local mail while Cue's lanes load", () => {
+    renderToday();
+
+    expect(lanes()).toEqual(["Also in your inbox"]);
+    expect(
+      within(lane("Also in your inbox")).getByText("Dentist on Tuesday"),
+    ).toBeTruthy();
+    // Cue's own lanes still load; nothing claims all is clear.
+    expect(skeletons()).not.toEqual([]);
+    expect(screen.queryByText("All clear.")).toBeNull();
+    // Whether Cue is on isn't known yet, so it offers no Needs reply.
+    expect(screen.queryByRole("button", { name: "Needs reply" })).toBeNull();
+    expect(mocks.localInboxArgs.at(-1)).toEqual({
+      accounts: [{ id: "account", email: "ada@example.com" }],
+      named: false,
+      enabled: true,
+    });
+  });
+
+  it("first visit: archives a local row through the mail engine", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("local-1")).getAllByRole("button", {
+          name: "Archive conversation",
+        })[0],
+      );
+    });
+
+    expect(screen.queryByText("Dentist on Tuesday")).toBeNull();
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: [{ accountId: "account", conversationId: "local-1" }],
+        change: { kind: "archive" },
+      }),
+    );
+  });
+
+  it("server's inbox still loading: shows local rows, each conversation once", () => {
+    mocks.home.isLoading = false;
+    mocks.home.data = {
+      ...homeData([thread("local-1", "Dentist on Tuesday")]),
+      pending: ["alsoInInbox"],
+    };
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply", "Also in your inbox"]);
+    const inbox = lane("Also in your inbox");
+    expect(within(inbox).queryByText("Dentist on Tuesday")).toBeNull();
+    expect(within(inbox).getByText("Invoice for October")).toBeTruthy();
+    expect(skeletons()).toEqual([]);
+  });
+
+  it("server's inbox loaded: shows its rows, not the local ones", () => {
+    mocks.home.isLoading = false;
+    mocks.home.data = {
+      ...homeData([]),
+      alsoInInbox: [thread("server-1", "Board minutes")],
+    };
+
+    renderToday();
+
+    const inbox = lane("Also in your inbox");
+    expect(within(inbox).getByText("Board minutes")).toBeTruthy();
+    expect(within(inbox).queryByText("Invoice for October")).toBeNull();
+    expect(mocks.localInboxArgs.at(-1)?.enabled).toBe(false);
+  });
+
+  it("no local mail yet: keeps the placeholders until the server answers", () => {
+    mocks.localInbox = null;
+
+    renderToday();
+
+    expect(lanes()).toEqual([]);
+    expect(skeletons()).not.toEqual([]);
+  });
+});
+
 describe("HomeDashboard on a copy from an earlier day", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -723,6 +840,19 @@ describe("HomeDashboard across accounts", () => {
     mocks.searchParams = new URLSearchParams();
     mocks.emailAccounts = [];
     mocks.homes = {};
+  });
+
+  it("reads every account's local inbox, each row naming its account", () => {
+    mocks.localInboxArgs = [];
+    renderToday();
+
+    expect(mocks.localInboxArgs.at(-1)).toMatchObject({
+      accounts: [
+        { id: "account", email: "a@example.com" },
+        { id: "account-b", email: "b@example.com" },
+      ],
+      named: true,
+    });
   });
 
   it("shows both accounts' rows in one lane, each naming its account", () => {
