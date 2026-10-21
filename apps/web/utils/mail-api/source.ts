@@ -50,6 +50,7 @@ import {
   createGmailQuotaStats,
   currentGmailQuotaContext,
   getGmailCallDeferredError,
+  gmailBurstUnitsFor,
   type GmailQuotaPriority,
   isGmailCallDeferredError,
   runWithGmailQuota,
@@ -82,7 +83,7 @@ const GMAIL_THREAD_COST = 120;
 // The first page of a scan is what the inbox shows first. It reads whole
 // messages, so it creates no hydration that would hold the engine's command
 // loop, and a first screen of them comes back on its own so the inbox fills
-// sooner; later pages read 50.
+// sooner; later pages read what `gmailScanPageSize` allows.
 const GMAIL_FIRST_PAGE_SIZE = 12;
 
 const SUPPORTED_CHANGES = [
@@ -229,10 +230,19 @@ export function createEmailProviderMailboxSource(input: {
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
+        // The backfill only fills in older mail, so it yields to everything
+        // else. The primary scan fills the inbox the user is waiting on, its
+        // first page after a sign-in included: that page is sync too, so it
+        // never takes the in-flight slots or the share of the second kept
+        // for what a person opens meanwhile. It goes first all the same, as
+        // the first sync's first call, with background held off until the
+        // scan ends and a full bucket that covers it above sync's floor.
+        const priority: GmailQuotaPriority = isBackfill ? "background" : "sync";
         const maxResults = Math.min(
           pageSize,
           maxPageSize,
           isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
+          isGmail ? gmailScanPageSize(priority) : maxPageSize,
         );
         const listPage = () =>
           provider.getMessagesWithPagination({
@@ -250,14 +260,6 @@ export function createEmailProviderMailboxSource(input: {
               before: new Date(token.receivedBeforeMs),
             }),
           });
-        // The backfill only fills in older mail, so it yields to everything
-        // else. The primary scan fills the inbox the user is waiting on, its
-        // first page after a sign-in included: that page is sync too, so it
-        // never takes the in-flight slots or the share of the second kept
-        // for what a person opens meanwhile. It goes first all the same, as
-        // the first sync's first call, with background held off until the
-        // scan ends and a full bucket that covers it above sync's floor.
-        const priority: GmailQuotaPriority = isBackfill ? "background" : "sync";
         const syncPage = isGmail
           ? await runWithGmailQuota({ priority }, () =>
               withGmailSyncBudget(
@@ -961,6 +963,21 @@ function throttled(retryAfterMs: number) {
 
 function gmailPageCost(pageSize: number) {
   return gmailMailSyncCosts.list + pageSize * gmailMailSyncCosts.message;
+}
+
+// A scan page larger than what its priority may take from a full quota bucket
+// holds its request in the gate while the bucket refills: a 50-message
+// backfill page slept about 12 seconds of every request. Pages that fit
+// answer in a few seconds and fill the mailbox just as fast, since the
+// budget, not the page, sets how much mail a minute brings.
+function gmailScanPageSize(priority: GmailQuotaPriority) {
+  return Math.max(
+    1,
+    Math.floor(
+      (gmailBurstUnitsFor(priority) - gmailMailSyncCosts.list) /
+        gmailMailSyncCosts.message,
+    ),
+  );
 }
 
 // Without Redis there is no shared budget to draw from, so scans fall back to

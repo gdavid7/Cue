@@ -20,7 +20,10 @@ import {
   runWithRequestMetrics,
 } from "@/utils/request-metrics";
 import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
-import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  gmailBurstUnitsFor,
+} from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
 import { createTestLogger } from "@/__tests__/helpers";
@@ -33,6 +36,7 @@ import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { redis } from "@/utils/redis";
 import { forgetEmailProviderRateLimitState } from "@/utils/redis/email-provider-rate-limit";
 import {
+  gmailMailSyncCosts,
   LocalMailSyncPausedError,
   withLocalMailSyncBudget,
 } from "@/utils/email/local-mail-sync-budget";
@@ -1469,8 +1473,8 @@ describe("createEmailProviderMailboxSource", () => {
     const deferred = new GmailCallDeferredError(5000, "background");
     const getMessagesWithPagination = vi.fn(async () => {
       await admitGmailCall({ emailAccountId: "acc-1", cost: 5 });
-      for (let batch = 0; batch < 3; batch++)
-        await admitGmailCall({ emailAccountId: "acc-1", cost: 200 });
+      for (let batch = 0; batch < 2; batch++)
+        await admitGmailCall({ emailAccountId: "acc-1", cost: 120 });
       throw deferred;
     });
     const source = createEmailProviderMailboxSource({
@@ -1493,8 +1497,9 @@ describe("createEmailProviderMailboxSource", () => {
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
     const [reservation] =
       vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
-    expect(reservation?.cost).toBe(3005);
-    expect(reservation?.unspentCost?.(deferred)).toBe(3005 - 605);
+    // A backfill page of nine whole messages and its list.
+    expect(reservation?.cost).toBe(545);
+    expect(reservation?.unspentCost?.(deferred)).toBe(545 - 245);
     // Any other failure may have reached Gmail, so nothing is given back.
     expect(reservation?.unspentCost?.(new Error("Gmail failed"))).toBe(0);
   });
@@ -1566,7 +1571,7 @@ describe("createEmailProviderMailboxSource", () => {
     expect(shouldLogLocalBudgetPause("rate-a", 61_000)).toBe(true);
   });
 
-  it("reads a scan's first screen whole on its own, then 50 at a time", async () => {
+  it("reads a scan's first screen whole on its own, then pages its quota admits without waiting", async () => {
     const getMessagesWithPagination = vi.fn(async () => ({
       messages: [],
       nextPageToken: "next",
@@ -1588,6 +1593,14 @@ describe("createEmailProviderMailboxSource", () => {
         page: JSON.stringify(token),
         pageSize: 50,
       });
+    const lastMaxResults = () =>
+      (
+        getMessagesWithPagination.mock.lastCall as unknown as [
+          { maxResults: number },
+        ]
+      )[0].maxResults;
+    const pageUnits = (messages: number) =>
+      gmailMailSyncCosts.list + messages * gmailMailSyncCosts.message;
 
     // Whole messages, so the page leaves no hydration to hold the engine's
     // commands, and only a screen of them, so the inbox fills sooner.
@@ -1597,12 +1610,48 @@ describe("createEmailProviderMailboxSource", () => {
       pageToken: undefined,
       includeDrafts: true,
     });
-    await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
-    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 50,
-      pageToken: "next",
-      includeDrafts: true,
+
+    // A larger page would hold its request in the gate while the bucket
+    // refills, as 50-message pages did for about 12 seconds each.
+    for (const [token, priority] of [
+      [{ scopeId: "primary", initial: true, pageToken: "next" }, "sync"],
+      [{ scopeId: "history", initial: true }, "background"],
+      [{ scopeId: "history", initial: true, pageToken: "next" }, "background"],
+    ] as const) {
+      await enumerate(token);
+      const size = lastMaxResults();
+      expect(pageUnits(size)).toBeLessThanOrEqual(gmailBurstUnitsFor(priority));
+      expect(pageUnits(size + 1)).toBeGreaterThan(gmailBurstUnitsFor(priority));
+    }
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageToken: "next", includeDrafts: true }),
+    );
+  });
+
+  it("keeps Outlook scan pages at its own page size", async () => {
+    const getMessagesWithPagination = vi.fn(async () => ({
+      messages: [],
+      nextPageToken: "next",
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
     });
+    await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "primary", pageToken: "next" }),
+      pageSize: 50,
+    });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith(
+      expect.objectContaining({ maxResults: 20 }),
+    );
   });
 
   it("asks Gmail for a first sync's first page as sync, leaving a person's share free", async () => {
