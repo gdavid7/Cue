@@ -267,6 +267,8 @@ function withoutAccountsHiddenDrafts(hidden: HiddenDrafts[]): MailPredicate {
   let remaining = MAX_MESSAGE_PREDICATE_IDS;
   const messagePredicates: MailPredicate[] = [];
   for (const { emailAccountId, messageIds } of hidden) {
+    // slice(-0) would keep every id.
+    if (remaining === 0) break;
     const ids = messageIds.slice(-remaining);
     if (ids.length === 0) continue;
     remaining -= ids.length;

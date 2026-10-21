@@ -159,7 +159,7 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       "all-inboxes-draft-scheduled",
     );
   } finally {
-    await cancelPendingScheduledEmails(second.id).catch(() => undefined);
+    await deletePendingScheduledEmails(second.id).catch(() => undefined);
     await unstarSentMessage(page).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
     await deleteSecondEmailAccount(excluded.accountId);
@@ -189,7 +189,8 @@ async function excludeFromAllInboxes(emailAccountId: string) {
   );
 }
 
-async function cancelPendingScheduledEmails(emailAccountId: string) {
+// Account deletion cascades; this also stops a send that fires mid-teardown.
+async function deletePendingScheduledEmails(emailAccountId: string) {
   await withClient((client) =>
     client.query(
       `DELETE FROM "ScheduledEmail" WHERE "emailAccountId" = $1 AND status = 'PENDING'`,
