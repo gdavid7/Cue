@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { cueDemoChat } from "@/__tests__/fixtures/inboxes/cue-demo-inbox";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { OUTLOOK_STEP_PREFIX } from "@/scripts/qa/health-report";
@@ -515,20 +515,23 @@ async function checkSuggestionText(
     const reader = page.getByTestId("thread-reader");
     const shown = reader.getByText("Suggested by Cue");
     const draftButton = reader.getByRole("button", { name: "Draft a reply" });
-    const gaveUp = reader.getByRole("button", { name: "Try again" });
-    const left = reader.getByText(/Cue left this reply|Cue couldn't confirm/);
+    // Fixed labels only, never the line's text: the report is public.
+    const exits = {
+      "Cue gave up waiting (Try again)": reader.getByRole("button", {
+        name: "Try again",
+      }),
+      "Cue couldn't confirm a fact": reader.getByText(/Cue couldn't confirm/),
+      "Cue left this reply": reader.getByText(/Cue left this reply/),
+    };
     // Whichever way the account is set up, Cue writes the reply on its own or
     // after "Draft a reply"; it is asked at most once so the run costs one call.
     const deadline = Date.now() + SUGGESTION_TIMEOUT_MS;
     let asked = false;
+    let exitReason = "timed out";
     while (Date.now() < deadline && !(await shown.isVisible())) {
-      if (
-        (await gaveUp.isVisible()) ||
-        (await left
-          .first()
-          .isVisible()
-          .catch(() => false))
-      ) {
+      const seen = await firstVisible(exits);
+      if (seen) {
+        exitReason = seen;
         break;
       }
       if (!asked && (await draftButton.isVisible())) {
@@ -541,7 +544,7 @@ async function checkSuggestionText(
     metrics.suggestionWaitMs = Date.now() - clicked;
     metrics.draftButtonClicked = asked;
     if (!(await shown.isVisible())) {
-      throw new StepSkippedError("skipped: no suggestion");
+      throw new StepSkippedError(`skipped: no suggestion (${exitReason})`);
     }
 
     const editor = reader.locator("[data-email-editor-content]").last();
@@ -568,6 +571,20 @@ async function checkSuggestionText(
     );
     metrics.cleanupMs = Date.now() - cleanup;
   }
+}
+
+/** The label of the first locator on screen, if any. */
+async function firstVisible(locators: Record<string, Locator>) {
+  for (const [label, locator] of Object.entries(locators)) {
+    if (
+      await locator
+        .first()
+        .isVisible()
+        .catch(() => false)
+    )
+      return label;
+  }
+  return null;
 }
 
 async function checkToday(
