@@ -29,6 +29,8 @@ import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
+import { timeRequestDependency } from "@/utils/request-metrics";
+import { sleep } from "@/utils/sleep";
 
 const uuidOverride = vi.hoisted(() => ({
   current: undefined as string | undefined,
@@ -252,6 +254,43 @@ describe("Middleware", () => {
           expect(lines[0]).toContain('"durationMs": 1600');
           expect(lines[0]).toContain('"preHandlerMs": 400');
           expect(lines[0]).toContain('"preHandlerDbCalls": 0');
+        } finally {
+          consoleLogSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+
+      it("always carries the dependency timings, and counts waits after an async hop", async () => {
+        vi.useFakeTimers();
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          const idle = withError("user/home", async () => {
+            vi.advanceTimersByTime(1500);
+            return NextResponse.json({ ok: true });
+          });
+          const waiting = withError("user/thread-brief", async () => {
+            await Promise.all([
+              timeRequestDependency("gmail", () => sleep(300)),
+              timeRequestDependency("wait", () => sleep(200)),
+            ]);
+            vi.advanceTimersByTime(1500);
+            return NextResponse.json({ ok: true });
+          });
+
+          await idle(mockReq, mockContext);
+          const pending = waiting(createMockRequest(), mockContext);
+          await vi.advanceTimersByTimeAsync(300);
+          await pending;
+
+          const [idleLine, waitingLine] = completionLines(consoleLogSpy);
+          // A request that never reached Gmail still says so with zeros.
+          expect(idleLine).toContain('"gmailMs": 0');
+          expect(idleLine).toContain('"waitMs": 0');
+          expect(waitingLine).toContain('"gmailMs": 300');
+          expect(waitingLine).toContain('"waitMs": 200');
+          expect(`${idleLine}${waitingLine}`).not.toMatch(/@|subject|"from"/);
         } finally {
           consoleLogSpy.mockRestore();
           vi.useRealTimers();

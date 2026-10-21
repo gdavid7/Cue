@@ -801,6 +801,7 @@ export async function admitGmailCall({
         emailAccountId,
         caller: context.caller,
         cost,
+        waitMs: wait,
         heldByStore: admission.defer,
         waitBudgetMs: Number.isFinite(deadline)
           ? Math.max(0, deadline - Date.now())
@@ -1135,6 +1136,7 @@ function logDeferral({
   emailAccountId,
   caller,
   cost,
+  waitMs,
   heldByStore,
   waitBudgetMs,
   held,
@@ -1145,6 +1147,7 @@ function logDeferral({
   emailAccountId: string;
   caller: string;
   cost: number;
+  waitMs: number;
   heldByStore: boolean;
   waitBudgetMs: number | null;
   held: GmailQuotaHold | undefined;
@@ -1156,13 +1159,17 @@ function logDeferral({
   if (deferralCounts.size < 200 || deferralCounts.has(countKey))
     deferralCounts.set(countKey, (deferralCounts.get(countKey) ?? 0) + 1);
   const { requestId, source } = getAuditContext();
-  const sampleRate = getFastRequestSampleRate(source);
+  // A person is waiting on an interactive deferral, so every one ships.
+  const sampleRate =
+    error.priority === "interactive" ? 1 : getFastRequestSampleRate(source);
   const sampled = isFastRequestSampled(requestId ?? randomUUID(), sampleRate);
   (sampled ? logger.info : logger.trace).call(logger, "Gmail call deferred", {
     emailAccountId,
     requestId,
     sampled,
     sampleRate,
+    route: caller,
+    waitMs,
     reason: error.reason,
     // "store_hold" is a pause the gate told callers not to wait on; otherwise
     // the wait was longer than the caller could spend.
