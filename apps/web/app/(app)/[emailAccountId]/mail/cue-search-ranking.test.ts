@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   rankCueFoundThreads,
   rankWithWidened,
+  searchedWords,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 
@@ -221,6 +222,60 @@ describe("rankWithWidened with the search by meaning", () => {
     ).toEqual(["newer", "older"]);
   });
 
+  it("leads with what a wider tier found when the model finds it clearly close too, above mail found by meaning alone", () => {
+    // Nothing has every word, so the confirmation is a tier's match on one
+    // group; the boarding pass shares only meaning. Words and meaning
+    // together outweigh meaning alone.
+    const confirmation = thread("confirmation", {
+      daysAgo: 20,
+      subject: "Your Skyline Air confirmation: SFO to DEN",
+    });
+    const boarding = thread("boarding", {
+      daysAgo: 5,
+      subject: "Your boarding pass: SFO to DEN",
+    });
+    expect(
+      ids(
+        rankWithWidened(
+          [],
+          [confirmation],
+          withSimilarity("flight (confirmation OR itinerary)", {
+            confirmation: 0.5,
+            boarding: 0.6,
+          }),
+          [boarding],
+        ),
+      ),
+    ).toEqual(["confirmation", "boarding"]);
+  });
+
+  it("orders a wider tier's matches by how close the model finds them when their words fit alike", () => {
+    // The same Lisbon match in both previews: only meaning tells the flight
+    // from the newer hotel stay.
+    const flight = thread("flight", {
+      daysAgo: 3,
+      subject: "Your Skyline Air confirmation: SFO to LIS",
+      preview: "Depart Aug 14, arrive Lisbon Aug 15",
+    });
+    const hotel = thread("hotel", {
+      daysAgo: 2,
+      subject: "Booking confirmed: Casa Alfama Hotel",
+      preview: "Thank you for booking Casa Alfama Hotel in Lisbon",
+    });
+    expect(
+      ids(
+        rankWithWidened(
+          [],
+          [hotel, flight],
+          withSimilarity("(vol OR flight) (Lisbonne OR Lisbon)", {
+            flight: 0.54,
+            hotel: 0.51,
+          }),
+        ),
+      ),
+    ).toEqual(["flight", "hotel"]);
+  });
+
   it("drops mail found by meaning alone that misses the search's sender or dates", () => {
     const fromBen = "from:ben kitchen after:2026/09/01";
     const recent = thread("recent", {
@@ -248,6 +303,23 @@ describe("rankWithWidened with the search by meaning", () => {
         ),
       ),
     ).toEqual(["recent"]);
+  });
+});
+
+describe("searchedWords", () => {
+  it("is the words Cue's searches look for, without their people, dates or conditions", () => {
+    expect(
+      searchedWords([
+        "from:carlos (vol OR flight) (Lisbonne OR Lisbon) after:2026/07/01 has:attachment",
+        'FLIGHT "boarding pass" label:travel',
+      ]),
+    ).toBe("vol flight Lisbonne Lisbon boarding pass");
+  });
+
+  it("is empty when the searches name no words", () => {
+    expect(searchedWords(["from:diane after:2026/01/01", "is:starred"])).toBe(
+      "",
+    );
   });
 });
 

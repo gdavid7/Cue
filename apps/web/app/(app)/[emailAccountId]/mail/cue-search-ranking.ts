@@ -100,9 +100,9 @@ export function rankCueFoundThreads<T extends ListThread>(
  * for): those compete with the rest on how well they fit, so mail that fits
  * the search better comes first even when only a wider search found it.
  * Meaning stands in for the words the rest lacks, so it ranks only them;
- * the first search's matches keep their order. Mail found by meaning alone
- * must still meet the search's sender, dates and conditions, and leads only
- * when the model finds it clearly close.
+ * the first search's matches keep their order. Mail the rest found leads
+ * when the model finds it clearly close, and mail found by meaning alone
+ * must still meet the search's sender, dates and conditions.
  */
 export function rankWithWidened<T extends ListThread>(
   primary: T[],
@@ -123,15 +123,36 @@ export function rankWithWidened<T extends ListThread>(
     ...context,
     similarity,
   }).filter((entry) => entry.index < semanticFrom || entry.meetsStructure);
+  // A wider tier's match the model finds clearly close has meaning and some
+  // of the words, so it leads wherever mail found by meaning alone would.
   const leads = (entry: ScoredThread<T>) =>
     !entry.demoted &&
     (entry.index < primary.length ||
-      (entry.index >= semanticFrom &&
-        entry.similarity >= SEMANTIC_LEAD_SIMILARITY));
+      entry.similarity >= SEMANTIC_LEAD_SIMILARITY);
   return [
     ...sortByScore(scored.filter(leads)),
     ...sortByScore(scored.filter((entry) => !leads(entry))),
   ];
+}
+
+/**
+ * The words Cue's searches look for, alternatives included, without their
+ * people, dates or conditions: what the search by meaning reads beside the
+ * words as typed. Cue's reading often holds the mailbox's own words for
+ * them, such as a translation, which the on-device model knows better.
+ */
+export function searchedWords(searches: string[]): string {
+  const words = new Map<string, string>();
+  for (const search of searches) {
+    for (const { node, role } of searchClauses(search)) {
+      if (role !== "words") continue;
+      for (const word of wordsOf(node)) {
+        const key = normalize(word);
+        if (key && !words.has(key)) words.set(key, word.trim());
+      }
+    }
+  }
+  return [...words.values()].join(" ");
 }
 
 type ScoredThread<T> = {
