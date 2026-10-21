@@ -211,6 +211,38 @@ describe("useCueSearch", () => {
     expect(result.current.threads.map((t) => t.id)).toEqual(["old"]);
   });
 
+  it("sends only the first of a multi-search last tier to the provider", () => {
+    const other =
+      "from:bob has:attachment after:2026/09/01 before:2026/10/01 invoice OR receipt";
+    state.intent = { searches: [SEARCH, other], isQuestion: false };
+    const ladder = getWideningLadder([SEARCH, other], {
+      now: new Date(),
+      provider: "google",
+    });
+    const last = ladder[ladder.length - 1];
+    expect(last.searches.length).toBeGreaterThan(1);
+    state.results.set([SEARCH, other].join(" | "), { settled: true, ids: [] });
+    for (const step of ladder) {
+      state.results.set(step.searches.join(" | "), { settled: true, ids: [] });
+    }
+    state.results.set(last.searches[0], { settled: true, ids: [] });
+    const { result } = render(SENTENCE);
+
+    expect(result.current.widening).toMatchObject({
+      tier: last.tier,
+      onProvider: true,
+    });
+    const lastResort = state.enabledPredicates.at(-1) as {
+      kind: string;
+      predicates: unknown[];
+    };
+    // One provider search; the tier's other searches still read local mail.
+    expect(searchesOf(lastResort)).toEqual([last.searches[0]]);
+    expect(lastResort.kind).toBe("any");
+    expect(lastResort.predicates).toHaveLength(last.searches.length);
+    expect(state.localOnlyWindows).not.toContain(last.searches[0]);
+  });
+
   it("says it found nothing once the provider's last-resort search finds nothing too", () => {
     for (const key of ladderKeys()) {
       state.results.set(key, { settled: true, ids: [] });

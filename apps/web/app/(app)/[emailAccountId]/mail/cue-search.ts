@@ -1,3 +1,4 @@
+import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -167,6 +168,34 @@ export function getNextWidening(
   )
     return { step, onProvider: true };
   return null;
+}
+
+/**
+ * A predicate's searches read from the local mail alone, each kept to the
+ * accounts it was written for. A last resort sends only the first of its
+ * tier's searches to the provider and reads the rest this way, so it is one
+ * provider search that answers or times out as one.
+ */
+export function localOnly(predicate: MailPredicate): MailPredicate {
+  switch (predicate.kind) {
+    case "search":
+      return predicate.accountIds
+        ? {
+            kind: "all",
+            predicates: [
+              { kind: "account", ids: predicate.accountIds },
+              predicate.local,
+            ],
+          }
+        : predicate.local;
+    case "all":
+    case "any":
+      return { ...predicate, predicates: predicate.predicates.map(localOnly) };
+    case "not":
+      return { ...predicate, predicate: localOnly(predicate.predicate) };
+    default:
+      return predicate;
+  }
 }
 
 export type SearchAnswerRequest = { query: string; searches?: string[] };
