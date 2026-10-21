@@ -82,6 +82,66 @@ test("an inbox shown again after a long absence catches up without a reload", as
   }
 });
 
+// RL-1c2: the laptop slept with the inbox showing, so waking fires no
+// visibility event; the clock having jumped past the tab's own ticks is the
+// wake, caught up the same way.
+test("an inbox left showing while the laptop slept catches up without a reload", async ({
+  page,
+}, testInfo) => {
+  await page.clock.install();
+  const { conversations } = await openMail(page);
+  await expect(conversations.getByRole("option").first()).toBeVisible();
+  await waitForMetadataCoverage(page);
+
+  const catchUps: number[] = [];
+  const handedOver: string[] = [];
+  page.on("response", async (response) => {
+    if (new URL(response.url()).pathname !== CATCH_UP_PATH) return;
+    catchUps.push(response.status());
+    const body = (await response.json().catch(() => null)) as {
+      changes?: { key?: { messageId?: string } }[];
+    } | null;
+    for (const change of body?.changes ?? [])
+      if (change.key?.messageId) handedOver.push(change.key.messageId);
+  });
+  const loads: string[] = [];
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) loads.push(frame.url());
+  });
+
+  const insertedMessageId = await insertInboxMailInConversation(page, {
+    threadId: THREAD_ID,
+    messageId: MESSAGE_ID,
+    subject: ARRIVAL_SUBJECT,
+    from: "arrivals@example.com",
+  });
+  try {
+    // Only the clock moves, and the tab never stops showing.
+    await page.clock.setSystemTime(Date.now() + 20 * 60_000);
+
+    await expect(
+      conversationWithSubject(page, conversations, ARRIVAL_SUBJECT),
+    ).toHaveCount(1, { timeout: 60_000 });
+    expect(loads).toEqual([]);
+    if (isMicrosoftPlaywright()) {
+      // Past the next tick and its settle, which would have asked by now.
+      await page.waitForTimeout(35_000);
+      expect(catchUps).toEqual([]);
+    } else {
+      await expect.poll(() => catchUps, { timeout: 45_000 }).toEqual([200]);
+      await expect.poll(() => handedOver).toContain(insertedMessageId);
+    }
+
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "wake-after-sleep-arrived",
+    );
+  } finally {
+    await deleteProviderMessage(page, insertedMessageId);
+  }
+});
+
 async function setVisibility(page: Page, state: DocumentVisibilityState) {
   await page.evaluate((next) => {
     Object.defineProperty(document, "visibilityState", {
