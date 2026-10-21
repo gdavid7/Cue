@@ -18,6 +18,7 @@ import {
 } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
+import { showCopiesOnce } from "@/utils/threads/cross-account-copies";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
 import {
   applyOptimisticTriage,
@@ -134,6 +135,8 @@ export function useEngineMailThreads({
     rows: new Map(),
     threads: EMPTY_THREADS,
   });
+  // A row in Drafts is the user's own draft in that account, so each stays.
+  const showsCopiesOnce = Boolean(accounts) && query.type !== "draft";
   const threads = useMemo(() => {
     if (!client || !enabled) return EMPTY_THREADS;
     if (!conversations.length) return EMPTY_THREADS;
@@ -141,8 +144,9 @@ export function useEngineMailThreads({
       previousThreads.current,
       conversations,
       accounts,
+      showsCopiesOnce,
     );
-  }, [accounts, client, enabled, conversations]);
+  }, [accounts, client, enabled, conversations, showsCopiesOnce]);
 
   // The mail screen shows while the engine starts, and has no answer yet.
   const engineStarting = enabled && !client;
@@ -220,6 +224,7 @@ type PreviousThreads = {
     {
       summary: string;
       account: CombinedListThread["account"] | undefined;
+      alsoIn: string;
       thread: ListThread;
     }
   >;
@@ -232,18 +237,34 @@ function reuseUnchangedThreads(
   previous: PreviousThreads,
   conversations: ConversationSummary[],
   accounts: Record<string, CombinedListThread["account"]> | undefined,
+  showsCopiesOnce: boolean,
 ): ListThread[] {
   const rows: PreviousThreads["rows"] = new Map();
-  const threads = conversations.map((conversation) => {
+  // All inboxes shows a message delivered to two accounts once. Archive, read
+  // and star on that row change its own account's copy only, as the row and
+  // its keys are that copy's; the other copy then shows on its own.
+  const shown = showsCopiesOnce
+    ? showCopiesOnce(conversations, (conversation) => ({
+        accountId: conversation.key.accountId,
+        messageId: conversation.latestInternetMessageId,
+      }))
+    : conversations.map((row) => ({ row, alsoIn: [] }));
+  const threads = shown.map(({ row: conversation, alsoIn: alsoInIds }) => {
     const key = `${conversation.key.accountId}:${conversation.key.conversationId}`;
     const account = accounts?.[conversation.key.accountId];
     const summary = JSON.stringify(conversation);
+    const alsoIn = alsoInIds.join("\n");
     const cached = previous.rows.get(key);
     const thread =
-      cached?.summary === summary && cached.account === account
+      cached?.summary === summary &&
+      cached.account === account &&
+      cached.alsoIn === alsoIn
         ? cached.thread
-        : conversationSummaryToListThread(conversation, account);
-    rows.set(key, { summary, account, thread });
+        : withAlsoIn(
+            conversationSummaryToListThread(conversation, account),
+            alsoInIds.flatMap((id) => accounts?.[id] ?? []),
+          );
+    rows.set(key, { summary, account, alsoIn, thread });
     return thread;
   });
   const unchanged =
@@ -252,6 +273,13 @@ function reuseUnchangedThreads(
   previous.rows = rows;
   if (!unchanged) previous.threads = threads;
   return previous.threads;
+}
+
+function withAlsoIn(
+  thread: ListThread,
+  alsoIn: CombinedListThread["account"][],
+): ListThread {
+  return alsoIn.length ? { ...thread, alsoIn } : thread;
 }
 
 async function readFailedAccountIds(

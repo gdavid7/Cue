@@ -6,6 +6,8 @@ import {
   type PageBuffer,
 } from "@/utils/threads/merge-paginated-sources";
 import { getThreadTimestamp } from "@/utils/threads/sort";
+import { showCopiesOnce } from "@/utils/threads/cross-account-copies";
+import { GmailLabel } from "@/utils/gmail/label";
 
 const ACCOUNT_CONCURRENCY = 4;
 
@@ -17,8 +19,15 @@ export type CombinedThreadsAccount = {
   provider: string;
 };
 
+type CombinedAccount = Pick<
+  CombinedThreadsAccount,
+  "id" | "email" | "name" | "image"
+>;
+
 export type CombinedListThread = ThreadListItem & {
-  account: Pick<CombinedThreadsAccount, "id" | "email" | "name" | "image">;
+  account: CombinedAccount;
+  /** The user's other accounts this row's newest message was delivered to. */
+  alsoIn?: CombinedAccount[];
 };
 
 export async function loadCombinedThreads({
@@ -83,8 +92,27 @@ export async function loadCombinedThreads({
     );
   }
 
+  // Within the page only: a copy past it shows on a later page as its own
+  // row, as remembering it would put its Message-ID in the cursor.
+  const accountsById = new Map(
+    items.map((item) => [item.account.id, item.account]),
+  );
+  const threads = showCopiesOnce(items, (thread) => ({
+    accountId: thread.account.id,
+    messageId: thread.messages.findLast(
+      (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
+    )?.headers["message-id"],
+  })).map(({ row, alsoIn }) =>
+    alsoIn.length
+      ? {
+          ...row,
+          alsoIn: alsoIn.flatMap((id) => accountsById.get(id) ?? []),
+        }
+      : row,
+  );
+
   return {
-    threads: items,
+    threads,
     labelsByAccount,
     nextPageToken,
     failedAccountIds: failedSourceIds,

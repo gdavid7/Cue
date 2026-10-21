@@ -121,6 +121,7 @@ export const ThreadRow = memo(function ThreadRow({
     [thread.messages, userLabels],
   );
   const account = "account" in thread ? thread.account : null;
+  const alsoIn = "account" in thread ? thread.alsoIn : undefined;
   const accountEmail = account?.email ?? userEmail;
   const participantSummary = useMemo(
     () =>
@@ -277,13 +278,25 @@ export const ThreadRow = memo(function ThreadRow({
           isSelected={isSelected}
           isStarred={isThreadStarred(thread.messages)}
           isUnread={isUnread}
-          labels={chips.map((label) => (
-            <MailLabelChip
-              color={label.color}
-              key={label.id}
-              name={label.name}
-            />
-          ))}
+          labels={[
+            ...chips.map((label) => (
+              <MailLabelChip
+                color={label.color}
+                key={label.id}
+                name={label.name}
+              />
+            )),
+            // The same message in another of the user's mailboxes, as Today
+            // marks it.
+            ...(alsoIn?.length
+              ? [
+                  <MailLabelChip
+                    key="also-in"
+                    name={`Also in ${alsoIn.map((other) => other.email).join(", ")}`}
+                  />,
+                ]
+              : []),
+          ]}
           layout={layout}
           messageCount={thread.messages.length}
           onOpen={onOpen}

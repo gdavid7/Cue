@@ -21,6 +21,7 @@ import {
 const SENT_SUBJECT = "Seeded Sent Message";
 const SENT_MESSAGE_ID = "msg_playwright_sent";
 const INBOX_SUBJECT = "Playwright Test Message";
+const SHARED_SUBJECT = "Draft deletion example";
 
 // Every account here reads the same seeded mailbox, so each message is listed
 // once per account included in All inboxes, marked with its account.
@@ -186,6 +187,51 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
     await unstarSentMessage(page).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
     await deleteSecondEmailAccount(excluded.accountId);
+    await deleteSecondEmailAccount(second.accountId);
+  }
+});
+
+// Both accounts read the same seeded mailbox, and this message carries a
+// Message-ID, so it is one message delivered to two of the user's accounts.
+test("shows a message delivered to two accounts once, naming the other account", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  const primaryEmail = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!primaryEmail) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const second = await createSecondEmailAccount(emailAccountId);
+
+  try {
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    const conversations = page.getByRole("listbox", { name: "Conversations" });
+    await expect(conversations).toBeVisible({ timeout: 60_000 });
+    const search = page.getByPlaceholder("Search mail");
+    await search.fill(SHARED_SUBJECT);
+    await search.press("Enter");
+
+    const rows = conversationWithSubject(page, conversations, SHARED_SUBJECT);
+    const alsoIn = rows.getByText(/^Also in /);
+    // The second account was never opened in this browser; it syncs here.
+    await expect(alsoIn).toHaveCount(1, { timeout: 120_000 });
+    await expect(rows).toHaveCount(1);
+    // The seeded copies arrived at the same moment, so either one may stand
+    // for both; the row is that copy's, and names the other account.
+    const [shown, other] =
+      (await alsoIn.innerText()) === `Also in ${second.email}`
+        ? [primaryEmail, second.email]
+        : [second.email, primaryEmail];
+    await expect(alsoIn).toHaveText(`Also in ${other}`);
+    await expect(rows.filter({ has: accountMarker(page, shown) })).toHaveCount(
+      1,
+    );
+    await capturePlaywrightCheckpoint(page, testInfo, "all-inboxes-also-in");
+
+    // One row, so one stop for the keyboard and one key for selection.
+    await rows.getByRole("checkbox", { includeHidden: true }).click();
+    await expect(rows).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
+  } finally {
     await deleteSecondEmailAccount(second.accountId);
   }
 });

@@ -355,6 +355,59 @@ describe("loadCombinedThreads", () => {
     );
     expect(second.threads.map((item) => item.id)).toEqual(["later"]);
   });
+
+  it("shows a message delivered to two accounts once, saying where else it is", async () => {
+    const pages: Record<string, ThreadListItem[]> = {
+      "account-1": [
+        thread("a-shared", "2026-08-13T10:00:00.000Z", "<Shared@Example.com>"),
+        thread("a-own", "2026-08-12T10:00:00.000Z", "<own@example.com>"),
+      ],
+      "account-2": [
+        thread("b-shared", "2026-08-13T10:00:01.000Z", "shared@example.com"),
+      ],
+    };
+
+    const result = await loadCombinedThreads({
+      accounts: [account("account-1"), account("account-2")],
+      cursor: null,
+      limit: 20,
+      loadPage: vi.fn(async ({ account }) => ({
+        threads: pages[account.id] ?? [],
+        nextPageToken: null,
+      })),
+      logger,
+    });
+
+    expect(
+      result.threads.map((item) => ({
+        id: item.id,
+        account: item.account.id,
+        alsoIn: item.alsoIn?.map((other) => other.id) ?? [],
+      })),
+    ).toEqual([
+      { id: "b-shared", account: "account-2", alsoIn: ["account-1"] },
+      { id: "a-own", account: "account-1", alsoIn: [] },
+    ]);
+  });
+
+  it("keeps rows of one account apart, even when they share a Message-ID", async () => {
+    const result = await loadCombinedThreads({
+      accounts: [account("account-1")],
+      cursor: null,
+      limit: 20,
+      loadPage: vi.fn(async () => ({
+        threads: [
+          thread("first", "2026-08-13T10:00:00.000Z", "<dup@example.com>"),
+          thread("second", "2026-08-12T10:00:00.000Z", "<dup@example.com>"),
+        ],
+        nextPageToken: null,
+      })),
+      logger,
+    });
+
+    expect(result.threads.map((item) => item.id)).toEqual(["first", "second"]);
+    expect(result.threads.every((item) => !item.alsoIn)).toBe(true);
+  });
 });
 
 type Account = {
@@ -375,7 +428,11 @@ function account(id: string): Account {
   };
 }
 
-function thread(id: string, internalDate: string): ThreadListItem {
+function thread(
+  id: string,
+  internalDate: string,
+  messageId?: string,
+): ThreadListItem {
   return {
     id,
     messageIds: [`${id}-message`],
@@ -391,11 +448,13 @@ function thread(id: string, internalDate: string): ThreadListItem {
         date: internalDate,
         internalDate,
         labelIds: ["INBOX"],
+        parentFolderId: undefined,
         headers: {
           date: internalDate,
           from: "sender@example.com",
           subject: id,
           to: "recipient@example.com",
+          ...(messageId ? { "message-id": messageId } : {}),
         },
       },
     ],
