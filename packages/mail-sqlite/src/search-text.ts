@@ -83,23 +83,35 @@ export function searchMatchQuery(
 
 // The index keeps words as written, so the query matches the word's stem as
 // a prefix, which also covers the word as typed: "invoices" also finds
-// "invoice", "shipping" finds "shipped". The stemmer's
-// rules are English suffixes, which also fold plurals in other languages
-// written in plain Latin letters ("facturas"); words with other letters are
-// left as typed. Only a short ending is dropped, so a long derivation
-// ("organization" to "organ") doesn't widen into unrelated words.
+// "invoice", "shipping" finds "shipped", "deliveries" finds "delivery". The
+// stemmer's rules are English suffixes, which also fold plurals in other
+// languages written in plain Latin letters ("facturas"); words with other
+// letters are left as typed. Only a short ending is dropped, so a long
+// derivation ("organizations" to "organ") falls back to dropping a plural
+// "s", and a stem under four letters ("running" to "run") leaves the word as
+// typed. A stem prefix still reaches words derived from it ("guide" also
+// finds "guidance"), which is the price of finding the singular.
 function stemPrefix(part: string): string | null {
   if (!PLAIN_LATIN_WORD.test(part)) return null;
   const word = part.toLowerCase();
-  const stem = stemmer(word);
+  const stemmed = stemmer(word);
+  // Porter spells "delivery" and "deliveries" alike as "deliveri".
+  const stem =
+    word.endsWith("ies") && stemmed.endsWith("i")
+      ? stemmed.slice(0, -1)
+      : stemmed;
+  const candidate =
+    word.length - stem.length > MAX_STEMMED_ENDING && PLURAL.test(word)
+      ? word.slice(0, -1)
+      : stem;
   if (
-    stem === word ||
-    !word.startsWith(stem) ||
-    stem.length < MIN_STEM_LENGTH ||
-    word.length - stem.length > MAX_STEMMED_ENDING
+    candidate === word ||
+    !word.startsWith(candidate) ||
+    candidate.length < MIN_STEM_LENGTH ||
+    word.length - candidate.length > MAX_STEMMED_ENDING
   )
     return null;
-  return `"${stem}"*`;
+  return `"${candidate}"*`;
 }
 
 // Runs during sync for every HTML-only body, in a worker or Node process with
@@ -152,6 +164,7 @@ const MAX_JOINED_COMPOUNDS = 200;
 const MAX_COMPOUND_LENGTH = 64;
 const FORMAT_NAME = /^[a-z0-9]{2,4}$/;
 const PLAIN_LATIN_WORD = /^[a-z]+$/i;
+const PLURAL = /[^s]s$/;
 const MIN_STEM_LENGTH = 4;
 const MAX_STEMMED_ENDING = 4;
 

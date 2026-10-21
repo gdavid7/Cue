@@ -65,6 +65,11 @@ describe("searchMatchQuery", () => {
     expect(searchMatchQuery("invoices shipping", "term")).toBe(
       '("invoic"* "ship"*) OR "invoicesshipping"',
     );
+    expect(searchMatchQuery("deliveries replies notifications", "term")).toBe(
+      '"deliver"* "repl"* "notification"*',
+    );
+    // A stem under four letters leaves the word as typed.
+    expect(searchMatchQuery("running", "term")).toBe('"running"*');
     // A stem that drops a long derivation, or isn't a prefix of the word,
     // and words outside plain Latin letters stay as typed.
     expect(searchMatchQuery("organization happy Häuser 請求", "term")).toBe(

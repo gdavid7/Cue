@@ -52,7 +52,7 @@ const VARIANT_MESSAGES = [
     id: "power",
     subject: "Electricity bill",
     from: "Dana Hastings <billing@power.example>",
-    text: "Your monthly invoices are ready and shipping is free",
+    text: "Your monthly invoices are ready and shipping is free. Delivery by the organization, cc Sam Jennings",
     attachments: [],
   },
   {
@@ -322,11 +322,20 @@ describe("word variants and attachments", () => {
   it("matches a word or name typed past its stem", async () => {
     const { store, close } = await variantMailbox();
 
-    for (const value of ["electri", "electrici", "electricit", "shipp"]) {
+    for (const value of [
+      "electri",
+      "electrici",
+      "electricit",
+      "shipp",
+      "organiza",
+      "organizations",
+      "deliveries",
+    ]) {
       expect(await search(store, text("any", value))).toEqual(["power"]);
     }
-    expect(await search(store, text("any", "hasti"))).toEqual(["power"]);
-    expect(await search(store, text("any", "hastings"))).toEqual(["power"]);
+    for (const value of ["hasti", "hastings", "jenni", "jennings"]) {
+      expect(await search(store, text("any", value))).toEqual(["power"]);
+    }
     await close();
   });
 
