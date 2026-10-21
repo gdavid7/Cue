@@ -577,9 +577,12 @@ function withExtraMailboxes(
     lines.splice(end, 0, ...copies);
   }
 
-  const users = lines.indexOf("  users:");
+  // After the primary user: the emulator answers a token it doesn't know as
+  // its first user, which the primary's stored token relies on.
+  let usersEnd = lines.indexOf("  users:") + 1;
+  while (/^ {4}/.test(lines[usersEnd] ?? "")) usersEnd++;
   lines.splice(
-    users + 1,
+    usersEnd,
     0,
     ...extraMailboxes.flatMap((mailbox, index) => [
       `    - email: ${mailbox.email}`,
