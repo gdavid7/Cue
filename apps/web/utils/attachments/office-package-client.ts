@@ -15,28 +15,51 @@ export function readOfficePackageInWorker(
       reject(signal.reason);
       return;
     }
-    const worker = new Worker(
-      new URL("./office-package-worker.ts", import.meta.url),
-      { type: "module" },
-    );
+    let worker: Worker | undefined;
     const finish = () => {
-      worker.terminate();
+      worker?.terminate();
       signal?.removeEventListener("abort", onAbort);
     };
     const onAbort = () => {
       finish();
       reject(signal?.reason);
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    worker.onmessage = (event: MessageEvent<OfficePackageResult>) => {
-      finish();
-      resolve(event.data);
-    };
-    worker.onerror = worker.onmessageerror = (event: Event) => {
-      event.preventDefault();
+    const refuse = () => {
       finish();
       resolve({ refused: "invalid" });
     };
-    worker.postMessage(bytes, [bytes]);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // A CSP that blocks the worker, or bytes that can't be transferred, throw
+    // here rather than reaching onerror.
+    try {
+      worker = new Worker(
+        new URL("./office-package-worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      worker.onmessage = (event: MessageEvent<unknown>) => {
+        finish();
+        resolve(toOfficePackageResult(event.data));
+      };
+      worker.onerror = worker.onmessageerror = (event: Event) => {
+        event.preventDefault();
+        refuse();
+      };
+      worker.postMessage(bytes, [bytes]);
+    } catch {
+      refuse();
+    }
   });
+}
+
+// The renderers must only ever get a package the worker counted.
+function toOfficePackageResult(data: unknown): OfficePackageResult {
+  if (typeof data !== "object" || data === null) return { refused: "invalid" };
+  if ("package" in data && data.package instanceof Uint8Array)
+    return { package: data.package };
+  if (
+    "refused" in data &&
+    (data.refused === "tooLarge" || data.refused === "invalid")
+  )
+    return { refused: data.refused };
+  return { refused: "invalid" };
 }

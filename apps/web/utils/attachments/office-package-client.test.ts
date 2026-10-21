@@ -22,7 +22,7 @@ class FakeWorker {
   terminate() {
     this.terminated = true;
   }
-  reply(data: OfficePackageResult) {
+  reply(data: unknown) {
     this.onmessage?.(new MessageEvent("message", { data }));
   }
 }
@@ -69,6 +69,48 @@ describe("readOfficePackageInWorker", () => {
       readOfficePackageInWorker(new ArrayBuffer(8), controller.signal),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(FakeWorker.created).toEqual([]);
+  });
+
+  it.each([
+    { package: "not bytes" },
+    { refused: "maybe" },
+    null,
+    "package",
+  ])("treats a malformed reply %j as an invalid package", async (reply) => {
+    const reading = readOfficePackageInWorker(new ArrayBuffer(8));
+    const [worker] = FakeWorker.created;
+
+    worker.reply(reply);
+
+    expect(await reading).toEqual({ refused: "invalid" });
+    expect(worker.terminated).toBe(true);
+  });
+
+  it("treats a worker that can't start or take the bytes as invalid", async () => {
+    vi.stubGlobal(
+      "Worker",
+      class {
+        constructor() {
+          throw new DOMException("blocked", "SecurityError");
+        }
+      },
+    );
+    expect(await readOfficePackageInWorker(new ArrayBuffer(8))).toEqual({
+      refused: "invalid",
+    });
+
+    vi.stubGlobal(
+      "Worker",
+      class extends FakeWorker {
+        override postMessage() {
+          throw new DOMException("detached", "DataCloneError");
+        }
+      },
+    );
+    expect(await readOfficePackageInWorker(new ArrayBuffer(8))).toEqual({
+      refused: "invalid",
+    });
+    expect(FakeWorker.created.at(-1)?.terminated).toBe(true);
   });
 
   it.each([
