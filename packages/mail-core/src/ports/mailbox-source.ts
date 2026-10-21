@@ -42,7 +42,15 @@ export type EnumerationPage = {
   requiredHydration: MessageKey[];
   bodies: BodyObservation[];
 } & (
-  | { nextPage: string; catchUpFrom: null }
+  | {
+      nextPage: string;
+      catchUpFrom: null;
+      /**
+       * How long to wait before asking for `nextPage`: the source's budget
+       * would refuse it sooner. Omitted means at once. Only paces this scan.
+       */
+      retryAfterMs?: number;
+    }
   | {
       nextPage: null;
       catchUpFrom: SyncPosition;

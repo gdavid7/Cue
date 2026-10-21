@@ -122,8 +122,11 @@ vi.mock("@/utils/email/local-mail-sync-budget", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   withLocalMailSyncBudget: (
     _input: unknown,
-    operation: (signal: AbortSignal) => Promise<unknown>,
-  ) => operation(new AbortController().signal),
+    operation: (
+      signal: AbortSignal,
+      admission: { nextAdmitAfterMs: number | null },
+    ) => Promise<unknown>,
+  ) => operation(new AbortController().signal, { nextAdmitAfterMs: null }),
 }));
 
 const ACCOUNT = "account-1";

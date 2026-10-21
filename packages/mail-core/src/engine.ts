@@ -1593,6 +1593,21 @@ export function createMailEngine(input: {
         await noteConnection(input.session.accountId, "paused");
         break;
       }
+      // The source says its budget would refuse the next page before then,
+      // so the scan waits instead of spending a refused request. Only this
+      // scan waits; commands and reads run in their own lanes.
+      const page = enumerated.value;
+      if (page.nextPage !== null && page.retryAfterMs) {
+        await store.deferBootstrapScan({
+          session: input.session,
+          scopeId: page.scopeId,
+          bootstrapId: scan.bootstrapId,
+          page: page.nextPage,
+          nextAttemptAtMs: runtime.nowMs() + page.retryAfterMs,
+          errorCode: null,
+        });
+        break;
+      }
       scan = {
         ...scan,
         scopeId: enumerated.value.scopeId,

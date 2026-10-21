@@ -134,6 +134,10 @@ export const enumerationResultSchema = z.object({
   nextPage: z.string().max(16_384).nullable(),
   catchUpFrom: syncPositionSchema.nullable(),
   windowStartMs: z.number().int().optional(),
+  // With nextPage: how long from this response the server expects to refuse
+  // the next page, so the client waits instead of spending a refused request.
+  // Relative, so client and server clocks need not agree.
+  retryAfterMs: z.number().int().min(0).optional(),
 });
 
 export const changesRequestSchema = z.object({

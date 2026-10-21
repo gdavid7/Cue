@@ -93,6 +93,37 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).resolves.toBe("current");
     });
 
+    it("says how long until the next page fits, matching the refusal it saves", async () => {
+      const page = { ...input, cost: 545, nextCost: 545 };
+      let hint: number | null = null;
+      // Nine 545-unit pages leave the 5,000-unit backfill bucket 450 short
+      // of a tenth.
+      for (let index = 0; index < 9; index++)
+        await withLocalMailSyncBudget(page, async (_signal, admission) => {
+          hint = admission.nextAdmitAfterMs;
+        });
+      expect(hint).toBeGreaterThan(0);
+      const refused = await withLocalMailSyncBudget(page, vi.fn()).catch(
+        (error: unknown) => error,
+      );
+      expect(refused).toMatchObject({ reason: "account_backfill_budget" });
+      const { retryAfterMs } = refused as LocalMailSyncPausedError;
+      // The refusal comes moments later, after a little refill.
+      expect(retryAfterMs).toBeLessThanOrEqual(hint!);
+      expect(retryAfterMs).toBeGreaterThan(hint! - 1000);
+    });
+
+    it("reports no wait while the budget covers the next page", async () => {
+      let hint: number | null | undefined;
+      await withLocalMailSyncBudget(
+        { ...input, cost: 545, nextCost: 545 },
+        async (_signal, admission) => {
+          hint = admission.nextAdmitAfterMs;
+        },
+      );
+      expect(hint).toBeNull();
+    });
+
     it("returns the part of a reservation that never reached the provider", async () => {
       const keys = [
         "local-mail-budget:google:account-1:total",

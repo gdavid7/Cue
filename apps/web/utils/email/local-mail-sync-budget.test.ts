@@ -79,7 +79,28 @@ describe("local mail sync admission", () => {
       keys.slice(4, 6),
       [args[5]],
     );
-    expect(operation).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(operation).toHaveBeenCalledWith(expect.any(AbortSignal), {
+      nextAdmitAfterMs: null,
+    });
+  });
+  it("tells an admitted request when the budget will admit the caller's next one", async () => {
+    vi.mocked(redis.eval).mockResolvedValueOnce([0, "", 6540]);
+    const operation = vi.fn().mockResolvedValue("page");
+    await expect(
+      withLocalMailSyncBudget({ ...input, nextCost: 545 }, operation),
+    ).resolves.toBe("page");
+    expect(vi.mocked(redis.eval).mock.calls[0]?.[2]?.[6]).toBe("545");
+    expect(operation).toHaveBeenCalledWith(expect.any(AbortSignal), {
+      nextAdmitAfterMs: 6540,
+    });
+  });
+  it("reports no wait when the budget already covers the next request", async () => {
+    vi.mocked(redis.eval).mockResolvedValueOnce([0, "", 0]);
+    const operation = vi.fn().mockResolvedValue("page");
+    await withLocalMailSyncBudget({ ...input, nextCost: 545 }, operation);
+    expect(operation).toHaveBeenCalledWith(expect.any(AbortSignal), {
+      nextAdmitAfterMs: null,
+    });
   });
   it("leaves a reserved current-work allowance above the backfill ceiling", async () => {
     await withLocalMailSyncBudget(
