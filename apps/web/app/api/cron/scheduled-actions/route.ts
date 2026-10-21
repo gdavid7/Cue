@@ -163,7 +163,8 @@ async function processScheduledActions(logger: Logger) {
   };
 }
 
-// The most frequent tick in the app, so new-mailbox health piggybacks on it.
+// Runs every minute, the most frequent tick in the app, so new-mailbox health
+// piggybacks on it.
 function runScheduledWork(logger: Logger) {
   return runCronJob({
     logger,
@@ -191,7 +192,6 @@ async function processScheduledMail(logger: Logger) {
     return { scheduledActions, snoozedThreads, scheduledEmails };
   }
 
-  logger.info("QStash configured; checking snoozed thread fallback");
   const [snoozedThreads, scheduledEmails] = await Promise.all([
     processDueSnoozedThreads(logger),
     processDueScheduledEmails(logger),

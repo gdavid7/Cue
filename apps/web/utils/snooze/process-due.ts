@@ -29,6 +29,9 @@ export async function processDueSnoozedThreads(logger: Logger) {
   const snoozedThreads = await prisma.snoozedThread.findMany({
     where: {
       scheduledFor: { lte: now },
+      // A disconnected mailbox fails every restore, and the cron runs every
+      // minute; its wake-ups stay due and go out once it reconnects.
+      emailAccount: { account: { disconnectedAt: null } },
       OR: [
         { status: SnoozedThreadStatus.PENDING },
         {

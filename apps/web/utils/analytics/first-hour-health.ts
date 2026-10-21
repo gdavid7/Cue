@@ -14,8 +14,9 @@ import { redis } from "@/utils/redis";
 import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
 
 // Mailboxes at least an hour past first sign-in (EmailAccount.createdAt) that
-// have not had the event get it. The tick runs once a day with up to an hour
-// of jitter, so the window spans more than the longest gap between ticks.
+// have not had the event get it. The tick runs every minute, so a mailbox is
+// usually seen right at the hour. The window still spans more than a day so a
+// deployment that can only tick daily (Vercel Hobby) covers every mailbox.
 const MIN_AGE_MS = 60 * 60 * 1000;
 const MAX_AGE_MS = 26 * 60 * 60 * 1000;
 // Above a day's sign-ups, so a daily tick never leaves one behind. Oldest go
@@ -68,8 +69,7 @@ export async function recordFirstHourHealthForNewMailboxes(logger: Logger) {
   let failed = 0;
   for (const [index, mailbox] of unsent.entries()) {
     if (sent + failed >= FIRST_HOUR_HEALTH_MAX_PER_RUN) break;
-    // The ones left are the newest. The next daily tick still reaches those
-    // under about two hours old; older ones leave the window and miss it.
+    // The ones left are the newest, so the last to leave the window.
     if (!hasTimeBeforeRequestDeadline(MAILBOX_RESERVE_MS)) {
       logger.warn("Stopping first-hour health before the deadline", {
         mailboxesLeft: unsent.length - index,

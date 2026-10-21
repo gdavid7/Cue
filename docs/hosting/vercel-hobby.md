@@ -270,6 +270,8 @@ Outlook doesn't need Pub/Sub. Cue creates Microsoft Graph subscriptions pointing
 
 ### What runs on a schedule (Hobby allows once a day per job)
 
+`apps/web/vercel.json` runs `/api/cron/scheduled-actions` and `/api/cron/automation-jobs` every minute (`* * * * *`), which needs Vercel Pro. **On Hobby, a deployment with a cron more frequent than daily is rejected**, so before you deploy, set those two schedules to `"0 0 * * *"` and `"0 14 * * *"` and use the external pinger below. The table shows the Hobby schedules.
+
 | Cron | When (UTC, ±59 min) | What it does |
 |---|---|---|
 | `/api/cron/scheduled-actions` | daily 00:xx | Sends scheduled "send later" emails, un-snoozes threads, and runs delayed rule actions. See the note below. |

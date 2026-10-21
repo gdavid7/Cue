@@ -13,6 +13,7 @@ describe("vercel.json", () => {
     buildCommand?: string;
     installCommand?: string;
     ignoreCommand?: string;
+    crons?: { path: string; schedule: string }[];
   };
 
   it("keeps commands within Vercel's 256-character limit", () => {
@@ -29,6 +30,29 @@ describe("vercel.json", () => {
     for (const command of [config.buildCommand, config.ignoreCommand]) {
       const script = command?.match(/^bash (\S+)$/)?.[1];
       if (script) expect(existsSync(path.join(webRoot, script))).toBe(true);
+    }
+  });
+
+  it("points every cron at a route that exists", () => {
+    for (const cron of config.crons ?? []) {
+      expect(
+        existsSync(path.join(webRoot, "app", cron.path, "route.ts")),
+        cron.path,
+      ).toBe(true);
+    }
+  });
+
+  // Send later, snooze wake-ups, server-held undo sends and scheduled
+  // check-ins have no other scheduler when QStash is off, so they are only as
+  // punctual as these crons.
+  it("runs the crons behind user-timed actions every minute", () => {
+    for (const timedPath of [
+      "/api/cron/scheduled-actions",
+      "/api/cron/automation-jobs",
+    ]) {
+      expect(
+        config.crons?.find((cron) => cron.path === timedPath)?.schedule,
+      ).toBe("* * * * *");
     }
   });
 

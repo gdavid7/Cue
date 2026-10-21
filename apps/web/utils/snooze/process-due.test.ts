@@ -106,4 +106,19 @@ describe("processDueSnoozedThreads", () => {
       leaseStartedAt,
     );
   });
+
+  // __tests__/db/snooze-cron-overlap.test.ts covers this against Postgres.
+  it("leaves wake-ups of disconnected mailboxes for after they reconnect", async () => {
+    prisma.snoozedThread.findMany.mockResolvedValue([]);
+
+    await processDueSnoozedThreads(logger);
+
+    expect(prisma.snoozedThread.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          emailAccount: { account: { disconnectedAt: null } },
+        }),
+      }),
+    );
+  });
 });
