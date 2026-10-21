@@ -217,7 +217,9 @@ describe("attachment preview routing", () => {
       filename: "report.docx",
     });
     expect(target?.kind).toBe("file");
-    expect(target?.file.type).toBe("application/pdf");
+    expect(target && "file" in target && target.file.type).toBe(
+      "application/pdf",
+    );
 
     const html = new Blob(["<html><script>alert(1)</script></html>"]);
     expect(
