@@ -31,7 +31,7 @@ export interface MicrosoftCalendarConnectionParams {
   accessToken: string | null;
   /** Calendars to read events from; the default calendar when empty. */
   calendarIds?: string[];
-  emailAccountId: string;
+  connectionId: string;
   expiresAt: number | null;
   refreshToken: string | null;
 }
@@ -86,7 +86,7 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
       accessToken: this.connection.accessToken,
       refreshToken: this.connection.refreshToken,
       expiresAt: this.connection.expiresAt,
-      emailAccountId: this.connection.emailAccountId,
+      connectionId: this.connection.connectionId,
       logger: this.logger,
     });
   }
