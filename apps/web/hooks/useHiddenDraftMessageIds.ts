@@ -1,17 +1,53 @@
 "use client";
 
 import { useMemo, useSyncExternalStore } from "react";
-import useSWR from "swr";
+import useSWR, { type ScopedMutator } from "swr";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
+import { useAllAccountsList } from "@/hooks/useAllAccountsList";
 
-type HiddenDrafts = { emailAccountId: string; messageIds: string[] };
+export type HiddenDrafts = { emailAccountId: string; messageIds: string[] };
 
 const NO_HIDDEN_DRAFTS: HiddenDrafts[] = [];
+const NO_HIDDEN_BY_ACCOUNT: HiddenDrafts[] = [];
 let sendingDrafts = NO_HIDDEN_DRAFTS;
 const listeners = new Set<() => void>();
 
-export function upcomingScheduledEmailsKey(emailAccountId: string) {
-  return ["/api/user/scheduled-emails", emailAccountId];
+const SCHEDULED_EMAILS_PATH = "/api/user/scheduled-emails";
+
+/**
+ * Re-reads an account's sends waiting to go out wherever they are read: alone,
+ * or among All inboxes' accounts, which hide drafts by them too. A failed
+ * read is stale data, not a failed action, so it never rejects.
+ */
+export async function refreshUpcomingScheduledEmails(
+  mutate: ScopedMutator,
+  emailAccountId: string,
+) {
+  await mutate(
+    (key) =>
+      Array.isArray(key) &&
+      key[0] === SCHEDULED_EMAILS_PATH &&
+      key.includes(emailAccountId),
+  ).catch(() => {});
+}
+
+/**
+ * Every listed account's sends waiting to go out, each read as its own
+ * account. No accounts reads nothing.
+ */
+export function useAllAccountsUpcomingScheduledEmails(
+  accounts: { id: string }[] | undefined,
+) {
+  return useAllAccountsList<UpcomingScheduledEmailsResponse>(
+    SCHEDULED_EMAILS_PATH,
+    accounts,
+    {
+      refreshInterval: (current) =>
+        scheduledEmailsRefreshInterval(
+          current?.byAccount.flatMap(({ data }) => data.scheduledEmails) ?? [],
+        ),
+    },
+  );
 }
 
 /** Null reads nothing, as when the sends of several accounts are read instead. */
@@ -62,6 +98,39 @@ export function useHiddenDraftMessageIds(emailAccountId: string) {
 }
 
 /**
+ * The same, for every account All inboxes merges, each account's apart: a
+ * message id names a message only within its own account. No accounts reads
+ * nothing.
+ */
+export function useAllAccountsHiddenDraftMessageIds(
+  accounts: { id: string }[] | undefined,
+): HiddenDrafts[] {
+  const { data } = useAllAccountsUpcomingScheduledEmails(accounts);
+  const sending = useSyncExternalStore(
+    subscribe,
+    () => sendingDrafts,
+    () => NO_HIDDEN_DRAFTS,
+  );
+  const accountKey = accounts?.map((account) => account.id).join("\n");
+  return useMemo(() => {
+    if (accountKey === undefined) return NO_HIDDEN_BY_ACCOUNT;
+    const hidden = accountKey.split("\n").flatMap((emailAccountId) => {
+      const scheduled =
+        data?.byAccount.find((entry) => entry.accountId === emailAccountId)
+          ?.data.scheduledEmails ?? [];
+      const messageIds = [
+        ...getScheduledDraftMessageIds(scheduled),
+        ...sending
+          .filter((entry) => entry.emailAccountId === emailAccountId)
+          .flatMap((entry) => entry.messageIds),
+      ];
+      return messageIds.length ? [{ emailAccountId, messageIds }] : [];
+    });
+    return hidden.length ? hidden : NO_HIDDEN_BY_ACCOUNT;
+  }, [accountKey, data, sending]);
+}
+
+/**
  * Hides a draft from this tab while its send is held for undo or queued on the
  * device, before the server knows about it, or once it is discarded and until
  * sync drops it. Returns a function that shows it again.
@@ -100,4 +169,8 @@ function subscribe(listener: () => void) {
 
 function notify() {
   for (const listener of listeners) listener();
+}
+
+function upcomingScheduledEmailsKey(emailAccountId: string) {
+  return [SCHEDULED_EMAILS_PATH, emailAccountId];
 }
