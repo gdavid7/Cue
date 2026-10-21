@@ -23,6 +23,7 @@ import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predica
 import {
   currentGmailQuotaContext,
   gmailBurstUnitsFor,
+  gmailRequestCost,
 } from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
@@ -767,7 +768,7 @@ describe("createEmailProviderMailboxSource", () => {
       textPlain: "A new event has been scheduled",
       isMeetingInvitation: true,
       inline: [],
-    } as ParsedMessage);
+    } as unknown as ParsedMessage);
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
@@ -1504,6 +1505,35 @@ describe("createEmailProviderMailboxSource", () => {
     expect(reservation?.unspentCost?.(new Error("Gmail failed"))).toBe(0);
   });
 
+  it("never refunds a negative amount when a page admitted more than it reserved", async () => {
+    const deferred = new GmailCallDeferredError(5000, "background");
+    const getMessagesWithPagination = vi.fn(async () => {
+      for (let batch = 0; batch < 5; batch++)
+        await admitGmailCall({ emailAccountId: "acc-1", cost: 120 });
+      throw deferred;
+    });
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+    const [reservation] =
+      vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
+    // 600 admitted against a 545 reservation.
+    expect(reservation?.unspentCost?.(deferred)).toBe(0);
+  });
+
   it("returns the sync budget's wait as a throttled pause", async () => {
     vi.mocked(withLocalMailSyncBudget).mockRejectedValueOnce(
       new LocalMailSyncPausedError(12_000),
@@ -1613,18 +1643,31 @@ describe("createEmailProviderMailboxSource", () => {
 
     // A larger page would hold its request in the gate while the bucket
     // refills, as 50-message pages did for about 12 seconds each.
-    for (const [token, priority] of [
-      [{ scopeId: "primary", initial: true, pageToken: "next" }, "sync"],
-      [{ scopeId: "history", initial: true }, "background"],
-      [{ scopeId: "history", initial: true, pageToken: "next" }, "background"],
+    for (const [token, priority, expected] of [
+      [{ scopeId: "primary", initial: true, pageToken: "next" }, "sync", 19],
+      [{ scopeId: "history", initial: true }, "background", 9],
+      [
+        { scopeId: "history", initial: true, pageToken: "next" },
+        "background",
+        9,
+      ],
     ] as const) {
       await enumerate(token);
       const size = lastMaxResults();
+      expect(size).toBe(expected);
       expect(pageUnits(size)).toBeLessThanOrEqual(gmailBurstUnitsFor(priority));
       expect(pageUnits(size + 1)).toBeGreaterThan(gmailBurstUnitsFor(priority));
     }
     expect(getMessagesWithPagination).toHaveBeenLastCalledWith(
       expect.objectContaining({ pageToken: "next", includeDrafts: true }),
+    );
+  });
+
+  it("prices local sync units like the quota gate prices the same Gmail calls", () => {
+    const base = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+    expect(gmailMailSyncCosts.list).toBe(gmailRequestCost("GET", base));
+    expect(gmailMailSyncCosts.message).toBe(
+      gmailRequestCost("GET", `${base}/m1`),
     );
   });
 
@@ -2043,7 +2086,11 @@ describe("createEmailProviderMailboxSource", () => {
       provider: {
         name: "google",
         localMailSyncStrategy: "history",
-        async getAttachmentStream(messageId, attachmentId, signal) {
+        async getAttachmentStream(
+          messageId: string,
+          attachmentId: string,
+          signal?: AbortSignal,
+        ) {
           expect(messageId).toBe("m1");
           expect(attachmentId).toBe("att-1");
           expect(signal).toBeDefined();

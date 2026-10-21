@@ -11,9 +11,12 @@ import {
 // automation and interactive operations. They are not total application quotas.
 // Cue's Gmail project allows 15,000 units per user per minute, and the
 // account envelope claims two thirds of that. The costs below are Cue's own
-// conservative units, a full read priced like a whole message: a 50-message
-// sync page of them costs 3,005, so one page must fit in a single reservation
-// and the backfill half of the account envelope.
+// conservative units, a full read priced like a whole message. Gmail scan
+// pages are sized to the quota burst their priority can spend without waiting
+// (nine whole messages for backfill, nineteen for the primary scan), so they
+// cost well under 3,100 and each fits a single reservation. maximumCost stays
+// 3,100 because search and foreground debits are not page-sized: a 50-message
+// read costs 3,005 and must still be accepted and charged in full.
 // https://learn.microsoft.com/en-us/graph/throttling-limits#outlook-service-limits
 const policies = {
   google: { account: 10_000, app: 360_000, maximumCost: 3100 },

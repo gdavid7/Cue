@@ -1004,7 +1004,7 @@ function withGmailSyncBudget<T>(
           provider: "google",
           unspentCost: (error) =>
             isGmailCallDeferredError(error)
-              ? input.cost - page.admittedCost
+              ? Math.max(0, input.cost - page.admittedCost)
               : 0,
         },
         operation,
