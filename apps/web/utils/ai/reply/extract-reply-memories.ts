@@ -5,7 +5,7 @@ import {
 } from "@/generated/prisma/enums";
 import type { ReplyMemory } from "@/generated/prisma/client";
 import type { ComposeAssistOutcome } from "@/utils/actions/compose-assist.validation";
-import { getUserInfoPrompt } from "@/utils/ai/helpers";
+import { escapePromptTags, getUserInfoPrompt } from "@/utils/ai/helpers";
 import { extractDomainFromEmail, isPublicEmailDomain } from "@/utils/email";
 import { createGenerateObject } from "@/utils/llms";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
@@ -216,34 +216,34 @@ function getPrompt({
 
   const writingStylePrompt = trimmedWritingStyle
     ? `<writing_style>
-${escapeTags(trimmedWritingStyle)}
+${escapePromptTags(trimmedWritingStyle)}
 </writing_style>
 `
     : "";
   const learnedWritingStylePrompt = trimmedLearnedWritingStyle
     ? `<learned_writing_style>
-${escapeTags(trimmedLearnedWritingStyle)}
+${escapePromptTags(trimmedLearnedWritingStyle)}
 </learned_writing_style>
 `
     : "";
 
-  return `<source_email_sender>${escapeTags(senderEmail)}</source_email_sender>
-<source_email_domain>${escapeTags(senderDomain) || "unknown"}</source_email_domain>
+  return `<source_email_sender>${escapePromptTags(senderEmail)}</source_email_sender>
+<source_email_domain>${escapePromptTags(senderDomain) || "unknown"}</source_email_domain>
 
 <incoming_email>
-${escapeTags(incomingEmailContent)}
+${escapePromptTags(incomingEmailContent)}
 </incoming_email>
 
 ${
   composeAssistOutcomes
     ? formatComposeAssistOutcomes(composeAssistOutcomes, startingDraftText)
     : `<ai_draft>
-${escapeTags(draftText)}
+${escapePromptTags(draftText)}
 </ai_draft>`
 }
 
 <user_sent>
-${escapeTags(sentText)}
+${escapePromptTags(sentText)}
 </user_sent>
 
 <existing_memories>
@@ -269,7 +269,7 @@ function formatComposeAssistOutcomes(
 ) {
   const startingDraft = startingDraftText?.trim()
     ? `<starting_draft>
-${escapeTags(startingDraftText.trim())}
+${escapePromptTags(startingDraftText.trim())}
 </starting_draft>
 
 `
@@ -278,26 +278,21 @@ ${escapeTags(startingDraftText.trim())}
 ${outcomes
   .map(
     (outcome) => `<suggestion outcome="${outcome.outcome}">
-<request>${escapeTags(outcome.request)}</request>
-${outcome.refinements.map((text) => `<follow_up>${escapeTags(text)}</follow_up>\n`).join("")}${
+<request>${escapePromptTags(outcome.request)}</request>
+${outcome.refinements.map((text) => `<follow_up>${escapePromptTags(text)}</follow_up>\n`).join("")}${
   outcome.original
     ? `<replaced_text>
-${escapeTags(outcome.original)}
+${escapePromptTags(outcome.original)}
 </replaced_text>
 `
     : ""
 }<suggested_text>
-${escapeTags(outcome.suggestion)}
+${escapePromptTags(outcome.suggestion)}
 </suggested_text>
 </suggestion>`,
   )
   .join("\n")}
 </cue_suggestions>`;
-}
-
-// Email text, drafts and style notes can't open or close the prompt's tags.
-function escapeTags(text: string) {
-  return text.replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 }
 
 export function formatReplyMemoryPromptLine(
@@ -308,8 +303,8 @@ export function formatReplyMemoryPromptLine(
   index: number,
 ) {
   return `${index + 1}. id=${memory.id}\n[${memory.kind} | ${memory.scopeType}${
-    memory.scopeValue ? `:${memory.scopeValue}` : ""
-  }] ${memory.content}`;
+    memory.scopeValue ? `:${escapePromptTags(memory.scopeValue)}` : ""
+  }] ${escapePromptTags(memory.content)}`;
 }
 
 function formatExistingMemories(

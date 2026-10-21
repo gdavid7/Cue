@@ -628,7 +628,7 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
     expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
   });
 
-  it("lets the saved suggested reply learn when Cue's suggestions teach nothing", async () => {
+  it("learns through Cue's log when the user changed the draft they started from with Cue's help", async () => {
     vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("please include pricing for seat counts."),
     ]);
@@ -650,9 +650,12 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
       logger,
     });
 
+    // Cue's suggestion went out as written, so on its own it teaches
+    // nothing; the change from the saved reply still teaches, through Cue's
+    // log so its wording isn't counted as the user's.
     expect(saveDraftSendLogReplyMemory).toHaveBeenCalledTimes(1);
     expect(saveDraftSendLogReplyMemory).toHaveBeenCalledWith(
-      expect.objectContaining({ draftSendLogId: "suggested-reply-log" }),
+      expect.objectContaining({ draftSendLogId: "compose-assist-log" }),
     );
   });
 
@@ -777,7 +780,7 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
     expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
   });
 
-  it("treats a repeated delivery of the same send as already logged", async () => {
+  it("on a repeated delivery, learns nothing again when the stored log already learned", async () => {
     vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("Could you kindly provide your pricing?"),
     ]);
@@ -786,13 +789,12 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
     );
     vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
     vi.mocked(prisma.draftSendLog.create)
-      .mockRejectedValueOnce(
-        new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
-          code: "P2002",
-          clientVersion: "test",
-        }),
-      )
+      .mockRejectedValueOnce(createDuplicateError())
       .mockResolvedValueOnce({ id: "suggested-reply-log" } as any);
+    vi.mocked(prisma.draftSendLog.findUnique).mockResolvedValue({
+      id: "stored-compose-log",
+      sentText: "Please include pricing for seat counts.",
+    } as any);
 
     await trackSentDraftStatus({
       emailAccountId: "account-1",
@@ -804,8 +806,39 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
       logger,
     });
 
-    // Still Cue's reply: the suggested reply's comparison doesn't learn.
     expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
+  });
+
+  it("on a repeated delivery, lets the draft learn through the stored log when Cue's outcomes teach nothing", async () => {
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
+      createComposeAssistReply("Please include pricing for seat counts."),
+    ]);
+    vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
+      createSuggestedReplyDraft(),
+    );
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
+    vi.mocked(prisma.draftSendLog.create)
+      .mockRejectedValueOnce(createDuplicateError())
+      .mockResolvedValueOnce({ id: "suggested-reply-log" } as any);
+    vi.mocked(prisma.draftSendLog.findUnique).mockResolvedValue({
+      id: "stored-compose-log",
+      sentText: "Please include pricing for seat counts.",
+    } as any);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn().mockResolvedValue(null),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(saveDraftSendLogReplyMemory).toHaveBeenCalledTimes(1);
+    expect(saveDraftSendLogReplyMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ draftSendLogId: "stored-compose-log" }),
+    );
   });
 });
 
@@ -1706,4 +1739,11 @@ function createComposeAssistReply(suggestion: string): any {
     ],
     emailAccount: { signature: "Best, User" },
   };
+}
+
+function createDuplicateError() {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "test",
+  });
 }

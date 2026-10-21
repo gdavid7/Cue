@@ -43,6 +43,13 @@ const PREFERENCE_EVIDENCE_PER_LEARNED_STYLE_REFRESH = 5;
 const MAX_PREFERENCE_EVIDENCE_FOR_LEARNED_STYLE = 25;
 // The same bound the sent text has.
 const MAX_STARTING_DRAFT_TEXT = 4000;
+// Well under the 0.7 that counts a draft as sent as written: Cue's rewrites
+// move the sent reply away from the draft it started from, but a reply this
+// far from it was written over it.
+const STARTING_DRAFT_MIN_SIMILARITY = 0.3;
+// Longer than any one attempt can run (the webhook's maxDuration is 300s),
+// so a live attempt is never taken over.
+const REPLY_MEMORY_CLAIM_LEASE_MS = 10 * 60 * 1000;
 
 export async function saveDraftSendLogReplyMemory({
   draftSendLogId,
@@ -104,7 +111,10 @@ export async function syncReplyMemoriesFromDraftSendLogs({
       },
       replyMemoryProcessedAt: null,
       replyMemorySentText: { not: null },
-      OR: draftSendLogAccountFilter(emailAccountId),
+      AND: [
+        { OR: draftSendLogAccountFilter(emailAccountId) },
+        { OR: unclaimedReplyMemoryFilter(new Date()) },
+      ],
     },
     include: draftSendLogReplyMemoryInclude,
     orderBy: [{ replyMemoryAttemptCount: "asc" }, { createdAt: "asc" }],
@@ -124,15 +134,6 @@ export async function syncReplyMemoriesFromDraftSendLogs({
         error,
         draftSendLogId: draftSendLog.id,
       });
-
-      try {
-        await recordDraftSendLogReplyMemoryFailure(draftSendLog);
-      } catch (recordError) {
-        logger.error("Failed to record reply memory draft send log failure", {
-          error: recordError,
-          draftSendLogId: draftSendLog.id,
-        });
-      }
     }
   }
 
@@ -320,19 +321,48 @@ async function processReplyMemoryDraftSendLog({
   logger: Logger;
 }) {
   // Overlapping syncs (two sends close together) each pick up the same log;
-  // only the one that claims this attempt learns from it. The claim spends an
+  // only the one holding its lease learns from it. The lease spends an
   // attempt rather than marking the log done, so work cut off midway (a
-  // timeout, a deploy) is retried by a later sync.
+  // timeout, a deploy) is retried once the lease goes stale.
+  const now = new Date();
   const claim = await prisma.draftSendLog.updateMany({
     where: {
       id: draftSendLog.id,
       replyMemoryProcessedAt: null,
-      replyMemoryAttemptCount: draftSendLog.replyMemoryAttemptCount,
+      replyMemoryAttemptCount: { lt: MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS },
+      OR: unclaimedReplyMemoryFilter(now),
     },
-    data: { replyMemoryAttemptCount: { increment: 1 } },
+    data: {
+      replyMemoryClaimedAt: now,
+      replyMemoryAttemptCount: { increment: 1 },
+    },
   });
   if (claim.count !== 1) return;
 
+  try {
+    await learnFromDraftSendLog({
+      draftSendLog,
+      emailAccount,
+      provider,
+      logger,
+    });
+  } catch (error) {
+    await recordDraftSendLogReplyMemoryFailure(draftSendLog);
+    throw error;
+  }
+}
+
+async function learnFromDraftSendLog({
+  draftSendLog,
+  emailAccount,
+  provider,
+  logger,
+}: {
+  draftSendLog: DraftSendLogReplyMemoryPayload;
+  emailAccount: NonNullable<Awaited<ReturnType<typeof getEmailAccountWithAi>>>;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
   const draft = getDraftSendLogDraft(draftSendLog);
   if (!draft) {
     await markDraftSendLogReplyMemoryProcessed(draftSendLog.id);
@@ -823,8 +853,8 @@ async function markDraftSendLogReplyMemoryProcessed(
   });
 }
 
-// The attempt was already counted when it was claimed; a failed one is
-// retried by a later sync until the attempts run out.
+// The attempt was counted when it was claimed. A failed one releases its
+// lease for a later sync until the attempts run out.
 async function recordDraftSendLogReplyMemoryFailure(
   draftSendLog: Pick<
     DraftSendLogReplyMemoryPayload,
@@ -832,23 +862,35 @@ async function recordDraftSendLogReplyMemoryFailure(
   >,
 ) {
   const attemptCount = draftSendLog.replyMemoryAttemptCount + 1;
-  if (attemptCount < MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS) return;
-
   await prisma.draftSendLog.update({
     where: { id: draftSendLog.id },
-    data: {
-      replyMemoryProcessedAt: new Date(),
-      replyMemorySentText: null,
-    },
+    data:
+      attemptCount >= MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS
+        ? { replyMemoryProcessedAt: new Date(), replyMemorySentText: null }
+        : { replyMemoryClaimedAt: null },
   });
+}
+
+/** Logs no sync is working on: never claimed, or claimed and abandoned. */
+function unclaimedReplyMemoryFilter(
+  now: Date,
+): Prisma.DraftSendLogWhereInput[] {
+  return [
+    { replyMemoryClaimedAt: null },
+    {
+      replyMemoryClaimedAt: {
+        lt: new Date(now.getTime() - REPLY_MEMORY_CLAIM_LEASE_MS),
+      },
+    },
+  ];
 }
 
 /**
  * The rule draft or saved suggested reply a reply written with Cue started
  * from, logged against the same send. Only one the user actually used: a
  * rule draft counted as sent, or a saved suggested reply whose mailbox draft
- * was gone when the reply went. A suggestion left waiting was never the
- * reply's starting point.
+ * was gone when the reply went, that the sent reply still resembles. A
+ * suggestion left waiting was never the reply's starting point.
  */
 async function getStartingDraftText({
   emailAccountId,
@@ -863,6 +905,8 @@ async function getStartingDraftText({
     where: {
       sentMessageId,
       id: { not: draftSendLogId },
+      // A draft the user threw away and replaced isn't where the reply began.
+      similarityScore: { gte: STARTING_DRAFT_MIN_SIMILARITY },
       OR: [
         {
           executedAction: {

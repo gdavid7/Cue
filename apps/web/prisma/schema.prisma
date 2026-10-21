@@ -1445,6 +1445,9 @@ model DraftSendLog {
   sentText                String?
   replyMemorySentText     String?
   replyMemoryAttemptCount Int                 @default(0)
+  // When a sync took this log to learn from; a newer claim waits until
+  // this one is done or stale.
+  replyMemoryClaimedAt    DateTime?
   replyMemoryProcessedAt  DateTime?
   replyMemorySources      ReplyMemorySource[]
 
