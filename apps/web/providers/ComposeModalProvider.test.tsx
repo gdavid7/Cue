@@ -49,6 +49,12 @@ vi.mock("@/utils/fetch-email-accounts", () => ({
     emailAccounts: [
       account("account-a", "a@gmail.com", "google"),
       account("account-b", "b@outlook.com", "microsoft"),
+      account("account-c", "c@gmail.com", "google", {
+        includeInAllAccounts: false,
+      }),
+      account("account-d", "d@gmail.com", "google", {
+        disconnectedAt: "2026-01-01T00:00:00.000Z",
+      }),
     ],
     lastEmailAccountId: "account-a",
   })),
@@ -236,6 +242,56 @@ describe("ComposeModalProvider focus", () => {
     ).toBe("");
   });
 
+  it("starts a new message from the account asked for in All inboxes", async () => {
+    navigation.pathname = "/mail/u/0/all-inboxes";
+    renderProvider();
+    fireEvent.click(
+      await screen.findByRole(
+        "button",
+        { name: "Write to Ana from account-b" },
+        { timeout: COLD_RENDER_TIMEOUT_MS },
+      ),
+    );
+    const composer = await screen.findByTestId(
+      "composer",
+      {},
+      { timeout: COLD_RENDER_TIMEOUT_MS },
+    );
+    expect(composer.textContent).toBe("account-b b@outlook.com");
+    expect(composer.getAttribute("data-initial-to")).toBe("ana@example.com");
+
+    // The next message starts from the page's account again.
+    fireEvent.click(screen.getByRole("button", { name: "Close compose" }));
+    fireEvent.click(screen.getByRole("button", { name: "Compose" }));
+    expect((await screen.findByTestId("composer")).textContent).toBe(
+      "account-a a@gmail.com",
+    );
+  });
+
+  it.each([
+    ["left out of All inboxes", "account-c"],
+    ["disconnected", "account-d"],
+  ])("never starts a new message from an account %s", async (_, from) => {
+    navigation.pathname = "/mail/u/0/all-inboxes";
+    renderProvider();
+    fireEvent.click(
+      await screen.findByRole(
+        "button",
+        { name: `Write to Ana from ${from}` },
+        { timeout: COLD_RENDER_TIMEOUT_MS },
+      ),
+    );
+    expect(
+      (
+        await screen.findByTestId(
+          "composer",
+          {},
+          { timeout: COLD_RENDER_TIMEOUT_MS },
+        )
+      ).textContent,
+    ).toBe("account-a a@gmail.com");
+  });
+
   it("returns focus to what opened compose when it closes", async () => {
     renderProvider();
     const opener = await screen.findByRole("button", { name: "Compose" });
@@ -339,6 +395,9 @@ function renderProvider({
           )}
           <PopOutButton />
           <ComposeToButton />
+          {["account-b", "account-c", "account-d"].map((from) => (
+            <ComposeToButton from={from} key={from} />
+          ))}
         </ComposeModalProvider>
       </EmailAccountProvider>
     </SWRConfig>,
@@ -366,11 +425,11 @@ function ComposeButton(props: ComponentProps<"button">) {
   );
 }
 
-function ComposeToButton() {
+function ComposeToButton({ from }: { from?: string }) {
   const { composeTo } = useComposeModal();
   return (
-    <button onClick={() => composeTo("ana@example.com")} type="button">
-      Write to Ana
+    <button onClick={() => composeTo("ana@example.com", from)} type="button">
+      {from ? `Write to Ana from ${from}` : "Write to Ana"}
     </button>
   );
 }
@@ -404,13 +463,22 @@ function PopOutButton() {
   );
 }
 
-function account(id: string, email: string, provider: string) {
+function account(
+  id: string,
+  email: string,
+  provider: string,
+  {
+    includeInAllAccounts = true,
+    disconnectedAt = null,
+  }: { includeInAllAccounts?: boolean; disconnectedAt?: string | null } = {},
+) {
   return {
     id,
     email,
     name: null,
     image: null,
-    account: { provider },
+    includeInAllAccounts,
+    account: { provider, disconnectedAt },
     providerRateLimit: null,
   };
 }

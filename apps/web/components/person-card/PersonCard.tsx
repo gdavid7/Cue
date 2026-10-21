@@ -321,7 +321,7 @@ function PersonCardBody({
           className="min-w-0 flex-1"
           onClick={() => {
             onClose();
-            composeTo(email);
+            composeTo(email, getComposeAccountId(scope, data));
           }}
           size="sm"
           variant="outline"
@@ -562,6 +562,21 @@ function PersonCardSkeleton() {
       <Skeleton className="h-4 w-4/6" />
     </div>
   );
+}
+
+/**
+ * The account a new message to them starts from: the open message's, else
+ * the one holding your newest conversation with them. Only an account the
+ * card reads from, so never one All inboxes leaves out.
+ */
+export function getComposeAccountId(
+  scope: Pick<PersonCardScopeValue, "accountIds" | "openConversation">,
+  data: Pick<PersonCardData, "conversations"> | undefined,
+) {
+  return [
+    scope.openConversation?.accountId,
+    data?.conversations[0]?.accountId,
+  ].find((accountId) => accountId && scope.accountIds.includes(accountId));
 }
 
 function formatLag(ms: number) {

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PersonCard as PersonCardData } from "@inboxzero/mail-core/queries";
 import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 import {
+  getComposeAccountId,
   PersonCardScope,
   PersonCardTrigger,
 } from "@/components/person-card/PersonCard";
@@ -126,11 +127,25 @@ describe("PersonCardTrigger", () => {
     expect(screen.getByRole("button", { name: "New message" })).toBeTruthy();
   });
 
-  it("writes to them from the card", async () => {
+  it("writes to them from the card, from the open message's account", async () => {
     renderTrigger();
     await openCard();
     fireEvent.click(screen.getByRole("button", { name: "New message" }));
-    expect(mocks.composeTo).toHaveBeenCalledWith("ana@example.com");
+    expect(mocks.composeTo).toHaveBeenCalledWith("ana@example.com", "a");
+  });
+
+  it("in All inboxes, writes from the account of your newest conversation with them", async () => {
+    mocks.queryPersonCard.mockResolvedValue({
+      ...card(),
+      conversations: [
+        { ...card().conversations[1], accountId: "b" },
+        card().conversations[0],
+      ],
+    });
+    renderTrigger({ accountIds: ["a", "b"], openConversation: null });
+    await openCard();
+    fireEvent.click(screen.getByRole("button", { name: "New message" }));
+    expect(mocks.composeTo).toHaveBeenCalledWith("ana@example.com", "b");
   });
 
   it("is plain text for the user's own address and outside a reader", () => {
@@ -146,18 +161,92 @@ describe("PersonCardTrigger", () => {
   });
 });
 
+describe("getComposeAccountId", () => {
+  const newest = (accountId: string) => ({
+    conversations: [
+      {
+        accountId,
+        conversationId: "newest",
+        subject: "",
+        latestMessageAtMs: 1,
+      },
+    ],
+  });
+
+  it("uses the account of the message the card was opened from", () => {
+    expect(
+      getComposeAccountId(
+        {
+          accountIds: ["a", "b"],
+          openConversation: { accountId: "b", conversationId: "open" },
+        },
+        newest("a"),
+      ),
+    ).toBe("b");
+  });
+
+  it("otherwise uses the account of the newest conversation with them", () => {
+    expect(
+      getComposeAccountId(
+        { accountIds: ["a", "b"], openConversation: null },
+        newest("b"),
+      ),
+    ).toBe("b");
+  });
+
+  it("keeps a single account's view on that account", () => {
+    expect(
+      getComposeAccountId(
+        {
+          accountIds: ["a"],
+          openConversation: { accountId: "a", conversationId: "open" },
+        },
+        newest("a"),
+      ),
+    ).toBe("a");
+  });
+
+  it("never picks an account the card doesn't read from", () => {
+    expect(
+      getComposeAccountId(
+        {
+          accountIds: ["a"],
+          openConversation: { accountId: "excluded", conversationId: "open" },
+        },
+        newest("excluded"),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("leaves the choice to compose before anything is known", () => {
+    expect(
+      getComposeAccountId(
+        { accountIds: ["a", "b"], openConversation: null },
+        undefined,
+      ),
+    ).toBeUndefined();
+  });
+});
+
 function renderTrigger(
-  scope: { onOpenConversation?: () => void } = {},
+  scope: {
+    onOpenConversation?: () => void;
+    accountIds?: string[];
+    openConversation?: { accountId: string; conversationId: string } | null;
+  } = {},
   email = "ana@example.com",
 ) {
   return render(
     <SWRConfig value={{ provider: () => new Map() }}>
       <PersonCardScope
         value={{
-          accountIds: ["a"],
+          accountIds: scope.accountIds ?? ["a"],
           ownAddresses: ["me@example.com"],
           replyTracking: [],
-          openConversation: { accountId: "a", conversationId: "open" },
+          openConversation:
+            scope.openConversation === undefined
+              ? { accountId: "a", conversationId: "open" }
+              : scope.openConversation,
           onOpenConversation: scope.onOpenConversation ?? vi.fn(),
         }}
       >
