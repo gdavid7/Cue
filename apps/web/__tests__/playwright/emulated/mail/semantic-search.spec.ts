@@ -37,6 +37,18 @@ test("finds mail by meaning when its words differ from the search", async ({
   await page.addInitScript(() => {
     window.__inboxZeroMailSemanticIndexIntervalMs = 2000;
   });
+  // The runtime's wasm is the app's own asset: nothing loads from a CDN.
+  const wasm: { url: string; contentType: string | undefined }[] = [];
+  page.context().on("response", (response) => {
+    if (new URL(response.url()).pathname.endsWith(".wasm"))
+      wasm.push({
+        url: response.url(),
+        contentType: response.headers()["content-type"],
+      });
+  });
+  await page
+    .context()
+    .route("https://cdn.jsdelivr.net/**", (route) => route.abort());
   const token = randomToken();
   const subject = `Kitchen remodel proposal ${token}`;
   await insertInboxMail(page, {
@@ -82,6 +94,13 @@ test("finds mail by meaning when its words differ from the search", async ({
     if (await showAll.isVisible()) await showAll.click();
     await expect(hit).toBeVisible({ timeout: 5000 });
   }).toPass({ timeout: INDEX_TIMEOUT_MS, intervals: [3000] });
+
+  console.log(`wasm loaded: ${JSON.stringify(wasm)}`);
+  const appOrigin = new URL(page.url()).origin;
+  for (const asset of wasm) {
+    expect(new URL(asset.url).origin).toBe(appOrigin);
+    expect(asset.contentType).toContain("application/wasm");
+  }
 });
 
 async function insertInboxMail(

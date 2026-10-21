@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as ort from "onnxruntime-web/wasm";
 import {
+  isPinnedModelFile,
   SEMANTIC_MODEL,
   type SemanticModelFile,
   semanticModelFileUrl,
@@ -24,16 +25,19 @@ async function readModelFile(file: SemanticModelFile) {
     tmpdir(),
     "cue-semantic-model",
     SEMANTIC_MODEL.id,
-    SEMANTIC_MODEL.files[file],
+    SEMANTIC_MODEL.files[file].path,
   );
-  try {
-    return new Uint8Array(await readFile(path));
-  } catch {
-    const response = await fetch(semanticModelFileUrl(file));
-    if (!response.ok) throw new Error(`model download ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, bytes);
-    return bytes;
-  }
+  const cached = await readFile(path).then(
+    (buffer) => new Uint8Array(buffer),
+    () => null,
+  );
+  if (cached && (await isPinnedModelFile(file, cached))) return cached;
+  const response = await fetch(semanticModelFileUrl(file));
+  if (!response.ok) throw new Error(`model download ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!(await isPinnedModelFile(file, bytes)))
+    throw new Error(`model file ${file} does not match its pinned hash`);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, bytes);
+  return bytes;
 }

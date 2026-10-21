@@ -128,7 +128,8 @@ async function createWorkerEngine(
 // Nothing of the model loads here: its worker starts on the index's first
 // batch or the first search. Devices it doesn't suit search as before.
 function startSemanticIndex(store: MailStore, input: BrowserEngineStart) {
-  if (!semanticSearchSupported(navigator)) return null;
+  if (!semanticSearchSupported(navigator, { touchOnly: input.touchOnly }))
+    return null;
   const embedder = createWorkerTextEmbedder();
   const index = createSemanticIndex({
     store,

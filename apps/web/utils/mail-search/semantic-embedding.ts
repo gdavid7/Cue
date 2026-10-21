@@ -9,10 +9,23 @@ export const SEMANTIC_MODEL = {
   id: "all-MiniLM-L6-v2@q8",
   repository: "Xenova/all-MiniLM-L6-v2",
   revision: "751bff37182d3f1213fa05d7196b954e230abad9",
+  // Each file's SHA-256, checked before it is used or cached.
   files: {
-    model: "onnx/model_quantized.onnx",
-    tokenizer: "tokenizer.json",
-    tokenizerConfig: "tokenizer_config.json",
+    model: {
+      path: "onnx/model_quantized.onnx",
+      sha256:
+        "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
+    },
+    tokenizer: {
+      path: "tokenizer.json",
+      sha256:
+        "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
+    },
+    tokenizerConfig: {
+      path: "tokenizer_config.json",
+      sha256:
+        "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3",
+    },
   },
   dimensions: 384,
   // What the model was trained on; longer input only costs time.
@@ -22,7 +35,21 @@ export const SEMANTIC_MODEL = {
 export type SemanticModelFile = keyof typeof SEMANTIC_MODEL.files;
 
 export function semanticModelFileUrl(file: SemanticModelFile) {
-  return `https://huggingface.co/${SEMANTIC_MODEL.repository}/resolve/${SEMANTIC_MODEL.revision}/${SEMANTIC_MODEL.files[file]}`;
+  return `https://huggingface.co/${SEMANTIC_MODEL.repository}/resolve/${SEMANTIC_MODEL.revision}/${SEMANTIC_MODEL.files[file].path}`;
+}
+
+/** Whether `bytes` are the pinned file, by SHA-256. */
+export async function isPinnedModelFile(
+  file: SemanticModelFile,
+  bytes: Uint8Array,
+) {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>),
+  );
+  const hex = Array.from(digest, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return hex === SEMANTIC_MODEL.files[file].sha256;
 }
 
 export type TextEmbedder = {

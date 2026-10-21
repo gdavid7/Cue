@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
+import type {
+  EmbeddingBacklogCursor,
+  MailStore,
+} from "@inboxzero/mail-core/ports/mail-store";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 import { migrateMailbox } from "./migrations";
+import {
+  EMBEDDING_BACKLOG_KEYS_SQL,
+  EMBEDDING_CAP_START_SQL,
+} from "./message-embeddings";
 
 const MODEL = "test-model";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -51,12 +58,12 @@ describe("message embeddings", () => {
         roles: ["trash"],
       }),
     ]);
-    const backlog = await store.readEmbeddingBacklog({ ...CAP, limit: 10 });
-    expect(backlog.map((source) => source.key.messageId)).toEqual([
+    const pending = await backlog(store);
+    expect(pending.map((source) => source.key.messageId)).toEqual([
       "new",
       "older",
     ]);
-    expect(backlog[0]).toMatchObject({
+    expect(pending[0]).toMatchObject({
       subject: "Subject new",
       body: "Preview new",
       fromBody: false,
@@ -71,12 +78,8 @@ describe("message embeddings", () => {
         message(`m${index}`, { receivedAtMs: NOW - index * 1000 }),
       ),
     );
-    const backlog = await store.readEmbeddingBacklog({
-      ...CAP,
-      maxMessages: 3,
-      limit: 10,
-    });
-    expect(backlog.map((source) => source.key.messageId)).toEqual([
+    const pending = await backlog(store, { maxMessages: 3 });
+    expect(pending.map((source) => source.key.messageId)).toEqual([
       "m0",
       "m1",
       "m2",
@@ -86,15 +89,15 @@ describe("message embeddings", () => {
   it("reads the stored body, and embeds a preview-only message again once its body arrives", async () => {
     const store = await setup();
     await write(store, [message("m", { receivedAtMs: NOW })]);
-    const [first] = await store.readEmbeddingBacklog({ ...CAP, limit: 10 });
+    const [first] = await backlog(store);
     await store.writeMessageEmbeddings({
       model: MODEL,
       embeddings: [{ ...first, vector: vector([1, 0]) }],
     });
-    expect(await store.readEmbeddingBacklog({ ...CAP, limit: 10 })).toEqual([]);
+    expect(await backlog(store)).toEqual([]);
 
     await write(store, [], [{ id: "m", text: "  The kitchen\n invoice  " }]);
-    const [again] = await store.readEmbeddingBacklog({ ...CAP, limit: 10 });
+    const [again] = await backlog(store);
     expect(again).toMatchObject({
       body: "The kitchen invoice",
       fromBody: true,
@@ -103,13 +106,14 @@ describe("message embeddings", () => {
       model: MODEL,
       embeddings: [{ ...again, vector: vector([1, 0]) }],
     });
-    expect(await store.readEmbeddingBacklog({ ...CAP, limit: 10 })).toEqual([]);
+    expect(await backlog(store)).toEqual([]);
     // Another model's vector is not this one's.
     expect(
       await store.readEmbeddingBacklog({
-        ...CAP,
         model: "other-model",
+        sinceMs: CAP.sinceMs,
         limit: 10,
+        before: null,
       }),
     ).toHaveLength(1);
   });
@@ -179,10 +183,57 @@ describe("message embeddings", () => {
       }),
     ]);
     // "keep" now holds the old model's vector, which is pruned too.
-    expect(await store.pruneMessageEmbeddings(CAP)).toBe(3);
+    expect((await store.pruneMessageEmbeddings(CAP)).dropped).toBe(3);
     expect(
       await store.countMessageEmbeddings({ accountId: "a", model: MODEL }),
     ).toBe(0);
+  });
+
+  it("continues a pass below the last batch, in time and then key order", async () => {
+    const store = await setup();
+    await write(store, [
+      message("a", { receivedAtMs: NOW }),
+      message("b", { receivedAtMs: NOW }),
+      message("c", { receivedAtMs: NOW - 1000 }),
+    ]);
+    const first = await backlog(store, { limit: 2 });
+    expect(first.map((source) => source.key.messageId)).toEqual(["b", "a"]);
+    const last = first.at(-1)!;
+    const next = await backlog(store, {
+      limit: 2,
+      before: { receivedAtMs: last.receivedAtMs, key: last.key },
+    });
+    expect(next.map((source) => source.key.messageId)).toEqual(["c"]);
+  });
+
+  it("stores no vector for mail that left the mailbox before the write", async () => {
+    const store = await setup();
+    await embed(store, { gone: [1, 0] });
+    expect(
+      await store.countMessageEmbeddings({ accountId: "a", model: MODEL }),
+    ).toBe(0);
+  });
+
+  it("walks the received index for the backlog and the cap, without scanning mail or sorting", async () => {
+    const driver = createNodeSqliteDriver();
+    await driver.write((tx) => migrateMailbox(tx, "epoch"));
+    for (const [sql, bindings] of [
+      [EMBEDDING_BACKLOG_KEYS_SQL, [0, NOW, "", "", MODEL, 8]],
+      [EMBEDDING_CAP_START_SQL, [0, 99]],
+    ] as const) {
+      const plan = (
+        await driver.read((tx) =>
+          tx.query(`EXPLAIN QUERY PLAN ${sql}`, [...bindings]),
+        )
+      )
+        .map((row) => String(row.detail))
+        .join("\n");
+      expect(plan).toContain("effective_messages_received");
+      expect(plan).not.toMatch(/TEMP B-TREE/);
+      expect(plan).not.toMatch(/SCAN (m|effective_messages)$/m);
+      expect(plan).not.toMatch(/message_content.*SCAN|SCAN c\b/);
+    }
+    await driver.close();
   });
 
   it("forgets an account's vectors with the account", async () => {
@@ -195,6 +246,25 @@ describe("message embeddings", () => {
     ).toBe(0);
   });
 });
+
+async function backlog(
+  store: MailStore,
+  {
+    maxMessages = CAP.maxMessages,
+    limit = 10,
+    before = null,
+  }: {
+    maxMessages?: number;
+    limit?: number;
+    before?: EmbeddingBacklogCursor | null;
+  } = {},
+) {
+  const { sinceMs } = await store.pruneMessageEmbeddings({
+    ...CAP,
+    maxMessages,
+  });
+  return store.readEmbeddingBacklog({ model: MODEL, sinceMs, limit, before });
+}
 
 async function setup() {
   const store = await createSqliteMailStore(createNodeSqliteDriver());

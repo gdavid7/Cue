@@ -75,7 +75,10 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   },
 }));
 
-import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import {
+  searchByMeaning,
+  useCueSearch,
+} from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 
 const SENTENCE = "the lease contract Sarah sent last month";
 const SEARCH =
@@ -403,6 +406,23 @@ describe("useCueSearch", () => {
       query: "when is my flight?",
       searches: ["flight OR itinerary"],
     });
+  });
+});
+
+describe("searchByMeaning", () => {
+  const query = { accountId: "account", text: SENTENCE, limit: 15 };
+
+  it("gives up at the search's budget, so a model still downloading never holds the search", async () => {
+    const pending = searchByMeaning(() => new Promise(() => undefined), query);
+    await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS);
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it("finds nothing when the engine can't search by meaning", async () => {
+    await expect(
+      searchByMeaning(() => Promise.reject(new Error("no model")), query),
+    ).resolves.toEqual([]);
+    await expect(searchByMeaning(undefined, query)).resolves.toEqual([]);
   });
 });
 

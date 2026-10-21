@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { MailClient } from "@inboxzero/mail-core/engine";
 import type {
   MailPredicate,
   SemanticMatch,
+  SemanticSearchQuery,
 } from "@inboxzero/mail-core/queries";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import useSWR from "swr";
@@ -356,11 +358,11 @@ function useSemanticThreads({
   const { data } = useSWR(
     active ? (["cue-semantic", emailAccountId, query] as const) : null,
     ([, accountId, text]: readonly [string, string, string]) =>
-      // Without vectors or the model, the search runs as before.
-      (
-        searchSemantic?.({ accountId, text, limit: CUE_SEMANTIC_RESULTS }) ??
-        Promise.resolve(NO_MATCHES)
-      ).catch(() => NO_MATCHES),
+      searchByMeaning(searchSemantic, {
+        accountId,
+        text,
+        limit: CUE_SEMANTIC_RESULTS,
+      }),
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
   const matches = data ?? NO_MATCHES;
@@ -397,4 +399,22 @@ function useSemanticThreads({
     }),
     [threads, similarity, active, data, read],
   );
+}
+
+/**
+ * The search by meaning, within the search's budget: a model still
+ * downloading, or no vectors, leaves the search as it was.
+ */
+export function searchByMeaning(
+  searchSemantic: MailClient["searchSemantic"],
+  query: SemanticSearchQuery,
+): Promise<SemanticMatch[]> {
+  if (!searchSemantic) return Promise.resolve(NO_MATCHES);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    searchSemantic(query).catch(() => NO_MATCHES),
+    new Promise<SemanticMatch[]>((resolve) => {
+      timer = setTimeout(() => resolve(NO_MATCHES), CUE_SEARCH_BUDGET_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }

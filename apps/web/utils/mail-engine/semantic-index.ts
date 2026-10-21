@@ -2,7 +2,11 @@ import type {
   SemanticMatch,
   SemanticSearchQuery,
 } from "@inboxzero/mail-core/queries";
-import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
+import type {
+  EmbeddingBacklogCursor,
+  MailStore,
+} from "@inboxzero/mail-core/ports/mail-store";
+import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-client";
 import {
   messageEmbeddingText,
   quantizeVector,
@@ -27,7 +31,11 @@ const BATCH_SIZE = 8;
 const BATCH_REST_MS = 250;
 /** Looks for new mail to embed this often once the backlog is done. */
 export const SEMANTIC_INDEX_RECHECK_MS = 10 * 60_000;
-const RETRY_MS = 30 * 60_000;
+// After a failed pass, waits this long, doubling with each failure in a row.
+const RETRY_BASE_MS = 10 * 60_000;
+const RETRY_MAX_MS = 8 * 60 * 60_000;
+// Test settings never make the index spin.
+const MIN_INTERVAL_MS = 1000;
 /**
  * Below this, the model rarely means the mail matches what was searched. It
  * only keeps clear noise out; ranking decides how much the rest counts.
@@ -36,7 +44,8 @@ export const SEMANTIC_MIN_SIMILARITY = 0.25;
 
 /**
  * Builds and searches this device's vectors of recent mail. The index runs
- * in the background after a delay, or from the first search if sooner.
+ * in the background after a delay, or from the first search if sooner, and
+ * stops for the session if the model can't be kept on this device.
  */
 export function createSemanticIndex({
   store,
@@ -62,23 +71,30 @@ export function createSemanticIndex({
 }) {
   let stopped = false;
   let started = false;
+  // Set only during the start delay, the one rest a search cuts short.
   let wake: (() => void) | null = null;
+  recheckMs = Math.max(MIN_INTERVAL_MS, recheckMs);
 
   /** Embeds every message within the cap that lacks a vector; resolves how many. */
   async function indexBacklog() {
-    const cap = {
+    const { sinceMs } = await store.pruneMessageEmbeddings({
       model: SEMANTIC_MODEL.id,
       sinceMs: nowMs() - SEMANTIC_INDEX_CAP.windowMs,
       maxMessages: SEMANTIC_INDEX_CAP.maxMessages,
-    };
-    await store.pruneMessageEmbeddings(cap);
+    });
     let embedded = 0;
+    // Each batch continues below the last, so a pass reads each message once.
+    let before: EmbeddingBacklogCursor | null = null;
     while (!stopped) {
       const sources = await store.readEmbeddingBacklog({
-        ...cap,
+        model: SEMANTIC_MODEL.id,
+        sinceMs,
         limit: BATCH_SIZE,
+        before,
       });
-      if (!sources.length) break;
+      const last = sources.at(-1);
+      if (!last) break;
+      before = { receivedAtMs: last.receivedAtMs, key: last.key };
       const vectors = await embedder.embed(sources.map(messageEmbeddingText));
       if (stopped) break;
       await store.writeMessageEmbeddings({
@@ -97,29 +113,32 @@ export function createSemanticIndex({
   }
 
   async function run() {
-    await rest(startDelayMs);
-    while (!stopped) {
-      let delay = recheckMs;
-      try {
-        await indexBacklog();
-      } catch {
-        // The model may be offline or the device out of storage; try later.
-        delay = RETRY_MS;
-      }
-      await rest(delay);
-    }
-  }
-
-  // A rest the first search cuts short.
-  function rest(ms: number) {
-    return Promise.race([
-      sleep(ms),
+    await Promise.race([
+      sleep(startDelayMs),
       new Promise<void>((resolve) => {
         wake = resolve;
       }),
-    ]).finally(() => {
-      wake = null;
-    });
+    ]);
+    wake = null;
+    let failures = 0;
+    while (!stopped) {
+      try {
+        await indexBacklog();
+        failures = 0;
+      } catch (error) {
+        if (isFatal(error)) {
+          stopped = true;
+          return;
+        }
+        failures += 1;
+      }
+      if (stopped) return;
+      await sleep(
+        failures
+          ? Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (failures - 1))
+          : recheckMs,
+      );
+    }
   }
 
   return {
@@ -137,13 +156,17 @@ export function createSemanticIndex({
       // A search during the start delay starts the index now.
       wake?.();
       const text = query.text.trim();
-      if (!text) return [];
+      // Stopped for good, as when the model can't be kept on this device.
+      if (!text || stopped) return [];
       const count = await store.countMessageEmbeddings({
         accountId: query.accountId,
         model: SEMANTIC_MODEL.id,
       });
       if (!count) return [];
-      const [vector] = await embedder.embed([text]);
+      const [vector] = await embedder.embed([text]).catch((error) => {
+        if (isFatal(error)) stopped = true;
+        throw error;
+      });
       return store.readSemanticMatches({
         accountId: query.accountId,
         model: SEMANTIC_MODEL.id,
@@ -167,7 +190,9 @@ export function semanticSearchSupported(
     deviceMemory?: number;
     connection?: { saveData?: boolean };
   },
+  page: { touchOnly?: boolean } = {},
 ) {
+  if (page.touchOnly) return false;
   if (typeof WebAssembly === "undefined" || typeof caches === "undefined")
     return false;
   if (typeof Worker === "undefined") return false;
@@ -177,6 +202,10 @@ export function semanticSearchSupported(
   if (nav.deviceMemory !== undefined && nav.deviceMemory < 4) return false;
   if (nav.connection?.saveData) return false;
   return true;
+}
+
+function isFatal(error: unknown) {
+  return error instanceof Error && error.message === MODEL_NOT_CACHED;
 }
 
 function defaultSleep(ms: number) {

@@ -16,6 +16,11 @@ export type BrowserEngineStart = {
    * new mail; tests shorten it.
    */
   semanticIndexIntervalMs?: number;
+  /**
+   * The page has touch and no fine pointer: a phone or tablet, including an
+   * iPad, whose user agent reads as a desktop's.
+   */
+  touchOnly?: boolean;
 };
 
 export function shouldReleaseDeferredOnStart(online?: boolean) {
@@ -138,6 +143,14 @@ export function readPageMaxPendingOperations(): number | undefined {
     return;
   }
   return Math.floor(value);
+}
+
+export function readPageTouchOnly(): boolean | undefined {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return;
+  return (
+    navigator.maxTouchPoints > 0 &&
+    !window.matchMedia?.("(pointer: fine)").matches
+  );
 }
 
 /** Set by browser tests that need the semantic index without its delays. */

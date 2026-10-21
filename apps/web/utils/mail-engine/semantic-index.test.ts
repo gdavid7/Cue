@@ -3,6 +3,7 @@ import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-client";
 import {
   createSemanticIndex,
   SEMANTIC_INDEX_CAP,
@@ -84,6 +85,75 @@ describe("createSemanticIndex", () => {
   });
 });
 
+describe("createSemanticIndex when passes fail", () => {
+  it("stops for the session when the model can't be kept on this device", async () => {
+    const store = await mailbox([
+      message("kitchen", "Kitchen remodel proposal", { daysAgo: 1 }),
+    ]);
+    const embedder = {
+      embed: vi.fn(async () => {
+        throw new Error(MODEL_NOT_CACHED);
+      }),
+    };
+    const sleeps: number[] = [];
+    const index = createSemanticIndex({
+      store,
+      embedder,
+      nowMs: () => NOW,
+      startDelayMs: 0,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+    index.start();
+    await vi.waitFor(() => expect(embedder.embed).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(embedder.embed).toHaveBeenCalledTimes(1);
+    // No pass is scheduled after the first.
+    expect(sleeps).toEqual([0]);
+    expect(await search(index, "kitchen")).toEqual([]);
+    expect(embedder.embed).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off after each failure in a row, and a search only cuts the start delay short", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = await mailbox([
+        message("kitchen", "Kitchen remodel proposal", { daysAgo: 1 }),
+      ]);
+      const embedder = {
+        embed: vi.fn(async (): Promise<Float32Array[]> => {
+          throw new Error("model_download_503");
+        }),
+      };
+      const index = createSemanticIndex({
+        store,
+        embedder,
+        nowMs: () => NOW,
+        startDelayMs: 60_000,
+      });
+      index.start();
+      await search(index, "kitchen");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(embedder.embed).toHaveBeenCalledTimes(1);
+
+      // Retries after 10 minutes, then 20: a search in between waits too.
+      await search(index, "kitchen");
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(embedder.embed).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(embedder.embed).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(19 * 60_000);
+      expect(embedder.embed).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(embedder.embed).toHaveBeenCalledTimes(3);
+      index.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("semanticSearchSupported", () => {
   const desktop = {
     userAgent:
@@ -125,6 +195,8 @@ describe("semanticSearchSupported", () => {
           userAgentData: { mobile: true },
         }),
       ).toBe(false);
+      // An iPad reads as a Mac; the page knows it has no fine pointer.
+      expect(semanticSearchSupported(desktop, { touchOnly: true })).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }

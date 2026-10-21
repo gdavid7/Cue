@@ -227,6 +227,9 @@ export type EmbeddingCap = {
   maxMessages: number;
 };
 
+/** Where a pass over the embedding backlog has reached, newest first. */
+export type EmbeddingBacklogCursor = { receivedAtMs: number; key: MessageKey };
+
 export type MailStoreInspectionInput = {
   accountIds?: string[];
   limit?: number;
@@ -419,8 +422,13 @@ export interface MailStore {
   /** Indexes one short batch of stored bodies missing from local search. */
   indexSearchBacklog(): Promise<{ remaining: boolean }>;
   inspect(input?: MailStoreInspectionInput): Promise<MailStoreInspection>;
-  /** Drops vectors outside the cap or of mail gone; resolves how many. */
-  pruneMessageEmbeddings(input: EmbeddingCap): Promise<number>;
+  /**
+   * Drops vectors outside the cap or of mail gone, and resolves how many
+   * with where the cap starts, for a pass's backlog reads.
+   */
+  pruneMessageEmbeddings(
+    input: EmbeddingCap,
+  ): Promise<{ dropped: number; sinceMs: number }>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   readAccountSyncStates(): Promise<AccountSyncState[]>;
   readBootstrapScan(input: {
@@ -444,10 +452,16 @@ export interface MailStore {
     nowMs: number,
   ): Promise<"complete" | "preparing" | "incomplete">;
   readDraft(key: DraftKey): Promise<DraftReadResult>;
-  /** The next messages within the cap without a current vector, newest first. */
-  readEmbeddingBacklog(
-    input: EmbeddingCap & { limit: number },
-  ): Promise<EmbeddingSource[]>;
+  /**
+   * The next messages received since `sinceMs` without a current vector,
+   * newest first, older than `before` when set.
+   */
+  readEmbeddingBacklog(input: {
+    model: string;
+    sinceMs: number;
+    limit: number;
+    before: EmbeddingBacklogCursor | null;
+  }): Promise<EmbeddingSource[]>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
    * only the server can still stop.
