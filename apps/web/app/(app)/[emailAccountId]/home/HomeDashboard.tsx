@@ -409,6 +409,7 @@ export function HomeDashboard() {
     if (!target) return;
     const id = rowKey(target);
     setMailCommandContext({
+      account: target.account?.email,
       actions: {
         archive: () => handlers.archive(id),
         moveToInbox: target.inInbox

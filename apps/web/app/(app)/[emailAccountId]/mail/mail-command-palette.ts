@@ -288,3 +288,17 @@ export function buildMailCommandPalette({
 
   return commands;
 }
+
+/**
+ * Across accounts, the account mail actions run in: the selection's one
+ * account, or how many it spans.
+ */
+export function getActionAccountLabel(
+  targetAccountIds: string[],
+  accounts: { id: string; email: string }[],
+) {
+  const ids = new Set(targetAccountIds);
+  if (ids.size > 1) return `${ids.size} accounts`;
+  const [id] = ids;
+  return accounts.find((account) => account.id === id)?.email;
+}

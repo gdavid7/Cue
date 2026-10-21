@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMailCommandPalette } from "./mail-command-palette";
+import {
+  buildMailCommandPalette,
+  getActionAccountLabel,
+} from "./mail-command-palette";
 
 const actions = {
   archive: vi.fn(),
@@ -169,5 +172,25 @@ describe("buildMailCommandPalette", () => {
     expect(commands.find(({ id }) => id === "mail-auto-archive")).toMatchObject(
       { label: "Show this sender in inbox again" },
     );
+  });
+});
+
+describe("getActionAccountLabel", () => {
+  const accounts = [
+    { id: "a", email: "a@example.com" },
+    { id: "b", email: "b@example.com" },
+  ];
+
+  it("names the one account the selection is in", () => {
+    expect(getActionAccountLabel(["b", "b"], accounts)).toBe("b@example.com");
+  });
+
+  it("counts the accounts a selection spans", () => {
+    expect(getActionAccountLabel(["a", "b", "a"], accounts)).toBe("2 accounts");
+  });
+
+  it("names nothing it can't name", () => {
+    expect(getActionAccountLabel([], accounts)).toBeUndefined();
+    expect(getActionAccountLabel(["gone"], accounts)).toBeUndefined();
   });
 });

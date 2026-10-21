@@ -103,6 +103,7 @@ import type { ThreadMessage } from "@/components/email-list/types";
 import { useMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-mail-threads";
 import { useCombinedMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-combined-mail-threads";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { getActionAccountLabel } from "@/app/(app)/[emailAccountId]/mail/mail-command-palette";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
@@ -1691,8 +1692,16 @@ export function MailShell() {
     singleActionTarget !== undefined &&
     singleActionTarget.key === openThreadKey;
 
+  const actionAccount = isAllAccounts
+    ? getActionAccountLabel(
+        actionTargets.map((target) => target.selection.emailAccountId),
+        combinedAccounts,
+      )
+    : undefined;
+
   const mailCommandContext = useMemo(
     () => ({
+      account: actionAccount,
       actions: {
         archive: archiveTargets,
         moveToInbox:
@@ -1733,6 +1742,7 @@ export function MailShell() {
       targetCount: actionTargets.length,
     }),
     [
+      actionAccount,
       archiveTargets,
       moveToInboxTargets,
       targetsArchived,
