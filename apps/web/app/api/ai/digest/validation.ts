@@ -9,6 +9,8 @@ export const digestBody = z.preprocess(
     actionId: z.string().optional(),
     messageId: z.string(),
     threadId: z.string(),
+    /** How many times the Gmail quota gate put this item off in a row. */
+    deferrals: z.number().int().nonnegative().optional(),
   }),
 );
 
