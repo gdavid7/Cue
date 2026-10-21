@@ -354,6 +354,12 @@ export async function createSqliteMailStore(
         }
         const read = await readOrder(tx, input.requestedAt, digest);
         for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessagePatch(tx, change))
+          ) {
+            continue;
+          }
           await applyChange(tx, change, read);
         }
         await recomputeTargets(tx, newTargets);
@@ -375,7 +381,11 @@ export async function createSqliteMailStore(
             input.previousPage,
           ],
         );
-        if (updated.changedRows === 0) return { status: "stale" };
+        // Checked above in this transaction; throwing rolls back the targets
+        // and changes already written, which returning would commit.
+        if (updated.changedRows === 0) {
+          throw new Error("Preparation page changed during its transaction");
+        }
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)

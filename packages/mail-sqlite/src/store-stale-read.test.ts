@@ -635,6 +635,47 @@ describe("a conversation command being prepared", () => {
     ).toMatchObject({ categoryIds: ["Blue"] });
     await store.close();
   });
+
+  it("doesn't bring back a Gmail message deleted since, from a copy at the same version", async () => {
+    const store = await mailbox("google");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("google", {}, "10")]);
+
+    expect(await isM1Deleted(store)).toBe(true);
+    await store.close();
+  });
+
+  it("doesn't bring back a Gmail message deleted since, from an older copy", async () => {
+    const store = await mailbox("google");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("google", {}, "9")]);
+
+    expect(await isM1Deleted(store)).toBe(true);
+    await store.close();
+  });
+
+  it("brings back a deleted Gmail message from a strictly newer copy", async () => {
+    const store = await mailbox("google");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("google", { starred: true }, "11")]);
+
+    expect(await isM1Deleted(store)).toBe(false);
+    expect((await readConfirmedM1(store))?.starred).toBe(true);
+    await store.close();
+  });
+
+  it("doesn't bring back an Outlook message deleted since, from a copy without a version", async () => {
+    const store = await mailbox("microsoft");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("microsoft")]);
+
+    expect(await isM1Deleted(store)).toBe(true);
+    await store.close();
+  });
 });
 
 const SESSION = { accountId: "acc-1", generation: "g1" };
@@ -744,6 +785,44 @@ async function confirmConversation(
   });
 }
 
+async function deleteM1(store: MailStore) {
+  await applyPage(store, "1", "2", [
+    { kind: "message_deleted", key: M1, evidence: "deleted" },
+  ]);
+  expect(await isM1Deleted(store)).toBe(true);
+}
+
+// Prepares a category change on conversation c-m1 with one page carrying
+// `changes`, as a command on a conversation not yet fully stored does.
+async function prepareWith(store: MailStore, changes: ProviderChange[]) {
+  const admission = await store.admitConversations({
+    accountId: "acc-1",
+    commandId: "blue-c1",
+    conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+    change: BLUE,
+    observedRevision: (await store.inspect()).revision,
+  });
+  expect(admission.status).toBe("preparing");
+  const work = await claim(store, "prepare");
+  const applied = await store.applyPreparationPage({
+    accountId: "acc-1",
+    commandId: "blue-c1",
+    attemptId: work.attemptId,
+    session: work.session,
+    previousPage: work.page,
+    page: {
+      conversation: { accountId: "acc-1", conversationId: "c-m1" },
+      resolutionId: work.resolutionId,
+      keys: [M1],
+      changes,
+      nextPage: null,
+      evidence: null,
+    },
+    requestedAt: await store.readRevision(),
+  });
+  expect(applied.status).toBe("preparing");
+}
+
 async function claim<Kind extends ClaimedWork["kind"]>(
   store: MailStore,
   kind: Kind,
@@ -848,6 +927,12 @@ async function readConfirmedM1(store: MailStore) {
   const inspection = await store.inspect();
   return inspection.messages.find((candidate) => candidate.messageId === "m1")
     ?.confirmed;
+}
+
+async function isM1Deleted(store: MailStore) {
+  const inspection = await store.inspect();
+  return inspection.messages.find((candidate) => candidate.messageId === "m1")
+    ?.deleted;
 }
 
 async function withDatabaseFile(run: (path: string) => Promise<void>) {
