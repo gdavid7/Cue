@@ -1594,6 +1594,40 @@ describe("createEmailProviderMailboxSource", () => {
     });
   });
 
+  it("puts the quota gate's deferral reason on the request's metrics", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => {
+          throw new GmailCallDeferredError(7000, "sync", "sync_pause");
+        }),
+      } as unknown as EmailProvider,
+    });
+    const metrics = createRequestMetrics();
+    const result = await runWithRequestMetrics(metrics, () =>
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify({ scopeId: "primary", pageToken: "page-2" }),
+        pageSize: 50,
+      }),
+    );
+    expect(result).toEqual({
+      status: "paused",
+      retryAfterMs: 7000,
+      reason: "throttled",
+    });
+    expect(getRequestMetricsFields(metrics)).toMatchObject({
+      pausedSource: "quota_gate",
+      pausedReason: "sync_pause",
+      pausedRetryAfterMs: 7000,
+    });
+  });
+
   it("logs a mailbox's local-budget pause at most once a minute", () => {
     expect(shouldLogLocalBudgetPause("rate-a", 1000)).toBe(true);
     expect(shouldLogLocalBudgetPause("rate-a", 30_000)).toBe(false);

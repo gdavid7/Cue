@@ -696,10 +696,17 @@ export function createEmailProviderMailboxSource(input: {
       });
       return throttled(error.retryAfterMs);
     }
-    // The quota gate logs its own deferrals with the reason, in "Gmail call
-    // deferred".
+    // The quota gate logs only a sample of its deferrals, so the request's own
+    // line carries the reason for every one.
     const deferred = getGmailCallDeferredError(error);
-    if (deferred) return throttled(deferred.retryAfterMs);
+    if (deferred) {
+      noteRequestPause({
+        source: "quota_gate",
+        reason: deferred.reason,
+        retryAfterMs: deferred.retryAfterMs,
+      });
+      return throttled(deferred.retryAfterMs);
+    }
     if (isProviderRateLimitModeError(error)) {
       const retryAtMs = error.retryAt ? Date.parse(error.retryAt) : Number.NaN;
       const retryAfterMs = Number.isNaN(retryAtMs)
