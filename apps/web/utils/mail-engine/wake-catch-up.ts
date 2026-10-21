@@ -39,10 +39,12 @@ export function followWakeCatchUp({
     const abort = new AbortController();
     running = abort;
     // Another tab of this browser waking at the same time already reads it.
+    // `ifAvailable` never waits, and browsers reject it alongside a signal;
+    // the read itself takes the signal.
     const done = locks
       ? locks.request(
           wakeCatchUpLockName(accountId),
-          { ifAvailable: true, signal: abort.signal },
+          { ifAvailable: true },
           (lock) => (lock ? onWake(abort.signal) : undefined),
         )
       : onWake(abort.signal);

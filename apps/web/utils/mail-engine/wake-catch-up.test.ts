@@ -159,9 +159,15 @@ describe("followWakeCatchUp", () => {
       request: vi.fn(
         async (
           name: string,
-          _options: LockOptions,
+          options: LockOptions,
           callback: (lock: Lock | null) => unknown,
         ) => {
+          // As browsers do.
+          if (options.ifAvailable && options.signal)
+            throw new DOMException(
+              "ifAvailable with signal",
+              "NotSupportedError",
+            );
           if (held.has(name)) return callback(null);
           held.add(name);
           try {
