@@ -283,21 +283,148 @@ describe("provider reads sent before a confirmed local change", () => {
     await store.close();
   });
 
-  // Only message patches are dated; a removal from a folder still applies.
-  it("still applies a removal from the inbox read before the change", async () => {
+  it("keeps a message moved back to the inbox when a removal read before the move lands", async () => {
+    const store = await mailbox("microsoft");
+    await confirm(store, ARCHIVE, [patch("microsoft", { archived: true })]);
+    // The inbox delta goes out while the message is archived...
+    const requestedAt = await store.readRevision();
+    // ...and the move back to the inbox is confirmed before it returns.
+    await confirm(store, UNARCHIVE, [patch("microsoft")]);
+
+    await applyPage(store, "1", "2", [REMOVED_FROM_INBOX], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({
+      folderId: "inbox",
+      roles: ["inbox"],
+    });
+    const reread = await claim(store, "hydrate");
+    expect(reread).toMatchObject({ keys: [M1], purpose: "metadata" });
+    await store.applyHydration({
+      session: SESSION,
+      requestId: reread.jobId,
+      attemptId: reread.attemptId,
+      changes: [patch("microsoft")],
+      bodies: [],
+      requestedAt: await store.readRevision(),
+    });
+    expect(await readM1(store)).toMatchObject({ roles: ["inbox"] });
+    await store.close();
+  });
+
+  // The removal may be true: filed elsewhere before an unrelated change. The
+  // re-read sent after the change brings that back.
+  it("re-reads a message whose removal from the inbox was read before a change", async () => {
     const store = await mailbox("microsoft");
     const requestedAt = await store.readRevision();
-    await confirm(store, STAR, [patch("microsoft", { starred: true })]);
+    await confirm(store, STAR, []);
+
+    await applyPage(store, "1", "2", [REMOVED_FROM_INBOX], requestedAt);
+    expect(await readM1(store)).toMatchObject({ roles: ["inbox"] });
+
+    const reread = await claim(store, "hydrate");
+    expect(reread).toMatchObject({ keys: [M1], purpose: "metadata" });
+    await store.applyHydration({
+      session: SESSION,
+      requestId: reread.jobId,
+      attemptId: reread.attemptId,
+      changes: [patch("microsoft", { starred: true, archived: true })],
+      bodies: [],
+      requestedAt: await store.readRevision(),
+    });
+    expect(await readM1(store)).toMatchObject({ starred: true, roles: [] });
+    await store.close();
+  });
+
+  it("applies a removal from the inbox read after the move back", async () => {
+    const store = await mailbox("microsoft");
+    await confirm(store, ARCHIVE, [patch("microsoft", { archived: true })]);
+    await confirm(store, UNARCHIVE, [patch("microsoft")]);
+    // Filed again in Outlook on the web afterwards.
+    const requestedAt = await store.readRevision();
+
+    await applyPage(store, "1", "2", [REMOVED_FROM_INBOX], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ roles: [] });
+    await expectNoWork(store);
+    await store.close();
+  });
+
+  it("still applies a deletion read before the move back", async () => {
+    const store = await mailbox("microsoft");
+    await confirm(store, ARCHIVE, [patch("microsoft", { archived: true })]);
+    const requestedAt = await store.readRevision();
+    await confirm(store, UNARCHIVE, [patch("microsoft")]);
 
     await applyPage(
       store,
       "1",
       "2",
-      [{ kind: "removed_from_scope", key: M1, scopeId: "inbox" }],
+      [{ kind: "message_deleted", key: M1, evidence: "deleted" }],
       requestedAt,
     );
 
-    expect(await readM1(store)).toMatchObject({ starred: true, roles: [] });
+    expect(await readM1(store)).toBeNull();
+    await store.close();
+  });
+
+  it("keeps a removal read before the move back out of a bootstrap page", async () => {
+    const store = await mailbox("microsoft");
+    await confirm(store, ARCHIVE, [patch("microsoft", { archived: true })]);
+    const from = await startScan(store, "folder:inbox");
+    const requestedAt = await store.readRevision();
+    await confirm(store, UNARCHIVE, [patch("microsoft")]);
+
+    await finishScan(
+      store,
+      "folder:inbox",
+      from,
+      [REMOVED_FROM_INBOX],
+      requestedAt,
+    );
+
+    expect(await readM1(store)).toMatchObject({ roles: ["inbox"] });
+    expect(await claim(store, "hydrate")).toMatchObject({ keys: [M1] });
+    await store.close();
+  });
+
+  // A scan listing pages read before the move back can't show the message
+  // back in the inbox, so its absence proves nothing.
+  it("keeps a message moved back to the inbox during a folder scan that missed it", async () => {
+    const store = await mailbox("microsoft");
+    const from = await startScan(store, "folder:inbox");
+    const requestedAt = await store.readRevision();
+    await confirm(store, ARCHIVE, [patch("microsoft", { archived: true })]);
+    await confirm(store, UNARCHIVE, [patch("microsoft")]);
+
+    await finishScan(store, "folder:inbox", from, [], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ roles: ["inbox"] });
+    expect(await claim(store, "hydrate")).toMatchObject({ keys: [M1] });
+    await store.close();
+  });
+
+  it("doesn't delete a message restored from the trash during a whole-mailbox scan that missed it", async () => {
+    const store = await mailbox("microsoft");
+    const from = await startScan(store, "account:all");
+    const requestedAt = await store.readRevision();
+    await confirm(store, { kind: "trash" }, []);
+    await confirm(store, { kind: "restore_from_trash" }, [patch("microsoft")]);
+
+    await finishScan(store, "account:all", from, [], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ roles: ["inbox"] });
+    expect(await claim(store, "hydrate")).toMatchObject({ keys: [M1] });
+    await store.close();
+  });
+
+  it("still clears a message a folder scan missed when nothing changed it", async () => {
+    const store = await mailbox("microsoft");
+    const from = await startScan(store, "folder:inbox");
+    const requestedAt = await store.readRevision();
+
+    await finishScan(store, "folder:inbox", from, [], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ roles: [] });
     await store.close();
   });
 
@@ -375,6 +502,13 @@ describe("provider reads sent before a confirmed local change", () => {
 const SESSION = { accountId: "acc-1", generation: "g1" };
 const M1 = { accountId: "acc-1", messageId: "m1" };
 const STAR: MetadataChange = { kind: "set_starred", starred: true };
+const ARCHIVE: MetadataChange = { kind: "archive" };
+const UNARCHIVE: MetadataChange = { kind: "unarchive" };
+const REMOVED_FROM_INBOX: ProviderChange = {
+  kind: "removed_from_scope",
+  key: M1,
+  scopeId: "inbox",
+};
 
 async function mailbox(provider: "google" | "microsoft", path?: string) {
   const store = await createSqliteMailStore(createNodeSqliteDriver(path));
@@ -448,6 +582,56 @@ async function applyPage(
     },
   });
   expect(applied.status).toBe("committed");
+}
+
+async function startScan(store: MailStore, scopeId: string) {
+  const from = { streamId: "primary", generation: "g1", checkpoint: "1" };
+  const started = await store.startBootstrapScan({
+    session: SESSION,
+    scopeId,
+    bootstrapId: "boot",
+    page: "page-1",
+    from,
+    catchUpFrom: null,
+    nowMs: 1000,
+  });
+  expect(started.status).toBe("committed");
+  return from;
+}
+
+async function finishScan(
+  store: MailStore,
+  scopeId: string,
+  from: { streamId: string; generation: string; checkpoint: string },
+  changes: ProviderChange[],
+  requestedAt: LocalRevision,
+) {
+  const applied = await store.applyBootstrapPage({
+    session: SESSION,
+    scopeId,
+    bootstrapId: "boot",
+    previousPage: "page-1",
+    nextPage: null,
+    from,
+    catchUpFrom: null,
+    requestId: "boot-page",
+    changes,
+    requiredHydration: [],
+    bodies: [],
+    ownerId: "owner",
+    requestedAt,
+  });
+  expect(applied.status).toBe("committed");
+}
+
+async function expectNoWork(store: MailStore) {
+  expect(
+    await store.claimWork({
+      ownerId: "owner",
+      nowMs: Date.now(),
+      leaseMs: 30_000,
+    }),
+  ).toBeNull();
 }
 
 async function readM1(store: MailStore) {
