@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
@@ -125,8 +125,10 @@ test("pauses from Settings, with a moon while paused", async ({
 }, testInfo) => {
   await stubBrowser(page, { permission: "granted", holdsLock: true });
   await page.goto("/settings");
+  const pauseButton = page.getByRole("button", { name: "Pause…" });
+  await waitUntilStill(pauseButton);
 
-  await page.getByRole("button", { name: "Pause…" }).click();
+  await pauseButton.click();
   await page
     .getByRole("dialog", { name: "Pause notifications until" })
     .getByRole("button", { name: /Until (tomorrow|this) morning/ })
@@ -212,6 +214,33 @@ async function pauseForAnHourFromPalette(page: Page) {
     page.getByRole("group", { name: "Pause notifications" }),
   ).toBeVisible();
   await page.getByRole("option", { name: /For 1 hour/ }).click();
+}
+
+// Settings fills in the account list and billing after first paint, pushing
+// the rows below them down. A popover opened before that follows its trigger
+// off screen, so wait for the trigger to stop moving.
+async function waitUntilStill(locator: Locator) {
+  const offsetInPage = () =>
+    locator.evaluate((element) => {
+      let top = 0;
+      for (
+        let node = element as HTMLElement | null;
+        node;
+        node = node.offsetParent as HTMLElement | null
+      )
+        top += node.offsetTop;
+      return top;
+    });
+  await expect
+    .poll(
+      async () => {
+        const before = await offsetInPage();
+        await locator.page().waitForTimeout(1000);
+        return (await offsetInPage()) === before;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
 }
 
 function quietUntilMs(page: Page) {
