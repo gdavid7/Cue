@@ -165,6 +165,7 @@ import {
 } from "./queued-reply";
 import { beginUndoSend, UNDO_SEND_DELAY_MS } from "./undo-send";
 import { PreSendConfirmation } from "./PreSendConfirmation";
+import { selectTextIn } from "./select-text-in";
 import {
   getComposeBodyText,
   getPreSendWarnings,
@@ -1866,13 +1867,18 @@ function ComposeEmailFormContent({
       (preSend?.markDone && sendAndMarkDoneButtonRef.current) || undefined,
     );
   }, [preSend]);
-  const fixPreSend = (fix: PreSendWarningFix) => {
+  const fixPreSend = (fix: PreSendWarningFix, selectText?: string) => {
     shownPreSendWarnings.current = undefined;
     setPreSend(undefined);
     if (fix === "attach") attachmentInputRef.current?.click();
     else if (fix === "subject") setFocus("subject");
-    else if (fix === "body") editorRef.current?.focus();
-    else if (showInlineReplySummary) openInlineReplyFields();
+    else if (fix === "body") {
+      editorRef.current?.focus();
+      const editable = formRef.current?.querySelector<HTMLElement>(
+        "[contenteditable='true']",
+      );
+      if (editable && selectText) selectTextIn(editable, selectText);
+    } else if (showInlineReplySummary) openInlineReplyFields();
     else formRef.current?.querySelector<HTMLElement>("#to")?.focus();
   };
 

@@ -20,7 +20,7 @@ export function PreSendConfirmation({
 }: {
   warnings: PreSendWarning[];
   onSend: () => void;
-  onFix: (fix: PreSendWarningFix) => void;
+  onFix: (fix: PreSendWarningFix, selectText?: string) => void;
   onDismiss: () => void;
   className?: string;
 }) {
@@ -29,7 +29,8 @@ export function PreSendConfirmation({
   const containerRef = useRef<HTMLFieldSetElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
   const fixRef = useRef<HTMLButtonElement>(null);
-  const fix = warnings[0]?.fix ?? "body";
+  const first = warnings[0];
+  const fix = first?.fix ?? "body";
 
   useEffect(() => {
     sendRef.current?.focus();
@@ -98,7 +99,7 @@ export function PreSendConfirmation({
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
         <Button
-          onClick={() => onFix(fix)}
+          onClick={() => onFix(fix, first?.selectText)}
           ref={fixRef}
           size="sm"
           type="button"

@@ -1,7 +1,9 @@
 import { extractEmailAddresses } from "@/utils/email";
 import { findEscapedMarkup } from "@/utils/email/escaped-markup";
+import { findPlaceholders } from "./find-placeholders";
 
 export const LARGE_REPLY_RECIPIENT_COUNT = 10;
+const MAX_PLACEHOLDERS_SHOWN = 3;
 
 export type PreSendDraft = {
   to: string;
@@ -31,9 +33,12 @@ export type PreSendWarning = {
     | "no-subject"
     | "large-reply"
     | "new-recipients"
-    | "escaped-markup";
+    | "escaped-markup"
+    | "placeholders";
   message: string;
   fix: PreSendWarningFix;
+  /** Text in the message the fix should select. */
+  selectText?: string;
 };
 
 /**
@@ -99,6 +104,16 @@ export function getPreSendWarnings(
     });
   }
 
+  const placeholders = findPlaceholders(draft.bodyText);
+  if (placeholders.length) {
+    warnings.push({
+      id: "placeholders",
+      message: describePlaceholders(placeholders),
+      fix: "body",
+      selectText: placeholders[0],
+    });
+  }
+
   return warnings;
 }
 
@@ -155,12 +170,13 @@ export function mentionsAttachment(text: string) {
 
 /**
  * The text the user wrote in the editor, leaving out a forwarded or quoted
- * message, which can mention attachments the user never meant to send.
+ * message, which can mention attachments the user never meant to send, and
+ * code, which can hold placeholders or markup on purpose.
  */
 export function getComposeBodyText(html: string) {
   const document = new DOMParser().parseFromString(html, "text/html");
   for (const quoted of document.body.querySelectorAll(
-    "blockquote, .gmail_quote",
+    "blockquote, .gmail_quote, pre, code",
   ))
     quoted.remove();
   // textContent runs blocks together ("Hi BobAttached"), which hides words.
@@ -183,6 +199,15 @@ function uniqueAddresses(lists: (string | undefined)[]) {
       ),
     ),
   ];
+}
+
+function describePlaceholders(placeholders: string[]) {
+  const shown = placeholders.slice(0, MAX_PLACEHOLDERS_SHOWN).join(", ");
+  const more = placeholders.length - MAX_PLACEHOLDERS_SHOWN;
+  if (more > 0)
+    return `The message still has placeholders to fill in: ${shown} and ${more} more.`;
+  const noun = placeholders.length === 1 ? "a placeholder" : "placeholders";
+  return `The message still has ${noun} to fill in: ${shown}.`;
 }
 
 function describeNewRecipients(added: string[]) {
