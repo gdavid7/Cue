@@ -1,9 +1,11 @@
 /**
  * The on-device embedding model behind semantic search. Mail never leaves
  * the device to be embedded: the browser downloads these files once, from
- * the model's public repository at a pinned revision, and runs the model in
- * a worker. Changing any field below changes `id`, so vectors made by
- * another model are never compared with this one's.
+ * Cue's own origin, and runs the model in a worker. They are the model
+ * repository's files at a pinned revision, committed under `public/models`
+ * so no third party sees who uses semantic search. Changing any field below
+ * changes `id`, so vectors made by another model are never compared with
+ * this one's.
  */
 export const SEMANTIC_MODEL = {
   id: "all-MiniLM-L6-v2@q8",
@@ -34,8 +36,9 @@ export const SEMANTIC_MODEL = {
 
 export type SemanticModelFile = keyof typeof SEMANTIC_MODEL.files;
 
-export function semanticModelFileUrl(file: SemanticModelFile) {
-  return `https://huggingface.co/${SEMANTIC_MODEL.repository}/resolve/${SEMANTIC_MODEL.revision}/${SEMANTIC_MODEL.files[file].path}`;
+/** Where the app serves a model file, under `public/`. */
+export function semanticModelFilePath(file: SemanticModelFile) {
+  return `/models/${SEMANTIC_MODEL.repository}/${SEMANTIC_MODEL.revision}/${SEMANTIC_MODEL.files[file].path}`;
 }
 
 /** Whether `bytes` are the pinned file, by SHA-256. */

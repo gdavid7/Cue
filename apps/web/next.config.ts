@@ -212,6 +212,16 @@ const nextConfig: NextConfig = {
         ],
         source: "/sw.js",
       },
+      {
+        // Each path names the model's pinned revision, so its bytes never change.
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+        source: "/models/:path*",
+      },
     ];
   },
   images: {
