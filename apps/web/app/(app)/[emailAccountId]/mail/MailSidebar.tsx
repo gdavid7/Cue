@@ -150,7 +150,18 @@ type SystemItem = {
 
 export const MAIL_SCHEDULED_TYPE = "scheduled";
 export const MAIL_SNOOZED_TYPE = "snoozed";
-const UNIFIED_VIEW_TYPES = new Set([MAIL_SNOOZED_TYPE, MAIL_SCHEDULED_TYPE]);
+/** Mailboxes All inboxes merges from every included account's local mail. */
+export const ALL_INBOXES_MAILBOX_TYPES: ReadonlySet<string> = new Set([
+  "draft",
+  "sent",
+  "starred",
+]);
+/** Every view All inboxes has beyond its inbox. */
+export const ALL_INBOXES_VIEW_TYPES: ReadonlySet<string> = new Set([
+  ...ALL_INBOXES_MAILBOX_TYPES,
+  MAIL_SNOOZED_TYPE,
+  MAIL_SCHEDULED_TYPE,
+]);
 
 /** Visited often enough to sit beside the inbox. */
 const PRIMARY_MAILBOX_ITEMS: SystemItem[] = [
@@ -279,9 +290,11 @@ function MailSidebarContent({
   accountSections,
   className,
 }: MailSidebarProps) {
-  // Views All inboxes merges beyond its inbox, kept in Cue's own database.
+  // Views All inboxes merges beyond its inbox, in one account's order.
   const unifiedViews = unified
-    ? MORE_MAILBOX_ITEMS.filter((item) => UNIFIED_VIEW_TYPES.has(item.type))
+    ? [...PRIMARY_MAILBOX_ITEMS, ...MORE_MAILBOX_ITEMS].filter((item) =>
+        ALL_INBOXES_VIEW_TYPES.has(item.type),
+      )
     : [];
   // Today across accounts, and those views, show the unified sidebar with
   // All inboxes a link.

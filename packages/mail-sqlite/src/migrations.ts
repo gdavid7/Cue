@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS messages (
   in_spam INTEGER NOT NULL CHECK (in_spam IN (0, 1)),
   has_attachments INTEGER NOT NULL CHECK (has_attachments IN (0, 1)),
   snoozed_until_ms INTEGER,
+  local_change_sequence INTEGER,
   deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
   PRIMARY KEY (account_id, message_id),
   FOREIGN KEY (account_id) REFERENCES accounts(account_id)
@@ -412,6 +413,13 @@ export async function migrateMailbox(
   }
   try {
     await tx.exec("ALTER TABLE coverage ADD COLUMN window_start_ms INTEGER");
+  } catch {
+    // column already exists on freshly created databases
+  }
+  try {
+    await tx.exec(
+      "ALTER TABLE messages ADD COLUMN local_change_sequence INTEGER",
+    );
   } catch {
     // column already exists on freshly created databases
   }

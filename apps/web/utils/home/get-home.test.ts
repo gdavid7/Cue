@@ -646,6 +646,36 @@ describe("getHomeData: what's next", () => {
     });
   });
 
+  it("with today's meetings over, still names how tomorrow starts", async () => {
+    // 2:00 PM in Los Angeles; tomorrow's sync, then one the day after.
+    const afternoon = new Date("2026-10-13T21:00:00Z");
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        event("later", "Planning", "2026-10-15T16:00:00Z"),
+        event("sync", "Morning sync", "2026-10-14T16:00:00Z"),
+      ],
+    });
+
+    const home = await run(mockProvider({}), afternoon);
+
+    expect(home.calendar.next).toMatchObject({
+      title: "Morning sync",
+      tomorrow: true,
+    });
+  });
+
+  it("names no next meeting when nothing is on today or tomorrow", async () => {
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [event("later", "Planning", "2026-10-15T16:00:00Z")],
+    });
+
+    const home = await run(mockProvider({}));
+
+    expect(home.calendar).toEqual({ connected: true, next: null });
+  });
+
   it.each([
     { label: "an older mailbox", ageMs: 24 * 60 * 60 * 1000, connected: false },
     // Sign-in connects the calendar after it redirects.

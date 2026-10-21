@@ -959,6 +959,9 @@ function multiAccountHarness(input: {
   const queuedCommands: string[] = [];
   const store = {
     ...idleCatchUpStore([]),
+    async readRevision() {
+      return { databaseEpoch: "test", sequence: 0 };
+    },
     async readAccountSyncStates() {
       return accounts;
     },
@@ -1066,6 +1069,9 @@ function busyQueueHarness(
   const heldChecks: Array<() => void> = [];
   const store = {
     ...idleCatchUpStore([]),
+    async readRevision() {
+      return { databaseEpoch: "test", sequence: 0 };
+    },
     async readAccountSyncStates() {
       laneChecks.push(nowMs);
       if (options.holdLaneChecks) {
@@ -1130,6 +1136,9 @@ function idleCatchUpStore(
   return {
     async claimWork() {
       return null;
+    },
+    async readRevision() {
+      return { databaseEpoch: "test", sequence: 0 };
     },
     async readAccountSyncStates() {
       return [

@@ -648,6 +648,7 @@ export function createMailEngine(input: {
             });
             continue;
           }
+          const requestedAt = await store.readRevision();
           const hydrated = await source.hydrate({
             session: work.session,
             requestId: work.jobId,
@@ -671,6 +672,7 @@ export function createMailEngine(input: {
               attemptId: work.attemptId,
               changes: [...hydrated.value.changes, ...gone],
               bodies: hydrated.value.bodies,
+              requestedAt,
             });
             await refreshViews();
             await store.completeJob({
@@ -700,6 +702,7 @@ export function createMailEngine(input: {
             continue;
           }
           let searched: Awaited<ReturnType<MailboxSource["search"]>>;
+          const requestedAt = await store.readRevision();
           try {
             searched = await source.search({
               session: work.session,
@@ -741,6 +744,7 @@ export function createMailEngine(input: {
                 requestId: work.jobId,
                 changes,
                 bodies,
+                requestedAt,
               });
             }
             const fetched = new Set(bodies.map((body) => body.key.messageId));
@@ -771,6 +775,7 @@ export function createMailEngine(input: {
           });
           continue;
         }
+        const requestedAt = await store.readRevision();
         const changes = await source.readChanges({
           session: work.session,
           requestId: work.jobId,
@@ -783,6 +788,7 @@ export function createMailEngine(input: {
             page: changes.page,
             ownerId,
             bodies: changes.page.bodies,
+            requestedAt,
           });
           if (applied.status === "committed") {
             await refreshViews();
@@ -830,6 +836,7 @@ export function createMailEngine(input: {
       });
       return;
     }
+    const requestedAt = await store.readRevision();
     const membership = await source.readConversationMembership({
       session: work.session,
       requestId: work.resolutionId,
@@ -894,6 +901,7 @@ export function createMailEngine(input: {
         session: work.session,
         previousPage: work.page,
         page: membership.value.page,
+        requestedAt,
       });
       if (prepared.status !== "stale" && !membership.value.page.nextPage) {
         await store.finishPreparation({
@@ -982,6 +990,7 @@ export function createMailEngine(input: {
     const resolutionId = runtime.randomId();
     let page: string | null = null;
     do {
+      const requestedAt = await store.readRevision();
       const membership: Awaited<
         ReturnType<MailboxSource["readConversationMembership"]>
       > = await untilAborted(
@@ -1021,6 +1030,7 @@ export function createMailEngine(input: {
       const applied = await store.applyConversationMembership({
         session,
         page: membership.value.page,
+        requestedAt,
       });
       // The account was reset or removed while the provider answered.
       if (applied.status === "stale") {
@@ -1383,6 +1393,7 @@ export function createMailEngine(input: {
       if (input.signal?.aborted) return;
       if (processedPages > 0 && runtime.nowMs() >= input.deadlineMs) return;
       if (processedPages >= MAX_BOOTSTRAP_PAGES_PER_RUN) return;
+      const requestedAt = await store.readRevision();
       const enumerated = await source.enumerate({
         session: input.session,
         requestId: `${input.requestId}-enum-${processedPages + 1}`,
@@ -1427,6 +1438,7 @@ export function createMailEngine(input: {
         requiredHydration: enumerated.value.requiredHydration,
         bodies: enumerated.value.bodies,
         ownerId,
+        requestedAt,
         ...(enumerated.value.nextPage === null &&
           enumerated.value.windowStartMs !== undefined && {
             windowStartMs: enumerated.value.windowStartMs,
@@ -1722,6 +1734,7 @@ export function createMailEngine(input: {
           offset,
           offset + MAX_CHANGES_BATCH_READS,
         );
+        const requestedAt = await store.readRevision();
         const results = await readBatch({
           session,
           reads: chunk.map((stream) => ({
@@ -1743,6 +1756,7 @@ export function createMailEngine(input: {
             idleGate,
             stream,
             changes,
+            requestedAt,
             signal,
           });
         }
@@ -1751,6 +1765,7 @@ export function createMailEngine(input: {
       for (const [index, stream] of dueStreams.entries()) {
         if (index > 0) await yieldToHost();
         if (signal.aborted) return;
+        const requestedAt = await store.readRevision();
         const changes = await source.readChanges({
           session,
           requestId: runtime.randomId(),
@@ -1763,6 +1778,7 @@ export function createMailEngine(input: {
           idleGate,
           stream,
           changes,
+          requestedAt,
           signal,
         });
       }
@@ -1775,12 +1791,14 @@ export function createMailEngine(input: {
     idleGate,
     stream,
     changes,
+    requestedAt,
     signal,
   }: {
     session: { accountId: string; generation: string };
     idleGate: IdleCatchUpGate;
     stream: AccountSyncState["streams"][number];
     changes: SyncReadResult;
+    requestedAt: LocalRevision;
     signal: AbortSignal;
   }) {
     // A stopped lane may have been replaced, and its late result must not
@@ -1791,6 +1809,7 @@ export function createMailEngine(input: {
         page: changes.page,
         ownerId,
         bodies: changes.page.bodies,
+        requestedAt,
       });
       if (applied.status === "committed") {
         if (changes.page.roundComplete) {

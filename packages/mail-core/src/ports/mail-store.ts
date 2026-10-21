@@ -257,6 +257,8 @@ export interface MailStore {
     requiredHydration: MessageKey[];
     bodies: BodyObservation[];
     ownerId: string;
+    /** The store's `readRevision()` just before the provider read was sent. */
+    requestedAt?: LocalRevision;
     /** On the last page: the scan covered only mail from this time on. */
     windowStartMs?: number;
   }): Promise<
@@ -271,6 +273,8 @@ export interface MailStore {
   applyConversationMembership(input: {
     session: AccountSession;
     page: ConversationMembershipPage;
+    /** The store's `readRevision()` just before the provider read was sent. */
+    requestedAt?: LocalRevision;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
@@ -286,6 +290,8 @@ export interface MailStore {
      * confirmed at the same provider version.
      */
     onlyMissing?: boolean;
+    /** The store's `readRevision()` just before the provider read was sent. */
+    requestedAt?: LocalRevision;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
@@ -296,11 +302,15 @@ export interface MailStore {
     session: AccountSession;
     previousPage: string | null;
     page: ConversationMembershipPage;
+    /** The store's `readRevision()` just before the provider read was sent. */
+    requestedAt?: LocalRevision;
   }): Promise<Admission | { status: "stale" }>;
   applySyncPage(input: {
     page: SyncPage;
     ownerId: string;
     bodies?: BodyObservation[];
+    /** The store's `readRevision()` just before the provider read was sent. */
+    requestedAt?: LocalRevision;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
@@ -494,6 +504,12 @@ export interface MailStore {
     limit: number;
     minSimilarity: number;
   }): Promise<SemanticMatch[]>;
+  /**
+   * The store's current revision. Taken just before a provider read is sent
+   * and passed back as that read's `requestedAt`, it orders the read against
+   * local changes on one clock shared by every engine on this database.
+   */
+  readRevision(): Promise<LocalRevision>;
   /** Resolves `true` when the stored connection state changed. */
   recordConnection(input: {
     accountId: string;

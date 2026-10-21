@@ -152,6 +152,110 @@ describe("mail client queries", () => {
     }
   });
 
+  it("merges Sent, Drafts and Starred across the listed accounts, newest first", async () => {
+    const store = await createSqliteMailStore(
+      createNodeSqliteDriver(":memory:"),
+    );
+    try {
+      const accounts = [
+        { accountId: "gmail", provider: "google" },
+        { accountId: "outlook", provider: "microsoft" },
+        // Kept out of All inboxes, so never listed.
+        { accountId: "excluded", provider: "google" },
+      ] as const;
+      for (const { accountId, provider } of accounts) {
+        await store.ensureAccount({ accountId, provider, generation: "g1" });
+      }
+      const pages: Record<string, ProviderChange[]> = {
+        gmail: [
+          inAccount("gmail", messagePatch("g-sent", "g-sent", 1000, ["sent"])),
+          inAccount(
+            "gmail",
+            messagePatch("g-draft", "g-draft", 4000, ["draft"]),
+          ),
+          inAccount(
+            "gmail",
+            starred(messagePatch("g-star", "g-star", 2000, ["inbox"])),
+          ),
+        ],
+        // Outlook's well-known folders arrive as the same roles.
+        outlook: [
+          inAccount(
+            "outlook",
+            inFolder(
+              messagePatch("o-sent", "o-sent", 3000, ["sent"]),
+              "sentitems",
+            ),
+          ),
+          inAccount(
+            "outlook",
+            inFolder(
+              messagePatch("o-draft", "o-draft", 2000, ["draft"]),
+              "drafts",
+            ),
+          ),
+          inAccount(
+            "outlook",
+            inFolder(
+              starred(messagePatch("o-star", "o-star", 5000, ["inbox"])),
+              "inbox",
+            ),
+          ),
+        ],
+        excluded: [
+          inAccount(
+            "excluded",
+            messagePatch("x-sent", "x-sent", 9000, ["sent"]),
+          ),
+          inAccount(
+            "excluded",
+            messagePatch("x-draft", "x-draft", 9000, ["draft"]),
+          ),
+          inAccount(
+            "excluded",
+            starred(messagePatch("x-star", "x-star", 9000, ["inbox"])),
+          ),
+        ],
+      };
+      for (const [accountId, changes] of Object.entries(pages)) {
+        await store.applySyncPage({
+          ownerId: "owner",
+          page: {
+            session: { accountId, generation: "g1" },
+            requestId: "bootstrap",
+            from: { streamId: "primary", generation: "g1", checkpoint: null },
+            to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+            changes,
+            requiredHydration: [],
+            roundComplete: true,
+          },
+        });
+      }
+
+      const read = async (mailbox: "sent" | "drafts" | "starred") => {
+        const result = await store.readMailboxView({
+          accountIds: ["gmail", "outlook"],
+          predicate: mailboxPredicate(mailbox),
+          order: "newest_first",
+          pageSize: 25,
+          after: null,
+        });
+        return result.view.conversations.map(
+          (row) => `${row.key.accountId}:${row.key.conversationId}`,
+        );
+      };
+
+      expect(await read("sent")).toEqual(["outlook:o-sent", "gmail:g-sent"]);
+      expect(await read("drafts")).toEqual([
+        "gmail:g-draft",
+        "outlook:o-draft",
+      ]);
+      expect(await read("starred")).toEqual(["outlook:o-star", "gmail:g-star"]);
+    } finally {
+      await store.close();
+    }
+  });
+
   it("counts archive unreads from the whole conversation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mail-archive-unread-"));
     const store = await createSqliteMailStore(
@@ -301,4 +405,28 @@ function messagePatch(
       snoozedUntilMs,
     },
   };
+}
+
+function inAccount(
+  accountId: string,
+  change: Extract<ProviderChange, { kind: "message_patch" }>,
+): Extract<ProviderChange, { kind: "message_patch" }> {
+  return { ...change, key: { ...change.key, accountId } };
+}
+
+function inFolder(
+  change: Extract<ProviderChange, { kind: "message_patch" }>,
+  folderId: string,
+): Extract<ProviderChange, { kind: "message_patch" }> {
+  return {
+    ...change,
+    reference: { ...change.reference, provider: "microsoft" },
+    fields: { ...change.fields, folderId, labelIds: [] },
+  };
+}
+
+function starred(
+  change: Extract<ProviderChange, { kind: "message_patch" }>,
+): Extract<ProviderChange, { kind: "message_patch" }> {
+  return { ...change, fields: { ...change.fields, starred: true } };
 }

@@ -10,10 +10,8 @@ import type {
   UnsnoozeThreadsResponse,
 } from "@/app/api/user/snoozed-threads/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
-import {
-  AccountRowMarker,
-  useAllAccountsList,
-} from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import { AccountRowMarker } from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import { useAllAccountsList } from "@/hooks/useAllAccountsList";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { formatSnoozeTime } from "@/app/(app)/[emailAccountId]/mail/snooze-command-palette";
 import { InlineActionButton } from "@/components/InlineActionButton";

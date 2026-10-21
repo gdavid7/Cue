@@ -808,7 +808,7 @@ export async function admitGmailCall({
       throw error;
     }
     const sleepMs = Math.min(wait, deadline - Date.now());
-    await sleep(sleepMs);
+    await timeRequestDependency("wait", () => sleep(sleepMs));
     if (stats) stats.waitMs += sleepMs;
   }
 }

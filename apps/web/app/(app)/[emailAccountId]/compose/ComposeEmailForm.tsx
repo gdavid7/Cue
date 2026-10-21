@@ -55,7 +55,7 @@ import {
 import { useFirstSuggestedReplySent } from "@/app/(app)/[emailAccountId]/compose/use-first-suggested-reply-sent";
 import {
   hideSendingDraftMessages,
-  upcomingScheduledEmailsKey,
+  refreshUpcomingScheduledEmails,
 } from "@/hooks/useHiddenDraftMessageIds";
 import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { VoiceInput } from "@/components/voice/VoiceInput";
@@ -2636,11 +2636,14 @@ async function refreshScheduledEmails(
   emailAccountId: string,
   threadId: string | null,
 ) {
-  const keys = [
-    upcomingScheduledEmailsKey(emailAccountId),
-    ...(threadId ? [threadScheduledEmailsKey(emailAccountId, threadId)] : []),
-  ];
-  await Promise.all(keys.map((key) => mutate(key).catch(() => {})));
+  await Promise.all([
+    refreshUpcomingScheduledEmails(mutate, emailAccountId),
+    threadId
+      ? mutate(threadScheduledEmailsKey(emailAccountId, threadId)).catch(
+          () => {},
+        )
+      : undefined,
+  ]);
 }
 
 // Unexpected server failures are usually transient and the autosave retries

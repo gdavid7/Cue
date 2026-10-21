@@ -21,6 +21,7 @@ const runtime = vi.hoisted(() => ({
     close: ReturnType<typeof vi.fn>;
   }>,
   emailAccounts: [] as unknown[],
+  createError: null as Error | null,
   earlyOwnerLock: null as (() => void) | null | Promise<(() => void) | null>,
   order: [] as string[],
   firstMailList: new Set<() => void>(),
@@ -66,6 +67,7 @@ vi.mock("@/utils/mail-engine/create-browser-engine", () => ({
   },
   createBrowserMailEngine: async (start: { accountId: string }) => {
     runtime.order.push("create");
+    if (runtime.createError) throw runtime.createError;
     const engine = {
       start,
       ensureAccount: vi.fn(async () => undefined),
@@ -113,6 +115,7 @@ afterEach(() => {
   runtime.engines.length = 0;
   runtime.emailAccounts = [];
   runtime.earlyOwnerLock = null;
+  runtime.createError = null;
   runtime.order.length = 0;
   runtime.firstMailList.clear();
   runtime.account = {
@@ -209,6 +212,21 @@ describe("MailEngineRuntime", () => {
     expect(runtime.order).toContain("release worker");
     expect(runtime.engines[0]?.close).toHaveBeenCalled();
     await vi.waitFor(() => expect(releaseEarlyLock).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets go of the early lock when the start fails because a sign-out wipe cannot finish", async () => {
+    const releaseEarlyLock = vi.fn();
+    runtime.earlyOwnerLock = releaseEarlyLock;
+    runtime.createError = new Error(
+      "The signed-out mailbox could not be wiped",
+    );
+
+    await renderRuntime([]);
+
+    // Held past the failure, the lock would keep every other tab from
+    // starting the engine too.
+    await vi.waitFor(() => expect(releaseEarlyLock).toHaveBeenCalledTimes(1));
+    expect(runtime.engines).toHaveLength(0);
   });
 
   it("lets go of the early worker when another tab owns the engine", async () => {

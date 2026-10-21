@@ -172,6 +172,32 @@ describe("MailRouteLayout", () => {
     );
   });
 
+  it("catches a stale Gmail mailbox up without reading the tab settings or the style choice", async () => {
+    mocks.localMailCookie = `acc_a~${syncedAgo(3 * 24 * 3_600_000)}`;
+    mocks.splits = [
+      { id: "all", filters: [] },
+      {
+        id: "primary",
+        matchAll: true,
+        filters: [{ kind: "CATEGORY", value: "CATEGORY_PERSONAL" }],
+      },
+    ];
+    mocks.dismissedHints = [];
+
+    await renderAt("0");
+
+    await vi.waitFor(() =>
+      expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
+        emailAccountId: "acc_a",
+        provider: "google",
+        catchUp: true,
+      }),
+    );
+    // The engine files the messages into its tabs, so neither read is needed.
+    expect(mocks.getMailSettings).not.toHaveBeenCalled();
+    expect(mocks.findUser).not.toHaveBeenCalled();
+  });
+
   it("treats a mailbox recorded before sync times were kept as fallen behind", async () => {
     mocks.localMailCookie = "acc_a.acc_b";
 

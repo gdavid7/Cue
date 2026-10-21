@@ -101,6 +101,9 @@ export async function createBrowserMailEngine(
     releasePrewarmedMailEngineWorker();
     await finishPendingLocalMailboxWipe();
     if (isLocalMailboxWipePending()) {
+      logger.warn(
+        "A pending sign-out wipe could not finish; the mail engine stays unavailable",
+      );
       throw new Error("The signed-out mailbox could not be wiped");
     }
   }

@@ -35,7 +35,7 @@ import {
   shouldShowEngineDeliveryStatus,
 } from "@/utils/mail-engine/engine-delivery";
 import { restoreUnsentReplyDraft } from "@/utils/mail-engine/reply-drafts";
-import { upcomingScheduledEmailsKey } from "@/hooks/useHiddenDraftMessageIds";
+import { refreshUpcomingScheduledEmails } from "@/hooks/useHiddenDraftMessageIds";
 import { useMailHref } from "@/hooks/useMailHref";
 
 export function ThreadDeliveryStatus({
@@ -142,9 +142,7 @@ export function ThreadDeliveryStatus({
       await mutate();
       await refreshOutbox();
       // Which drafts are hidden follows whether their sends are still pending.
-      await mutateCache(upcomingScheduledEmailsKey(emailAccountId)).catch(
-        () => {},
-      );
+      await refreshUpcomingScheduledEmails(mutateCache, emailAccountId);
     } catch (failure) {
       setActionError(
         failure instanceof Error

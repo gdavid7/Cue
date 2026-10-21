@@ -3,14 +3,18 @@ import { cueDemoChat } from "@/__tests__/fixtures/inboxes/cue-demo-inbox";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { OUTLOOK_STEP_PREFIX } from "@/scripts/qa/health-report";
 import {
+  appendInboxMessages,
   pruneReplyProbes,
   QA_PROBE_SUBJECT_PREFIX,
+  type QaMailboxCredentials,
   readQaMailboxCredentials,
   readQaOutlookMailbox,
   sendOutlookProbe,
   sendSelfMessage,
+  trashMessagesWithSubject,
   waitForMessageFrom,
 } from "@/scripts/qa/qa-mailbox";
+import { findEscapedMarkup } from "@/scripts/qa/suggestion-text";
 import {
   findMailAccount,
   replyToGmailQa,
@@ -25,7 +29,7 @@ import {
   signInWithEmailCode,
   threadShowsText,
 } from "./qa-session";
-import { RobotRun } from "./robot-run";
+import { RobotRun, StepSkippedError } from "./robot-run";
 
 // A synthetic user that walks production as the dedicated QA account. It
 // records every step instead of stopping at the first failure; the health
@@ -46,6 +50,9 @@ const runId = process.env.GITHUB_RUN_ID
 const PROBE_ARRIVAL_TIMEOUT_MS = 180_000;
 // Sends wait out a 30-second undo window before they reach Gmail.
 const SENT_TIMEOUT_MS = 150_000;
+// Cue gives up on a reply after 15 seconds and says so; this leaves room for
+// the thread to open first.
+const SUGGESTION_TIMEOUT_MS = 60_000;
 
 if (!credentials) {
   console.log(
@@ -242,6 +249,15 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
       }
       await pruneReplyProbes(credentials, 3).catch(() => undefined);
     },
+    "gmail",
+  );
+
+  // One model call per run. The message comes from a reserved example.com
+  // sender because Cue never suggests a reply to the user's own mail.
+  await step(
+    "suggested reply text is clean",
+    (metrics) =>
+      checkSuggestionText(page, credentials, qaAccount().index, runId, metrics),
     "gmail",
   );
 
@@ -442,6 +458,94 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   const failed = run.failedSteps.map((s) => s.name);
   expect(failed, "every robot step passed").toEqual([]);
 });
+
+async function checkSuggestionText(
+  page: Page,
+  credentials: QaMailboxCredentials,
+  accountIndex: number,
+  runId: string,
+  metrics: Record<string, number | boolean>,
+) {
+  const tag = `s${runId.replaceAll(/\D/g, "")}`;
+  const subject = `Cue QA suggestion probe ${tag}`;
+  // Delivered mail's subject words, for the cleanup search.
+  const subjectWords = ["suggestion", "probe", tag];
+  metrics.suggestionShown = false;
+  try {
+    await appendInboxMessages(credentials, [
+      {
+        subject,
+        from: { name: "Jonas Weber", address: "jonas.weber@example.com" },
+        text: "Hi,\n\nCan you confirm Q3's numbers & send them over? A quick yes or no on timing is fine.\n\nThanks,\nJonas",
+        messageId: `<cue-qa-suggestion-${tag}@cue-qa.invalid>`,
+      },
+    ]);
+    await page.goto(`/mail/u/${accountIndex}/inbox`);
+    const probe = page
+      .getByRole("listbox", { name: "Conversations" })
+      .getByRole("option")
+      .filter({ hasText: subject })
+      .first();
+    await expect(async () => {
+      if (!(await probe.isVisible())) await page.reload();
+      await expect(probe).toBeVisible({ timeout: 20_000 });
+    }, "the suggestion probe reaches the inbox").toPass({
+      timeout: PROBE_ARRIVAL_TIMEOUT_MS,
+    });
+    await probe.click();
+
+    const reader = page.getByTestId("thread-reader");
+    const shown = reader.getByText("Suggested by Cue");
+    const draftButton = reader.getByRole("button", { name: "Draft a reply" });
+    const gaveUp = reader.getByRole("button", { name: "Try again" });
+    const left = reader.getByText(/Cue left this reply|Cue couldn't confirm/);
+    // Whichever way the account is set up, Cue writes the reply on its own or
+    // after "Draft a reply"; it is asked at most once so the run costs one call.
+    const deadline = Date.now() + SUGGESTION_TIMEOUT_MS;
+    let asked = false;
+    while (Date.now() < deadline && !(await shown.isVisible())) {
+      if (
+        (await gaveUp.isVisible()) ||
+        (await left
+          .first()
+          .isVisible()
+          .catch(() => false))
+      ) {
+        break;
+      }
+      if (!asked && (await draftButton.isVisible())) {
+        asked = true;
+        await draftButton.click();
+      }
+      await page.waitForTimeout(1000);
+    }
+    if (!(await shown.isVisible())) {
+      throw new StepSkippedError("skipped: no suggestion");
+    }
+
+    const editor = reader.locator("[data-email-editor-content]").last();
+    await expect
+      .poll(async () => (await editor.innerText()).trim().length, {
+        message: "the suggestion has text",
+        timeout: 10_000,
+      })
+      .toBeGreaterThan(0);
+    const text = await editor.innerText();
+    metrics.suggestionShown = true;
+    metrics.suggestionChars = text.length;
+    // Only the kinds are reported: the report is public. The suggestion is
+    // never sent or edited, so it leaves nothing in the mailbox.
+    const leaks = findEscapedMarkup(text);
+    expect(
+      leaks,
+      `the suggested reply shows escaped HTML (${leaks.join(", ")})`,
+    ).toEqual([]);
+  } finally {
+    await trashMessagesWithSubject(credentials, subjectWords).catch(
+      () => undefined,
+    );
+  }
+}
 
 async function checkToday(
   page: Page,

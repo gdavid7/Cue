@@ -35,6 +35,7 @@ import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-pro
 import type { Logger } from "@/utils/logger";
 import { randomUUID } from "node:crypto";
 import { getAuditContext } from "@/utils/audit/context";
+import { noteRequestPause } from "@/utils/request-metrics";
 import {
   getFastRequestSampleRate,
   isFastRequestSampled,
@@ -659,14 +660,21 @@ export function createEmailProviderMailboxSource(input: {
     }).catch(() => undefined);
   }
 
-  // Pauses are frequent, so only a sample gets a line; sampleRate lets counts
-  // be re-weighted.
+  // The request's own line always carries the reason. Local-budget pauses are
+  // the common ones and get one unsampled line per mailbox per minute; the
+  // rest log a sample, and sampleRate lets counts be re-weighted.
   function logPaused(fields: {
     source: string;
     reason: string;
     retryAfterMs: number;
     [key: string]: unknown;
   }) {
+    noteRequestPause(fields);
+    if (fields.source === "local_budget") {
+      if (shouldLogLocalBudgetPause(accountId))
+        logger.info("Mail sync paused", fields);
+      return;
+    }
     const { requestId, source: scope } = getAuditContext();
     const sampleRate = getFastRequestSampleRate(scope);
     if (isFastRequestSampled(requestId ?? randomUUID(), sampleRate))
@@ -1176,4 +1184,21 @@ function searchMessageFields(accountId: string, message: ParsedMessage) {
         ? convertEmailHtmlToText({ htmlText: message.textHtml })
         : message.textPlain),
   };
+}
+
+const LOCAL_BUDGET_PAUSE_LOG_INTERVAL_MS = 60_000;
+const MAX_TRACKED_PAUSE_MAILBOXES = 1000;
+const lastLocalBudgetPauseLogAt = new Map<string, number>();
+
+export function shouldLogLocalBudgetPause(accountId: string, now = Date.now()) {
+  const last = lastLocalBudgetPauseLogAt.get(accountId);
+  if (last !== undefined && now - last < LOCAL_BUDGET_PAUSE_LOG_INTERVAL_MS)
+    return false;
+  lastLocalBudgetPauseLogAt.delete(accountId);
+  lastLocalBudgetPauseLogAt.set(accountId, now);
+  if (lastLocalBudgetPauseLogAt.size > MAX_TRACKED_PAUSE_MAILBOXES) {
+    const oldest = lastLocalBudgetPauseLogAt.keys().next().value;
+    if (oldest !== undefined) lastLocalBudgetPauseLogAt.delete(oldest);
+  }
+  return true;
 }

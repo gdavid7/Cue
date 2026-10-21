@@ -121,6 +121,14 @@ async function markOnboardingComplete(email: string) {
               [email, prefix],
             );
           }
+          // The week-1 Get started checklist on Today, for the same reason;
+          // onboarding/get-started.spec.ts opens it again.
+          await client.query(
+            `UPDATE "User"
+             SET "dismissedHints" = array_append("dismissedHints", $2)
+             WHERE email = $1 AND NOT ($2 = ANY("dismissedHints"))`,
+            [email, "get-started:dismissed"],
+          );
           return;
         }
       }
