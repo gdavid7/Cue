@@ -30,7 +30,14 @@ export type TodayAgentTask = AgentTask & { account?: TodayAccount };
 /** What Today shows, for one account or merged across several. */
 export type TodayData = Omit<
   TodayHomeData,
-  "needsYou" | "waiting" | "alsoInInbox" | "agentTasks" | "cue" | "today"
+  | "needsYou"
+  | "waiting"
+  | "alsoInInbox"
+  | "agentTasks"
+  | "cue"
+  | "today"
+  // Label ids are each mailbox's own, so they aren't merged.
+  | "handledLabelIds"
 > & {
   needsYou: TodayThread[];
   waiting: TodayThread[];

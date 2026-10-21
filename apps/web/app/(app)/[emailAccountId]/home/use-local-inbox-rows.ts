@@ -15,10 +15,12 @@ import {
 } from "@/utils/email";
 import { getFirstSyncAccountIds } from "@/utils/mail-engine/coverage";
 import type { TodayAccount, TodayThread } from "@/utils/home/merge-home";
-import { ALSO_IN_INBOX_LIMIT } from "@/utils/home/today-cache";
-import { HOME_LANE_LIMIT } from "@/utils/home/today-constants";
+import { HANDLED_WINDOW_DAYS } from "@/utils/home/today-constants";
 
-const MAX_PAGE_SIZE = 100;
+// Today shows five, but those the server puts under Needs reply and mail Cue
+// filed are left out, so read the most one page holds: a local read is cheap.
+const PAGE_SIZE = 100;
+const NO_HANDLED_LABELS: Record<string, string[]> = {};
 
 /**
  * The inbox as this browser's local mail store holds it, newest first, as
@@ -30,11 +32,17 @@ const MAX_PAGE_SIZE = 100;
 export function useLocalInboxRows({
   accounts,
   named,
+  handledLabelIds = NO_HANDLED_LABELS,
   enabled,
 }: {
   accounts: TodayAccount[];
   /** Across accounts each row names its account, as the server's do. */
   named: boolean;
+  /**
+   * By account, the labels of mail Cue files without asking, from a server
+   * answer. Missing before the first one, when filed mail can still show.
+   */
+  handledLabelIds?: Record<string, string[]>;
   enabled: boolean;
 }): TodayThread[] | null {
   const client = useOptionalMailClient();
@@ -44,11 +52,7 @@ export function useLocalInboxRows({
       accountIds: accounts.map((account) => account.id),
       predicate: { kind: "mailbox", mailbox: "inbox" },
       order: "newest_first",
-      // Room for the rows the server puts under Needs reply instead.
-      pageSize: Math.min(
-        MAX_PAGE_SIZE,
-        ALSO_IN_INBOX_LIMIT + HOME_LANE_LIMIT * accounts.length,
-      ),
+      pageSize: PAGE_SIZE,
       after: null,
     }),
     [accounts],
@@ -56,24 +60,43 @@ export function useLocalInboxRows({
   const mailbox = useMailboxWindow(query, { client, enabled: active });
   const view = active && mailbox.status === "ready" ? mailbox.data : null;
   return useMemo(
-    () => (view ? localInboxRows(view, { accounts, named }) : null),
-    [view, accounts, named],
+    () =>
+      view ? localInboxRows(view, { accounts, named, handledLabelIds }) : null,
+    [view, accounts, named, handledLabelIds],
   );
 }
 
 /** The view's conversations as Today's rows, or null if it can't answer yet. */
 export function localInboxRows(
   view: MailboxView,
-  { accounts, named }: { accounts: TodayAccount[]; named: boolean },
+  {
+    accounts,
+    named,
+    handledLabelIds = NO_HANDLED_LABELS,
+    now = Date.now(),
+  }: {
+    accounts: TodayAccount[];
+    named: boolean;
+    handledLabelIds?: Record<string, string[]>;
+    now?: number;
+  },
 ): TodayThread[] | null {
   const accountIds = accounts.map((account) => account.id);
   if (view.connection && view.connection !== "ready") return null;
   if (getFirstSyncAccountIds(accountIds, view.coverage).length) return null;
   const byId = new Map(accounts.map((account) => [account.id, account]));
+  const handledSince = now - HANDLED_WINDOW_DAYS * 86_400_000;
   return view.conversations.flatMap((conversation) => {
     // Only the accounts asked for, so another mailbox's rows never show.
     const account = byId.get(conversation.key.accountId);
     if (!account) return [];
+    // As the server's answer does, mail Cue filed lately is left to Cue.
+    const handled = handledLabelIds[account.id] ?? [];
+    if (
+      conversation.latestMessageAtMs >= handledSince &&
+      conversation.labelIds.some((id) => handled.includes(id))
+    )
+      return [];
     const row = toTodayThread(conversation, account.email);
     if (!row) return [];
     return [named ? { ...row, account } : row];

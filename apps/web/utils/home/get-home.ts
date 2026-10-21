@@ -32,6 +32,7 @@ import { getReadySuggestionMessageIds } from "@/utils/reply-tracker/ready-sugges
 import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import { getNextUp } from "@/utils/home/next-up";
 import {
+  HANDLED_WINDOW_DAYS,
   HOME_LANE_LIMIT,
   MINUTES_PER_REPLY,
   PRIORITY_ORDER,
@@ -52,7 +53,6 @@ const LIST_LIMIT = HOME_LANE_LIMIT;
 // Well inside the route's 30 seconds, and about as long as a person watches a
 // loading page before giving up on it.
 const HOME_BUDGET_MS = 10_000;
-const HANDLED_WINDOW_DAYS = 7;
 // Older pending drafts were most likely deleted in the mail app, and a rule
 // still "applying" after this long has crashed; neither is work in progress.
 const RUNNING_WINDOW_MINUTES = 30;
@@ -235,7 +235,8 @@ export async function getHomeData({
   const labelNames = new Map(labels.map((l) => [l.id, l.name]));
   const toReplyId = labelId(getRuleLabel(SystemType.TO_REPLY));
   const awaitingId = labelId(getRuleLabel(SystemType.AWAITING_REPLY));
-  const handledIds = new Set(HANDLED_LABELS.map(labelId).filter(isString));
+  const handledLabelIds = HANDLED_LABELS.map(labelId).filter(isString);
+  const handledIds = new Set(handledLabelIds);
   const since = now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000;
   // Each thread shows once on Today. Recently filed mail is Cue's to handle,
   // so it isn't repeated under the rest of the inbox either.
@@ -284,6 +285,11 @@ export async function getHomeData({
     needsYou: needsYouRows.map(withDrafted),
     waiting: waiting.map(toRow).filter(isDefined),
     alsoInInbox: inboxRows.map(withDrafted),
+    /**
+     * The account's labels for mail Cue files without asking, so the
+     * browser's own inbox can leave recently filed mail out as this does.
+     */
+    handledLabelIds,
     /** Lanes Gmail couldn't serve in time; empty here means "not loaded yet". */
     pending,
     /** Lanes that failed to load; empty here means "unknown", not "nothing". */

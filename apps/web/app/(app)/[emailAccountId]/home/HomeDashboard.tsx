@@ -152,9 +152,17 @@ export function HomeDashboard() {
       return allInboxesAccounts.map(({ id, email }) => ({ id, email }));
     return emailAccountId ? [{ id: emailAccountId, email: userEmail }] : [];
   }, [allInboxesAccounts, emailAccountId, userEmail]);
+  const { handledLabelIdsByAccount } = all;
+  const singleHandledLabelIds = single.data?.handledLabelIds;
+  const handledLabelIds = useMemo(() => {
+    if (merged) return handledLabelIdsByAccount;
+    if (!singleHandledLabelIds) return;
+    return { [emailAccountId]: singleHandledLabelIds };
+  }, [merged, handledLabelIdsByAccount, emailAccountId, singleHandledLabelIds]);
   const localInbox = useLocalInboxRows({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
+    handledLabelIds,
     enabled: !data || data.pending.includes("alsoInInbox"),
   });
   const alsoInInbox = useMemo(() => {
@@ -553,7 +561,8 @@ export function HomeDashboard() {
         loadingComponent={
           <>
             <HomeSkeleton layout={isLargeScreen ? "list" : "split"} />
-            {/* Cue's lanes wait for the server; the inbox is already here. */}
+            {/* Cue's lanes wait for the server; the inbox is already here.
+                No Needs reply correction: whether Cue is on isn't known yet. */}
             <AlsoInInboxSection
               threads={visibleAlsoInInbox}
               rowContext={rowContext}

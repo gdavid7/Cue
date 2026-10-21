@@ -16,7 +16,11 @@ import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
-import type { TodayThread } from "@/utils/home/merge-home";
+import type {
+  ConversationSummary,
+  MailboxView,
+} from "@inboxzero/mail-core/queries";
+import type { useLocalInboxRows } from "./use-local-inbox-rows";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { HomeDashboard } from "./HomeDashboard";
 
@@ -34,13 +38,9 @@ const mocks = vi.hoisted(() => ({
   markNoReplyNeeded: vi.fn(),
   toastUndo: vi.fn(),
   undoLatestToast: vi.fn(),
-  // The browser's own inbox, as useLocalInboxRows reads it from the engine.
-  localInbox: null as TodayThread[] | null,
-  localInboxArgs: [] as {
-    accounts: { id: string; email: string }[];
-    named: boolean;
-    enabled: boolean;
-  }[],
+  // The browser's own inbox, as the mail engine lists it.
+  localInbox: null as ConversationSummary[] | null,
+  localInboxArgs: [] as Parameters<typeof useLocalInboxRows>[0][],
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -137,12 +137,21 @@ vi.mock("@/utils/actions/rule-feedback", () => ({
 vi.mock("@/utils/actions/thread-assist", () => ({
   markNeedsReplyAction: mocks.markNeedsReply,
 }));
-vi.mock("./use-local-inbox-rows", () => ({
-  useLocalInboxRows: (args: (typeof mocks.localInboxArgs)[number]) => {
-    mocks.localInboxArgs.push(args);
-    return args.enabled ? mocks.localInbox : null;
-  },
-}));
+vi.mock("./use-local-inbox-rows", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./use-local-inbox-rows")>();
+  return {
+    ...actual,
+    useLocalInboxRows: (args: Parameters<typeof useLocalInboxRows>[0]) => {
+      mocks.localInboxArgs.push(args);
+      if (!args.enabled || !mocks.localInbox) return null;
+      return actual.localInboxRows(
+        syncedView(mocks.localInbox, args.accounts),
+        args,
+      );
+    },
+  };
+});
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -670,8 +679,8 @@ describe("HomeDashboard before the server answers", () => {
     mocks.home.data = undefined;
     mocks.localInboxArgs = [];
     mocks.localInbox = [
-      thread("local-1", "Dentist on Tuesday"),
-      thread("local-2", "Invoice for October"),
+      localConversation("local-1", "Dentist on Tuesday"),
+      localConversation("local-2", "Invoice for October"),
     ];
   });
 
@@ -693,7 +702,7 @@ describe("HomeDashboard before the server answers", () => {
     expect(screen.queryByText("All clear.")).toBeNull();
     // Whether Cue is on isn't known yet, so it offers no Needs reply.
     expect(screen.queryByRole("button", { name: "Needs reply" })).toBeNull();
-    expect(mocks.localInboxArgs.at(-1)).toEqual({
+    expect(mocks.localInboxArgs.at(-1)).toMatchObject({
       accounts: [{ id: "account", email: "ada@example.com" }],
       named: false,
       enabled: true,
@@ -734,6 +743,25 @@ describe("HomeDashboard before the server answers", () => {
     expect(within(inbox).queryByText("Dentist on Tuesday")).toBeNull();
     expect(within(inbox).getByText("Invoice for October")).toBeTruthy();
     expect(skeletons()).toEqual([]);
+  });
+
+  it("server's inbox still loading: leaves out mail Cue filed, as the server does", () => {
+    mocks.home.isLoading = false;
+    mocks.home.data = {
+      ...homeData([]),
+      pending: ["alsoInInbox"],
+      handledLabelIds: ["Label_Newsletter"],
+    };
+    mocks.localInbox = [
+      localConversation("weekly", "This week in design", ["Label_Newsletter"]),
+      localConversation("local-2", "Invoice for October"),
+    ];
+
+    renderToday();
+
+    const inbox = lane("Also in your inbox");
+    expect(within(inbox).queryByText("This week in design")).toBeNull();
+    expect(within(inbox).getByText("Invoice for October")).toBeTruthy();
   });
 
   it("server's inbox loaded: shows its rows, not the local ones", () => {
@@ -1186,11 +1214,58 @@ function thread(threadId: string, subject: string): HomeThread {
   };
 }
 
+function localConversation(
+  conversationId: string,
+  subject: string,
+  labelIds: string[] = [],
+): ConversationSummary {
+  return {
+    key: { accountId: "account", conversationId },
+    subject,
+    preview: "Can you take a look?",
+    from: "Grace Hopper <grace@example.com>",
+    to: "ada@example.com",
+    senders: ["Grace Hopper <grace@example.com>"],
+    latestMessageAtMs: Date.now() - 60 * 60 * 1000,
+    unread: true,
+    starred: false,
+    labelIds,
+    roles: ["inbox"],
+    pendingOperationIds: [],
+    latestMessageId: `${conversationId}-message`,
+  };
+}
+
+function syncedView(
+  conversations: ConversationSummary[],
+  accounts: { id: string }[],
+): MailboxView {
+  return {
+    conversations,
+    counts: {
+      matchingConversations: conversations.length,
+      unreadConversations: 0,
+      extent: "local_coverage",
+    },
+    nextPage: null,
+    coverage: accounts.map(({ id }) => ({
+      accountId: id,
+      scopeId: "primary",
+      metadata: "complete",
+      content: "not_requested",
+      indexedContent: "not_requested",
+      lastCompletedSyncAtMs: 1,
+    })),
+    connection: "ready",
+  };
+}
+
 function homeData(needsYou: HomeThread[]): GetHomeResponse {
   return {
     needsYou,
     waiting: [],
     alsoInInbox: [],
+    handledLabelIds: [],
     pending: [],
     failed: [],
     agentTasks: [],

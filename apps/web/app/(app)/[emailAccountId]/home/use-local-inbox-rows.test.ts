@@ -93,6 +93,39 @@ describe("localInboxRows", () => {
     expect(rows).toEqual([]);
   });
 
+  it("leaves out mail Cue filed lately, as the server's answer does", () => {
+    const rows = localInboxRows(
+      view(
+        [
+          conversation("weekly", { labelIds: ["Label_Newsletter"] }),
+          conversation("old-news", {
+            labelIds: ["Label_Newsletter"],
+            at: "2026-10-01T09:00:00.000Z",
+          }),
+          conversation("t1", { labelIds: ["Label_Customer"] }),
+          // Another mailbox's label ids say nothing about this one's.
+          conversation("bob-weekly", {
+            accountId: BOB.id,
+            labelIds: ["Label_Newsletter"],
+          }),
+        ],
+        [ADA.id, BOB.id],
+      ),
+      {
+        accounts: [ADA, BOB],
+        named: true,
+        handledLabelIds: { [ADA.id]: ["Label_Newsletter"] },
+        now: Date.parse("2026-10-21T09:00:00.000Z"),
+      },
+    );
+
+    expect(rows?.map((row) => row.threadId)).toEqual([
+      "old-news",
+      "t1",
+      "bob-weekly",
+    ]);
+  });
+
   it("can't answer before every account's first sync finishes", () => {
     const rows = localInboxRows(view([conversation("t1")], [ADA.id]), {
       accounts: [ADA, BOB],
@@ -147,6 +180,8 @@ function conversation(
     to = "ada@example.com",
     unread = false,
     latestMessageId = `${conversationId}-latest`,
+    labelIds = [],
+    at = "2026-10-20T09:00:00.000Z",
   }: {
     accountId?: string;
     subject?: string;
@@ -154,6 +189,8 @@ function conversation(
     to?: string;
     unread?: boolean;
     latestMessageId?: string | null;
+    labelIds?: string[];
+    at?: string;
   } = {},
 ): ConversationSummary {
   return {
@@ -163,10 +200,10 @@ function conversation(
     from: senders.at(-1) ?? "",
     to,
     senders,
-    latestMessageAtMs: Date.parse("2026-10-20T09:00:00.000Z"),
+    latestMessageAtMs: Date.parse(at),
     unread,
     starred: false,
-    labelIds: [],
+    labelIds,
     roles: ["inbox"],
     pendingOperationIds: [],
     ...(latestMessageId ? { latestMessageId } : {}),
