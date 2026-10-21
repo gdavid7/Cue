@@ -1039,6 +1039,9 @@ importers:
       '@inboxzero/mail-core':
         specifier: workspace:*
         version: link:../mail-core
+      stemmer:
+        specifier: 2.0.1
+        version: 2.0.1
     devDependencies:
       '@types/node':
         specifier: 24.10.1
@@ -12040,6 +12043,10 @@ packages:
   stdin-discarder@0.3.2:
     resolution: {integrity: sha512-eCPu1qRxPVkl5605OTWF8Wz40b4Mf45NY5LQmVPQ599knfs5QhASUm9GbJ5BDMDOXgrnh0wyEdvzmL//YMlw0A==}
     engines: {node: '>=18'}
+
+  stemmer@2.0.1:
+    resolution: {integrity: sha512-bkWvSX2JR4nSZFfs113kd4C6X13bBBrg4fBKv2pVdzpdQI2LA5pZcWzTFNdkYsiUNl13E4EzymSRjZ0D55jBYg==}
+    hasBin: true
 
   stream-browserify@3.0.0:
     resolution: {integrity: sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==}
@@ -25976,6 +25983,8 @@ snapshots:
 
   stdin-discarder@0.3.2:
     optional: true
+
+  stemmer@2.0.1: {}
 
   stream-browserify@3.0.0:
     dependencies:

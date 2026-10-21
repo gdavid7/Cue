@@ -1,3 +1,6 @@
+import type { MessageAttachmentDescriptor } from "@inboxzero/mail-core/messages";
+import { stemmer } from "stemmer";
+
 // Text written to and matched against message_fts. The index and the query
 // must be prepared the same way, so both sides go through this module.
 
@@ -11,33 +14,104 @@ export function searchableBody(content: {
   return "";
 }
 
-// unicode61 splits words on spaces and punctuation, so a run of Chinese,
-// Japanese, or Thai would otherwise index as one token that no word inside it
-// can match. Indexing each character as a token and querying terms as
-// character phrases keeps substring search working for those scripts.
+// unicode61 splits "Wi-Fi" into "wi" and "fi", so each hyphenated compound
+// is also indexed joined ("wifi") at the end of the text, where it can't
+// break a phrase match across the words around it.
 export function searchableText(value: string): string {
-  return value.replace(UNSPACED_SCRIPT, " $& ");
+  const joined = new Set<string>();
+  for (const [compound] of value.matchAll(HYPHENATED)) {
+    if (joined.size === MAX_JOINED_COMPOUNDS) break;
+    if (compound.length <= MAX_COMPOUND_LENGTH)
+      joined.add(compound.replace(HYPHENS, ""));
+  }
+  return spaceUnspacedScripts(
+    joined.size ? `${value} ${[...joined].join(" ")}` : value,
+  );
+}
+
+// A real attachment's file name, and its type when that is a short format
+// name such as pdf or jpeg. Inline images such as signature logos are left
+// out: they aren't what someone searching for an attachment means.
+export function searchableAttachments(
+  attachments: Pick<
+    MessageAttachmentDescriptor,
+    "filename" | "mimeType" | "inline"
+  >[],
+): string {
+  return attachments
+    .filter((attachment) => !attachment.inline)
+    .flatMap((attachment) => {
+      const format = attachment.mimeType.toLowerCase().split("/")[1] ?? "";
+      return [
+        searchableText(attachment.filename),
+        ...(FORMAT_NAME.test(format) ? [format] : []),
+      ];
+    })
+    .join(" ");
 }
 
 // Builds an FTS5 query where each term, or the whole phrase, is one quoted
 // string: quoting makes FTS5 read operators, column filters, and punctuation
 // as plain text, and the trailing * matches words as they are being typed.
-// Resolves null when nothing in the input can match an indexed token.
+// A term also matches other forms of its word (see stemPrefix), a hyphenated
+// term also matches written as one word, the way a joined compound is
+// indexed, and two words also match as that one whole word. Resolves null
+// when nothing in the input can match an indexed token.
 export function searchMatchQuery(
   value: string,
   match: "term" | "phrase",
 ): string | null {
-  const parts = match === "phrase" ? [value] : value.split(/\s+/);
-  const quoted = parts
-    .map((part) => searchableText(part).replace(/\s+/g, " ").trim())
-    .filter((part) => TOKEN_CHARACTER.test(part))
-    // A one-character prefix expands to a large share of the vocabulary and
-    // made the first keystroke the slowest search, so it matches whole words.
-    .map((part) => {
-      const prefix = [...part].length > 1 ? "*" : "";
-      return `"${part.replaceAll('"', '""')}"${prefix}`;
-    });
-  return quoted.length ? quoted.join(" ") : null;
+  const parts = (match === "phrase" ? [value] : value.split(/\s+/)).filter(
+    (part) => TOKEN_CHARACTER.test(part),
+  );
+  if (!parts.length) return null;
+  if (match === "phrase") return quoteTerm(parts[0]);
+  const terms = parts.map((part) => {
+    const joined = part.replace(HYPHENS, "");
+    const forms = [
+      stemPrefix(part) ?? quoteTerm(part),
+      ...(isJoinable(part) && joined !== part ? [quoteTerm(joined)] : []),
+    ];
+    return forms.length > 1 ? `(${forms.join(" OR ")})` : forms[0];
+  });
+  if (parts.length === 2 && parts.every(isJoinable)) {
+    const whole = parts.join("").replace(HYPHENS, "").replaceAll('"', "");
+    return `(${terms.join(" ")}) OR "${whole}"`;
+  }
+  return terms.join(" ");
+}
+
+// The index keeps words as written, so the query matches the word's stem as
+// a prefix, which also covers the word as typed: "invoices" also finds
+// "invoice", "shipping" finds "shipped", "deliveries" finds "delivery". The
+// stemmer's rules are English suffixes, which also fold plurals in other
+// languages written in plain Latin letters ("facturas"); words with other
+// letters are left as typed. Only a short ending is dropped, so a long
+// derivation ("organizations" to "organ") falls back to dropping a plural
+// "s", and a stem under four letters ("running" to "run") leaves the word as
+// typed. A stem prefix still reaches words derived from it ("guide" also
+// finds "guidance"), which is the price of finding the singular.
+function stemPrefix(part: string): string | null {
+  if (!PLAIN_LATIN_WORD.test(part)) return null;
+  const word = part.toLowerCase();
+  const stemmed = stemmer(word);
+  // Porter spells "delivery" and "deliveries" alike as "deliveri".
+  const stem =
+    word.endsWith("ies") && stemmed.endsWith("i")
+      ? stemmed.slice(0, -1)
+      : stemmed;
+  const candidate =
+    word.length - stem.length > MAX_STEMMED_ENDING && PLURAL.test(word)
+      ? word.slice(0, -1)
+      : stem;
+  if (
+    candidate === word ||
+    !word.startsWith(candidate) ||
+    candidate.length < MIN_STEM_LENGTH ||
+    word.length - candidate.length > MAX_STEMMED_ENDING
+  )
+    return null;
+  return `"${candidate}"*`;
 }
 
 // Runs during sync for every HTML-only body, in a worker or Node process with
@@ -54,8 +128,45 @@ export function htmlToSearchText(html: string): string {
     .trim();
 }
 
+// unicode61 splits words on spaces and punctuation, so a run of Chinese,
+// Japanese, or Thai would otherwise index as one token that no word inside it
+// can match. Indexing each character as a token and querying terms as
+// character phrases keeps substring search working for those scripts.
+function spaceUnspacedScripts(value: string): string {
+  return value.replace(UNSPACED_SCRIPT, " $& ");
+}
+
+function quoteTerm(part: string): string {
+  const text = spaceUnspacedScripts(part).replace(/\s+/g, " ").trim();
+  // A one-character prefix expands to a large share of the vocabulary and
+  // made the first keystroke the slowest search, so it matches whole words.
+  const prefix = [...text].length > 1 ? "*" : "";
+  return `"${text.replaceAll('"', '""')}"${prefix}`;
+}
+
+// A word, or words joined by hyphens, in a script written with spaces.
+function isJoinable(part: string): boolean {
+  return (
+    JOINABLE.test(part) &&
+    part.length <= MAX_COMPOUND_LENGTH &&
+    spaceUnspacedScripts(part) === part
+  );
+}
+
 // unicode61's default token characters: letters, numbers, and private use.
 const TOKEN_CHARACTER = /[\p{L}\p{N}\p{Co}]/u;
+
+const HYPHENATED = /[\p{L}\p{N}]+(?:[-\u2010\u2011][\p{L}\p{N}]+)+/gu;
+const JOINABLE = /^[\p{L}\p{N}]+(?:[-\u2010\u2011][\p{L}\p{N}]+)*$/u;
+const HYPHENS = /[-\u2010\u2011]/gu;
+// Bounds what a long body adds to its search row.
+const MAX_JOINED_COMPOUNDS = 200;
+const MAX_COMPOUND_LENGTH = 64;
+const FORMAT_NAME = /^[a-z0-9]{2,4}$/;
+const PLAIN_LATIN_WORD = /^[a-z]+$/i;
+const PLURAL = /[^s]s$/;
+const MIN_STEM_LENGTH = 4;
+const MAX_STEMMED_ENDING = 4;
 
 const UNSPACED_SCRIPT =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;

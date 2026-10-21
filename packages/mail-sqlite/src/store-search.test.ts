@@ -47,6 +47,50 @@ const MESSAGES = [
   },
 ];
 
+const VARIANT_MESSAGES = [
+  {
+    id: "power",
+    subject: "Electricity bill",
+    from: "Dana Hastings <billing@power.example>",
+    text: "Your monthly invoices are ready and shipping is free. Delivery by the organization, cc Sam Jennings",
+    attachments: [],
+  },
+  {
+    id: "router",
+    subject: "Router setup",
+    text: "The Wi-Fi password changed",
+    attachments: [],
+  },
+  {
+    id: "hotspot",
+    subject: "Hotspot",
+    text: "Free wifi in the lobby",
+    attachments: [],
+  },
+  {
+    id: "factura",
+    subject: "Facturas pendientes",
+    text: "Adjunto las facturas del mes",
+    attachments: [],
+  },
+  {
+    id: "mitsumori",
+    subject: "見積書の送付",
+    text: "ご確認ください",
+    attachments: [],
+  },
+  {
+    id: "scan",
+    subject: "Scanned documents",
+    text: "See attached",
+    attachments: [
+      attachment("contract-2026.pdf", "application/pdf"),
+      attachment("logo.png", "image/png", true),
+      attachment("scan", "image/jpeg"),
+    ],
+  },
+];
+
 describe("local text search", () => {
   it("matches words from an HTML-only body but not its markup", async () => {
     const { store, close } = await searchableMailbox();
@@ -173,7 +217,7 @@ describe("local text search", () => {
     const { driver, close } = await searchableMailbox();
     // Reopening after forgetting the latest index migration rebuilds it empty.
     await driver.write((tx) =>
-      tx.execute("DELETE FROM schema_migrations WHERE id = 7"),
+      tx.execute("DELETE FROM schema_migrations WHERE id = 12"),
     );
     const reopened = await createSqliteMailStore(driver);
 
@@ -258,6 +302,158 @@ describe("local text search", () => {
     await close();
   });
 });
+
+describe("word variants and attachments", () => {
+  it("matches other forms of a word", async () => {
+    const { store, close } = await variantMailbox();
+
+    expect(await search(store, text("any", "electric"))).toEqual(["power"]);
+    expect(await search(store, text("any", "electricity bills"))).toEqual([
+      "power",
+    ]);
+    expect(await search(store, text("any", "invoice"))).toEqual(["power"]);
+    expect(await search(store, text("subject", "factura"))).toEqual([
+      "factura",
+    ]);
+    expect(await search(store, text("any", "shipped"))).toEqual(["power"]);
+    await close();
+  });
+
+  it("matches a word or name typed past its stem", async () => {
+    const { store, close } = await variantMailbox();
+
+    for (const value of [
+      "electri",
+      "electrici",
+      "electricit",
+      "shipp",
+      "organiza",
+      "organizations",
+      "deliveries",
+    ]) {
+      expect(await search(store, text("any", value))).toEqual(["power"]);
+    }
+    for (const value of ["hasti", "hastings", "jenni", "jennings"]) {
+      expect(await search(store, text("any", value))).toEqual(["power"]);
+    }
+    await close();
+  });
+
+  it("matches hyphenated, spaced, and joined spellings of a compound", async () => {
+    const { store, close } = await variantMailbox();
+
+    for (const value of ["wifi", "Wi-Fi", "wi fi", "WiFi password"]) {
+      expect(await search(store, text("any", value))).toEqual(
+        value === "WiFi password" ? ["router"] : ["hotspot", "router"],
+      );
+    }
+    expect(
+      await search(store, {
+        kind: "text",
+        field: "body",
+        value: "wi-fi password",
+        match: "phrase",
+      }),
+    ).toEqual(["router"]);
+    await close();
+  });
+
+  it("keeps matching scripts written without spaces", async () => {
+    const { store, close } = await variantMailbox();
+
+    expect(await search(store, text("any", "見積"))).toEqual(["mitsumori"]);
+    expect(await search(store, text("any", "確認"))).toEqual(["mitsumori"]);
+    await close();
+  });
+
+  it("matches attachment file names and types but not inline images", async () => {
+    const { store, close } = await variantMailbox();
+
+    expect(await search(store, text("any", "contract-2026.pdf"))).toEqual([
+      "scan",
+    ]);
+    expect(await search(store, text("any", "contract"))).toEqual(["scan"]);
+    expect(await search(store, text("any", "pdf"))).toEqual(["scan"]);
+    expect(await search(store, text("any", "jpeg"))).toEqual(["scan"]);
+    expect(await search(store, text("any", "png"))).toEqual([]);
+    expect(await search(store, text("any", "logo"))).toEqual([]);
+    expect(await search(store, text("body", "pdf"))).toEqual([]);
+    await close();
+  });
+
+  it("rebuilds an index written before variants and attachments", async () => {
+    const { driver } = await variantMailbox();
+    await driver.write(async (tx) => {
+      await tx.exec(
+        `DROP TABLE message_fts;
+         CREATE VIRTUAL TABLE message_fts USING fts5(subject, preview, from_address, body, content = '', contentless_delete = 1, tokenize = 'unicode61');
+         DELETE FROM schema_migrations WHERE id = 12;`,
+      );
+    });
+
+    const reopened = await createSqliteMailStore(driver);
+    await drainBacklog(reopened);
+    expect(await search(reopened, text("any", "invoice"))).toEqual(["power"]);
+    expect(await search(reopened, text("any", "pdf"))).toEqual(["scan"]);
+    await reopened.close();
+  });
+});
+
+function attachment(filename: string, mimeType: string, inline = false) {
+  return {
+    attachmentId: `att-${filename}`,
+    filename,
+    mimeType,
+    size: 100,
+    inline,
+  };
+}
+
+async function variantMailbox(): Promise<{
+  store: MailStore;
+  driver: SqliteDriver;
+  close: () => Promise<void>;
+}> {
+  const driver = createNodeSqliteDriver();
+  const store = await createSqliteMailStore(driver);
+  await store.ensureAccount({
+    accountId: "acc-1",
+    provider: "google",
+    generation: "g1",
+  });
+  await store.applySyncPage({
+    ownerId: "owner",
+    page: {
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "bootstrap",
+      from: { streamId: "primary", generation: "g1", checkpoint: null },
+      to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+      changes: VARIANT_MESSAGES.map((message, index) =>
+        messagePatch(
+          {
+            id: message.id,
+            subject: message.subject,
+            from: ("from" in message && message.from) || "sender@example.com",
+            to: ["me@example.com"],
+            read: true,
+          },
+          index,
+        ),
+      ),
+      requiredHydration: [],
+      roundComplete: true,
+    },
+    bodies: VARIANT_MESSAGES.map((message) => ({
+      key: { accountId: "acc-1", messageId: message.id },
+      version: "1",
+      text: message.text,
+      html: null,
+      attachments: message.attachments,
+    })),
+  });
+  await drainBacklog(store);
+  return { store, driver, close: () => store.close() };
+}
 
 function text(field: "any" | "subject" | "body", value: string): MailPredicate {
   return { kind: "text", field, value, match: "term" };
@@ -344,7 +540,10 @@ async function drainBacklog(store: MailStore) {
 }
 
 function messagePatch(
-  message: (typeof MESSAGES)[number],
+  message: Pick<
+    (typeof MESSAGES)[number],
+    "id" | "subject" | "from" | "to" | "read"
+  >,
   index: number,
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   return {

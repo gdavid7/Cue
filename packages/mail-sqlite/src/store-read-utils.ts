@@ -1,5 +1,9 @@
 import type { LocalRevision } from "@inboxzero/mail-core/identities";
-import type { MessageMetadata } from "@inboxzero/mail-core/messages";
+import {
+  messageAttachmentDescriptorSchema,
+  type MessageAttachmentDescriptor,
+  type MessageMetadata,
+} from "@inboxzero/mail-core/messages";
 import type { Coverage } from "@inboxzero/mail-core/queries";
 import type { SqlTransaction, SqlValue } from "./driver";
 
@@ -125,4 +129,20 @@ export function jsonStringArray(value: SqlValue) {
 
 export function uniqueStrings(values: string[]) {
   return [...new Set(values)];
+}
+
+export function parseStoredAttachments(
+  value: SqlValue | undefined,
+): MessageAttachmentDescriptor[] {
+  if (value === null || value === undefined) return [];
+  try {
+    const parsed = JSON.parse(String(value)) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      const result = messageAttachmentDescriptorSchema.safeParse(item);
+      return result.success ? [result.data] : [];
+    });
+  } catch {
+    return [];
+  }
 }

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { htmlToSearchText, searchMatchQuery } from "./search-text";
+import {
+  htmlToSearchText,
+  searchableAttachments,
+  searchableText,
+  searchMatchQuery,
+} from "./search-text";
 
 describe("htmlToSearchText", () => {
   it("keeps visible text and drops markup, styles, scripts, head, and comments", () => {
@@ -44,9 +49,39 @@ describe("htmlToSearchText", () => {
 
 describe("searchMatchQuery", () => {
   it("ANDs each term as a quoted prefix token", () => {
-    expect(searchMatchQuery("quarterly inv", "term")).toBe(
-      '"quarterly"* "inv"*',
+    expect(searchMatchQuery("quarterly report inv", "term")).toBe(
+      '"quarterly"* "report"* "inv"*',
     );
+  });
+
+  it("ANDs two words and also matches them as one exact word", () => {
+    expect(searchMatchQuery("quarterly inv", "term")).toBe(
+      '("quarterly"* "inv"*) OR "quarterlyinv"',
+    );
+    expect(searchMatchQuery("wi fi", "term")).toBe('("wi"* "fi"*) OR "wifi"');
+  });
+
+  it("matches a word's stem as a prefix when it drops a short ending", () => {
+    expect(searchMatchQuery("invoices shipping", "term")).toBe(
+      '("invoic"* "ship"*) OR "invoicesshipping"',
+    );
+    expect(searchMatchQuery("deliveries replies notifications", "term")).toBe(
+      '"deliver"* "repl"* "notification"*',
+    );
+    // A stem under four letters leaves the word as typed.
+    expect(searchMatchQuery("running", "term")).toBe('"running"*');
+    // A stem that drops a long derivation, or isn't a prefix of the word,
+    // and words outside plain Latin letters stay as typed.
+    expect(searchMatchQuery("organization happy Häuser 請求", "term")).toBe(
+      '"organization"* "happy"* "Häuser"* "請 求"*',
+    );
+  });
+
+  it("also matches a hyphenated term written as one word", () => {
+    expect(searchMatchQuery("wi-fi setup guide", "term")).toBe(
+      '("wi-fi"* OR "wifi"*) "setup"* "guid"*',
+    );
+    expect(searchMatchQuery("wi-fi", "phrase")).toBe('"wi-fi"*');
   });
 
   it("keeps a phrase together with a prefix on its last word", () => {
@@ -62,18 +97,46 @@ describe("searchMatchQuery", () => {
   });
 
   it("matches a single character as a whole word", () => {
-    expect(searchMatchQuery("a invoice", "term")).toBe('"a" "invoice"*');
+    expect(searchMatchQuery("a report due", "term")).toBe(
+      '"a" "report"* "due"*',
+    );
   });
 
   it("splits scripts written without spaces into a character phrase", () => {
-    expect(searchMatchQuery("請求書 invoice", "term")).toBe(
-      '"請 求 書"* "invoice"*',
+    expect(searchMatchQuery("請求書 report", "term")).toBe(
+      '"請 求 書"* "report"*',
     );
   });
 
   it("drops terms with nothing to search for", () => {
-    expect(searchMatchQuery("... invoice ---", "term")).toBe('"invoice"*');
+    expect(searchMatchQuery("report ---", "term")).toBe('"report"*');
+    expect(searchMatchQuery("... report ---", "term")).toBe('"report"*');
     expect(searchMatchQuery("... ---", "term")).toBeNull();
     expect(searchMatchQuery('"*"', "phrase")).toBeNull();
+  });
+});
+
+describe("searchableText", () => {
+  it("adds hyphenated compounds joined, after the text", () => {
+    expect(searchableText("Wi-Fi and e‑mail, not -x")).toBe(
+      "Wi-Fi and e‑mail, not -x WiFi email",
+    );
+    expect(searchableText("請求書")).toBe(" 請  求  書 ");
+  });
+});
+
+describe("searchableAttachments", () => {
+  it("indexes real attachments by name and short format", () => {
+    expect(
+      searchableAttachments([
+        {
+          filename: "Q3-report.xlsx",
+          mimeType: "application/vnd.ms-excel",
+          inline: false,
+        },
+        { filename: "scan", mimeType: "image/JPEG", inline: false },
+        { filename: "logo.png", mimeType: "image/png", inline: true },
+      ]),
+    ).toBe("Q3-report.xlsx Q3report scan jpeg");
   });
 });
