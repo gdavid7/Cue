@@ -93,11 +93,6 @@ export function MailMessageBody({
     messageId,
   ]);
 
-  const plainSegments = useMemo(
-    () => (html ? null : linkifyPlainText(text ?? "")),
-    [html, text],
-  );
-
   if (document) {
     return (
       <div className="relative min-w-0 overflow-x-hidden">
@@ -111,7 +106,7 @@ export function MailMessageBody({
     );
   }
 
-  return <MailPlainTextBody segments={plainSegments ?? []} />;
+  return <LinkifiedPlainTextBody text={text ?? ""} />;
 }
 
 export function MailPlainTextBody({
@@ -718,4 +713,9 @@ function applyDarkModeClass(mailDocument: Document, isDarkMode: boolean) {
 
   mailDocument.documentElement.classList.add("dark");
   mailDocument.body.classList.add("dark");
+}
+
+function LinkifiedPlainTextBody({ text }: { text: string }) {
+  const segments = useMemo(() => linkifyPlainText(text), [text]);
+  return <MailPlainTextBody segments={segments} />;
 }

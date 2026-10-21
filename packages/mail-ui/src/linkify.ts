@@ -12,6 +12,10 @@ const BRACKETED_URL = /<((?:https?|mailto):[^<>]{1,8192})>/gi;
 const WHITESPACE = /\s+/g;
 // Whitespace that has no line break is a real space, not a wrap.
 const SPACE_BETWEEN_WORDS = /\S[^\S\n]+\S/;
+// A line that starts a new URL is a list of links, not one wrapped link.
+const LINE_STARTING_URL = /\n\s*(?:https?|mailto):/i;
+const BRACKETED_URL_START = /^<(?:https?|mailto):/i;
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 
 // Linkifying costs ~0.25ms per KB of text. Gmail clips a message at ~100KB,
 // so links past this budget stay plain text instead of slowing a huge body.
@@ -19,17 +23,17 @@ const LINKIFY_TEXT_BUDGET = 100_000;
 
 // Text inside these is not prose a reader would expect to click.
 const UNLINKED_ELEMENTS = new Set([
-  "A",
-  "BUTTON",
-  "HEAD",
-  "NOSCRIPT",
-  "OPTION",
-  "SCRIPT",
-  "SELECT",
-  "STYLE",
-  "TEMPLATE",
-  "TEXTAREA",
-  "TITLE",
+  "a",
+  "button",
+  "head",
+  "noscript",
+  "option",
+  "script",
+  "select",
+  "style",
+  "template",
+  "textarea",
+  "title",
 ]);
 
 export function linkifyPlainText(
@@ -42,7 +46,12 @@ export function linkifyPlainText(
 
   for (const match of linkable.matchAll(BRACKETED_URL)) {
     const inner = match[1];
-    if (!inner?.includes("\n") || SPACE_BETWEEN_WORDS.test(inner)) continue;
+    if (
+      !inner?.includes("\n") ||
+      SPACE_BETWEEN_WORDS.test(inner) ||
+      LINE_STARTING_URL.test(inner)
+    )
+      continue;
     const href = getSafeEmailLinkUrl(inner.replace(WHITESPACE, ""));
     if (!href) continue;
 
@@ -71,7 +80,10 @@ export function linkifyMailHtml(root: Element) {
     {
       acceptNode: (node) => {
         if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
-        return UNLINKED_ELEMENTS.has((node as Element).tagName)
+        const element = node as Element;
+        // An HTML <a> inside SVG or MathML would not render as a link.
+        return element.namespaceURI !== HTML_NAMESPACE ||
+          UNLINKED_ELEMENTS.has(element.localName)
           ? NodeFilter.FILTER_REJECT
           : NodeFilter.FILTER_SKIP;
       },
@@ -135,9 +147,19 @@ function pushLinkifiedText(segments: MailPlainTextSegment[], text: string) {
 }
 
 function cutAtWhitespace(text: string, limit: number) {
-  const breakAt = Math.max(
+  let breakAt = Math.max(
     text.lastIndexOf(" ", limit),
     text.lastIndexOf("\n", limit),
+    0,
   );
-  return text.slice(0, Math.max(breakAt, 0));
+  // Cutting inside a wrapped <url> would link only its first line.
+  const open = text.lastIndexOf("<", breakAt);
+  if (
+    open !== -1 &&
+    !text.slice(open, breakAt).includes(">") &&
+    BRACKETED_URL_START.test(text.slice(open, open + 10))
+  ) {
+    breakAt = open;
+  }
+  return text.slice(0, breakAt);
 }

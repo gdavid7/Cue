@@ -1,5 +1,7 @@
+/** @vitest-environment jsdom */
+
 import { describe, expect, it } from "vitest";
-import { linkifyPlainText } from "./linkify";
+import { linkifyMailHtml, linkifyPlainText } from "./linkify";
 
 describe("linkifyPlainText", () => {
   it("finds web and email links while preserving the surrounding text", () => {
@@ -92,6 +94,46 @@ describe("linkifyPlainText", () => {
         .join(""),
     ).toBe(text);
   });
+
+  it("keeps two bracketed URLs on separate lines as separate links", () => {
+    const text = "<https://first.example.com\nhttps://second.example.com>";
+
+    expect(linkHrefs(linkifyPlainText(text))).toEqual([
+      "https://first.example.com/",
+      "https://second.example.com/",
+    ]);
+  });
+
+  it("does not stop the link budget inside a wrapped URL", () => {
+    const text = "Reset: <https://a.example.com/very\nlong/path> done";
+    const segments = linkifyPlainText(text, 36);
+
+    expect(linkHrefs(segments)).toEqual([]);
+    expect(segments.map((segment) => segment.text).join("")).toBe(text);
+  });
+});
+
+describe("linkifyMailHtml", () => {
+  it("leaves text in SVG and MathML alone", () => {
+    const document = new DOMParser().parseFromString(
+      "<p>https://html.example.com</p><svg><text>https://svg.example.com</text></svg><math><mi>https://math.example.com</mi></math>",
+      "text/html",
+    );
+
+    linkifyMailHtml(document.documentElement);
+
+    expect(
+      Array.from(document.querySelectorAll("a"), (anchor) =>
+        anchor.getAttribute("href"),
+      ),
+    ).toEqual(["https://html.example.com/"]);
+  });
 });
 
 const LONG_TRACKING_URL = `https://click.mail.example.com/ls/click?upn=${"u001.aB3-_x%2F9".repeat(18)}&utm_source=newsletter`;
+
+function linkHrefs(segments: ReturnType<typeof linkifyPlainText>) {
+  return segments.flatMap((segment) =>
+    segment.type === "link" ? [segment.href] : [],
+  );
+}
