@@ -128,6 +128,25 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
     expect(after).toBeNull();
     expect(calls).toBeGreaterThan(1);
 
+    // A one-letter name can't use the search index, so it reads file names
+    // under the same per-call cap.
+    after = null;
+    calls = 0;
+    const lettered: string[] = [];
+    do {
+      queries.length = 0;
+      const start = performance.now();
+      const page = await store.readFiles({ ...query, name: "u", after });
+      const elapsed = performance.now() - start;
+      calls += 1;
+      expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES_PER_CALL);
+      expect(elapsed).toBeLessThan(SCAN_BUDGET_MS);
+      lettered.push(...page.files.map((file) => file.attachment.filename));
+      after = page.nextPage;
+    } while (after && calls < 10);
+    expect(lettered).toEqual(["launch.pptx"]);
+    expect(calls).toBeGreaterThan(1);
+
     // Walks mail with files newest first through its own index, never a
     // sort of the whole mailbox.
     const read = queries.find(({ sql }) => sql.includes("AS indexed"));

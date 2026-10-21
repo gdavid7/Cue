@@ -26,6 +26,8 @@ const MIN_BATCH_MESSAGES = 100;
 // in one transaction. Past this many, a page comes back short (even empty)
 // with a cursor after the last message read, and the next page goes on.
 const MAX_SCANNED_MESSAGES = 2000;
+// Conversations looked up per query for the same file in older messages.
+const CONVERSATION_CHUNK = 200;
 
 // The mail the Files view lists files from. SQLite only uses a partial index
 // for a query that repeats its WHERE clause, so the index and the reads share
@@ -74,13 +76,8 @@ export async function readFiles(
   const accountIds = [...new Set(query.accountIds)];
   if (!accountIds.length || query.pageSize < 1)
     return { files: [], nextPage: null };
-  // The unary + keeps SQLite from starting at each account's primary key and
-  // sorting all its mail; it walks the files index newest first instead.
-  const where = [
-    FILE_MESSAGES,
-    `+e.account_id IN (${placeholders(accountIds)})`,
-  ];
-  const bindings: SqlValue[] = [...accountIds];
+  const where = [FILE_MESSAGES];
+  const bindings: SqlValue[] = [];
   const sender = query.sender ? foldAddress(query.sender) : null;
   // Only an ASCII address can be narrowed by LIKE without missing a match.
   if (sender && /^[\x20-\x7e]+$/.test(sender)) {
@@ -100,6 +97,15 @@ export async function readFiles(
       indexedColumn = candidates.indexed;
     } else indexedColumn = "0";
   }
+
+  // The unary + keeps SQLite from starting at each account's primary key and
+  // sorting all its mail; it walks the files index newest first instead.
+  const scanWhere = [
+    ...where,
+    `+e.account_id IN (${placeholders(accountIds)})`,
+  ];
+  const scanBindings = [...bindings, ...accountIds];
+  const filter = { sender, kind: query.kind, nameForms };
 
   const pageCursor = query.after ? parseCursor(query.after) : null;
   // A cursor inside a message starts there; one that read a message through
@@ -124,11 +130,11 @@ export async function readFiles(
        FROM effective_messages e
        CROSS JOIN message_content c
          ON c.account_id = e.account_id AND c.message_id = e.message_id
-       WHERE ${[...where, ...cursorSql].join(" AND ")}
+       WHERE ${[...scanWhere, ...cursorSql].join(" AND ")}
        ORDER BY e.received_at_ms DESC, e.account_id, e.message_id
        LIMIT ?`,
       [
-        ...bindings,
+        ...scanBindings,
         ...(after
           ? [
               after.receivedAtMs,
@@ -141,8 +147,18 @@ export async function readFiles(
       ],
     );
     scanned += rows.length;
-    for (const row of rows) {
-      if (sender && senderOf(row) !== sender) continue;
+    const listing = rows.flatMap((row) => {
+      if (sender && senderOf(row) !== sender) return [];
+      const entries = messageFiles(row, query.kind, nameForms);
+      return entries.length ? [{ row, entries }] : [];
+    });
+    const copies = await readConversationCopies(
+      tx,
+      { where, bindings, indexedColumn },
+      listing.map(({ row }) => row),
+      filter,
+    );
+    for (const { row, entries } of listing) {
       const skipThrough =
         pageCursor &&
         pageCursor.position !== null &&
@@ -150,8 +166,15 @@ export async function readFiles(
         pageCursor.messageId === String(row.message_id)
           ? pageCursor.position
           : -1;
-      for (const entry of messageFiles(row, query.kind, nameForms)) {
-        if (entry.position > skipThrough) files.push(entry);
+      const conversation = copies.get(conversationKey(row));
+      const listed = new Set<string>();
+      for (const entry of entries) {
+        const holders = conversation?.get(fileKey(entry)) ?? [];
+        if (holders[0] !== messageKey(row) || listed.has(fileKey(entry)))
+          continue;
+        listed.add(fileKey(entry));
+        if (entry.position <= skipThrough) continue;
+        files.push({ ...entry, copies: holders.length });
       }
     }
     const last = rows.at(-1);
@@ -321,6 +344,10 @@ function nameCandidates(
   search: SearchSupport,
 ): { sql: string; bindings: SqlValue[]; indexed: string } | null | undefined {
   if (!search.fts5) return;
+  // The index matches a one-character term as a whole word only, so "a"
+  // would miss every file name that merely contains the letter; the files'
+  // own names are checked instead, which the scan cap keeps bounded.
+  if (name.split(/\s+/).some((part) => [...part].length === 1)) return;
   const match = searchMatchQuery(name, "term");
   if (!match) return null;
   const hit = `(e.account_id, e.message_id) IN (
@@ -344,7 +371,7 @@ function messageFiles(
   row: Record<string, SqlValue>,
   kind: FileKind | null,
   nameForms: string[][],
-): Array<FileEntry & { position: number }> {
+): Array<Omit<FileEntry, "copies"> & { position: number }> {
   const files = storedAttachments(row.attachments_json).filter(
     ({ attachment }) => !attachment.inline,
   );
@@ -372,6 +399,77 @@ function messageFiles(
       },
     ];
   });
+}
+
+// Which messages of each conversation in these rows carry each file, newest
+// first, among the messages passing the same filters as the scan. Read per
+// conversation rather than remembered from earlier pages, so a file's newest
+// copy is the same whichever page it falls on.
+async function readConversationCopies(
+  tx: SqlTransaction,
+  scan: { where: string[]; bindings: SqlValue[]; indexedColumn: string },
+  rows: Array<Record<string, SqlValue>>,
+  filter: {
+    sender: string | null;
+    kind: FileKind | null;
+    nameForms: string[][];
+  },
+) {
+  const byAccount = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const account = String(row.account_id);
+    byAccount.set(
+      account,
+      (byAccount.get(account) ?? new Set()).add(String(row.conversation_id)),
+    );
+  }
+  const copies = new Map<string, Map<string, string[]>>();
+  for (const [account, conversations] of byAccount) {
+    const ids = [...conversations];
+    for (let from = 0; from < ids.length; from += CONVERSATION_CHUNK) {
+      const chunk = ids.slice(from, from + CONVERSATION_CHUNK);
+      const found = await tx.query(
+        `SELECT e.account_id, e.message_id, e.conversation_id, e.subject,
+                e.from_address, e.received_at_ms, c.attachments_json,
+                ${scan.indexedColumn} AS indexed
+         FROM effective_messages e
+         CROSS JOIN message_content c
+           ON c.account_id = e.account_id AND c.message_id = e.message_id
+         WHERE ${[
+           ...scan.where,
+           "e.account_id = ?",
+           `e.conversation_id IN (${placeholders(chunk)})`,
+         ].join(" AND ")}
+         ORDER BY e.received_at_ms DESC, e.account_id, e.message_id`,
+        [...scan.bindings, account, ...chunk],
+      );
+      for (const row of found) {
+        if (filter.sender && senderOf(row) !== filter.sender) continue;
+        const key = conversationKey(row);
+        const files = copies.get(key) ?? new Map<string, string[]>();
+        copies.set(key, files);
+        for (const entry of messageFiles(row, filter.kind, filter.nameForms)) {
+          const holders = files.get(fileKey(entry)) ?? [];
+          // A message attaching the same file twice still counts once.
+          if (holders.at(-1) !== messageKey(row)) holders.push(messageKey(row));
+          files.set(fileKey(entry), holders);
+        }
+      }
+    }
+  }
+  return copies;
+}
+
+function conversationKey(row: Record<string, SqlValue>) {
+  return JSON.stringify([row.account_id, row.conversation_id]);
+}
+
+function messageKey(row: Record<string, SqlValue>) {
+  return JSON.stringify([row.account_id, row.message_id]);
+}
+
+function fileKey(entry: { attachment: { filename: string; size: number } }) {
+  return JSON.stringify([entry.attachment.filename, entry.attachment.size]);
 }
 
 function nameHolds(filename: string, forms: string[][]) {

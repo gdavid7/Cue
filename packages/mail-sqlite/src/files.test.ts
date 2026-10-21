@@ -9,6 +9,7 @@ import { createSqliteMailStore } from "./store";
 
 type Seed = {
   id: string;
+  conversation?: string;
   account?: string;
   from?: string;
   subject?: string;
@@ -157,6 +158,25 @@ describe("readFiles", () => {
     await store.close();
   });
 
+  it("finds files by a one-letter search, which the search index can't match", async () => {
+    for (const indexed of [true, false]) {
+      const store = await filesMailbox({ indexed });
+
+      expect(await names(store, { name: "q" })).toEqual(["Q3 budget.xlsx"]);
+      expect(await names(store, { name: "X" })).toEqual([
+        "route.gpx",
+        "Q3 budget.xlsx",
+        "Board deck.pptx",
+        "notes.docx",
+      ]);
+      expect(await names(store, { name: "q 3 budget" })).toEqual([
+        "Q3 budget.xlsx",
+      ]);
+      expect(await names(store, { name: "q", kind: "pdf" })).toEqual([]);
+      await store.close();
+    }
+  });
+
   it("combines filters", async () => {
     const store = await filesMailbox();
 
@@ -202,6 +222,121 @@ describe("readFiles", () => {
     expect(await names(store, { name: "invoice" })).toEqual([
       "invoice-march.pdf",
     ]);
+    await store.close();
+  });
+});
+
+// A reply chain that re-attaches the same file, listed oldest first.
+const REPLY_CHAIN: Seed[] = [
+  {
+    id: "other-thread",
+    conversation: "other",
+    from: "Cy <cy@example.com>",
+    attachments: [file("Plan.pdf", "application/pdf")],
+  },
+  {
+    id: "first",
+    conversation: "plan",
+    from: "Ana Lima <ana@example.com>",
+    subject: "Plan",
+    attachments: [
+      file("Plan.pdf", "application/pdf"),
+      file("Draft.docx", "application/msword", false, 500),
+    ],
+  },
+  {
+    id: "reply",
+    conversation: "plan",
+    from: "Ben <ben@example.com>",
+    subject: "Re: Plan",
+    attachments: [
+      file("Plan.pdf", "application/pdf"),
+      file("Draft.docx", "application/msword", false, 900),
+    ],
+  },
+  {
+    id: "last",
+    conversation: "plan",
+    from: "Ana Lima <ana@example.com>",
+    subject: "Re: Re: Plan",
+    attachments: [
+      file("Plan.pdf", "application/pdf"),
+      file("Plan.pdf", "application/pdf"),
+    ],
+  },
+];
+
+describe("the same file in one conversation", () => {
+  it("lists it once from the newest message, with how many messages carry it", async () => {
+    const store = await filesMailbox({ mailbox: REPLY_CHAIN });
+
+    const page = await store.readFiles(query());
+    expect(
+      page.files.map((entry) => [
+        entry.messageId,
+        entry.attachment.filename,
+        entry.attachment.size,
+        entry.copies,
+      ]),
+    ).toEqual([
+      ["last", "Plan.pdf", 1024, 3],
+      ["reply", "Draft.docx", 900, 1],
+      ["first", "Draft.docx", 500, 1],
+      ["other-thread", "Plan.pdf", 1024, 1],
+    ]);
+    await store.close();
+  });
+
+  it("dedupes among the files that pass the filters", async () => {
+    const store = await filesMailbox({ mailbox: REPLY_CHAIN });
+
+    const fromBen = await store.readFiles(query({ sender: "ben@example.com" }));
+    expect(
+      fromBen.files.map((entry) => [entry.messageId, entry.copies]),
+    ).toEqual([
+      ["reply", 1],
+      ["reply", 1],
+    ]);
+    const fromAna = await store.readFiles(query({ sender: "ana@example.com" }));
+    expect(
+      fromAna.files.map((entry) => [
+        entry.messageId,
+        entry.attachment.filename,
+        entry.copies,
+      ]),
+    ).toEqual([
+      ["last", "Plan.pdf", 2],
+      ["first", "Draft.docx", 1],
+    ]);
+    expect(await names(store, { name: "draft" })).toEqual([
+      "Draft.docx",
+      "Draft.docx",
+    ]);
+    await store.close();
+  });
+
+  it("pages without repeating or skipping a file, whatever the page size", async () => {
+    const store = await filesMailbox({ mailbox: REPLY_CHAIN });
+
+    for (const pageSize of [1, 2, 3]) {
+      const seen: string[] = [];
+      let after: string | null = null;
+      do {
+        const page = await store.readFiles(query({ pageSize, after }));
+        seen.push(
+          ...page.files.map(
+            (entry) => `${entry.messageId}:${entry.attachment.filename}`,
+          ),
+        );
+        after = page.nextPage;
+      } while (after);
+      expect(seen).toEqual([
+        "last:Plan.pdf",
+        "reply:Draft.docx",
+        "first:Draft.docx",
+        "other-thread:Plan.pdf",
+      ]);
+    }
     await store.close();
   });
 });
@@ -413,7 +548,7 @@ function messagePatch(
     reference: {
       provider: "google",
       messageId: seed.id,
-      conversationId: seed.id,
+      conversationId: seed.conversation ?? seed.id,
       version: "1",
     },
     fields: {
@@ -438,12 +573,13 @@ function file(
   filename: string,
   mimeType: string,
   inline = false,
+  size = 1024,
 ): MessageAttachmentDescriptor {
   return {
     attachmentId: `att-${filename}`,
     filename,
     mimeType,
-    size: 1024,
+    size,
     inline,
   };
 }
