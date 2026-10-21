@@ -29,11 +29,7 @@ import type {
   LocalRevision,
   MessageKey,
 } from "@inboxzero/mail-core/identities";
-import {
-  messageAttachmentDescriptorSchema,
-  type MessageAttachmentDescriptor,
-  type MessageMetadata,
-} from "@inboxzero/mail-core/messages";
+import type { MessageMetadata } from "@inboxzero/mail-core/messages";
 import {
   DEFERRED_DISPATCH_MIN_HOLD_MS,
   EXECUTABLE_OPERATION_STATUSES,
@@ -85,6 +81,7 @@ import {
   connectionStatus,
   metadataFromEffective,
   coversWholeMailbox,
+  parseStoredAttachments,
   readCoverage,
   readRevision,
 } from "./store-read-utils";
@@ -3485,7 +3482,10 @@ async function insertMessageContent(
   );
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
-  await indexMessageContent(tx, body.key, stored);
+  await indexMessageContent(tx, body.key, {
+    ...stored,
+    attachments: body.attachments ?? [],
+  });
 }
 
 type ReadOrder = {
@@ -3839,22 +3839,6 @@ function parseOperationPayload(value: import("./driver").SqlValue) {
       conversationIds: [],
       messageIds: [],
     };
-  }
-}
-
-function parseStoredAttachments(
-  value: import("./driver").SqlValue,
-): MessageAttachmentDescriptor[] {
-  if (value === null || value === undefined) return [];
-  try {
-    const parsed = JSON.parse(String(value)) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      const result = messageAttachmentDescriptorSchema.safeParse(item);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
   }
 }
 

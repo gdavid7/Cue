@@ -1170,6 +1170,13 @@ export async function openFixtureMailbox(): Promise<{
       version: "1",
       text: email.body,
       html: null,
+      attachments: (email.attachments ?? []).map((filename, index) => ({
+        attachmentId: `${email.id}-${index}`,
+        filename,
+        mimeType: "application/octet-stream",
+        size: 1024,
+        inline: false,
+      })),
     })),
   });
   while ((await store.indexSearchBacklog()).remaining) {
