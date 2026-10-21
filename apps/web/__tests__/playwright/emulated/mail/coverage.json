@@ -313,5 +313,13 @@
     "lib/shortcuts/useShortcuts.ts",
     "app/(app)/[emailAccountId]/mail/thread-list-behavior.ts",
     "components/email-list/EmailThread.tsx"
+  ],
+  "all-inboxes-folders.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/use-combined-mail-threads.ts",
+    "app/(app)/[emailAccountId]/mail/all-accounts-list.tsx",
+    "app/(app)/[emailAccountId]/mail/ScheduledEmailList.tsx",
+    "app/(app)/[emailAccountId]/mail/SnoozedThreadList.tsx",
+    "hooks/useAllAccountsList.ts",
+    "hooks/useHiddenDraftMessageIds.ts"
   ]
 }
