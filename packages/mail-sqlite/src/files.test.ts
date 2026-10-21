@@ -177,6 +177,16 @@ describe("readFiles", () => {
     }
   });
 
+  it("keeps the index for a search whose only one-character token is punctuation", async () => {
+    const store = await filesMailbox();
+
+    expect(await names(store, { name: "contract ." })).toEqual([
+      "Contract-2026.pdf",
+    ]);
+    expect(await names(store, { name: "." })).toEqual([]);
+    await store.close();
+  });
+
   it("combines filters", async () => {
     const store = await filesMailbox();
 
@@ -337,6 +347,44 @@ describe("the same file in one conversation", () => {
         "other-thread:Plan.pdf",
       ]);
     }
+    await store.close();
+  });
+});
+
+// Past this many messages a conversation's copies are no longer all counted.
+const CONVERSATION_COPY_CAP = 500;
+
+describe("a conversation longer than the lookup cap", () => {
+  it("lists the newest copy once and still lists files only its oldest messages hold", async () => {
+    const total = CONVERSATION_COPY_CAP + 20;
+    const mailbox: Seed[] = Array.from({ length: total }, (_, index) => ({
+      id: `m${String(index).padStart(4, "0")}`,
+      conversation: "long",
+      attachments: [
+        file("Same.pdf", "application/pdf"),
+        ...(index === 0 ? [file("Oldest.pdf", "application/pdf")] : []),
+      ],
+    }));
+    const store = await filesMailbox({ mailbox });
+
+    const seen: string[] = [];
+    let after: string | null = null;
+    do {
+      const page = await store.readFiles(query({ pageSize: 1, after }));
+      seen.push(
+        ...page.files.map(
+          (entry) =>
+            `${entry.messageId}:${entry.attachment.filename}:${entry.copies}`,
+        ),
+      );
+      after = page.nextPage;
+    } while (after);
+    // The count is left at 1 once copies may be uncounted, so the note never
+    // states a wrong number.
+    expect(seen).toEqual([
+      `m${String(total - 1).padStart(4, "0")}:Same.pdf:1`,
+      "m0000:Oldest.pdf:1",
+    ]);
     await store.close();
   });
 });

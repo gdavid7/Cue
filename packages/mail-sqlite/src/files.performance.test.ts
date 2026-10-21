@@ -164,6 +164,70 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
   }
 }, 60_000);
 
+it("reads one giant conversation once per call under a sparse sender filter", async () => {
+  const { driver, queries } = recordingDriver();
+  const store = await createSqliteMailStore(driver);
+  try {
+    await store.ensureAccount({
+      accountId: "a",
+      provider: "google",
+      generation: "g",
+    });
+    await driver.write(async (tx) => {
+      for (let i = 0; i < MESSAGES; i++) {
+        const giant = i % FILES_EVERY === 0;
+        await tx.execute(
+          `INSERT INTO effective_messages(account_id,message_id,conversation_id,subject,preview,from_address,to_json,cc_json,received_at_ms,read,starred,label_ids_json,category_ids_json,roles_json,in_inbox,in_sent,in_draft,in_trash,in_spam,has_attachments,pending_operation_ids_json)
+           VALUES ('a', ?, ?, 'Subject', '', ?, '[]', '[]', ?, 1, 0, '[]', '[]', '["inbox"]', 1, 0, 0, 0, 0, 1, '[]')`,
+          [
+            String(i),
+            giant ? "giant" : `c-${i}`,
+            giant ? "Giant <giant@example.com>" : `other${i % 50}@example.com`,
+            1_700_000_000_000 + i * 60_000,
+          ],
+        );
+        await tx.execute(
+          "INSERT INTO message_content(account_id, message_id, version, html, text, attachments_json) VALUES ('a', ?, '1', NULL, 'x', ?)",
+          [
+            String(i),
+            JSON.stringify([attachment("report.pdf", "application/pdf")]),
+          ],
+        );
+      }
+    });
+
+    const query: FilesQuery = {
+      accountIds: ["a"],
+      kind: null,
+      sender: "giant@example.com",
+      name: null,
+      pageSize: 100,
+      after: null,
+    };
+    let after: string | null = null;
+    let calls = 0;
+    let reports = 0;
+    do {
+      queries.length = 0;
+      const start = performance.now();
+      const page = await store.readFiles({ ...query, after });
+      const elapsed = performance.now() - start;
+      calls += 1;
+      // The scan's batches plus the conversation's single, capped lookup.
+      expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES_PER_CALL + 2);
+      expect(elapsed).toBeLessThan(SCAN_BUDGET_MS);
+      reports += page.files.filter(
+        (file) => file.attachment.filename === "report.pdf",
+      ).length;
+      after = page.nextPage;
+    } while (after && calls < 100);
+    expect(after).toBeNull();
+    expect(reports).toBe(1);
+  } finally {
+    await store.close();
+  }
+}, 60_000);
+
 function attachment(filename: string, mimeType: string, inline = false) {
   return {
     attachmentId: `att-${filename}`,
