@@ -158,7 +158,7 @@ export function createSemanticIndex({
 /**
  * Whether this device runs the model: a desktop-class browser with the
  * memory and cores for it, not on a metered or data-saving connection.
- * Phones skip it: the model is a one-time download of about 35 MB, and
+ * Phones skip it: the model is a one-time download of about 26 MB, and
  * embedding thousands of messages costs their battery.
  */
 export function semanticSearchSupported(
