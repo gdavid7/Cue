@@ -5,6 +5,11 @@
     "components/SidebarRight.tsx",
     "components/SideNavWithTopNav.tsx"
   ],
+  "cue-found-all-inboxes.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/use-all-inboxes-cue-search.ts",
+    "app/(app)/[emailAccountId]/mail/all-inboxes-cue-search.ts",
+    "app/(app)/[emailAccountId]/mail/CueFoundSection.tsx"
+  ],
   "cue-found-keyboard.spec.ts": [
     "app/(app)/[emailAccountId]/mail/CueFoundSection.tsx",
     "app/(app)/[emailAccountId]/mail/use-cue-search.ts",

@@ -26,6 +26,22 @@ const INTENT = {
   explanation: "Mail from Sarah with attachments in September",
   isQuestion: false,
   timeZone: "UTC",
+  parts: {
+    senders: ["sarah"],
+    recipients: [],
+    sentByUser: false,
+    keywordGroups: [["lease", "contract"]],
+    hasAttachment: true,
+    unread: false,
+    starred: false,
+    label: "",
+    dateRange: "between" as const,
+    lastNDays: 0,
+    fromDate: "2026-09-03",
+    toDate: "",
+    explanation: "Mail from Sarah with attachments in September",
+    isQuestion: false,
+  },
 };
 
 afterEach(cleanup);

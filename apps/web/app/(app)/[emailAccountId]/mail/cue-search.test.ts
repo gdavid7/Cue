@@ -17,6 +17,23 @@ const INTENT: CueSearchIntent = {
   explanation: "Mail from Sarah with attachments mentioning lease or contract",
   isQuestion: false,
   timeZone: "UTC",
+  parts: {
+    senders: ["sarah"],
+    recipients: [],
+    sentByUser: false,
+    keywordGroups: [["lease", "contract"]],
+    hasAttachment: true,
+    unread: false,
+    starred: false,
+    label: "",
+    dateRange: "none",
+    lastNDays: 0,
+    fromDate: "",
+    toDate: "",
+    explanation:
+      "Mail from Sarah with attachments mentioning lease or contract",
+    isQuestion: false,
+  },
 };
 const IDLE = { settled: false, count: 0 };
 const EMPTY = { settled: true, count: 0 };

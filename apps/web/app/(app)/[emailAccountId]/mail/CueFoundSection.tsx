@@ -8,6 +8,7 @@ import {
   type CueSearchStage,
   type CueWidening,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import {
@@ -23,6 +24,7 @@ import { readableSearch } from "@/utils/mail-search/generated-search";
 import type { WideningTier } from "@/utils/mail-search/natural-language-search";
 
 const PLACEHOLDER_WIDTHS = ["w-3/4", "w-2/3", "w-5/6"];
+const NO_LABELS: EmailLabels = {};
 const WIDENING_LABELS: Record<WideningTier, string> = {
   fewer_words: "searched with fewer words",
   sender_and_dates: "searched by sender and date alone",
@@ -51,6 +53,9 @@ export function CueFoundSection({
   expandedPreview,
   userEmail,
   userLabels,
+  labelsByAccount,
+  accountColorIndexById,
+  stillSearching,
   focusedIndex,
   hasAnySelection,
   isSelected,
@@ -78,6 +83,12 @@ export function CueFoundSection({
   expandedPreview: boolean;
   userEmail: string;
   userLabels: EmailLabels;
+  /** All inboxes: each account's labels, for the rows of that account. */
+  labelsByAccount?: Record<string, EmailLabels>;
+  /** All inboxes: each account's position, which picks its row marker color. */
+  accountColorIndexById?: Record<string, number>;
+  /** All inboxes: accounts Cue is still searching, after showing what it found. */
+  stillSearching?: { id: string; email: string }[];
   /** The mail screen's cursor; a row here when it is below `threads.length`. */
   focusedIndex: number;
   hasAnySelection: boolean;
@@ -185,9 +196,20 @@ export function CueFoundSection({
                 onOpen={onOpen}
                 onSelectRangeTo={onSelectRangeTo}
                 onToggleSelect={onToggleSelect}
+                accountColorClassName={
+                  "account" in thread
+                    ? getAccountColorClassName(
+                        accountColorIndexById?.[thread.account.id] ?? 0,
+                      )
+                    : undefined
+                }
                 thread={thread}
                 userEmail={userEmail}
-                userLabels={userLabels}
+                userLabels={
+                  "account" in thread
+                    ? (labelsByAccount?.[thread.account.id] ?? NO_LABELS)
+                    : userLabels
+                }
               />
             ))}
             {placeholders.length ? (
@@ -198,6 +220,15 @@ export function CueFoundSection({
               </div>
             ) : null}
           </div>
+          {stillSearching?.length ? (
+            <p
+              className="px-4 pb-2 text-muted-foreground text-xs"
+              role="status"
+            >
+              Still searching{" "}
+              {stillSearching.map((account) => account.email).join(", ")}…
+            </p>
+          ) : null}
           {foundNothing ? (
             <p className="px-4 pb-3 text-muted-foreground text-sm">
               No mail matched Cue&apos;s searches.
