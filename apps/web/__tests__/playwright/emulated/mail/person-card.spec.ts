@@ -1,7 +1,11 @@
 import { expect, type Page } from "@playwright/test";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
-import { openMail, openThreadIdFromUrl } from "./mail-test-helpers";
+import {
+  openMail,
+  openThreadIdFromUrl,
+  readLatestMailMutation,
+} from "./mail-test-helpers";
 
 const THREAD_ID = "thr_playwright_reader_html";
 
@@ -70,9 +74,20 @@ test("opens the sender's card from the keyboard and keeps focus in it", async ({
 
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden();
-  // The reader stays on the conversation, with focus back on the name.
+  // The reader stays on the conversation, with focus back on the name, and
+  // the `e` pressed in the card queued no archive.
   expect(openThreadIdFromUrl(page.url())).toBe(THREAD_ID);
   await expect(sender).toBeFocused();
+  await expect(
+    page.getByRole("heading", { name: "Reader Html Message", exact: true }),
+  ).toBeVisible();
+  expect(
+    await readLatestMailMutation(page, {
+      emailAccountId,
+      kind: "archive",
+      threadId: THREAD_ID,
+    }),
+  ).toBeUndefined();
   await capturePlaywrightCheckpoint(page, testInfo, "person-card-closed");
 });
 

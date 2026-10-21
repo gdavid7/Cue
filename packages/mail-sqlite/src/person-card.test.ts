@@ -196,23 +196,73 @@ describe("readPersonCard", () => {
     expect(card.awaitingThem.map((c) => c.conversationId)).toEqual(["wait"]);
   });
 
-  it("names other addresses only when they carry exactly the same full name", async () => {
+  it("names other addresses you have sent to under exactly the same full name", async () => {
     const { store } = await setup();
+    const sent = (id: string, to: string, at = T0) =>
+      mail({ id, from: ME, to: [to], at, roles: ["sent"] });
     await write(store, [
-      mail({ id: "1", from: ANA }),
-      mail({ id: "2", from: "Ana Lima <ana@work.example>" }),
-      mail({ id: "3", from: "ana lima <lowercase@example.com>" }),
-      mail({ id: "4", from: "Ana Lima Costa <costa@example.com>" }),
-      mail({ id: "5", from: "Ana Lima <me@example.com>" }),
-      mail({ id: "6", from: "Bo <bo@example.com>" }),
-      mail({ id: "7", from: "Bo <bo@other.example>" }),
+      sent("1", ANA),
+      sent("2", "Ana Lima <ana@work.example>", T0 + HOUR),
+      sent("3", "Ana Lima <ana@home.example>", T0 + 2 * HOUR),
+      sent("4", "ana lima <lowercase@example.com>"),
+      sent("5", "Ana Lima Costa <costa@example.com>"),
+      sent("6", "Bo <bo@example.com>"),
+      sent("7", "Bo <bo@other.example>"),
+      // Anyone can claim her name on mail they send you.
+      mail({ id: "8", from: "Ana Lima <ana.payroll@evil.example>" }),
     ]);
 
-    expect((await read(store)).otherAddresses).toEqual(["ana@work.example"]);
+    expect((await read(store)).otherAddresses).toEqual([
+      "ana@home.example",
+      "ana@work.example",
+    ]);
     // A lone first name is too common to say it's the same person.
     expect(
       (await read(store, { email: "bo@example.com" })).otherAddresses,
     ).toEqual([]);
+  });
+
+  it("takes their name only from mail you sent them", async () => {
+    const { store } = await setup();
+    await write(store, [
+      mail({ id: "1", from: "Totally Ana <ana@example.com>" }),
+      mail({ id: "2", from: "Totally Ana <ana@example.com>" }),
+    ]);
+    expect((await read(store)).name).toBeNull();
+
+    await write(store, [
+      mail({ id: "3", from: ME, to: [ANA], roles: ["sent"] }),
+    ]);
+    expect((await read(store)).name).toBe("Ana Lima");
+  });
+
+  it("shows a message that reached two of your accounts once", async () => {
+    const { store } = await setup(["a", "b"]);
+    const exchange = (account: string, offset: number) =>
+      [
+        mail({
+          id: `${account}-1`,
+          conversation: "t",
+          from: ANA,
+          at: T0 + offset,
+          subject: "Plan",
+        }),
+        mail({
+          id: `${account}-2`,
+          conversation: "t",
+          from: ME,
+          to: [ANA],
+          at: T0 + HOUR + offset,
+          subject: "Re: Plan",
+          roles: ["sent"],
+        }),
+      ] satisfies ProviderChange[];
+    await write(store, exchange("a", 0), "a");
+    await write(store, exchange("b", 30_000), "b");
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.conversations).toHaveLength(1);
   });
 
   it("says older mail is still syncing until coverage and the contact index are complete", async () => {

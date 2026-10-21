@@ -774,6 +774,13 @@ export function assertNoShortcutConflicts(
  */
 export const TYPING_SURFACE_ATTRIBUTE = "data-typing-surface";
 
+/**
+ * Marks a surface over the mail, such as a popover, whose keys are its own:
+ * no mail-scope shortcut runs from inside it, so `e` there never archives
+ * the conversation behind it.
+ */
+export const MAIL_SHORTCUTS_OFF_ATTRIBUTE = "data-mail-shortcuts-off";
+
 /** Bindings stay inert while the user is typing, unless they're a ⌘ combo. */
 export function isTypingTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;

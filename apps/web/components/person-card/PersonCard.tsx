@@ -2,7 +2,6 @@
 
 import {
   createContext,
-  type KeyboardEvent,
   type ReactNode,
   useContext,
   useMemo,
@@ -38,6 +37,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { SystemType } from "@/generated/prisma/enums";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { cn } from "@/utils";
@@ -202,7 +202,7 @@ function PersonCardPopover({
           <SheetTrigger asChild>{trigger}</SheetTrigger>
           <SheetContent
             className="max-h-[85dvh] overflow-y-auto rounded-t-xl p-0 pb-[env(safe-area-inset-bottom)]"
-            onKeyDown={stopMailShortcuts}
+            {...{ [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" }}
             side="bottom"
             size={null}
           >
@@ -220,7 +220,7 @@ function PersonCardPopover({
             className="max-h-[min(36rem,var(--radix-popover-content-available-height))] w-[22rem] overflow-y-auto p-0 motion-reduce:animate-none"
             collisionPadding={16}
             data-testid="person-card"
-            onKeyDown={stopMailShortcuts}
+            {...{ [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" }}
           >
             {body}
           </PopoverContent>
@@ -278,7 +278,7 @@ function PersonCardBody({
   const { data, error, isLoading } = useSWR(
     readCard ? ["person-card", JSON.stringify(query)] : null,
     () => (readCard as NonNullable<typeof readCard>)(query),
-    { revalidateOnFocus: false },
+    { revalidateOnFocus: false, shouldRetryOnError: false },
   );
   const open = scope.openConversation;
   const notOpen = (conversation: PersonCardConversation) =>
@@ -343,7 +343,7 @@ function PersonCardBody({
           </Button>
         ) : null}
       </div>
-      {readCard ? (
+      {readCard && !isUnsupported(error) ? (
         <LoadingContent
           error={error}
           errorComponent={
@@ -563,10 +563,11 @@ function PersonCardSkeleton() {
   );
 }
 
-// The mail shortcuts listen on the document; inside the card, keys belong to
-// it, so `e` never archives the conversation behind it.
-function stopMailShortcuts(event: KeyboardEvent) {
-  if (event.key !== "Escape") event.stopPropagation();
+// A tab that relays to another tab's engine can reach one too old to answer.
+function isUnsupported(error: unknown) {
+  return (
+    error instanceof Error && error.message.startsWith("unsupported method")
+  );
 }
 
 function formatLag(ms: number) {

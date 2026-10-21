@@ -22,6 +22,9 @@ const FILE_LIMIT = 6;
 // few are looked up for stored file details.
 const FILE_MESSAGE_LIMIT = 40;
 const OTHER_ADDRESS_LIMIT = 3;
+// Providers stamp a message's arrival per mailbox, so the same message in two
+// accounts can differ by a little.
+const COPY_WINDOW_MS = 5 * 60_000;
 
 type PersonMessage = {
   accountId: string;
@@ -92,8 +95,22 @@ export async function readPersonCard(
       latestMessageAtMs: message.receivedAtMs,
     });
   }
-  const newestFirst = [...conversations.values()].sort(
+  const sorted = [...conversations.values()].sort(
     (a, b) => b.latestMessageAtMs - a.latestMessageAtMs,
+  );
+  const originals = findCrossAccountCopies(sorted);
+  const newestFirst = sorted.filter(
+    (conversation) =>
+      !originals.has(
+        conversationKey(conversation.accountId, conversation.conversationId),
+      ),
+  );
+  // One message to two of your accounts shows once and counts once.
+  const distinct = messages.filter(
+    (message) =>
+      !originals.has(
+        conversationKey(message.accountId, message.conversationId),
+      ),
   );
 
   const awaitingYou: PersonCardConversation[] = [];
@@ -111,10 +128,13 @@ export async function readPersonCard(
         [tracking.accountId, labelId],
       );
       for (const row of rows) {
-        const conversation = conversations.get(
-          conversationKey(tracking.accountId, String(row.conversation_id)),
+        const key = conversationKey(
+          tracking.accountId,
+          String(row.conversation_id),
         );
-        if (conversation) list.push(conversation);
+        const conversation = originals.get(key) ?? conversations.get(key);
+        if (conversation && !list.includes(conversation))
+          list.push(conversation);
       }
     }
   }
@@ -128,9 +148,9 @@ export async function readPersonCard(
       ? await readOtherAddresses(tx, accountIds, email, name, own)
       : [],
     conversations: newestFirst.slice(0, PERSON_CARD_CONVERSATION_LIMIT),
-    files: await readFiles(tx, messages),
+    files: await readFiles(tx, distinct),
     replyLag: measureReplyLag(
-      messages.flatMap((message) =>
+      distinct.flatMap((message) =>
         message.from === "other"
           ? []
           : [
@@ -191,6 +211,11 @@ function summarize(lags: number[]): ReplyLag | null {
   return { medianMs, exchanges: sorted.length };
 }
 
+/**
+ * The name you address them by in mail you sent. Names on mail you received
+ * are whatever the sender chose, so the card leaves those to the header of
+ * the message being read.
+ */
 async function readName(
   tx: SqlTransaction,
   accountIds: string[],
@@ -199,7 +224,8 @@ async function readName(
   if (!accountIds.length) return null;
   const [row] = await tx.query(
     `SELECT name FROM contact_stats
-     WHERE account_id IN (${placeholders(accountIds)}) AND email = ? AND name != ''
+     WHERE account_id IN (${placeholders(accountIds)}) AND email = ?
+       AND sent = 1 AND name != ''
      GROUP BY name ORDER BY SUM(count) DESC, MAX(last_at) DESC, name LIMIT 1`,
     [...accountIds, email],
   );
@@ -208,8 +234,10 @@ async function readName(
 }
 
 /**
- * Addresses shown with exactly this full name. A lone first name is shared
- * by too many people to say it is the same one.
+ * Other addresses you have sent mail to under exactly this full name, newest
+ * first. Only your own sent mail counts: anyone can put a name on mail they
+ * send you. A lone first name is shared by too many people to say it is the
+ * same one.
  */
 async function readOtherAddresses(
   tx: SqlTransaction,
@@ -220,12 +248,13 @@ async function readOtherAddresses(
 ): Promise<string[]> {
   if (name.trim().split(/\s+/u).length < 2) return [];
   const rows = await tx.query(
-    `SELECT DISTINCT t.email FROM contact_tokens t
+    `SELECT t.email, MAX(s.last_at) AS last_at FROM contact_tokens t
      JOIN contact_stats s
-       ON s.account_id = t.account_id AND s.email = t.email AND s.name = ?
+       ON s.account_id = t.account_id AND s.email = t.email
+       AND s.name = ? AND s.sent = 1
      WHERE t.account_id IN (${placeholders(accountIds)})
        AND t.token = ? AND t.email != ?
-     ORDER BY t.email LIMIT ?`,
+     GROUP BY t.email ORDER BY last_at DESC, t.email LIMIT ?`,
     [
       name,
       ...accountIds,
@@ -323,6 +352,36 @@ function parseAttachments(value: SqlValue | undefined) {
   } catch {
     return [];
   }
+}
+
+/**
+ * Conversations another account already holds, as when a message went to two
+ * of your accounts, mapped to the copy that stays. The store keeps no
+ * Message-ID header, so a copy is one with the same subject whose newest
+ * message landed within a few minutes, in a different account.
+ */
+function findCrossAccountCopies(newestFirst: PersonCardConversation[]) {
+  const copies = new Map<string, PersonCardConversation>();
+  const keptBySubject = new Map<string, PersonCardConversation[]>();
+  for (const conversation of newestFirst) {
+    const kept = keptBySubject.get(conversation.subject) ?? [];
+    const original = kept.find(
+      (other) =>
+        other.accountId !== conversation.accountId &&
+        Math.abs(other.latestMessageAtMs - conversation.latestMessageAtMs) <=
+          COPY_WINDOW_MS,
+    );
+    if (original) {
+      copies.set(
+        conversationKey(conversation.accountId, conversation.conversationId),
+        original,
+      );
+    } else {
+      kept.push(conversation);
+      keptBySubject.set(conversation.subject, kept);
+    }
+  }
+  return copies;
 }
 
 function byNewest(a: PersonCardConversation, b: PersonCardConversation) {

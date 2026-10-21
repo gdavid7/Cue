@@ -10,6 +10,7 @@ import {
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PersonCard as PersonCardData } from "@inboxzero/mail-core/queries";
+import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 import {
   PersonCardScope,
   PersonCardTrigger,
@@ -91,26 +92,38 @@ describe("PersonCardTrigger", () => {
     expect(screen.queryByTestId("person-card")).toBeNull();
   });
 
-  it("keeps the mail shortcuts out of the card and closes on Escape", async () => {
+  it("closes on Escape and gives focus back to the name", async () => {
     renderTrigger();
-    const shortcut = vi.fn();
-    document.addEventListener("keydown", shortcut);
-    try {
-      await openCard();
-      fireEvent.keyDown(screen.getByTestId("person-card"), { key: "e" });
-      expect(shortcut).not.toHaveBeenCalled();
+    await openCard();
+    expect(
+      screen
+        .getByTestId("person-card")
+        .hasAttribute(MAIL_SHORTCUTS_OFF_ATTRIBUTE),
+    ).toBe(true);
 
-      fireEvent.keyDown(screen.getByTestId("person-card"), { key: "Escape" });
-      expect(screen.queryByTestId("person-card")).toBeNull();
-      // Focus goes back to the name it opened from.
-      await waitFor(() =>
-        expect(document.activeElement).toBe(
-          screen.getByRole("button", { name: "Ana Lima" }),
-        ),
-      );
-    } finally {
-      document.removeEventListener("keydown", shortcut);
-    }
+    fireEvent.keyDown(screen.getByTestId("person-card"), { key: "Escape" });
+    expect(screen.queryByTestId("person-card")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Ana Lima" }),
+      ),
+    );
+  });
+
+  it("says the history isn't available when the engine can't read it", async () => {
+    mocks.queryPersonCard.mockRejectedValue(
+      new Error("unsupported method queryPersonCard"),
+    );
+    renderTrigger();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Ana Lima" }));
+    });
+    expect(
+      await screen.findByText(
+        "Your mail history with them isn't available here.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New message" })).toBeTruthy();
   });
 
   it("writes to them from the card", async () => {

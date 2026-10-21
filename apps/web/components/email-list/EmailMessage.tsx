@@ -804,7 +804,9 @@ function MessageHeader({
                 event.target.closest("button, a, [role='menu']") ||
                 // A click in the person card, portaled out of the row,
                 // still bubbles here through React.
-                !event.currentTarget.contains(event.target)
+                !event.currentTarget.contains(event.target) ||
+                // Ending a text selection isn't a request to toggle.
+                window.getSelection()?.isCollapsed === false
               )
                 return;
               onToggle();

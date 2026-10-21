@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Suspense, startTransition } from "react";
 import {
+  MAIL_SHORTCUTS_OFF_ATTRIBUTE,
   SEQUENCE_TIMEOUT_MS,
   SHORTCUTS,
   type ShortcutHandlers,
@@ -243,6 +244,23 @@ describe("useShortcuts", () => {
     expect(dialogOpenEvent.defaultPrevented).toBe(false);
     expect(dialogEscapeEvent.defaultPrevented).toBe(false);
     expect(dialogSearchEvent.defaultPrevented).toBe(false);
+  });
+
+  it("runs no mail shortcut from a surface that turns them off, but keeps global ones", () => {
+    const archive = vi.fn();
+    const commandPalette = vi.fn();
+    renderShortcuts({ archive, commandPalette });
+    const card = appendElement("div", { [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" });
+    const inside = appendElement("button");
+    card.append(inside);
+
+    press({ key: "e", code: "KeyE" }, inside);
+    press({ key: "k", code: "KeyK", ctrlKey: true }, inside);
+    expect(archive).not.toHaveBeenCalled();
+    expect(commandPalette).toHaveBeenCalledOnce();
+
+    press({ key: "e", code: "KeyE" });
+    expect(archive).toHaveBeenCalledOnce();
   });
 
   it("leaves Enter to a focused control that activates on it", () => {
