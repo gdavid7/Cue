@@ -10,9 +10,14 @@ const FIXTURES = "__tests__/playwright/emulated/mail/fixtures";
 const DOCX = "planning-notes.docx";
 const XLSX = "team-budget.xlsx";
 const PPTX = "launch-deck.pptx";
+// An external hyperlink, remote and missing images, and an altChunk HTML page
+// with a remote image, @import and script.
+const HOSTILE = "hostile.docx";
+const WORD_TYPE =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const TYPES: Record<string, string> = {
-  [DOCX]:
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  [DOCX]: WORD_TYPE,
+  [HOSTILE]: WORD_TYPE,
   [XLSX]: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   [PPTX]:
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -26,6 +31,7 @@ test.beforeEach(async ({ page }, testInfo) => {
   inserted = await insertMessageWithAttachments(page, subject, {
     [DOCX]: await readFile(`${FIXTURES}/${DOCX}`),
     [XLSX]: await readFile(`${FIXTURES}/${XLSX}`),
+    [HOSTILE]: await readFile(`${FIXTURES}/${HOSTILE}`),
     // No in-browser renderer for slides; the bytes only need to be a file.
     [PPTX]: Buffer.from("PK\u0003\u0004slides"),
   });
@@ -58,6 +64,46 @@ test("previews a Word attachment in the browser, sending it nowhere", async ({
   expect(thirdPartyRequests()).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+});
+
+test("keeps a hostile Word document from loading or navigating anything", async ({
+  page,
+  context,
+}, testInfo) => {
+  await openInsertedThread(page);
+  const thirdPartyRequests = watchThirdPartyRequests(page);
+
+  await page.getByRole("button", { name: `Preview ${HOSTILE}` }).click();
+  const dialog = page.getByRole("dialog", { name: HOSTILE });
+  const frame = dialog.locator(`iframe[title="${HOSTILE}"]`);
+  const document = dialog.frameLocator(`iframe[title="${HOSTILE}"]`);
+  await expect(document.getByText("End of hostile document")).toBeVisible({
+    timeout: 30_000,
+  });
+  // The altChunk page is never rendered.
+  await expect(document.getByText("Embedded page")).toHaveCount(0);
+  await capturePlaywrightCheckpoint(page, testInfo, "office-docx-hostile");
+
+  // The link opens in a new tab; the preview frame stays on the document.
+  // Answered in the browser, so the new tab's load never leaves it.
+  await context.route("https://phish.invalid/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<p>Opened</p>" }),
+  );
+  const popup = context.waitForEvent("page");
+  await document.getByText("Open the portal").click();
+  const opened = await popup;
+  await opened.waitForURL("https://phish.invalid/login");
+  await opened.close();
+  await expect(document.getByText("Hostile document")).toBeVisible();
+  expect(
+    await frame.evaluate(
+      (element: HTMLIFrameElement) => element.contentWindow?.location.href,
+    ),
+  ).toBe("about:srcdoc");
+
+  // Give any late image or stylesheet load time to show up.
+  await page.waitForTimeout(1000);
+  expect(thirdPartyRequests()).toEqual([]);
 });
 
 test("previews an Excel attachment sheet by sheet", async ({
@@ -108,8 +154,9 @@ async function openInsertedThread(page: Page) {
 }
 
 /**
- * Requests that leave the app and the emulators, as an online viewer's frame
- * or an upload would. Avatars and fonts load on their own and aren't mail.
+ * Requests of any kind that leave the app and the emulators, as an online
+ * viewer, an upload or a document's tracking image would, plus the
+ * "<app>/null" a missing image part used to request.
  */
 function watchThirdPartyRequests(page: Page) {
   const allowed = new Set(
@@ -124,10 +171,10 @@ function watchThirdPartyRequests(page: Page) {
   );
   const offending: string[] = [];
   page.on("request", (request) => {
-    if (["image", "font"].includes(request.resourceType())) return;
     const url = new URL(request.url());
     if (url.protocol === "data:" || url.protocol === "blob:") return;
-    if (!allowed.has(url.origin)) offending.push(url.origin);
+    if (!allowed.has(url.origin) || url.pathname.endsWith("/null"))
+      offending.push(`${request.resourceType()} ${url.origin}${url.pathname}`);
   });
   return () => offending;
 }

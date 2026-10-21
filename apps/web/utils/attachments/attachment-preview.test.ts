@@ -1,3 +1,4 @@
+import { zipSync } from "fflate";
 import { encodeImage } from "utif2";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -5,8 +6,10 @@ import {
   getAttachmentPreview,
   getAttachmentPreviewTarget,
   isPreviewableAttachment,
+  isSafeToUnpack,
+  OFFICE_PREVIEW_MAX_BYTES,
   isPreviewableImageType,
-} from "./image-preview";
+} from "./attachment-preview";
 
 describe("attachment image previews", () => {
   it.each([
@@ -173,7 +176,12 @@ describe("attachment preview routing", () => {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   const PPTX =
     "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-  const zip = () => new Blob([new Uint8Array([80, 75, 3, 4, 20, 0, 6, 0])]);
+  const zip = () =>
+    new Blob([
+      zipSync({
+        "word/document.xml": new TextEncoder().encode("<w:document/>"),
+      }),
+    ]);
 
   it.each([
     [DOCX, "notes", "docx"],
@@ -218,5 +226,43 @@ describe("attachment preview routing", () => {
         filename: "budget.xlsx",
       }),
     ).toBeUndefined();
+  });
+
+  // Unpacked on the page, so a bomb must be refused before parsing.
+  it("refuses a package that would inflate far past its size", async () => {
+    const bomb = zipSync({
+      "word/document.xml": new Uint8Array(2 * 1024 * 1024),
+    });
+    expect(isSafeToUnpack(bomb)).toBe(false);
+    expect(
+      await getAttachmentPreviewTarget(new Blob([bomb]), {
+        mimeType: DOCX,
+        filename: "bomb.docx",
+      }),
+    ).toEqual({ kind: "tooLarge" });
+  });
+
+  it("refuses a package with an absurd number of parts", () => {
+    const parts: Record<string, Uint8Array> = {};
+    for (let index = 0; index < 5001; index++)
+      parts[`xl/part${index}.xml`] = new Uint8Array(0);
+    expect(isSafeToUnpack(zipSync(parts))).toBe(false);
+  });
+
+  it("refuses a file over the Office preview cap without unpacking it", async () => {
+    const big = new Blob([
+      new Uint8Array([80, 75, 3, 4]),
+      new Uint8Array(OFFICE_PREVIEW_MAX_BYTES),
+    ]);
+    expect(
+      await getAttachmentPreviewTarget(big, {
+        mimeType: XLSX,
+        filename: "huge.xlsx",
+      }),
+    ).toEqual({ kind: "tooLarge" });
+  });
+
+  it("refuses a file that only starts like a zip", () => {
+    expect(isSafeToUnpack(new Uint8Array([80, 75, 3, 4, 1, 2, 3]))).toBe(false);
   });
 });

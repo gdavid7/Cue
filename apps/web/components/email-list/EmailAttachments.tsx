@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { DownloadIcon, ImageIcon, Loader2 } from "lucide-react";
+import { DownloadIcon, ImageIcon } from "lucide-react";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { CardBasic } from "@/components/ui/card";
 import {
@@ -20,11 +20,19 @@ import { useSaveDestinations } from "@/hooks/useSaveDestinations";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
 import {
+  PREVIEW_TOO_LARGE,
+  PREVIEW_UNAVAILABLE,
+  PreviewMessage,
+  PreviewSpinner,
+} from "@/components/email-list/AttachmentPreviewStatus";
+import {
   type AttachmentPreviewTarget,
   getAttachmentPreviewTarget,
+  getOfficePreviewKind,
+  OFFICE_PREVIEW_MAX_BYTES,
   isPreviewableAttachment,
   isPreviewableImageType,
-} from "@/utils/attachments/image-preview";
+} from "@/utils/attachments/attachment-preview";
 import {
   fetchAttachment,
   getAttachmentUrl,
@@ -216,11 +224,14 @@ function AttachmentPreviewDialogContent({
   url: string;
   emailAccountId: string;
 }) {
-  const tooLarge = size > PREVIEW_MAX_BYTES;
+  const maxBytes = getOfficePreviewKind({ mimeType, filename })
+    ? OFFICE_PREVIEW_MAX_BYTES
+    : PREVIEW_MAX_BYTES;
+  const tooLarge = size > maxBytes;
   const [file, setFile] = useState<Blob>();
   const [preview, setPreview] = useState<AttachmentPreview>();
   const [error, setError] = useState<string | undefined>(
-    tooLarge ? "This file is too large to preview." : undefined,
+    tooLarge ? PREVIEW_TOO_LARGE : undefined,
   );
 
   useEffect(() => {
@@ -232,7 +243,7 @@ function AttachmentPreviewDialogContent({
       url,
       emailAccountId,
       signal: controller.signal,
-      maxBytes: PREVIEW_MAX_BYTES,
+      maxBytes,
     })
       .then(async (blob) => {
         const target = await getAttachmentPreviewTarget(blob, {
@@ -242,7 +253,11 @@ function AttachmentPreviewDialogContent({
         if (controller.signal.aborted) return;
         setFile(blob);
         if (!target) {
-          setError("Preview isn't available for this file.");
+          setError(PREVIEW_UNAVAILABLE);
+          return;
+        }
+        if (target.kind === "tooLarge") {
+          setError(PREVIEW_TOO_LARGE);
           return;
         }
         if (target.kind !== "file") {
@@ -261,7 +276,7 @@ function AttachmentPreviewDialogContent({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [url, emailAccountId, tooLarge, mimeType, filename]);
+  }, [url, emailAccountId, tooLarge, maxBytes, mimeType, filename]);
 
   return (
     <DialogContent className="flex h-[90dvh] max-w-5xl flex-col gap-0 overflow-hidden p-0">
@@ -303,7 +318,7 @@ function AttachmentPreviewBody({
   preview?: AttachmentPreview;
   error?: string;
 }) {
-  if (error) return <p className="text-muted-foreground text-sm">{error}</p>;
+  if (error) return <PreviewMessage>{error}</PreviewMessage>;
   if (!preview) return <PreviewSpinner />;
   if (preview.kind !== "file")
     return preview.kind === "docx" ? (
@@ -333,11 +348,7 @@ function AttachmentPreviewBody({
 
 type AttachmentPreview =
   | { kind: "file"; url: string; type: string }
-  | Exclude<AttachmentPreviewTarget, { kind: "file" }>;
-
-function PreviewSpinner() {
-  return <Loader2 className="size-6 animate-spin text-muted-foreground" />;
-}
+  | Exclude<AttachmentPreviewTarget, { kind: "file" } | { kind: "tooLarge" }>;
 
 function AttachmentImagePreview({
   emailAccountId,

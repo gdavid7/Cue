@@ -13,8 +13,8 @@ export type RowSwipeAxis = "pending" | "horizontal" | "vertical";
 export const AXIS_LOCK_SLOP_PX = 10;
 /** Horizontal must clearly dominate, so a slanted scroll stays a scroll. */
 const HORIZONTAL_LOCK_RATIO = 1.2;
-/** iOS Safari's back gesture starts at the screen edge; leave it alone. */
-export const EDGE_GUARD_PX = 16;
+/** iOS Safari's back and forward gestures start at the screen edges. */
+const EDGE_GUARD_PX = 16;
 const MIN_COMMIT_PX = 56;
 const MAX_COMMIT_PX = 160;
 const COMMIT_FRACTION = 0.3;
@@ -30,6 +30,11 @@ export function resolveAxis(dx: number, dy: number): RowSwipeAxis {
   const ay = Math.abs(dy);
   if (Math.max(ax, ay) < AXIS_LOCK_SLOP_PX) return "pending";
   return ax > ay * HORIZONTAL_LOCK_RATIO ? "horizontal" : "vertical";
+}
+
+/** A touch that starts at either screen edge belongs to the browser. */
+export function isEdgeGesture(x: number, viewportWidth: number) {
+  return x < EDGE_GUARD_PX || x > viewportWidth - EDGE_GUARD_PX;
 }
 
 export function getCommitThreshold(width: number) {

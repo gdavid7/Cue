@@ -1,11 +1,15 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import readXlsxFile, {
   type CellValue,
   type Sheet,
 } from "read-excel-file/browser";
+import {
+  PREVIEW_UNAVAILABLE,
+  PreviewMessage,
+  PreviewSpinner,
+} from "@/components/email-list/AttachmentPreviewStatus";
 import { cn } from "@/utils";
 
 // Enough to recognise a sheet; past this the browser slows and Download is better.
@@ -37,14 +41,8 @@ export default function XlsxAttachmentPreview({ file }: { file: Blob }) {
     };
   }, [file]);
 
-  if (failed)
-    return (
-      <p className="text-muted-foreground text-sm">
-        Couldn't preview this spreadsheet. Download it to open it.
-      </p>
-    );
-  if (!sheets)
-    return <Loader2 className="size-6 animate-spin text-muted-foreground" />;
+  if (failed) return <PreviewMessage>{PREVIEW_UNAVAILABLE}</PreviewMessage>;
+  if (!sheets) return <PreviewSpinner />;
 
   const sheet = sheets[active] ?? sheets[0];
   const rows = sheet?.data ?? [];

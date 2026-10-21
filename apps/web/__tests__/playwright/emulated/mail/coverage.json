@@ -315,6 +315,7 @@
     "components/email-list/EmailAttachments.tsx",
     "components/email-list/DocxAttachmentPreview.tsx",
     "components/email-list/XlsxAttachmentPreview.tsx",
-    "utils/attachments/image-preview.ts"
+    "utils/attachments/attachment-preview.ts",
+    "utils/attachments/docx-frame.ts"
   ]
 }

@@ -258,6 +258,35 @@ describe("ThreadRow swipe", () => {
     expect(row.closest<HTMLElement>("[data-swiping]")).toBeNull();
   });
 
+  it("archives once when the row is swiped again on its way out", async () => {
+    const rowActions = actions();
+    renderRow({ rowActions });
+    const row = screen.getByRole("option");
+
+    swipe(row, "touch", [-20, -80, -160, -200]);
+    await waitFor(() => expect(rowActions.archive).toHaveBeenCalled());
+    // Archived, but the list hasn't removed the row yet.
+    swipe(row, "touch", [-20, -80, -160, -200]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(rowActions.archive).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a swipe from the screen's right edge to the browser", () => {
+    const rowActions = actions();
+    renderRow({ rowActions });
+    const row = screen.getByRole("option");
+    const edge = window.innerWidth - 4;
+
+    fireEvent.pointerDown(row, touchAt(edge, 100));
+    for (const dx of [-20, -80, -160, -200])
+      fireEvent.pointerMove(row, touchAt(edge + dx, 100));
+    fireEvent.pointerUp(row, touchAt(edge - 200, 100));
+
+    expect(row.closest<HTMLElement>("[data-swiping]")).toBeNull();
+    expect(rowActions.archive).not.toHaveBeenCalled();
+  });
+
   it("never moves the row for a mouse drag", () => {
     const rowActions = actions();
     renderRow({ rowActions });

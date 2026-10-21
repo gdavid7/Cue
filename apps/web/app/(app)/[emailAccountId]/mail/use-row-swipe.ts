@@ -2,12 +2,12 @@
 
 import { type MouseEvent, type PointerEvent, useEffect, useRef } from "react";
 import {
-  EDGE_GUARD_PX,
   getReleaseVelocity,
   getSwipeAction,
   getSwipeOffset,
   getSwipeTravel,
   isArmed,
+  isEdgeGesture,
   type RowSwipeAction,
   type RowSwipeAxis,
   resolveAxis,
@@ -57,6 +57,9 @@ export function useRowSwipe({
   const frame = useRef<number | null>(null);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const swallowClick = useRef(false);
+  // From an archive's commit until its row is gone, the row is no longer
+  // the user's to move: a second grab would archive again.
+  const dismissing = useRef(false);
   const latest = useRef({ enabled, onCommit });
   latest.current = { enabled, onCommit };
 
@@ -115,13 +118,15 @@ export function useRowSwipe({
       return;
     }
     const start = performance.now();
-    const step = (now: number) => {
+    const step = () => {
       const spring = springAt({
         from,
         to,
         velocity,
         response,
-        elapsed: (now - start) / 1000,
+        // performance.now(), not the frame's timestamp, which can predate
+        // `start` and would run the spring backwards.
+        elapsed: Math.max(0, (performance.now() - start) / 1000),
       });
       const settled =
         Math.abs(spring.value - to) < 0.5 && Math.abs(spring.velocity) < 20;
@@ -150,6 +155,7 @@ export function useRowSwipe({
         })
       : null;
     if (action === "archive") {
+      dismissing.current = true;
       const exit = -(width() + 24);
       animateTo({
         to: exit,
@@ -159,6 +165,7 @@ export function useRowSwipe({
           latest.current.onCommit("archive");
           resetTimer.current = setTimeout(() => {
             resetTimer.current = null;
+            dismissing.current = false;
             paint(0);
           }, DISMISSED_RESET_MS);
         },
@@ -193,11 +200,21 @@ export function useRowSwipe({
     layerRef,
     handlers: {
       onPointerDown: (event: PointerEvent) => {
-        swallowClick.current = false;
+        // A tap on a row on its way out shouldn't open it either.
+        swallowClick.current = dismissing.current;
         const current = latest.current.enabled;
-        if (event.pointerType !== "touch" || !current || !event.isPrimary)
+        if (
+          event.pointerType !== "touch" ||
+          !current ||
+          !event.isPrimary ||
+          dismissing.current
+        )
           return;
-        if (event.clientX < EDGE_GUARD_PX && offset.current === 0) return;
+        if (
+          offset.current === 0 &&
+          isEdgeGesture(event.clientX, window.innerWidth)
+        )
+          return;
         const interrupted = frame.current !== null || offset.current !== 0;
         stopAnimation();
         gesture.current = {

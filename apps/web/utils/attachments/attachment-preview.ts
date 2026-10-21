@@ -1,3 +1,5 @@
+import { unzipSync } from "fflate";
+
 const rasterTypes = new Set([
   "image/png",
   "image/jpeg",
@@ -10,6 +12,16 @@ const DOCX_MIME_TYPE =
 const XLSX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const ZIP_SIGNATURE = [80, 75, 3, 4];
+/**
+ * Office renderers parse on the page, so a hostile package (a zip bomb, or
+ * just an enormous workbook) must be turned away before it is unpacked.
+ */
+export const OFFICE_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
+const OFFICE_MAX_UNPACKED_BYTES = 100 * 1024 * 1024;
+const OFFICE_MAX_ENTRIES = 5000;
+// Office XML compresses about 10-20x; far beyond that is a bomb.
+const OFFICE_MAX_RATIO = 200;
+const OFFICE_RATIO_FLOOR_BYTES = 1024 * 1024;
 // Bounds the RGBA buffer a sender can make us allocate (~100 MB).
 const MAX_TIFF_PIXELS = 25_000_000;
 
@@ -55,7 +67,10 @@ export function getOfficePreviewKind({
 
 export type AttachmentPreviewTarget =
   /** An image or PDF the browser shows itself, typed by its bytes. */
-  { kind: "file"; file: Blob } | { kind: OfficePreviewKind; file: Blob };
+  | { kind: "file"; file: Blob }
+  | { kind: OfficePreviewKind; file: Blob }
+  /** An Office file too big, or too suspicious, to unpack here. */
+  | { kind: "tooLarge" };
 
 /**
  * What the preview dialog shows for an attachment. The bytes decide: an image
@@ -70,8 +85,43 @@ export async function getAttachmentPreviewTarget(
   if (file) return { kind: "file", file };
   const office = getOfficePreviewKind(attachment);
   if (!office) return;
-  const bytes = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
-  if (matches(bytes, ZIP_SIGNATURE)) return { kind: office, file: blob };
+  const header = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+  if (!matches(header, ZIP_SIGNATURE)) return;
+  if (blob.size > OFFICE_PREVIEW_MAX_BYTES) return { kind: "tooLarge" };
+  const fits = isSafeToUnpack(new Uint8Array(await blob.arrayBuffer()));
+  return fits ? { kind: office, file: blob } : { kind: "tooLarge" };
+}
+
+/**
+ * Reads only the zip's central directory (nothing is inflated) and checks the
+ * sizes it declares. Undeclared growth is still possible in theory, but the
+ * renderers decompress against these same entries.
+ */
+export function isSafeToUnpack(bytes: Uint8Array) {
+  let entries = 0;
+  let unpacked = 0;
+  let bomb = false;
+  try {
+    unzipSync(bytes, {
+      filter: ({ size, originalSize }) => {
+        entries++;
+        unpacked += originalSize;
+        if (
+          originalSize > OFFICE_RATIO_FLOOR_BYTES &&
+          originalSize > Math.max(size, 1) * OFFICE_MAX_RATIO
+        )
+          bomb = true;
+        return false;
+      },
+    });
+  } catch {
+    return false;
+  }
+  return (
+    !bomb &&
+    entries <= OFFICE_MAX_ENTRIES &&
+    unpacked <= OFFICE_MAX_UNPACKED_BYTES
+  );
 }
 
 export async function getAttachmentPreview(

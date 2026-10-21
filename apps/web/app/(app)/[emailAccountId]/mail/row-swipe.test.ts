@@ -5,6 +5,7 @@ import {
   getSwipeOffset,
   getSwipeTravel,
   isArmed,
+  isEdgeGesture,
   resolveAxis,
   resolveRelease,
   springAt,
@@ -29,6 +30,16 @@ describe("resolveAxis", () => {
   it("takes a clearly sideways drag", () => {
     expect(resolveAxis(-24, 6)).toBe("horizontal");
     expect(resolveAxis(18, 2)).toBe("horizontal");
+  });
+});
+
+describe("isEdgeGesture", () => {
+  // iOS Safari's back (left edge) and forward (right edge) swipes.
+  it("leaves touches at either screen edge to the browser", () => {
+    expect(isEdgeGesture(8, 390)).toBe(true);
+    expect(isEdgeGesture(384, 390)).toBe(true);
+    expect(isEdgeGesture(40, 390)).toBe(false);
+    expect(isEdgeGesture(350, 390)).toBe(false);
   });
 });
 
