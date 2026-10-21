@@ -220,7 +220,8 @@ export function useIngestInboxPreview() {
 
 /**
  * The same catch-up a page load gets for a mailbox that fell behind (RL-1),
- * for a tab shown again after a long absence without reloading: the newest
+ * for a tab shown again after a long absence, or woken from a long sleep with
+ * it showing, without reloading: the newest
  * inbox mail is read once, at interactive priority, and handed to the engine
  * ahead of its own catch-up. Only the open account's; the others follow their
  * usual sync. Gmail only, as the server's preview hands Outlook's engine

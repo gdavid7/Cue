@@ -213,6 +213,78 @@ describe("followWakeCatchUp", () => {
     expect(onWake).toHaveBeenCalledTimes(1);
   });
 
+  it("catches up once after a laptop slept with the tab showing", async () => {
+    const { onWake } = follow();
+
+    // No timer ran while it slept; only the clock moved.
+    vi.setSystemTime(Date.now() + 20 * MINUTE);
+    expect(onWake).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30_000 + 2000);
+    expect(onWake).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(10 * MINUTE);
+    expect(onWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not count a short sleep with the tab showing", async () => {
+    const { onWake } = follow();
+
+    vi.setSystemTime(Date.now() + 14 * MINUTE);
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+
+    expect(onWake).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing of a tab that stayed open and awake", async () => {
+    const { isStale, onWake } = follow();
+
+    await vi.advanceTimersByTimeAsync(60 * MINUTE);
+
+    expect(isStale).not.toHaveBeenCalled();
+    expect(onWake).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["resume", () => document.dispatchEvent(new Event("resume"))],
+    ["online", () => window.dispatchEvent(new Event("online"))],
+  ])("treats %s after a long gap as a wake", async (_name, fire) => {
+    const { onWake } = follow();
+
+    vi.setSystemTime(Date.now() + 20 * MINUTE);
+    fire();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onWake).toHaveBeenCalledTimes(1);
+
+    // Again soon after is not another gap.
+    fire();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not take coming back online after a short gap as a wake", async () => {
+    const { onWake } = follow();
+
+    vi.setSystemTime(Date.now() + 5 * MINUTE);
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+
+    expect(onWake).not.toHaveBeenCalled();
+  });
+
+  it("leaves a hidden tab's absence to it being shown again", async () => {
+    const { onWake } = follow();
+
+    setVisibility("hidden");
+    vi.setSystemTime(Date.now() + 20 * MINUTE);
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(5 * MINUTE);
+    expect(onWake).not.toHaveBeenCalled();
+
+    setVisibility("visible");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onWake).toHaveBeenCalledTimes(1);
+  });
+
   it("stops listening when stopped", async () => {
     const { onWake } = follow();
     setVisibility("hidden");
