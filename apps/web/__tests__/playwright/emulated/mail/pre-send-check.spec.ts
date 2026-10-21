@@ -141,18 +141,19 @@ test("does not flag an earlier participant added to a reply-all", async ({
     threadId: earlier.threadId,
     from: "Alex Latest <alex.latest@example.com>",
     to: userEmail(),
-    cc: "Eli Latest <eli.latest@example.com>",
+    cc: "eli.latest@example.com",
     subject,
     minutesAgo: 10,
   });
 
   const message = await openThreadMessage(page, emailAccountId, latest);
   await message.getByRole("button", { name: "Reply all", exact: true }).click();
+  // Casey is only on the first message, not the one being replied to.
+  await addRecipient(message, "casey.earlier@example.com");
+  // Reply all kept the other person on the message being replied to.
   await expect(
     message.getByRole("button", { name: "Remove eli.latest@example.com" }),
   ).toBeVisible();
-  // Casey is only on the first message, not the one being replied to.
-  await addRecipient(message, "casey.earlier@example.com");
   const body = `Pre-send participants body ${testInfo.retry}-${Date.now()}`;
   const { sent } = await sendReply(page, message, body);
 
