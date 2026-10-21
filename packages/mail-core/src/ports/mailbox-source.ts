@@ -35,6 +35,10 @@ export type ScopeDescriptor = {
   priority?: "high" | "low";
 };
 
+// A longer wait is cut to this, and a scan still waiting past it is told
+// again by the source's refusal.
+export const MAX_ENUMERATION_RETRY_AFTER_MS = 60_000;
+
 export type EnumerationPage = {
   bootstrapId: string;
   scopeId: string;
@@ -46,8 +50,10 @@ export type EnumerationPage = {
       nextPage: string;
       catchUpFrom: null;
       /**
-       * How long to wait before asking for `nextPage`: the source's budget
-       * would refuse it sooner. Omitted means at once. Only paces this scan.
+       * How long to wait before asking for `nextPage`, because the source's
+       * budget would refuse it sooner. Omitted means at once. It paces only
+       * this scan, the account's primary scan or its backfill alike, never
+       * commands or reads. At most MAX_ENUMERATION_RETRY_AFTER_MS.
        */
       retryAfterMs?: number;
     }
