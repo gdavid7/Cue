@@ -9,6 +9,9 @@
  */
 export const MODEL_NOT_CACHED = "model_not_cached";
 
+/** A downloaded model file didn't match its pinned SHA-256. */
+export const MODEL_INTEGRITY = "model_integrity";
+
 export type EmbeddingWorkerRequest = { id: number; texts: string[] };
 export type EmbeddingWorkerResponse =
   | { id: number; vectors: Float32Array[] }

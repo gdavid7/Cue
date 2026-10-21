@@ -10,6 +10,7 @@ import { createTextEmbedder } from "@/utils/mail-search/text-embedder";
 import {
   type EmbeddingWorkerRequest,
   type EmbeddingWorkerResponse,
+  MODEL_INTEGRITY,
   MODEL_NOT_CACHED,
 } from "@/utils/mail-engine/embedding-worker-protocol";
 
@@ -59,8 +60,7 @@ async function readModelFile(file: SemanticModelFile) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`model_download_${response.status}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!(await isPinnedModelFile(file, bytes)))
-    throw new Error("model_integrity");
+  if (!(await isPinnedModelFile(file, bytes))) throw new Error(MODEL_INTEGRITY);
   try {
     await cache.put(
       url,

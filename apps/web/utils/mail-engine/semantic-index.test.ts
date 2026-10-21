@@ -3,7 +3,10 @@ import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-protocol";
+import {
+  MODEL_INTEGRITY,
+  MODEL_NOT_CACHED,
+} from "@/utils/mail-engine/embedding-worker-protocol";
 import {
   createSemanticIndex,
   SEMANTIC_INDEX_CAP,
@@ -86,13 +89,16 @@ describe("createSemanticIndex", () => {
 });
 
 describe("createSemanticIndex when passes fail", () => {
-  it("stops for the session when the model can't be kept on this device", async () => {
+  it.each([
+    MODEL_NOT_CACHED,
+    MODEL_INTEGRITY,
+  ])("stops for the session on %s, rather than downloading the model again", async (code) => {
     const store = await mailbox([
       message("kitchen", "Kitchen remodel proposal", { daysAgo: 1 }),
     ]);
     const embedder = {
       embed: vi.fn(async () => {
-        throw new Error(MODEL_NOT_CACHED);
+        throw new Error(code);
       }),
     };
     const sleeps: number[] = [];

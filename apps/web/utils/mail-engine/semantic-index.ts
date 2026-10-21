@@ -6,7 +6,10 @@ import type {
   EmbeddingBacklogCursor,
   MailStore,
 } from "@inboxzero/mail-core/ports/mail-store";
-import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-protocol";
+import {
+  MODEL_INTEGRITY,
+  MODEL_NOT_CACHED,
+} from "@/utils/mail-engine/embedding-worker-protocol";
 import {
   messageEmbeddingText,
   quantizeVector,
@@ -73,6 +76,11 @@ export function createSemanticIndex({
   let started = false;
   // Set only during the start delay, the one rest a search cuts short.
   let wake: (() => void) | null = null;
+  // Ends whatever rest the loop is in, so stop() never waits out a sleep.
+  let interrupt: () => void = () => undefined;
+  const interrupted = new Promise<void>((resolve) => {
+    interrupt = resolve;
+  });
   recheckMs = Math.max(MIN_INTERVAL_MS, recheckMs);
 
   /** Embeds every message within the cap that lacks a vector; resolves how many. */
@@ -133,11 +141,14 @@ export function createSemanticIndex({
         failures += 1;
       }
       if (stopped) return;
-      await sleep(
-        failures
-          ? Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (failures - 1))
-          : recheckMs,
-      );
+      await Promise.race([
+        sleep(
+          failures
+            ? Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (failures - 1))
+            : recheckMs,
+        ),
+        interrupted,
+      ]);
     }
   }
 
@@ -151,6 +162,7 @@ export function createSemanticIndex({
     stop() {
       stopped = true;
       wake?.();
+      interrupt();
     },
     async search(query: SemanticSearchQuery): Promise<SemanticMatch[]> {
       // A search during the start delay starts the index now.
@@ -205,7 +217,12 @@ export function semanticSearchSupported(
 }
 
 function isFatal(error: unknown) {
-  return error instanceof Error && error.message === MODEL_NOT_CACHED;
+  // A model that can't be kept, or whose upstream file no longer matches
+  // its pinned hash, would only be downloaded again on every retry.
+  return (
+    error instanceof Error &&
+    (error.message === MODEL_NOT_CACHED || error.message === MODEL_INTEGRITY)
+  );
 }
 
 function defaultSleep(ms: number) {

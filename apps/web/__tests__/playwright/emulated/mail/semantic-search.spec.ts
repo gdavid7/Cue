@@ -97,6 +97,8 @@ test("finds mail by meaning when its words differ from the search", async ({
 
   console.log(`wasm loaded: ${JSON.stringify(wasm)}`);
   const appOrigin = new URL(page.url()).origin;
+  // With no wasm seen at all, the checks below would pass vacuously.
+  expect(wasm.length).toBeGreaterThan(0);
   for (const asset of wasm) {
     expect(new URL(asset.url).origin).toBe(appOrigin);
     expect(asset.contentType).toContain("application/wasm");
