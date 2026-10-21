@@ -17,6 +17,7 @@ import { SnoozedThreadList } from "./SnoozedThreadList";
 
 const mocks = vi.hoisted(() => ({
   cancel: vi.fn(),
+  refreshScheduled: vi.fn(),
   requestSync: vi.fn(),
 }));
 
@@ -34,6 +35,19 @@ vi.mock("@/hooks/useMailHref", () => ({
     ({ accountId = "account-a" }: { accountId?: string } = {}) =>
       `/mail/${accountId}/sent`,
 }));
+vi.mock("@/hooks/useHiddenDraftMessageIds", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/useHiddenDraftMessageIds")>();
+  return {
+    ...actual,
+    refreshUpcomingScheduledEmails: (
+      ...args: Parameters<typeof actual.refreshUpcomingScheduledEmails>
+    ) => {
+      mocks.refreshScheduled(args[1]);
+      return actual.refreshUpcomingScheduledEmails(...args);
+    },
+  };
+});
 vi.mock("@/utils/actions/scheduled-email", () => ({
   cancelScheduledEmailAction: mocks.cancel,
   retryScheduledEmailAction: vi.fn(),
@@ -175,6 +189,28 @@ describe("ScheduledEmailList across accounts", () => {
     await waitFor(() =>
       expect(mocks.cancel).toHaveBeenCalledWith("account-b", { id: "send-b" }),
     );
+    // So All inboxes' cached reads of that account's sends don't go stale.
+    await waitFor(() =>
+      expect(mocks.refreshScheduled).toHaveBeenCalledWith("account-b"),
+    );
+  });
+
+  it("leaves other reads alone when the action fails", async () => {
+    byAccount = {
+      "account-a": { scheduledEmails: [scheduled("send-a", "First", 2)] },
+      "account-b": { scheduledEmails: [] },
+    };
+    mocks.cancel.mockResolvedValue({ serverError: "Nope" });
+    renderWithSWR(<ScheduledEmailList accounts={ACCOUNTS} />);
+
+    const list = await screen.findByRole("list", { name: "Scheduled emails" });
+    await act(async () => {
+      fireEvent.click(
+        within(list).getByRole("button", { name: "Cancel send" }),
+      );
+    });
+    await screen.findByRole("alert");
+    expect(mocks.refreshScheduled).not.toHaveBeenCalled();
   });
 });
 

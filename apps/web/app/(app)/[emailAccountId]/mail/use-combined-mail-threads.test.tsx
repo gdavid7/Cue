@@ -255,6 +255,68 @@ describe("useCombinedMailThreads merged mailboxes", () => {
       ),
     ).toEqual(["gmail", "outlook"]);
   });
+
+  it("caps the hidden draft ids across accounts, keeping the newest of each", async () => {
+    const idsFor = (prefix: string) =>
+      Array.from({ length: 6000 }, (_, index) => `${prefix}-${index}`);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const accountId = new Headers(init?.headers).get("X-Email-Account-ID");
+        return Response.json({
+          scheduledEmails: [
+            {
+              id: `send-${accountId}`,
+              status: "PENDING",
+              sendAt: new Date(Date.now() + 60_000).toISOString(),
+              draftMessageIds: idsFor(accountId ?? ""),
+            },
+          ],
+        });
+      }),
+    );
+    const engine = fakeEngine(
+      mailboxSnapshot({
+        conversations: [conversation("gmail", "g-1")],
+        coverage: [coverage("gmail", 10), coverage("outlook", 20)],
+      }),
+    );
+
+    renderHook(
+      () =>
+        useCombinedMailThreads({
+          accounts: [GMAIL, OUTLOOK],
+          emailAccountId: "gmail",
+          enabled: true,
+          isUnread: false,
+          mailboxType: "draft",
+        }),
+      { wrapper: engine.wrapper },
+    );
+
+    await waitFor(() => {
+      const [{ predicate }] = engine.client.observeMailbox.mock
+        .lastCall as unknown as [
+        {
+          predicate: {
+            predicates: {
+              predicate?: {
+                predicates: { accountId: string; ids: string[] }[];
+              };
+            }[];
+          };
+        },
+      ];
+      const messages = predicate.predicates[1]?.predicate?.predicates ?? [];
+      expect(
+        messages.map(({ accountId, ids }) => [accountId, ids.length]),
+      ).toEqual([
+        ["gmail", 6000],
+        ["outlook", 4000],
+      ]);
+      expect(messages[1]?.ids[0]).toBe("outlook-2000");
+    });
+  });
 });
 
 describe("labelNamesToAccountScopedPredicate", () => {

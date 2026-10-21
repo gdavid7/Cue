@@ -143,10 +143,9 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       .getByRole("button", { name: /Tomorrow morning/ })
       .click();
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await mailboxes
-      .getByRole("link", { name: "Drafts", exact: true })
-      .first()
-      .click();
+    // No navigation: the open Drafts list must drop the draft by itself, not on
+    // a remount's revalidation.
+    await expect(page).toHaveURL(/\/all-inboxes\/drafts(\?|$)/);
     await expect(
       draftRows.filter({ has: accountMarker(page, second.email) }),
     ).toHaveCount(0, { timeout: 30_000 });
@@ -159,6 +158,7 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       "all-inboxes-draft-scheduled",
     );
   } finally {
+    await cancelPendingScheduledEmails(second.id).catch(() => undefined);
     await unstarSentMessage(page).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
     await deleteSecondEmailAccount(excluded.accountId);
@@ -183,6 +183,15 @@ async function excludeFromAllInboxes(emailAccountId: string) {
   await withClient((client) =>
     client.query(
       `UPDATE "EmailAccount" SET "includeInAllAccounts" = false WHERE id = $1`,
+      [emailAccountId],
+    ),
+  );
+}
+
+async function cancelPendingScheduledEmails(emailAccountId: string) {
+  await withClient((client) =>
+    client.query(
+      `DELETE FROM "ScheduledEmail" WHERE "emailAccountId" = $1 AND status = 'PENDING'`,
       [emailAccountId],
     ),
   );
