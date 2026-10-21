@@ -1,5 +1,6 @@
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { createBrowserCache } from "@/utils/browser-cache";
+import { takeReaderPrefetchOr } from "@/utils/reader-prefetch";
 import { getAccountScopedKey } from "@/utils/swr";
 import type { ThreadContextItem } from "@/utils/thread-context/get-thread-context";
 
@@ -31,14 +32,17 @@ export function useThreadContext({
     threadId && emailAccountId
       ? contexts.get(emailAccountId, threadId)
       : undefined;
-  const path =
-    threadId && emailAccountId
-      ? `/api/user/thread-context?threadId=${encodeURIComponent(threadId)}`
-      : null;
+  const { fetcher } = useSWRConfig();
+  const key = getThreadContextKey(threadId, emailAccountId);
   // Fetched earlier on this page, SWR's copy (with its text) wins over the
-  // kept one; otherwise the kept one stands and nothing is fetched.
+  // kept one; otherwise the kept one stands and nothing is fetched. Hovering
+  // the row may already have asked (see reader-prefetch).
   return useSWR<ShownContext>(
-    path ? getAccountScopedKey(path, emailAccountId) : null,
+    key,
+    (swrKey: NonNullable<typeof key>) =>
+      takeReaderPrefetchOr(swrKey, () =>
+        (fetcher as (key: unknown) => Promise<ShownContext>)(swrKey),
+      ),
     {
       fallbackData: kept,
       revalidateOnMount: !kept,
@@ -51,6 +55,22 @@ export function useThreadContext({
       },
     },
   );
+}
+
+export function getThreadContextKey(
+  threadId: string | null | undefined,
+  emailAccountId: string | null | undefined,
+) {
+  if (!threadId || !emailAccountId) return null;
+  return getAccountScopedKey(
+    `/api/user/thread-context?threadId=${encodeURIComponent(threadId)}`,
+    emailAccountId,
+  );
+}
+
+/** Whether this browser already holds the thread's context. */
+export function isThreadContextKept(emailAccountId: string, threadId: string) {
+  return Boolean(contexts.get(emailAccountId, threadId));
 }
 
 /** The items' text read back, only when every item has it. */

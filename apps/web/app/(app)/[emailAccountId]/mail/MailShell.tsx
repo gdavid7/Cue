@@ -2645,6 +2645,8 @@ export function MailShell() {
                       onLoadMore={loadMore}
                       rowActions={rowActions}
                       insightsPaused={isFirstSync}
+                      prefetchReaderOnHover
+                      openThreadKey={openThreadKey}
                       showSentOpenStatus={
                         scopeType === "sent" && !isAllAccounts
                       }

@@ -1,6 +1,7 @@
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import type { GetThreadBriefResponse } from "@/app/api/user/thread-brief/route";
 import { createBrowserCache } from "@/utils/browser-cache";
+import { takeReaderPrefetchOr } from "@/utils/reader-prefetch";
 import { getAccountScopedKey } from "@/utils/swr";
 
 // Briefs are kept in this browser, not on the server (RD-3), under the
@@ -36,16 +37,25 @@ export function useThreadBrief({
     key && emailAccountId
       ? briefs.get(emailAccountId, `${threadId}:${messageId}`)
       : undefined;
-  const result = useSWR<GetThreadBriefResponse>(kept ? null : key, {
-    revalidateOnFocus: false,
-    revalidateOnReconnect: false,
-    errorRetryCount: 2,
-    onSuccess: (data) => {
-      // Only a written brief is worth keeping: the extract costs no model call.
-      if (data.brief?.source === "ai" && emailAccountId)
-        briefs.set(emailAccountId, `${threadId}:${messageId}`, data.brief);
+  const { fetcher } = useSWRConfig();
+  const result = useSWR<GetThreadBriefResponse>(
+    kept ? null : key,
+    // Hovering the row may already have asked (see reader-prefetch).
+    (swrKey: NonNullable<typeof key>) =>
+      takeReaderPrefetchOr(swrKey, () =>
+        (fetcher as (key: unknown) => Promise<GetThreadBriefResponse>)(swrKey),
+      ),
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      errorRetryCount: 2,
+      onSuccess: (data) => {
+        // Only a written brief is worth keeping: the extract costs no model call.
+        if (data.brief?.source === "ai" && emailAccountId)
+          briefs.set(emailAccountId, `${threadId}:${messageId}`, data.brief);
+      },
     },
-  });
+  );
   if (!kept) return result;
   return {
     data: { brief: kept } satisfies GetThreadBriefResponse,
@@ -67,4 +77,17 @@ export function getThreadBriefKey({
     `/api/user/thread-brief?${params.toString()}`,
     emailAccountId,
   );
+}
+
+/** Whether this browser already holds the brief, so asking costs nothing. */
+export function isThreadBriefKept({
+  emailAccountId,
+  threadId,
+  messageId,
+}: {
+  emailAccountId: string;
+  threadId: string;
+  messageId: string;
+}) {
+  return Boolean(briefs.get(emailAccountId, `${threadId}:${messageId}`));
 }

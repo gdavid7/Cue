@@ -15,6 +15,7 @@ import { getEmailAccountWithAi } from "@/utils/user/get";
 const MAX_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 1500;
 const MAX_KEY_POINTS = 4;
+const SLOW_STEPS_LOG_MS = 1000;
 // The fallback quotes sentences that ask for something or set a date. English
 // only: it's a stand-in for when no model is available, not the main path.
 const ASK =
@@ -61,11 +62,16 @@ export async function getThreadBrief({
   emailProvider: EmailProvider;
   logger: Logger;
 }): Promise<ThreadBrief | null> {
+  const startedAt = Date.now();
+  // Who may use AI doesn't depend on the thread, so it's read while it loads.
+  const writerPromise = getBriefWriter(emailAccountId);
+  writerPromise.catch(() => undefined);
   const thread = await emailProvider.getThread(threadId).catch((error) => {
     if (isGmailCallDeferredError(error)) throw error;
     logger.warn("Failed to load thread for brief", { error });
     return null;
   });
+  const threadMs = Date.now() - startedAt;
   // An unsent draft is the user's own words, not what the thread asks of them.
   const messages =
     thread?.messages
@@ -74,33 +80,44 @@ export async function getThreadBrief({
   const latest = messages.at(-1);
   if (!latest) return null;
 
-  const ai = await aiBrief({ emailAccountId, messages }).catch((error) => {
-    logger.warn("AI thread brief failed, using extract", { error });
-    return null;
-  });
+  const ai = await writerPromise
+    .then((writer) => aiBrief({ writer, messages }))
+    .catch((error) => {
+      logger.warn("AI thread brief failed, using extract", { error });
+      return null;
+    });
+  const totalMs = Date.now() - startedAt;
+  if (totalMs >= SLOW_STEPS_LOG_MS)
+    logger.info("Thread brief steps", { threadMs, totalMs });
   if (ai && "summary" in ai) return ai;
   const extract = extractBrief(messages);
   if (extract && ai?.aiUnavailable) return { ...extract, aiUnavailable: true };
   return extract;
 }
 
-async function aiBrief({
-  emailAccountId,
-  messages,
-}: {
-  emailAccountId: string;
-  messages: ParsedMessage[];
-}): Promise<ThreadBrief | { aiUnavailable: true } | null> {
+/** The account that would write the brief, if it may use AI. */
+async function getBriefWriter(emailAccountId: string) {
   const emailAccount = await getEmailAccountWithAi({ emailAccountId });
   if (!emailAccount) return null;
-
   const hasAccess = await assertHasAiAccess({
     userId: emailAccount.userId,
     hasUserApiKey: !!emailAccount.user.aiApiKey,
   })
     .then(() => true)
     .catch(() => false);
-  if (!hasAccess) return { aiUnavailable: true };
+  return hasAccess ? emailAccount : ("no-access" as const);
+}
+
+async function aiBrief({
+  writer,
+  messages,
+}: {
+  writer: Awaited<ReturnType<typeof getBriefWriter>>;
+  messages: ParsedMessage[];
+}): Promise<ThreadBrief | { aiUnavailable: true } | null> {
+  if (!writer) return null;
+  if (writer === "no-access") return { aiUnavailable: true };
+  const emailAccount = writer;
 
   const modelOptions = getModelForUseCase(
     emailAccount.user,

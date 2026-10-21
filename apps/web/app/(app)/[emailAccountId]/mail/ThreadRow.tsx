@@ -26,6 +26,7 @@ import {
   ThreadRowActions,
 } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import { getThreadParticipantNames } from "@/app/(app)/[emailAccountId]/mail/thread-participants";
+import type { RowHoverIntent } from "@/app/(app)/[emailAccountId]/mail/use-reader-row-prefetch";
 import { useRowSwipe } from "@/app/(app)/[emailAccountId]/mail/use-row-swipe";
 import {
   getListThreadKey,
@@ -67,6 +68,10 @@ export type ThreadRowProps = {
   expandedPreview?: boolean;
   selectionEnabled?: boolean;
   onOpen: (index: number) => void;
+  /** The mouse came to rest on the row (see use-reader-row-prefetch). */
+  onHoverIntent?: (intent: RowHoverIntent) => void;
+  /** The mouse left the row or pressed it. */
+  onHoverIntentEnd?: (threadId: string) => void;
   onToggleSelect: (index: number) => void;
   onSelectRangeTo: (index: number) => void;
   rowRef?: Ref<HTMLDivElement>;
@@ -95,6 +100,8 @@ export const ThreadRow = memo(function ThreadRow({
   expandedPreview = false,
   selectionEnabled = true,
   onOpen,
+  onHoverIntent,
+  onHoverIntentEnd,
   onToggleSelect,
   onSelectRangeTo,
   rowRef,
@@ -184,11 +191,18 @@ export const ThreadRow = memo(function ThreadRow({
         if (!event.isPropagationStopped()) longPress.onClickCapture(event);
       }}
       onContextMenu={longPress.onContextMenu}
+      onPointerEnter={(event) => {
+        // Touch has no hover, and a tap opens the row at once anyway.
+        if (event.pointerType === "mouse")
+          onHoverIntent?.({ thread, insightData, userLabels, accountEmail });
+      }}
+      onPointerLeave={() => onHoverIntentEnd?.(thread.id)}
       onPointerCancel={(event) => {
         longPress.onPointerCancel();
         swipe.handlers.onPointerCancel(event);
       }}
       onPointerDown={(event) => {
+        onHoverIntentEnd?.(thread.id);
         longPress.onPointerDown(event);
         swipe.handlers.onPointerDown(event);
       }}
