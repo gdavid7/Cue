@@ -1147,6 +1147,14 @@ function ReplyPanel({
         cc: suggestedRecipients?.cc ?? reply.cc,
         bcc: suggestedRecipients?.bcc ?? reply.bcc,
         subject: suggestedRecipients?.subject ?? reply.subject,
+        // Only a rule's action sets these, so the user chose them.
+        ruleRecipients: [
+          suggestedRecipients?.to,
+          suggestedRecipients?.cc,
+          suggestedRecipients?.bcc,
+        ]
+          .filter(Boolean)
+          .join(","),
       };
     }
     return forwardSource

@@ -221,6 +221,8 @@ export type ReplyingToEmail = {
   references?: string;
   /** Everyone on the message being replied to, to tell who a reply adds. */
   participants?: string;
+  /** Recipients a rule the user set up chose for this reply. */
+  ruleRecipients?: string;
   subject: string;
   to: string;
   cc?: string;
@@ -1383,12 +1385,15 @@ function ComposeEmailFormContent({
           },
           {
             kind: getPreSendKind(draftMode, replyingToEmail),
-            // Not the reply's own recipients: Cue may have suggested someone
-            // new there. A reopened draft only knows who it was going to.
+            // Not the reply's own recipients, which may already add someone.
+            // A reopened draft only knows who it was going to.
             repliedToAddresses: (replyingToEmail?.participants
               ? [replyingToEmail.participants]
               : [replyingToEmail?.to, replyingToEmail?.cc, replyingToEmail?.bcc]
             ).flatMap((list) => (list ? [list] : [])),
+            chosenAddresses: replyingToEmail?.ruleRecipients
+              ? [replyingToEmail.ruleRecipients]
+              : [],
             ownEmails,
           },
         );
