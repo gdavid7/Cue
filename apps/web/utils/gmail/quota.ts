@@ -174,6 +174,12 @@ type GmailQuotaContext = {
   maxTotalWaitMs?: number;
   /** Told before each Gmail call this context makes, admitted or not. */
   onAdmit?: () => void;
+  /**
+   * Sync work that still waits for a primary scan to end, as background
+   * does: a first sync's older inbox, which must not slow the scan of the
+   * newest mail.
+   */
+  afterInitialSync?: boolean;
 };
 
 // Route scopes, matched exactly so a route added under a background path is
@@ -468,6 +474,7 @@ export function runWithGmailQuota<T>(
     stats?: GmailQuotaStats;
     maxTotalWaitMs?: number;
     onAdmit?: () => void;
+    afterInitialSync?: boolean;
   },
   operation: () => T,
 ): T {
@@ -479,6 +486,7 @@ export function runWithGmailQuota<T>(
       stats: context.stats ?? current.stats,
       maxTotalWaitMs: context.maxTotalWaitMs ?? current.maxTotalWaitMs,
       onAdmit: context.onAdmit ?? current.onAdmit,
+      afterInitialSync: context.afterInitialSync ?? current.afterInitialSync,
     },
     operation,
   );
@@ -638,19 +646,21 @@ export async function admitGmailCall({
   rememberUnsummarizedAccount(emailAccountId);
   gateStats.calls += 1;
   const keys = accountKeys(emailAccountId);
+  const afterInitialSync = priority === "sync" && context.afterInitialSync;
+  const scanHold =
+    context.caller === ENGINE_SCAN_CALLER
+      ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
+      : { key: keys.initialSync };
   const blockers = {
     interactive: [{ key: keys.interactivePause }],
-    sync: [{ key: keys.syncPause }],
-    background: [
-      context.caller === ENGINE_SCAN_CALLER
-        ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
-        : { key: keys.initialSync },
-      { key: keys.backgroundPause },
-    ],
+    sync: afterInitialSync
+      ? [{ key: keys.syncPause }, scanHold]
+      : [{ key: keys.syncPause }],
+    background: [scanHold, { key: keys.backgroundPause }],
   }[priority];
   const blockerReasons: GmailDeferralReason[] = {
     interactive: ["interactive_pause" as const],
-    sync: ["sync_pause" as const],
+    sync: ["sync_pause" as const, "initial_sync_scan" as const],
     background: ["initial_sync_scan" as const, "background_pause" as const],
   }[priority];
   const { stats, maxTotalWaitMs } = context;
@@ -665,14 +675,16 @@ export async function admitGmailCall({
     getRequestDeadline() ?? Number.POSITIVE_INFINITY,
   );
   // A person's large request starts a demand episode as it arrives, which
-  // only the store can do, so it never rides on the lane.
+  // only the store can do, so it never rides on the lane. Nor does sync
+  // that waits for the primary scan: the scan's own reservation on the sync
+  // lane would admit it past that hold.
+  const startsDemand =
+    priority === "interactive" && cost >= INTERACTIVE_DEMAND_MIN_UNITS;
   const lane =
-    priority === "interactive" && cost >= INTERACTIVE_DEMAND_MIN_UNITS
-      ? null
-      : laneFor(emailAccountId, priority);
+    startsDemand || afterInitialSync ? null : laneFor(emailAccountId, priority);
   // What sync and background hold here would only delay it; their unspent
   // reservations are cut with its own round trip.
-  if (!lane) forgetLanes(emailAccountId, ["sync", "background"]);
+  if (startsDemand) forgetLanes(emailAccountId, ["sync", "background"]);
 
   const waitKey = context.caller === ENGINE_SCAN_CALLER ? "scan" : "";
   const usageField = `${priority}:${context.caller}`;

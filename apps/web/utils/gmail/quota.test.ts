@@ -530,6 +530,64 @@ describe("Gmail quota gate", () => {
     await expect(backfillPage()).resolves.toBe("page");
   });
 
+  it("holds a first sync's inbox backfill at sync behind the primary scan, even with the scan's lease live", async () => {
+    const account = "account-inbox-first";
+    const call = (
+      context: Parameters<typeof runWithGmailQuota>[0],
+      cost: number,
+    ) =>
+      runWithGmailQuota(context, () =>
+        meterGmailCall({ emailAccountId: account, cost }, async () => "x"),
+      ).catch((error: unknown) => error as GmailCallDeferredError);
+    const scan = { caller: "mail/v1/enumeration", priority: "sync" } as const;
+    const inboxFirst = { ...scan, afterInitialSync: true };
+
+    // The primary scan pages steadily, so its lane holds a reservation.
+    await setGmailInitialSync(account, true);
+    for (let i = 0; i < 6; i++) {
+      expect(await call(scan, 20)).toBe("x");
+      await vi.advanceTimersByTimeAsync(150);
+    }
+
+    // The inbox backfill is turned away at once and asked back within
+    // seconds, as the background backfill is, while the scan keeps going.
+    const held = await call(inboxFirst, 20);
+    expect(held).toBeInstanceOf(GmailCallDeferredError);
+    expect((held as GmailCallDeferredError).reason).toBe("initial_sync_scan");
+    expect((held as GmailCallDeferredError).retryAfterMs).toBeLessThanOrEqual(
+      5000,
+    );
+    expect(await call(scan, 20)).toBe("x");
+
+    await setGmailInitialSync(account, false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Once the scan is done it pages at sync, in batches of sync's request
+    // size, until what is left is sync's floor: that is kept for a person.
+    let admitted = 0;
+    let stopped: unknown = null;
+    while (!stopped) {
+      const result = await call({ ...inboxFirst, maxTotalWaitMs: 0 }, 240);
+      if (result === "x") admitted += 1;
+      else stopped = result;
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(admitted).toBeGreaterThan(4);
+    expect((stopped as GmailCallDeferredError).reason).toBe(
+      "per_minute_budget",
+    );
+    // A thread a person opens meanwhile is read at once (D-086).
+    expect(
+      await call(
+        {
+          caller: "threads/detail",
+          priority: "interactive",
+          maxTotalWaitMs: 0,
+        },
+        120,
+      ),
+    ).toBe("x");
+  });
+
   it("asks only the engine's backfill back within seconds; jobs and routes wait out the first sync", async () => {
     await setGmailInitialSync(JOBS_ACCOUNT, true);
     await vi.advanceTimersByTimeAsync(10_000);
