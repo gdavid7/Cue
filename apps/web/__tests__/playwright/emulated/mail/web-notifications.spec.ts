@@ -117,14 +117,18 @@ async function stubBrowser(
       writable: true,
     });
 
+    // The mail engine takes its own locks, so only the notifier's is stubbed.
+    const realLocks = navigator.locks;
     Object.defineProperty(navigator, "locks", {
       configurable: true,
       value: {
         request(
           name: string,
-          _options: unknown,
-          callback: (lock: unknown) => Promise<void>,
+          options: LockOptions,
+          callback: (lock: unknown) => Promise<unknown>,
         ) {
+          if (name !== "cue:web-notifier")
+            return realLocks.request(name, options, callback);
           state.lockRequests.push(name);
           // A tab that doesn't hold the lock waits in the queue.
           return stub.holdsLock ? callback({ name }) : new Promise(() => {});
