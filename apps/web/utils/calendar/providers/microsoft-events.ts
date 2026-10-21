@@ -177,9 +177,11 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
           // calendarView returns events overlapping the range, unlike /events
           const response = await client
             .api(path)
+            // A zoned date (TZDate) prints its offset, and Graph reads the
+            // query's unencoded "+" as a space, so always send UTC.
             .query({
-              startDateTime: timeMin.toISOString(),
-              endDateTime: timeMax.toISOString(),
+              startDateTime: new Date(timeMin.getTime()).toISOString(),
+              endDateTime: new Date(timeMax.getTime()).toISOString(),
             })
             .top(top)
             .orderby("start/dateTime")

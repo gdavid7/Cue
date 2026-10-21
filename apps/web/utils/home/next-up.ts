@@ -8,7 +8,10 @@ import { findIntegration } from "@/utils/mcp/integrations";
 import { connectionExecutor } from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import { onePerIntegration } from "@/utils/mcp/user-connections";
-import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
+import {
+  onePerExternalAccount,
+  ownedBySameUser,
+} from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
 import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
@@ -113,7 +116,7 @@ export async function getNextUp({
     }),
     prisma.calendarConnection.findMany({
       where: calendarConnectionsWhere(emailAccountId),
-      select: { email: true },
+      select: { id: true, provider: true, email: true, isConnected: true },
     }),
     ownAddresses,
   ]);
@@ -136,8 +139,12 @@ export async function getNextUp({
         (a) => a.declined && self.has(a.email.toLowerCase()),
       ),
   );
-  // With two calendar accounts, each meeting says whose calendar it is on.
-  const labelCalendars = distinctCalendars(calendarAccounts) > 1;
+  // With two calendar accounts, each meeting says whose calendar it is on. A
+  // disconnected one, or one connected from two mailboxes, is no second source.
+  const labelCalendars =
+    onePerExternalAccount(
+      calendarAccounts.filter((account) => account.isConnected),
+    ).length > 1;
   const next = pickNextEvent(events, { now, today, timeZone });
 
   return {
@@ -560,10 +567,6 @@ function eventItem(event: CalendarEvent, labelCalendar: boolean): NextUpItem {
       : {}),
     url: event.eventUrl,
   };
-}
-
-function distinctCalendars(accounts: { email: string }[]) {
-  return new Set(accounts.map((account) => account.email.toLowerCase())).size;
 }
 
 /** The last minute of a `YYYY-MM-DD` date in the user's time zone. */
