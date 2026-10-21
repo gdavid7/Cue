@@ -9,6 +9,7 @@ import {
 
 // The model downloads on first use, so the first search can take a while.
 const INDEX_TIMEOUT_MS = 240_000;
+const THIRD_PARTY_MODEL_HOSTS = ["huggingface.co", "cdn.jsdelivr.net"];
 
 let restorePlans: (() => Promise<void>) | undefined;
 
@@ -37,18 +38,29 @@ test("finds mail by meaning when its words differ from the search", async ({
   await page.addInitScript(() => {
     window.__inboxZeroMailSemanticIndexIntervalMs = 2000;
   });
-  // The runtime's wasm is the app's own asset: nothing loads from a CDN.
+  // The runtime's wasm and the model are the app's own assets: the browser
+  // never contacts the model's repository or a CDN.
   const wasm: { url: string; contentType: string | undefined }[] = [];
+  const model: { url: string; cacheControl: string | undefined }[] = [];
   page.context().on("response", (response) => {
-    if (new URL(response.url()).pathname.endsWith(".wasm"))
+    const { pathname } = new URL(response.url());
+    if (pathname.endsWith(".wasm"))
       wasm.push({
         url: response.url(),
         contentType: response.headers()["content-type"],
       });
+    if (pathname.startsWith("/models/"))
+      model.push({
+        url: response.url(),
+        cacheControl: response.headers()["cache-control"],
+      });
   });
-  await page
-    .context()
-    .route("https://cdn.jsdelivr.net/**", (route) => route.abort());
+  const thirdParty: string[] = [];
+  for (const host of THIRD_PARTY_MODEL_HOSTS)
+    await page.context().route(`https://${host}/**`, (route) => {
+      thirdParty.push(route.request().url());
+      return route.abort();
+    });
   const token = randomToken();
   const subject = `Kitchen remodel proposal ${token}`;
   await insertInboxMail(page, {
@@ -103,6 +115,13 @@ test("finds mail by meaning when its words differ from the search", async ({
     expect(new URL(asset.url).origin).toBe(appOrigin);
     expect(asset.contentType).toContain("application/wasm");
   }
+  console.log(`model loaded: ${JSON.stringify(model)}`);
+  expect(model.length).toBeGreaterThan(0);
+  for (const file of model) {
+    expect(new URL(file.url).origin).toBe(appOrigin);
+    expect(file.cacheControl).toContain("immutable");
+  }
+  expect(thirdParty).toEqual([]);
 });
 
 async function insertInboxMail(

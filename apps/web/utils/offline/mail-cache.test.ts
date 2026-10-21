@@ -5,6 +5,11 @@ import {
   matchesMailEngineStaticRequest,
   clearsOfflineMailOnGet,
 } from "./mail-cache";
+import {
+  SEMANTIC_MODEL,
+  type SemanticModelFile,
+  semanticModelFilePath,
+} from "@/utils/mail-search/semantic-embedding";
 
 const origin = "https://app.example.com";
 const mailUrl = `${origin}/mail/u/0/inbox`;
@@ -281,6 +286,16 @@ describe("offline mail cache", () => {
         origin,
       ),
     ).toBe(false);
+  });
+
+  it("leaves the semantic model to the embedding worker's own cache", () => {
+    for (const file of Object.keys(
+      SEMANTIC_MODEL.files,
+    ) as SemanticModelFile[]) {
+      const request = new Request(`${origin}${semanticModelFilePath(file)}`);
+      expect(matchesMailEngineStaticRequest(request, origin)).toBe(false);
+      expect(matchesOfflineMailRequest(request, origin)).toBe(false);
+    }
   });
 
   it("clears offline mail on SSO entry and callbacks without clearing it for session reads", () => {
