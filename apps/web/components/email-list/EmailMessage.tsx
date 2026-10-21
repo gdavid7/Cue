@@ -1431,6 +1431,14 @@ const prepareReplyingToEmail = ({
     cc: recipients.cc,
     bcc: recipients.bcc,
     references: threadOn.headers.references,
+    participants: [
+      message.headers.from,
+      message.headers.to,
+      message.headers.cc,
+      message.headers["reply-to"],
+    ]
+      .filter(Boolean)
+      .join(","),
     draftHtml: "",
     quotedContentHtml: html,
   };

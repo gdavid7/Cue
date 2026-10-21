@@ -17,6 +17,7 @@ import { EmailOtpSection } from "@/app/(app)/settings/EmailOtpSection";
 import { AppearanceSection } from "@/app/(app)/settings/AppearanceSection";
 import { NotificationsSection } from "@/app/(app)/settings/NotificationsSection";
 import { TodayWeatherSetting } from "@/app/(app)/settings/TodayWeatherSetting";
+import { PreSendCheckSetting } from "@/app/(app)/settings/PreSendCheckSetting";
 import { BillingSection } from "@/app/(app)/[emailAccountId]/settings/BillingSection";
 import { CleanupDraftsSection } from "@/app/(app)/[emailAccountId]/settings/CleanupDraftsSection";
 import { SentMessageOpenTrackingSetting } from "@/app/(app)/[emailAccountId]/settings/SentMessageOpenTrackingSetting";
@@ -138,6 +139,7 @@ export function SettingsContent() {
           <ItemSeparator />
           <AppearanceSection />
           <TodayWeatherSetting />
+          <PreSendCheckSetting />
           <NotificationsSection />
           {activeEmailAccountId && (
             <>

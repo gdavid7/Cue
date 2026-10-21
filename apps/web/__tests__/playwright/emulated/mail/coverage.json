@@ -356,5 +356,13 @@
     "utils/attachments/attachment-preview.ts",
     "utils/attachments/docx-frame.ts",
     "utils/attachments/office-package.ts"
+  ],
+  "pre-send-check.spec.ts": [
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "app/(app)/[emailAccountId]/compose/PreSendConfirmation.tsx",
+    "app/(app)/[emailAccountId]/compose/pre-send-warnings.ts",
+    "app/(app)/settings/PreSendCheckSetting.tsx",
+    "hooks/usePreSendCheck.ts",
+    "utils/email/escaped-markup.ts"
   ]
 }
