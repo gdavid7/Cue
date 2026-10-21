@@ -53,6 +53,7 @@ describe("Today's cache", () => {
       data: home({
         calendar: {
           connected: true,
+          clearThroughTomorrow: false,
           next: {
             title: "Standup",
             at: iso(NOW + HOUR),
@@ -308,7 +309,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 3, filed: 1, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: {

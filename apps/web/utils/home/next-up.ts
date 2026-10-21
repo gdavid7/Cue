@@ -127,19 +127,29 @@ export async function getNextUp({
       (email) => email.toLowerCase(),
     ),
   );
-  const events = calendar.events.filter(
+  // Today, like the user, counts meetings they haven't declined and that have
+  // a time; all-day entries such as holidays don't fill a day.
+  const meetings = calendar.events.filter(
     (event) =>
       !event.allDay &&
-      event.startTime > now &&
+      event.endTime > now &&
+      event.startTime < dayAfter &&
       !event.attendees.some(
         (a) => a.declined && self.has(a.email.toLowerCase()),
       ),
   );
+  const events = meetings.filter((event) => event.startTime > now);
   const next = pickNextEvent(events, { now, today, timeZone });
 
   return {
     calendar: {
       connected: calendar.connected,
+      /**
+       * Every connected calendar was read in full through tomorrow and has
+       * no meetings left in that time. A slow or failed read is never clear.
+       */
+      clearThroughTomorrow:
+        calendar.connected && calendar.complete && meetings.length === 0,
       next: next
         ? {
             title: next.event.title,
@@ -167,7 +177,12 @@ async function upcomingEvents({
   now: Date;
   until: Date;
   logger: Logger;
-}): Promise<{ connected: boolean; events: CalendarEvent[] }> {
+}): Promise<{
+  connected: boolean;
+  /** Every connected calendar answered in time, with nothing left out. */
+  complete: boolean;
+  events: CalendarEvent[];
+}> {
   try {
     const result = await withTimeout(
       fetchCalendarEventsInWindow({
@@ -185,12 +200,16 @@ async function upcomingEvents({
       result.noCalendarConnected &&
       (await isNewMailbox({ emailAccountId, now }))
     )
-      return { connected: true, events: [] };
-    return { connected: !result.noCalendarConnected, events: result.events };
+      return { connected: true, complete: false, events: [] };
+    return {
+      connected: !result.noCalendarConnected,
+      complete: result.complete,
+      events: result.events,
+    };
   } catch (error) {
     // Unknown isn't "not connected": don't ask a connected user to connect.
     logger.warn("Failed to fetch calendar events for Today", { error });
-    return { connected: true, events: [] };
+    return { connected: true, complete: false, events: [] };
   }
 }
 

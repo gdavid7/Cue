@@ -9,6 +9,10 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 const account = vi.hoisted(() => ({ provider: "google" }));
 const rules = vi.hoisted(() => ({ enabledArg: undefined as unknown }));
 const logOut = vi.hoisted(() => vi.fn());
+const weather = vi.hoisted(() => ({
+  dismissed: false,
+  save: vi.fn(async () => true),
+}));
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("@/hooks/useSettingsDialog", () => ({
@@ -30,6 +34,9 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   }),
 }));
 vi.mock("@/utils/user", () => ({ logOut }));
+vi.mock("@/hooks/useTodayWeather", () => ({
+  useTodayWeather: () => ({ dismissed: weather.dismissed, save: weather.save }),
+}));
 vi.mock("@/components/SideNav", () => ({
   useNavigation: () => ({
     manageItems: [
@@ -50,6 +57,7 @@ describe("useCommandPaletteCommands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     account.provider = "google";
+    weather.dismissed = false;
   });
 
   it("opens rules settings on a page that exists", () => {
@@ -105,5 +113,22 @@ describe("useCommandPaletteCommands", () => {
         (c) => c.label === "Go to Cold Email Blocker",
       ),
     ).toBe(false);
+  });
+
+  it("after Not now on Today's weather, offers to show it again and opens Today", async () => {
+    const offered = () =>
+      renderHook(() =>
+        useCommandPaletteCommands(),
+      ).result.current.commands.find(
+        (c) => c.label === "Show weather on Today",
+      );
+    expect(offered()).toBeUndefined();
+
+    weather.dismissed = true;
+    await offered()?.action();
+
+    // Clears the dismissal "Not now" stored, rather than a flag of its own.
+    expect(weather.save).toHaveBeenCalledWith(null);
+    expect(router.push).toHaveBeenCalledWith("/account-1/home");
   });
 });

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
+  CloudSunIcon,
   LogOutIcon,
   BarChartBigIcon,
   SettingsIcon,
@@ -16,6 +17,7 @@ import type { Command } from "@/lib/commands/types";
 import { useNavigation } from "@/components/SideNav";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useRules } from "@/hooks/useRules";
+import { useTodayWeather } from "@/hooks/useTodayWeather";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { prefixPath } from "@/utils/path";
 import { isGoogleProvider } from "@/utils/email/provider-types";
@@ -35,6 +37,7 @@ export function useCommandPaletteCommands({
   const { openSettings } = useSettingsDialog();
   const { emailAccountId, provider } = useAccount();
   const { manageItems, toolsItems } = useNavigation();
+  const { dismissed: weatherDismissed, save: saveWeather } = useTodayWeather();
   const { data: rulesData, isLoading: rulesLoading } = useRules(
     undefined,
     includeRules,
@@ -141,6 +144,21 @@ export function useCommandPaletteCommands({
       },
     ];
 
+    // Only after "Not now", which hides the offer on Today itself.
+    if (weatherDismissed)
+      settingsCommands.push({
+        id: "show-today-weather",
+        label: "Show weather on Today",
+        icon: CloudSunIcon,
+        section: "settings",
+        priority: 7,
+        keywords: ["weather", "forecast", "today"],
+        action: async () => {
+          router.push(prefixPath(emailAccountId, "/home"));
+          await saveWeather(null);
+        },
+      });
+
     const ruleCommands: Command[] = includeRules
       ? (rulesData ?? []).map((rule, index) => ({
           id: `rule-${rule.id}`,
@@ -166,7 +184,9 @@ export function useCommandPaletteCommands({
     provider,
     router,
     rulesData,
+    saveWeather,
     toolsItems,
+    weatherDismissed,
   ]);
 
   return {

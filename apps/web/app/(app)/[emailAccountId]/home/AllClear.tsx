@@ -75,6 +75,9 @@ export function AllClear({
             )}
           </p>
         ) : null}
+        {!next && calendar.clearThroughTomorrow ? (
+          <p className="text-foreground">Calendar clear through tomorrow.</p>
+        ) : null}
         {calendar.connected ? null : (
           <ConnectLine
             emailAccountId={emailAccountId}

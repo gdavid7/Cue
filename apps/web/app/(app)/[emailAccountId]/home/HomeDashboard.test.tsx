@@ -334,7 +334,11 @@ describe("HomeDashboard states", () => {
         thread("c", "Contract"),
       ]),
       waiting: [thread("w", "Intro to Sam")],
-      calendar: { connected: true, next: nextEvent(false) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(false),
+      },
     };
 
     renderToday();
@@ -380,7 +384,11 @@ describe("HomeDashboard states", () => {
         filed: 12,
         filedLabel: { labelId: "Label_Newsletter", name: "Newsletter" },
       },
-      calendar: { connected: true, next: nextEvent(false) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(false),
+      },
       nextUp: [
         {
           id: "canvas:4",
@@ -423,7 +431,11 @@ describe("HomeDashboard states", () => {
   it("caught up after 5 pm: says how tomorrow starts", () => {
     mocks.home.data = {
       ...homeData([]),
-      calendar: { connected: true, next: nextEvent(true) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(true),
+      },
     };
 
     renderToday();
@@ -445,6 +457,26 @@ describe("HomeDashboard states", () => {
     expect(screen.queryByText(/^Next:|^Due |Waiting on|Connect/)).toBeNull();
   });
 
+  it("caught up with a calendar read in full and empty: says it's clear through tomorrow", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: true, clearThroughTomorrow: true, next: null },
+    };
+
+    renderToday();
+
+    expect(screen.getByText("Calendar clear through tomorrow.")).toBeTruthy();
+  });
+
+  it("caught up but the calendar couldn't be read: doesn't call it clear", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+
+    expect(screen.queryByText(/^Calendar clear/)).toBeNull();
+    expect(screen.queryByText(/Connect/)).toBeNull();
+  });
+
   it("quiet day: All clear still says how tomorrow starts and which replies Cue drafted", () => {
     mocks.home.data = {
       ...homeData([]),
@@ -459,7 +491,11 @@ describe("HomeDashboard states", () => {
           at: "2026-10-13T09:00:00.000Z",
         },
       ],
-      calendar: { connected: true, next: nextEvent(true) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(true),
+      },
     };
 
     renderToday();
@@ -497,7 +533,7 @@ describe("HomeDashboard states", () => {
   it("no integrations: offers the calendar and one app the user gets mail from", () => {
     mocks.home.data = {
       ...homeData([]),
-      calendar: { connected: false, next: null },
+      calendar: { connected: false, clearThroughTomorrow: false, next: null },
       suggestion: { app: "canvas", name: "Canvas" },
     };
 
@@ -523,7 +559,11 @@ describe("HomeDashboard states", () => {
   it("busy with deadlines: lists what's next, soonest first, each with its source", () => {
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
-      calendar: { connected: true, next: nextEvent(false) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(false),
+      },
       nextUp: [
         {
           id: "event:review",
@@ -912,6 +952,7 @@ function savedYesterday() {
       today: { checked: 42, filed: 12, filedLabel: null },
       calendar: {
         connected: true,
+        clearThroughTomorrow: false,
         next: {
           title: "Design review",
           at: new Date(Date.now() + 3_600_000).toISOString(),
@@ -972,7 +1013,7 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: {
