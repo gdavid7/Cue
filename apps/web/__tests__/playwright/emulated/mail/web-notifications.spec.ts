@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
@@ -24,6 +25,9 @@ declare global {
 
 test.describe.configure({ mode: "serial" });
 
+const OUTLOOK_SKIP =
+  "Notifying is provider-neutral; the Outlook emulator needs a real message id to reply to.";
+
 test("shows the unread count in the tab title", async ({ page }, testInfo) => {
   await openMail(page);
   await expect
@@ -35,6 +39,7 @@ test("shows the unread count in the tab title", async ({ page }, testInfo) => {
 test("notifies about new mail from the tab that holds the lock", async ({
   page,
 }, testInfo) => {
+  test.skip(isMicrosoftPlaywright(), OUTLOOK_SKIP);
   await stubBrowser(page, { permission: "granted", holdsLock: true });
   await openMail(page);
   await waitForMetadataCoverage(page);
@@ -58,6 +63,7 @@ test("notifies about new mail from the tab that holds the lock", async ({
 });
 
 test("stays quiet in a tab that is waiting for the lock", async ({ page }) => {
+  test.skip(isMicrosoftPlaywright(), OUTLOOK_SKIP);
   await stubBrowser(page, { permission: "granted", holdsLock: false });
   await openMail(page);
   await waitForMetadataCoverage(page);
