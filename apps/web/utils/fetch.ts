@@ -1,4 +1,5 @@
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { fetchWithSessionRetry } from "@/utils/session-refresh";
 
 /**
  * A wrapper around the native fetch function that automatically adds the
@@ -21,5 +22,5 @@ export const fetchWithAccount = async ({
 
   const newInit = { ...init, headers };
 
-  return fetch(url, newInit);
+  return fetchWithSessionRetry(url, newInit);
 };
