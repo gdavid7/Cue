@@ -11,6 +11,7 @@ import { measureReplyLag } from "./person-card";
 import { createSqliteMailStore } from "./store";
 
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 const T0 = 1_800_000_000_000;
 const ME = "me@example.com";
 const ANA = "Ana Lima <ana@example.com>";
@@ -64,7 +65,6 @@ describe("readPersonCard", () => {
     const card = await read(store, { accountIds: ["a", "b"] });
 
     expect(card.email).toBe("ana@example.com");
-    expect(card.name).toBe("Ana Lima");
     expect(
       card.conversations.map((c) => [c.accountId, c.conversationId, c.subject]),
     ).toEqual([
@@ -198,10 +198,16 @@ describe("readPersonCard", () => {
 
   it("names other addresses you have sent to under exactly the same full name", async () => {
     const { store } = await setup();
-    // Each alias is written to in two conversations.
+    // Each address is written to in two conversations a week apart.
     const sent = (id: string, to: string, at = T0) => [
       mail({ id, from: ME, to: [to], at, roles: ["sent"] }),
-      mail({ id: `${id}b`, from: ME, to: [to], at, roles: ["sent"] }),
+      mail({
+        id: `${id}b`,
+        from: ME,
+        to: [to],
+        at: at + 8 * DAY,
+        roles: ["sent"],
+      }),
     ];
     await write(store, [
       ...sent("1", ANA),
@@ -225,66 +231,38 @@ describe("readPersonCard", () => {
     ).toEqual([]);
   });
 
-  it("needs her name on your mail to an address in two conversations to call it hers", async () => {
+  it("needs your mail to an address under her name to span two conversations a week apart", async () => {
     const { store } = await setup();
     const SPOOF = "Ana Lima <ana.payroll@evil.example>";
+    const sentTo = (id: string, to: string, at: number, conversation = id) =>
+      mail({ id, conversation, from: ME, to: [to], at, roles: ["sent"] });
     await write(store, [
-      mail({
-        id: "1",
-        conversation: "c1",
-        from: ME,
-        to: [ANA],
-        roles: ["sent"],
-      }),
-      mail({
-        id: "2",
-        conversation: "c2",
-        from: ME,
-        to: [ANA],
-        roles: ["sent"],
-      }),
-      // Replying to a stranger copies the name they chose back to them.
-      mail({ id: "3", conversation: "spoof", from: SPOOF, at: T0 + HOUR }),
-      mail({
-        id: "4",
-        conversation: "spoof",
-        from: ME,
-        to: [SPOOF],
-        at: T0 + 2 * HOUR,
-        roles: ["sent"],
-      }),
-      mail({
-        id: "5",
-        conversation: "spoof",
-        from: ME,
-        to: [SPOOF],
-        at: T0 + 3 * HOUR,
-        roles: ["sent"],
-      }),
+      sentTo("1", ANA, T0, "c1"),
+      sentTo("2", ANA, T0 + 8 * DAY, "c2"),
+      // Replying to a stranger copies the name they chose back to them, and
+      // they can open as many conversations as they like in one exchange.
+      mail({ id: "3", conversation: "s1", from: SPOOF, at: T0 + HOUR }),
+      sentTo("4", SPOOF, T0 + 2 * HOUR, "s1"),
+      mail({ id: "5", conversation: "s2", from: SPOOF, at: T0 + 3 * HOUR }),
+      sentTo("6", SPOOF, T0 + 4 * HOUR, "s2"),
+      mail({ id: "7", conversation: "s2", from: SPOOF, at: T0 + 6 * DAY }),
+      sentTo("8", SPOOF, T0 + 6 * DAY + HOUR, "s2"),
     ]);
     expect((await read(store)).otherAddresses).toEqual([]);
-    // Nor does the stranger's own card vouch for the address they borrowed
-    // the name from.
-    expect(
-      (await read(store, { email: "ana.payroll@evil.example" })).otherAddresses,
-    ).toEqual([]);
+    // Nor does the stranger's own card take her name or vouch for her.
+    const spoofCard = await read(store, { email: "ana.payroll@evil.example" });
+    expect(spoofCard.name).toBeNull();
+    expect(spoofCard.otherAddresses).toEqual([]);
 
+    // A week of back and forth in a single conversation isn't enough either.
+    const WORK = "Ana Lima <ana@work.example>";
     await write(store, [
-      mail({
-        id: "6",
-        conversation: "w1",
-        from: ME,
-        to: ["Ana Lima <ana@work.example>"],
-        roles: ["sent"],
-      }),
-      mail({
-        id: "7",
-        conversation: "w2",
-        from: ME,
-        to: ["Ana Lima <ana@work.example>"],
-        roles: ["sent"],
-      }),
+      sentTo("9", WORK, T0, "w1"),
+      sentTo("10", WORK, T0 + 8 * DAY, "w1"),
     ]);
+    expect((await read(store)).otherAddresses).toEqual([]);
+
+    await write(store, [sentTo("11", WORK, T0 + 9 * DAY, "w2")]);
     expect((await read(store)).otherAddresses).toEqual(["ana@work.example"]);
   });
 
@@ -304,6 +282,7 @@ describe("readPersonCard", () => {
         conversation: "c2",
         from: ME,
         to: [ANA],
+        at: T0 + 8 * DAY,
         roles: ["sent"],
       }),
       mail({
@@ -311,6 +290,14 @@ describe("readPersonCard", () => {
         conversation: "w",
         from: ME,
         to: [WORK],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "4",
+        conversation: "w",
+        from: ME,
+        to: [WORK],
+        at: T0 + 8 * DAY,
         roles: ["sent"],
       }),
     ]);
@@ -330,6 +317,47 @@ describe("readPersonCard", () => {
 
     const card = await read(store, { accountIds: ["a", "b"] });
 
+    expect(card.name).toBe("Ana Lima");
+    expect(card.otherAddresses).toEqual([]);
+  });
+
+  it("does not add up her conversations across your accounts to vouch for her name", async () => {
+    const { store } = await setup(["a", "b"]);
+    const WORK = "Ana Lima <ana@work.example>";
+    for (const [accountId, at] of [
+      ["a", T0],
+      ["b", T0 + 8 * DAY],
+    ] as const)
+      await write(
+        store,
+        [
+          mail({
+            id: `ana-${accountId}`,
+            from: ME,
+            to: [ANA],
+            at,
+            roles: ["sent"],
+          }),
+          mail({
+            id: `w1-${accountId}`,
+            from: ME,
+            to: [WORK],
+            roles: ["sent"],
+          }),
+          mail({
+            id: `w2-${accountId}`,
+            from: ME,
+            to: [WORK],
+            at: T0 + 8 * DAY,
+            roles: ["sent"],
+          }),
+        ],
+        accountId,
+      );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.name).toBeNull();
     expect(card.otherAddresses).toEqual([]);
   });
 
@@ -341,8 +369,15 @@ describe("readPersonCard", () => {
     ]);
     expect((await read(store)).name).toBeNull();
 
+    // Nor from one short exchange, where they chose the name you replied to.
     await write(store, [
       mail({ id: "3", from: ME, to: [ANA], roles: ["sent"] }),
+      mail({ id: "4", from: ME, to: [ANA], at: T0 + HOUR, roles: ["sent"] }),
+    ]);
+    expect((await read(store)).name).toBeNull();
+
+    await write(store, [
+      mail({ id: "5", from: ME, to: [ANA], at: T0 + 8 * DAY, roles: ["sent"] }),
     ]);
     expect((await read(store)).name).toBe("Ana Lima");
   });
