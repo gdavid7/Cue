@@ -29,6 +29,8 @@ vi.mock("@/utils/ai/reply/reply-memory", () => ({
     () => new Date("2026-03-10T10:00:00.000Z"),
   ),
   isMeaningfulDraftEdit: vi.fn(),
+  // The rule itself is tested in reply-memory.test.ts.
+  isUsedStartingDraft: vi.fn(() => true),
   saveDraftSendLogReplyMemory: vi.fn().mockResolvedValue(undefined),
   syncReplyMemoriesFromDraftSendLogs: vi.fn().mockResolvedValue(undefined),
 }));
@@ -52,6 +54,7 @@ import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
 import { recordFirstSuggestedReplySent } from "@/utils/analytics/activation";
 import {
   isMeaningfulDraftEdit,
+  isUsedStartingDraft,
   saveDraftSendLogReplyMemory,
   syncReplyMemoriesFromDraftSendLogs,
 } from "@/utils/ai/reply/reply-memory";
@@ -554,6 +557,7 @@ describe("trackSentDraftStatus", () => {
 describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isUsedStartingDraft).mockReturnValue(true);
     vi.mocked(calculateSimilarityDetails).mockImplementation(
       (storedContent, providerMessage, options) => ({
         score: calculateSimilarity(storedContent, providerMessage, options),
@@ -657,6 +661,39 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
     expect(saveDraftSendLogReplyMemory).toHaveBeenCalledWith(
       expect.objectContaining({ draftSendLogId: "compose-assist-log" }),
     );
+  });
+
+  it("doesn't learn from a draft the reply didn't start from when Cue wrote it", async () => {
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
+      createComposeAssistReply("please include pricing for seat counts."),
+    ]);
+    vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
+      createSuggestedReplyDraft(),
+    );
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
+    vi.mocked(isUsedStartingDraft).mockReturnValue(false);
+    vi.mocked(prisma.draftSendLog.create)
+      .mockResolvedValueOnce({ id: "compose-assist-log" } as any)
+      .mockResolvedValueOnce({ id: "suggested-reply-log" } as any);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn().mockResolvedValue({ id: "suggested-draft-1" }),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    // The saved reply's draft was still in the mailbox: it wasn't sent, and
+    // nothing in this send is the user's edit of it.
+    expect(isUsedStartingDraft).toHaveBeenCalledWith({
+      source: "suggested-reply",
+      draftExists: true,
+      similarityScore: 0.4,
+    });
+    expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
   });
 
   it("finds the suggestions made for this reply among others in the thread", async () => {

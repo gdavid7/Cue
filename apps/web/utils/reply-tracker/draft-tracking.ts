@@ -12,6 +12,7 @@ import type { Logger } from "@/utils/logger";
 import {
   getReplyMemoryRetentionCutoff,
   isMeaningfulDraftEdit,
+  isUsedStartingDraft,
   saveDraftSendLogReplyMemory,
   syncReplyMemoriesFromDraftSendLogs,
 } from "@/utils/ai/reply/reply-memory";
@@ -245,6 +246,11 @@ export async function trackSentDraftStatus({
     if (sentMessageRepliesToSource !== false) {
       queueReplyMemoryLearning({
         composeAssistSend,
+        startingDraftUsed: isUsedStartingDraft({
+          source: "rule-draft",
+          draftStatus: DraftEmailStatus.REPLIED_WITHOUT_DRAFT,
+          similarityScore,
+        }),
         emailAccountId,
         draftSendLogId: draftSendLog.id,
         draftText: executedAction.content,
@@ -317,6 +323,11 @@ export async function trackSentDraftStatus({
 
   queueReplyMemoryLearning({
     composeAssistSend,
+    startingDraftUsed: isUsedStartingDraft({
+      source: "rule-draft",
+      draftStatus,
+      similarityScore,
+    }),
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: executedAction.content,
@@ -566,6 +577,7 @@ export async function cleanupThreadAIDrafts({
 
 function queueReplyMemoryLearning({
   composeAssistSend,
+  startingDraftUsed,
   emailAccountId,
   draftSendLogId,
   draftText,
@@ -575,6 +587,8 @@ function queueReplyMemoryLearning({
   logger,
 }: {
   composeAssistSend: ComposeAssistSend | null;
+  /** Whether this draft was where the reply began (isUsedStartingDraft). */
+  startingDraftUsed: boolean;
   emailAccountId: string;
   draftSendLogId: string;
   draftText?: string | null;
@@ -585,6 +599,9 @@ function queueReplyMemoryLearning({
 }) {
   // Cue's log already learns from this send.
   if (composeAssistSend?.queued) return;
+  // Cue wrote this reply, not from this draft: comparing them would count
+  // Cue's wording as the user's edits.
+  if (composeAssistSend && !startingDraftUsed) return;
   if (!draftText || !sentText) return;
 
   const replyMemorySentText = sentText.slice(0, 4000);
@@ -911,6 +928,11 @@ async function trackSentSuggestedReplyDraft({
 
   queueReplyMemoryLearning({
     composeAssistSend,
+    startingDraftUsed: isUsedStartingDraft({
+      source: "suggested-reply",
+      draftExists,
+      similarityScore,
+    }),
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: suggestedReplyDraft.content,
@@ -1041,6 +1063,11 @@ async function trackSentReplySuggestion({
 
   queueReplyMemoryLearning({
     composeAssistSend,
+    startingDraftUsed: isUsedStartingDraft({
+      source: "rule-draft",
+      draftStatus,
+      similarityScore,
+    }),
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: executedAction.content,

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ParsedMessage } from "@/utils/types";
 import { createTestLogger } from "@/__tests__/helpers";
 import {
+  DraftEmailStatus,
   ReplyMemoryKind,
   ReplyMemoryScopeType,
 } from "@/generated/prisma/enums";
@@ -10,6 +11,7 @@ import { getEmailAccount } from "@/__tests__/helpers";
 import {
   getReplyMemoriesForPrompt,
   isMeaningfulDraftEdit,
+  isUsedStartingDraft,
   syncReplyMemoriesFromDraftSendLogs,
 } from "./reply-memory";
 import { aiExtractReplyMemoriesFromDraftEdit } from "./extract-reply-memories";
@@ -75,6 +77,46 @@ describe("reply-memory", () => {
     vi.mocked(prisma.replyMemorySource.updateMany).mockResolvedValue({
       count: 0,
     } as any);
+  });
+
+  it("counts a draft as where a reply began only when the user used it", () => {
+    const used = { similarityScore: 0.5 };
+    expect(
+      isUsedStartingDraft({
+        source: "rule-draft",
+        draftStatus: DraftEmailStatus.LIKELY_SENT,
+        ...used,
+      }),
+    ).toBe(true);
+    expect(
+      isUsedStartingDraft({
+        source: "rule-draft",
+        draftStatus: DraftEmailStatus.REPLIED_WITHOUT_DRAFT,
+        ...used,
+      }),
+    ).toBe(false);
+    expect(
+      isUsedStartingDraft({
+        source: "suggested-reply",
+        draftExists: false,
+        ...used,
+      }),
+    ).toBe(true);
+    expect(
+      isUsedStartingDraft({
+        source: "suggested-reply",
+        draftExists: true,
+        ...used,
+      }),
+    ).toBe(false);
+    // Sent, but the reply was written over it.
+    expect(
+      isUsedStartingDraft({
+        source: "rule-draft",
+        draftStatus: DraftEmailStatus.LIKELY_SENT,
+        similarityScore: 0.1,
+      }),
+    ).toBe(false);
   });
 
   it("filters out unchanged draft edits after normalization", () => {
@@ -504,6 +546,7 @@ describe("reply-memory", () => {
       where: { id: "draft-send-log-1" },
       data: {
         replyMemoryProcessedAt: expect.any(Date),
+        replyMemoryClaimedAt: null,
       },
     });
   });
@@ -572,7 +615,10 @@ describe("reply-memory", () => {
     );
     expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
       where: { id: "draft-send-log-1" },
-      data: { replyMemoryProcessedAt: expect.any(Date) },
+      data: {
+        replyMemoryProcessedAt: expect.any(Date),
+        replyMemoryClaimedAt: null,
+      },
     });
   });
 
@@ -580,7 +626,7 @@ describe("reply-memory", () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
       count: 1,
     });
-    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValueOnce([
       {
         ...createDraftSendLog({
           sourceMessageId: "source-3",
@@ -604,10 +650,18 @@ describe("reply-memory", () => {
         },
       },
     ] as any);
-    vi.mocked(prisma.draftSendLog.findFirst).mockResolvedValue({
-      executedAction: { content: "Rule draft <b>text</b>." },
-      suggestedReplyDraft: null,
-    } as any);
+    // The rule draft logged against the same send, used as written enough.
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValueOnce([
+      {
+        similarityScore: 0.6,
+        similarityMetadata: null,
+        executedAction: {
+          content: "Rule draft <b>text</b>.",
+          draftStatus: "LIKELY_SENT",
+        },
+        suggestedReplyDraft: null,
+      },
+    ] as any);
     vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
     vi.mocked(prisma.replyMemory.upsert).mockResolvedValue(
       createReplyMemory({}) as any,
@@ -652,29 +706,16 @@ describe("reply-memory", () => {
     expect(prompt).toContain(
       "<starting_draft>\nRule draft &lt;b&gt;text&lt;/b&gt;.\n</starting_draft>",
     );
-    expect(prisma.draftSendLog.findFirst).toHaveBeenCalledWith(
+    expect(prisma.draftSendLog.findMany).toHaveBeenLastCalledWith(
       expect.objectContaining({
         where: {
           sentMessageId: "sent-1",
           id: { not: "draft-send-log-1" },
-          // Not a draft the user threw away and wrote over.
-          similarityScore: { gte: 0.3 },
-          // Only a draft the user used: a rule draft counted as sent, or a
-          // saved suggested reply whose mailbox draft went with the send.
           OR: [
             {
-              executedAction: {
-                executedRule: { emailAccountId: "account-1" },
-                draftStatus: "LIKELY_SENT",
-              },
+              executedAction: { executedRule: { emailAccountId: "account-1" } },
             },
-            {
-              suggestedReplyDraft: { emailAccountId: "account-1" },
-              similarityMetadata: {
-                path: ["lifecycle", "draftExists"],
-                equals: false,
-              },
-            },
+            { suggestedReplyDraft: { emailAccountId: "account-1" } },
           ],
         },
         orderBy: { createdAt: "desc" },
@@ -692,7 +733,7 @@ describe("reply-memory", () => {
 
   it("gives no starting draft when the reply didn't use one", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({ count: 1 });
-    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValueOnce([
       {
         ...createDraftSendLog({ sourceMessageId: "source-3" }),
         executedAction: null,
@@ -714,8 +755,22 @@ describe("reply-memory", () => {
       },
     ] as any);
     // A rule's suggestion left waiting is logged for the send too, but as
-    // unused, so the lookup for a used starting draft finds nothing.
-    vi.mocked(prisma.draftSendLog.findFirst).mockResolvedValue(null);
+    // unused, and a saved reply the user wrote over: neither is where the
+    // reply began.
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValueOnce([
+      {
+        similarityScore: 0.9,
+        similarityMetadata: null,
+        executedAction: { content: "Unused.", draftStatus: "PENDING" },
+        suggestedReplyDraft: null,
+      },
+      {
+        similarityScore: 0.1,
+        similarityMetadata: { lifecycle: { draftExists: false } },
+        executedAction: null,
+        suggestedReplyDraft: { content: "Written over." },
+      },
+    ] as any);
     vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
     vi.mocked(prisma.draftSendLog.update).mockResolvedValue({} as any);
     mockGenerateObject.mockResolvedValue({ object: { memories: [] } });
@@ -812,6 +867,7 @@ Can you send pricing?`,
       where: { id: "draft-send-log-1" },
       data: {
         replyMemoryProcessedAt: expect.any(Date),
+        replyMemoryClaimedAt: null,
         replyMemorySentText: null,
       },
     });
@@ -1236,6 +1292,57 @@ Can you send pricing?`,
     ]);
   });
 
+  it("closes a log whose last attempt failed, by the stored count, even when read earlier", async () => {
+    // Read by this sync at attempt 0; meanwhile two other syncs each claimed
+    // and released an attempt, so this claim spends the last one.
+    const stored = {
+      replyMemoryAttemptCount: 2,
+      replyMemoryClaimedAt: null as Date | null,
+      replyMemoryProcessedAt: null as Date | null,
+      replyMemorySentText: "Pricing depends on seat count." as string | null,
+    };
+    vi.mocked(prisma.draftSendLog.updateMany).mockImplementation(
+      async ({ where, data }: any) => {
+        if (where.createdAt) return { count: 0 };
+        if (where.OR) {
+          if (
+            stored.replyMemoryAttemptCount >= where.replyMemoryAttemptCount.lt
+          )
+            return { count: 0 };
+          stored.replyMemoryClaimedAt = data.replyMemoryClaimedAt;
+          stored.replyMemoryAttemptCount += 1;
+          return { count: 1 };
+        }
+        if (
+          stored.replyMemoryClaimedAt?.getTime() !==
+          where.replyMemoryClaimedAt.getTime()
+        )
+          return { count: 0 };
+        if (
+          where.replyMemoryAttemptCount &&
+          stored.replyMemoryAttemptCount < where.replyMemoryAttemptCount.gte
+        )
+          return { count: 0 };
+        Object.assign(stored, data);
+        return { count: 1 };
+      },
+    );
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      createDraftSendLog({ replyMemoryAttemptCount: 0 }),
+    ] as any);
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: { getMessage: vi.fn().mockResolvedValue(null) } as any,
+      logger,
+    });
+
+    expect(stored.replyMemoryAttemptCount).toBe(3);
+    expect(stored.replyMemoryProcessedAt).toEqual(expect.any(Date));
+    expect(stored.replyMemorySentText).toBeNull();
+    expect(stored.replyMemoryClaimedAt).toBeNull();
+  });
+
   it("only picks up logs no live sync holds", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({ count: 1 });
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([]);
@@ -1298,7 +1405,10 @@ Can you send pricing?`,
     expect(mockGenerateObject).toHaveBeenCalledTimes(1);
     expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
       where: { id: "draft-send-log-1" },
-      data: { replyMemoryProcessedAt: expect.any(Date) },
+      data: {
+        replyMemoryProcessedAt: expect.any(Date),
+        replyMemoryClaimedAt: null,
+      },
     });
 
     vi.clearAllMocks();
@@ -1315,19 +1425,17 @@ Can you send pricing?`,
     });
 
     expectLeaseClaimed();
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: {
-        replyMemoryProcessedAt: expect.any(Date),
-        replyMemorySentText: null,
-      },
-    });
+    expectExhaustedClosed();
   });
 
   it("increments retry state when the source email cannot be loaded", async () => {
-    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 1,
-    });
+    // Claims succeed; the stored count is under the limit, so the failure
+    // only releases the lease.
+    vi.mocked(prisma.draftSendLog.updateMany).mockImplementation(
+      async ({ where }: any) => ({
+        count: where.replyMemoryAttemptCount?.gte ? 0 : 1,
+      }),
+    );
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
         replyMemorySentText: "Pricing depends on seat count.",
@@ -1349,16 +1457,17 @@ Can you send pricing?`,
     expect(prisma.replyMemory.upsert).not.toHaveBeenCalled();
     expectLeaseClaimed();
     // Not finished: the lease is released for a later sync.
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: { replyMemoryClaimedAt: null },
-    });
+    expectLeaseReleased();
   });
 
   it("increments retry state when non-source reply memory processing fails", async () => {
-    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 1,
-    });
+    // Claims succeed; the stored count is under the limit, so the failure
+    // only releases the lease.
+    vi.mocked(prisma.draftSendLog.updateMany).mockImplementation(
+      async ({ where }: any) => ({
+        count: where.replyMemoryAttemptCount?.gte ? 0 : 1,
+      }),
+    );
     vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
       createDraftSendLog({
         replyMemorySentText: "Pricing depends on seat count.",
@@ -1392,10 +1501,7 @@ Can you send pricing?`,
 
     expectLeaseClaimed();
     // Not finished: the lease is released for a later sync.
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: { replyMemoryClaimedAt: null },
-    });
+    expectLeaseReleased();
   });
 
   it("stops a failing draft send log from starving newer pending rows", async () => {
@@ -1435,8 +1541,20 @@ Can you send pricing?`,
     vi.mocked(prisma.draftSendLog.updateMany).mockImplementation(
       async ({ where, data }: any) => {
         const log = draftSendLogs.find((entry) => entry.id === where.id);
+        if (!log) return { count: 0 };
+        // A failure: closes the log or releases the lease this sync holds.
+        if (!where.OR) {
+          if (
+            log.replyMemoryClaimedAt?.getTime() !==
+              where.replyMemoryClaimedAt.getTime() ||
+            (where.replyMemoryAttemptCount &&
+              log.replyMemoryAttemptCount < where.replyMemoryAttemptCount.gte)
+          )
+            return { count: 0 };
+          Object.assign(log, data);
+          return { count: 1 };
+        }
         if (
-          !log ||
           log.replyMemoryProcessedAt ||
           log.replyMemoryAttemptCount >= where.replyMemoryAttemptCount.lt ||
           log.replyMemoryClaimedAt
@@ -1542,13 +1660,7 @@ Can you send pricing?`,
       logger,
     });
 
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: {
-        replyMemoryProcessedAt: expect.any(Date),
-        replyMemorySentText: null,
-      },
-    });
+    expectExhaustedClosed();
   });
 
   it("marks a draft send log processed after repeated non-source processing failures", async () => {
@@ -1587,13 +1699,7 @@ Can you send pricing?`,
       logger,
     });
 
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: {
-        replyMemoryProcessedAt: expect.any(Date),
-        replyMemorySentText: null,
-      },
-    });
+    expectExhaustedClosed();
   });
 
   it("marks draft send logs processed when sender extraction fails", async () => {
@@ -1623,6 +1729,7 @@ Can you send pricing?`,
       where: { id: "draft-send-log-1" },
       data: {
         replyMemoryProcessedAt: expect.any(Date),
+        replyMemoryClaimedAt: null,
         replyMemorySentText: null,
       },
     });
@@ -1675,6 +1782,7 @@ Can you send pricing?`,
       where: { id: "draft-send-log-1" },
       data: {
         replyMemoryProcessedAt: expect.any(Date),
+        replyMemoryClaimedAt: null,
       },
     });
   });
@@ -2354,5 +2462,27 @@ function expectLeaseClaimed() {
       replyMemoryClaimedAt: expect.any(Date),
       replyMemoryAttemptCount: { increment: 1 },
     },
+  });
+}
+
+function expectExhaustedClosed() {
+  expect(prisma.draftSendLog.updateMany).toHaveBeenCalledWith({
+    where: {
+      id: "draft-send-log-1",
+      replyMemoryClaimedAt: expect.any(Date),
+      replyMemoryAttemptCount: { gte: 3 },
+    },
+    data: {
+      replyMemoryProcessedAt: expect.any(Date),
+      replyMemorySentText: null,
+      replyMemoryClaimedAt: null,
+    },
+  });
+}
+
+function expectLeaseReleased() {
+  expect(prisma.draftSendLog.updateMany).toHaveBeenCalledWith({
+    where: { id: "draft-send-log-1", replyMemoryClaimedAt: expect.any(Date) },
+    data: { replyMemoryClaimedAt: null },
   });
 }
