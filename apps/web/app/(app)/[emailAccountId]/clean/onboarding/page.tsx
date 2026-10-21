@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Loading } from "@/components/Loading";
+import { CleanAccountPicker } from "@/app/(app)/[emailAccountId]/clean/CleanAccountPicker";
 import { IntroStep } from "@/app/(app)/[emailAccountId]/clean/IntroStep";
 import { ActionSelectionStep } from "@/app/(app)/[emailAccountId]/clean/ActionSelectionStep";
 import { CleanInstructionsStep } from "@/app/(app)/[emailAccountId]/clean/CleanInstructionsStep";
@@ -110,6 +111,7 @@ export default async function CleanPage(props: {
   return (
     <div>
       <Card className="my-4 max-w-2xl p-6 sm:mx-4 md:mx-auto">
+        <CleanAccountPicker />
         <Suspense
           key={step}
           fallback={

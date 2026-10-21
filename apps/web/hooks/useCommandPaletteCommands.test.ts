@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCommandPaletteCommands } from "./useCommandPaletteCommands";
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
-const account = vi.hoisted(() => ({ provider: "google" }));
+const account = vi.hoisted(() => ({ provider: "google", allAccounts: false }));
 const rules = vi.hoisted(() => ({ enabledArg: undefined as unknown }));
 const logOut = vi.hoisted(() => vi.fn());
 
@@ -26,8 +26,12 @@ vi.mock("@/hooks/useRules", () => ({
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: "account-1",
+    emailAccount: { email: "one@example.com" },
     provider: account.provider,
   }),
+}));
+vi.mock("@/hooks/useTodayHref", () => ({
+  useAllAccountsScope: () => account.allAccounts,
 }));
 vi.mock("@/utils/user", () => ({ logOut }));
 vi.mock("@/components/SideNav", () => ({
@@ -41,6 +45,7 @@ vi.mock("@/components/SideNav", () => ({
         name: "Unsubscribe",
         href: "/account-1/bulk-unsubscribe",
         icon: MailsIcon,
+        account: account.allAccounts ? "one@example.com" : undefined,
       },
     ],
   }),
@@ -50,6 +55,7 @@ describe("useCommandPaletteCommands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     account.provider = "google";
+    account.allAccounts = false;
   });
 
   it("opens rules settings on a page that exists", () => {
@@ -105,5 +111,28 @@ describe("useCommandPaletteCommands", () => {
         (c) => c.label === "Go to Cold Email Blocker",
       ),
     ).toBe(false);
+  });
+
+  it("across accounts names the account each account's page and rule opens in", () => {
+    account.allAccounts = true;
+    const { result } = renderHook(() => useCommandPaletteCommands());
+    const accountOf = (label: string) =>
+      result.current.commands.find((c) => c.label === label)?.account;
+
+    expect(accountOf("Go to Unsubscribe")).toBe("one@example.com");
+    expect(accountOf("Go to Cold Email Blocker")).toBe("one@example.com");
+    expect(accountOf("Newsletters")).toBe("one@example.com");
+    expect(accountOf("Rules settings")).toBe("one@example.com");
+    expect(accountOf("Usage")).toBe("one@example.com");
+    // Places that aren't one account's say no account.
+    expect(accountOf("Go to Inbox")).toBeUndefined();
+    expect(accountOf("Sign out")).toBeUndefined();
+    expect(accountOf("Manage Accounts")).toBeUndefined();
+  });
+
+  it("one account at a time names no account", () => {
+    const { result } = renderHook(() => useCommandPaletteCommands());
+
+    expect(result.current.commands.every((c) => !c.account)).toBe(true);
   });
 });

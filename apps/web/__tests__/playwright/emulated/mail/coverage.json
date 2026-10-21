@@ -42,6 +42,15 @@
     "utils/actions/today-weather.ts",
     "utils/home/next-up.ts"
   ],
+  "mixed-provider-accounts.spec.ts": [
+    "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
+    "app/(app)/[emailAccountId]/home/NextUp.tsx",
+    "utils/home/next-up.ts",
+    "utils/calendar/fetch-events-in-window.ts",
+    "components/CommandK.tsx",
+    "hooks/useCommandPaletteCommands.ts",
+    "app/(app)/[emailAccountId]/clean/CleanAccountPicker.tsx"
+  ],
   "today-all-accounts.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/use-all-accounts-home.tsx",

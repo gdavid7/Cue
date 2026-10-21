@@ -433,11 +433,11 @@ function CommandPaletteContent({
                 <React.Fragment key={section}>
                   {showSeparator && <CommandSeparator />}
                   <CommandGroup
-                    heading={
-                      page === "snooze" && section === "actions"
-                        ? "Snooze until"
-                        : SECTION_LABELS[section]
-                    }
+                    heading={sectionHeading(
+                      section,
+                      page,
+                      mailCommandContext?.account,
+                    )}
                   >
                     {sectionCommands.map((command) => (
                       <CommandItem
@@ -455,6 +455,11 @@ function CommandPaletteContent({
                             {command.description}
                           </span>
                         )}
+                        {command.account && (
+                          <span className="ml-3 min-w-0 truncate text-xs text-muted-foreground">
+                            {command.account}
+                          </span>
+                        )}
                         {command.shortcut && (
                           <CommandShortcut>{command.shortcut}</CommandShortcut>
                         )}
@@ -469,6 +474,19 @@ function CommandPaletteContent({
       </CommandList>
     </CommandDialog>
   );
+}
+
+/** Across accounts, the mail actions' heading says which account they run in. */
+function sectionHeading(
+  section: CommandSection,
+  page: "root" | "snooze" | "accounts",
+  account: string | undefined,
+) {
+  const heading =
+    page === "snooze" && section === "actions"
+      ? "Snooze until"
+      : SECTION_LABELS[section];
+  return section === "actions" && account ? `${heading} · ${account}` : heading;
 }
 
 function groupCommands(commands: Command[]) {

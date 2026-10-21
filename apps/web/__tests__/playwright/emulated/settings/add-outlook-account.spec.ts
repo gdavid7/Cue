@@ -1,5 +1,8 @@
 import { expect } from "@playwright/test";
-import { Client } from "pg";
+import {
+  deleteLinkedOutlookAccount,
+  linkOutlookAccount,
+} from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
@@ -19,32 +22,7 @@ test("a Google user links an Outlook mailbox and reads its mail", async ({
   expect(LINKED_OUTLOOK_EMAIL).not.toBe("");
 
   try {
-    await page.goto("/accounts", { waitUntil: "domcontentloaded" });
-    // A production build only follows https sign-in links, and the emulator
-    // serves http, so the test follows the link the button was given.
-    let authUrl: string | undefined;
-    await page.route("**/api/outlook/linking/auth-url**", async (route) => {
-      const response = await route.fetch();
-      const body = (await response.json()) as { url: string };
-      authUrl = body.url;
-      await route.fulfill({ response, json: { url: "/accounts" } });
-    });
-    await page.getByRole("button", { name: "Add Microsoft" }).click();
-    await expect.poll(() => authUrl).toBeTruthy();
-    // The app's own navigation back to /accounts can interrupt the first try.
-    await expect(async () => {
-      await page.goto(authUrl!);
-    }).toPass({ timeout: 30_000 });
-
-    await expect(page).toHaveURL(/\/oauth2\/v2\.0\/authorize(?:\?.*)?$/);
-    await page.getByRole("button", { name: LINKED_OUTLOOK_EMAIL }).click();
-
-    await expect(page).toHaveURL(
-      /\/accounts\?success=account_created_and_linked/,
-      {
-        timeout: 60_000,
-      },
-    );
+    await linkOutlookAccount(page, LINKED_OUTLOOK_EMAIL);
     const outlookAccount = page.getByText(LINKED_OUTLOOK_EMAIL, {
       exact: true,
     });
@@ -64,21 +42,6 @@ test("a Google user links an Outlook mailbox and reads its mail", async ({
     ).toBeVisible({ timeout: 60_000 });
     await capturePlaywrightCheckpoint(page, testInfo, "outlook-linked-mail");
   } finally {
-    await deleteLinkedOutlookAccount();
+    await deleteLinkedOutlookAccount(LINKED_OUTLOOK_EMAIL);
   }
 });
-
-// The Google account is shared by every spec in the run.
-async function deleteLinkedOutlookAccount() {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
-  await client.connect();
-  try {
-    await client.query(
-      `DELETE FROM "Account" WHERE id IN
-         (SELECT "accountId" FROM "EmailAccount" WHERE email = $1)`,
-      [LINKED_OUTLOOK_EMAIL],
-    );
-  } finally {
-    await client.end();
-  }
-}

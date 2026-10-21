@@ -466,6 +466,10 @@ function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
     "emulate.playwright.linked-microsoft.generated.yaml",
   );
   const receivedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  // Just after the Google calendar's meeting, so Today's next meetings come
+  // from both calendars.
+  const meetingStart = new Date(Date.now() + 135 * 60 * 1000);
+  const meetingEnd = new Date(meetingStart.getTime() + 30 * 60 * 1000);
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(
     outputPath,
@@ -495,6 +499,17 @@ function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
       parent_folder_id: inbox
       is_read: false
       received_date_time: "${receivedAt}"
+  calendar_events:
+    - id: evt_playwright_linked_outlook
+      user_email: ${linkedOutlookEmail}
+      calendar_id: primary
+      subject: Outlook design review
+      start_date_time: "${meetingStart.toISOString()}"
+      end_date_time: "${meetingEnd.toISOString()}"
+      attendees:
+        - address: ${linkedOutlookEmail}
+        - address: designer@example.com
+          name: Design Partner
 `,
   );
   return outputPath;

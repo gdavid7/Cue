@@ -115,6 +115,22 @@ describe("fetchCalendarEventsInWindow", () => {
     );
   });
 
+  it("says which calendar account each event was read from", async () => {
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider([makeEvent("work", "Standup")], "me@work.example"),
+      fakeProvider([makeEvent("home", "Dentist")], "me@outlook.example"),
+    ]);
+
+    const result = await fetchCalendarEventsInWindow(fetchParams);
+
+    expect(
+      Object.fromEntries(
+        result.events.map((event) => [event.id, event.calendarEmail]),
+      ),
+    ).toEqual({ work: "me@work.example", home: "me@outlook.example" });
+  });
+
   it("keeps every copy for automations reading only the account's own calendars", async () => {
     vi.mocked(countConnectedCalendars).mockResolvedValue(2);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([
@@ -146,8 +162,9 @@ function makeEvent(id: string, title = "Planning"): CalendarEvent {
   } as unknown as CalendarEvent;
 }
 
-function fakeProvider(events: CalendarEvent[]) {
+function fakeProvider(events: CalendarEvent[], calendarEmail?: string) {
   return {
+    calendarEmail,
     fetchEvents: vi.fn().mockResolvedValue(events),
   } as never;
 }
