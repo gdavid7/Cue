@@ -19,6 +19,8 @@ describe("enforceReasoningRetention", () => {
     prisma.executedRule.updateMany.mockResolvedValue({ count: 1 });
     prisma.documentFiling.updateMany.mockResolvedValue({ count: 2 });
     prisma.draftSendLog.updateMany.mockResolvedValue({ count: 3 });
+    prisma.composeAssistReply.deleteMany.mockResolvedValue({ count: 4 });
+    prisma.composeAssistReply.updateMany.mockResolvedValue({ count: 5 });
   });
 
   it("redacts stale reasoning fields and returns per-table counts", async () => {
@@ -67,6 +69,8 @@ describe("enforceReasoningRetention", () => {
     ).resolves.toEqual({
       cutoff,
       draftSendLogs: 3,
+      unsentComposeAssistReplies: 4,
+      sentComposeAssistReplies: 5,
     });
 
     expect(prisma.draftSendLog.updateMany).toHaveBeenCalledWith({
@@ -81,6 +85,33 @@ describe("enforceReasoningRetention", () => {
         sentText: null,
         replyMemorySentText: null,
       },
+    });
+  });
+
+  it("deletes Cue's suggestions for replies never sent, and clears the text of sent ones", async () => {
+    const now = new Date("2026-05-05T12:00:00.000Z");
+
+    await enforceDraftSentTextRetention({ days: 14, logger, now });
+
+    expect(prisma.composeAssistReply.deleteMany).toHaveBeenCalledWith({
+      where: { updatedAt: { lt: subDays(now, 7) }, draftSendLog: null },
+    });
+    expect(prisma.composeAssistReply.updateMany).toHaveBeenCalledWith({
+      where: {
+        draftSendLog: { is: { createdAt: { lt: subDays(now, 14) } } },
+        NOT: { outcomes: { equals: [] } },
+      },
+      data: { outcomes: [] },
+    });
+  });
+
+  it("never keeps unsent suggestions longer than the configured retention", async () => {
+    const now = new Date("2026-05-05T12:00:00.000Z");
+
+    await enforceDraftSentTextRetention({ days: 2, logger, now });
+
+    expect(prisma.composeAssistReply.deleteMany).toHaveBeenCalledWith({
+      where: { updatedAt: { lt: subDays(now, 2) }, draftSendLog: null },
     });
   });
 

@@ -665,6 +665,11 @@ function ComposeEmailFormContent({
     editorRef,
     emailAccountId: selectedEmailAccountId,
     threadId: replyingToEmail?.threadId,
+    // A forward answers no one, so it teaches no reply memories.
+    replyToMessageId:
+      draftMode === "forward"
+        ? undefined
+        : (draftKeyMessageId ?? replyingToEmail?.messageId),
     getEnvelope: () => ({
       to: getValues("to") || undefined,
       subject: getValues("subject") || undefined,
