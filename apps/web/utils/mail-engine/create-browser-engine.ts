@@ -333,6 +333,9 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "searchMessages", [query]),
     queryPersonCard: (query) =>
       callWorker(worker, pending, "queryPersonCard", [query]),
+    queryFiles: (query) => callWorker(worker, pending, "queryFiles", [query]),
+    queryFileSenders: (accountIds) =>
+      callWorker(worker, pending, "queryFileSenders", [accountIds]),
     observeMailbox: (query) => observe("mailbox", [query]),
     observeMailboxCounts: (query) => observe("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

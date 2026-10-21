@@ -24,6 +24,7 @@ import {
   ALL_INBOXES_MAILBOX_TYPES,
   ALL_INBOXES_VIEW_TYPES,
   getMailboxName,
+  MAIL_FILES_TYPE,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
@@ -68,6 +69,7 @@ import {
   SearchAnswerCard,
   useSearchAnswer,
 } from "@/app/(app)/[emailAccountId]/mail/SearchAnswerCard";
+import { FilesView } from "@/app/(app)/[emailAccountId]/mail/FilesView";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
 import { SampleThread } from "@/app/(app)/[emailAccountId]/mail/SampleThread";
 import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
@@ -554,6 +556,9 @@ export function MailShell() {
   const isScheduledView = !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
   // The mailbox doesn't know what's snoozed or until when; our database does.
   const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
+  // Files are read from the local mailbox's stored attachment details.
+  const isFilesView = !searchQuery && scopeType === MAIL_FILES_TYPE;
+  const isDatabaseView = isScheduledView || isSnoozedView || isFilesView;
   const allInboxesMailboxType =
     isAllInboxesView &&
     !searchQuery &&
@@ -691,17 +696,12 @@ export function MailShell() {
     query,
     providerSearch,
     enabled:
-      !isAllAccounts &&
-      searchSettled &&
-      !isScheduledView &&
-      !isSnoozedView &&
-      !isResolvingRoute,
+      !isAllAccounts && searchSettled && !isDatabaseView && !isResolvingRoute,
   });
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
     emailAccountId,
-    enabled:
-      isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
+    enabled: isAllAccounts && searchSettled && !isDatabaseView,
     mailboxType: allInboxesMailboxType,
     isUnread:
       !searchQuery &&
@@ -1860,7 +1860,7 @@ export function MailShell() {
     updateLocation,
   ]);
 
-  const openSnoozedThread = useCallback(
+  const openDatabaseThread = useCallback(
     (threadId: string, threadAccountId: string) =>
       setOpenThread({ emailAccountId: threadAccountId, threadId }),
     [setOpenThread],
@@ -2265,7 +2265,14 @@ export function MailShell() {
     databaseList = (
       <SnoozedThreadList
         accounts={databaseListAccounts}
-        onOpenThread={openSnoozedThread}
+        onOpenThread={openDatabaseThread}
+      />
+    );
+  else if (isFilesView)
+    databaseList = (
+      <FilesView
+        accounts={databaseListAccounts}
+        onOpenThread={openDatabaseThread}
       />
     );
 
