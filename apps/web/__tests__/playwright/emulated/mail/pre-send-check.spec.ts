@@ -203,6 +203,73 @@ test("does not count an alias the user sent from earlier as a new recipient", as
   await capturePlaywrightCheckpoint(page, testInfo, "pre-send-reply-alias");
 });
 
+test("does not flag an earlier participant on a reopened draft reply", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "The Outlook emulator stamps the signed-in user as sender, so a thread with other participants can't be seeded.",
+  );
+  const { emailAccountId } = await openMail(page);
+  const subject = `Pre-send draft ${testInfo.retry}-${Date.now()}`;
+  const earlier = await insertGmailMessage({
+    from: "Dana Example <dana@example.com>",
+    to: userEmail(),
+    cc: "Casey Earlier <casey.earlier@example.com>",
+    subject,
+    minutesAgo: 20,
+  });
+  const latest = await insertGmailMessage({
+    threadId: earlier.threadId,
+    from: "Alex Latest <alex.latest@example.com>",
+    to: userEmail(),
+    subject,
+    minutesAgo: 10,
+  });
+  const body = `PresendDraftBody${testInfo.retry}x${Date.now()}`;
+  const created = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/drafts`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          threadId: earlier.threadId,
+          to: "alex.latest@example.com, casey.earlier@example.com",
+          subject: `Re: ${subject}`,
+          body_text: body,
+        },
+      }),
+    },
+  );
+  expect(created.ok, await created.text()).toBe(true);
+
+  await openThreadMessage(page, emailAccountId, latest);
+  const editor = page.getByRole("textbox", { name: "Email message" });
+  await expect(editor).toContainText(body, { timeout: 60_000 });
+  const sent = page
+    .waitForRequest(
+      (request) =>
+        request.method() !== "GET" && !!request.postData()?.includes(body),
+      { timeout: 90_000 },
+    )
+    .catch(() => null);
+  await page
+    .locator("form")
+    .filter({ has: editor })
+    .getByRole("button", { name: "Send", exact: true })
+    .click();
+
+  expect(await sent).not.toBeNull();
+  await expect(
+    page.getByRole("group", { name: "Before you send" }),
+  ).toHaveCount(0);
+  await capturePlaywrightCheckpoint(page, testInfo, "pre-send-reopened-draft");
+});
+
 test("warns about a recipient who was never on the thread", async ({
   page,
 }, testInfo) => {
