@@ -25,10 +25,16 @@ describe("getThreadAddresses", () => {
       }),
     ]);
 
-    expect(participants).toContain("alex@example.com");
-    expect(participants).toContain("sam@example.com");
-    expect(participants).toContain("lee@example.com");
-    expect(participants).toContain("kim-replies@example.com");
+    expect(participants.split(",").sort()).toEqual([
+      "Alex <alex@example.com>",
+      "kim-replies@example.com",
+      "kim@example.com",
+      "lee@example.com",
+      "me@example.com",
+      "me@example.com",
+      "me@example.com",
+      "sam@example.com",
+    ]);
   });
 
   it("leaves out unsent drafts, whose recipients may be new", () => {
@@ -40,8 +46,8 @@ describe("getThreadAddresses", () => {
       ]),
     ]);
 
-    expect(participants).not.toContain("stranger@example.com");
-    expect(sentFrom).not.toContain("alias@example.com");
+    expect(participants.split(",")).not.toContain("stranger@example.com");
+    expect(sentFrom).toBe("");
   });
 
   it("reports the addresses the user has sent from in the thread", () => {
@@ -53,6 +59,18 @@ describe("getThreadAddresses", () => {
     ]);
 
     expect(sentFrom).toBe("Me <alias@example.com>");
+  });
+
+  it("does not take a received message moved into Sent for the user", () => {
+    expect(
+      getThreadAddresses([
+        message({ from: "alex@example.com", to: "me@example.com" }, [
+          "SENT",
+          "INBOX",
+        ]),
+        message({ from: "pat@example.com", to: "", cc: "" }, ["SENT"]),
+      ]).sentFrom,
+    ).toBe("");
   });
 
   it("does not take a received message's sender for the user", () => {

@@ -17,6 +17,8 @@ export function getThreadAddresses(messages: ThreadAddressMessage[]) {
     (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
   );
   return {
+    // The whole thread on purpose: someone re-added after being dropped
+    // earlier is not a new recipient, so they raise no warning.
     participants: sent
       .flatMap(({ headers }) => [
         headers.from,
@@ -26,8 +28,15 @@ export function getThreadAddresses(messages: ThreadAddressMessage[]) {
       ])
       .filter(Boolean)
       .join(","),
+    // Outlook gives SENT to anything in Sent Items, so a received message the
+    // user moved there is skipped: it sits in the inbox or has no recipients.
     sentFrom: sent
-      .filter((message) => message.labelIds?.includes(GmailLabel.SENT))
+      .filter(
+        (message) =>
+          message.labelIds?.includes(GmailLabel.SENT) &&
+          !message.labelIds.includes(GmailLabel.INBOX) &&
+          (message.headers.to || message.headers.cc),
+      )
       .map((message) => message.headers.from)
       .join(","),
   };
