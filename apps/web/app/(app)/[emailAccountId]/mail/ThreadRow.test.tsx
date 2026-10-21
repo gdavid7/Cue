@@ -6,9 +6,11 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { formatShortDate } from "@/utils/date";
 import type { ThreadInsightData } from "@/utils/inbox-insights/get-inbox-insights";
@@ -203,16 +205,144 @@ describe("ThreadRow", () => {
   });
 });
 
+describe("ThreadRow swipe", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(390);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  // The hover actions' handlers are the toolbar's and the keyboard's, so a
+  // swipe gets the same optimistic update, sync and Undo.
+  it("archives on a touch swipe left, through the row's actions, without opening", async () => {
+    const onOpen = vi.fn();
+    const rowActions = actions();
+    renderRow({ onOpen, rowActions });
+    const row = screen.getByRole("option");
+
+    swipe(row, "touch", [-20, -80, -160, -200]);
+    fireEvent.click(row);
+
+    await waitFor(() =>
+      expect(rowActions.archive).toHaveBeenCalledWith("thread-1"),
+    );
+    expect(rowActions.setRead).not.toHaveBeenCalled();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("marks an unread conversation read on a touch swipe right", () => {
+    const rowActions = actions();
+    renderRow({ rowActions, unread: true });
+
+    swipe(screen.getByRole("option"), "touch", [20, 80, 160, 200]);
+
+    expect(rowActions.setRead).toHaveBeenCalledWith("thread-1", true);
+    expect(rowActions.archive).not.toHaveBeenCalled();
+  });
+
+  it("leaves a vertical scroll alone", () => {
+    const onOpen = vi.fn();
+    const rowActions = actions();
+    renderRow({ onOpen, rowActions });
+    const row = screen.getByRole("option");
+
+    fireEvent.pointerDown(row, touchAt(200, 100));
+    fireEvent.pointerMove(row, touchAt(190, 140));
+    fireEvent.pointerMove(row, touchAt(60, 300));
+    fireEvent.pointerUp(row, touchAt(60, 300));
+
+    expect(rowActions.archive).not.toHaveBeenCalled();
+    expect(rowActions.setRead).not.toHaveBeenCalled();
+    expect(row.closest<HTMLElement>("[data-swiping]")).toBeNull();
+  });
+
+  it("archives once when the row is swiped again on its way out", async () => {
+    const rowActions = actions();
+    renderRow({ rowActions });
+    const row = screen.getByRole("option");
+
+    swipe(row, "touch", [-20, -80, -160, -200]);
+    await waitFor(() => expect(rowActions.archive).toHaveBeenCalled());
+    // Archived, but the list hasn't removed the row yet.
+    swipe(row, "touch", [-20, -80, -160, -200]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(rowActions.archive).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a swipe from the screen's right edge to the browser", () => {
+    const rowActions = actions();
+    renderRow({ rowActions });
+    const row = screen.getByRole("option");
+    const edge = window.innerWidth - 4;
+
+    fireEvent.pointerDown(row, touchAt(edge, 100));
+    for (const dx of [-20, -80, -160, -200])
+      fireEvent.pointerMove(row, touchAt(edge + dx, 100));
+    fireEvent.pointerUp(row, touchAt(edge - 200, 100));
+
+    expect(row.closest<HTMLElement>("[data-swiping]")).toBeNull();
+    expect(rowActions.archive).not.toHaveBeenCalled();
+  });
+
+  it("never moves the row for a mouse drag", () => {
+    const rowActions = actions();
+    renderRow({ rowActions });
+
+    swipe(screen.getByRole("option"), "mouse", [-20, -80, -160, -200]);
+
+    expect(rowActions.archive).not.toHaveBeenCalled();
+  });
+});
+
+function swipe(row: HTMLElement, pointerType: string, xs: number[]) {
+  const at = (dx: number) => ({
+    pointerId: 1,
+    isPrimary: true,
+    pointerType,
+    clientX: 200 + dx,
+    clientY: 100,
+  });
+  fireEvent.pointerDown(row, at(0));
+  for (const dx of xs) fireEvent.pointerMove(row, at(dx));
+  fireEvent.pointerUp(row, at(xs.at(-1) ?? 0));
+}
+
+function touchAt(clientX: number, clientY: number) {
+  return {
+    pointerId: 1,
+    isPrimary: true,
+    pointerType: "touch",
+    clientX,
+    clientY,
+  };
+}
+
+function actions() {
+  return {
+    archive: vi.fn(),
+    moveToInbox: vi.fn(),
+    trash: vi.fn(),
+    setRead: vi.fn(),
+    setStarred: vi.fn(),
+    snooze: vi.fn(),
+  };
+}
+
 function renderRow({
   onOpen = vi.fn(),
   onToggleSelect = vi.fn(),
   unread = false,
   insightData,
+  rowActions,
 }: {
   onOpen?: (index: number) => void;
   onToggleSelect?: (index: number) => void;
   unread?: boolean;
   insightData?: ThreadInsightData;
+  rowActions?: ThreadRowActionHandlers;
 } = {}) {
   const base = thread();
   return render(
@@ -226,6 +356,7 @@ function renderRow({
       onOpen={onOpen}
       onSelectRangeTo={vi.fn()}
       onToggleSelect={onToggleSelect}
+      rowActions={rowActions}
       thread={
         {
           ...base,

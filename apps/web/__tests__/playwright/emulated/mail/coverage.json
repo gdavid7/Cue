@@ -327,5 +327,18 @@
     "app/(app)/[emailAccountId]/mail/SnoozedThreadList.tsx",
     "hooks/useAllAccountsList.ts",
     "hooks/useHiddenDraftMessageIds.ts"
+  ],
+  "swipe-actions.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/ThreadRow.tsx",
+    "app/(app)/[emailAccountId]/mail/use-row-swipe.ts",
+    "app/(app)/[emailAccountId]/mail/row-swipe.ts"
+  ],
+  "office-attachment-previews.spec.ts": [
+    "components/email-list/EmailAttachments.tsx",
+    "components/email-list/DocxAttachmentPreview.tsx",
+    "components/email-list/XlsxAttachmentPreview.tsx",
+    "utils/attachments/attachment-preview.ts",
+    "utils/attachments/docx-frame.ts",
+    "utils/attachments/office-package.ts"
   ]
 }

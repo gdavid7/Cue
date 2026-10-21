@@ -82,6 +82,7 @@ const featureGroups = [
       "mail/draft-send-recovery.spec.ts",
       "mail/draft-deletion.spec.ts",
       "mail/attachment-previews.spec.ts",
+      "mail/office-attachment-previews.spec.ts",
     ],
   },
   {
@@ -124,6 +125,7 @@ const featureGroups = [
       "mail/triage-actions.spec.ts",
       "mail/assistant-catch-up.spec.ts",
       "mail/starring.spec.ts",
+      "mail/swipe-actions.spec.ts",
     ],
   },
   {

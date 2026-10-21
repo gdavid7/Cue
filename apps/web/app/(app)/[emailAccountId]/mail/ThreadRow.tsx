@@ -1,6 +1,11 @@
 "use client";
 
-import { PaperclipIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  MailIcon,
+  MailOpenIcon,
+  PaperclipIcon,
+} from "lucide-react";
 import {
   memo,
   type MouseEvent,
@@ -21,6 +26,7 @@ import {
   ThreadRowActions,
 } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import { getThreadParticipantNames } from "@/app/(app)/[emailAccountId]/mail/thread-participants";
+import { useRowSwipe } from "@/app/(app)/[emailAccountId]/mail/use-row-swipe";
 import {
   getListThreadKey,
   type ListThread,
@@ -125,6 +131,22 @@ export const ThreadRow = memo(function ThreadRow({
   const longPress = useLongPressToSelect(() => {
     if (selectionEnabled) onToggleSelect(index);
   });
+  const isUnread = isThreadUnread(thread.messages);
+  const threadKey = getListThreadKey(thread);
+  // While selecting, a touch picks rows; it shouldn't also move them.
+  const swipeEnabled = !!rowActions && !hasAnySelection;
+  const swipe = useRowSwipe({
+    enabled: swipeEnabled
+      ? { archive: !isThreadArchived(thread.messages), toggleRead: true }
+      : null,
+    // The same handlers as the hover actions, so sync, the optimistic update
+    // and Undo behave as they do for the keyboard and toolbar.
+    onCommit: (action) => {
+      if (!rowActions) return;
+      if (action === "archive") rowActions.archive(threadKey);
+      else rowActions.setRead(threadKey, isUnread);
+    },
+  });
 
   const insight = useMemo(
     () =>
@@ -153,128 +175,201 @@ export const ThreadRow = memo(function ThreadRow({
 
   return (
     // Touch has no hover or Shift, so holding a row selects it, as in the
-    // platform mail apps. `contents` keeps the row the listbox's own child.
+    // platform mail apps, and swiping it archives or flips read state.
     // Text selection and iOS's callout would start on the same hold.
     <div
-      className="contents pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none]"
-      {...longPress}
+      className="group/swipe relative pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none] data-[swiping]:overflow-hidden"
+      onClickCapture={(event) => {
+        swipe.handlers.onClickCapture(event);
+        if (!event.isPropagationStopped()) longPress.onClickCapture(event);
+      }}
+      onContextMenu={longPress.onContextMenu}
+      onPointerCancel={(event) => {
+        longPress.onPointerCancel();
+        swipe.handlers.onPointerCancel(event);
+      }}
+      onPointerDown={(event) => {
+        longPress.onPointerDown(event);
+        swipe.handlers.onPointerDown(event);
+      }}
+      onPointerMove={(event) => {
+        longPress.onPointerMove(event);
+        swipe.handlers.onPointerMove(event);
+      }}
+      onPointerUp={(event) => {
+        longPress.onPointerUp();
+        swipe.handlers.onPointerUp(event);
+      }}
+      ref={swipe.trackRef}
+      // Vertical scrolling and zoom stay the browser's; sideways is the row's.
+      style={swipeEnabled ? { touchAction: "pan-y pinch-zoom" } : undefined}
     >
-      <MailThreadRow
-        accountAvatar={
-          account ? (
-            <AccountMarker
-              account={account}
-              colorClassName={accountColorClassName}
-            />
-          ) : null
-        }
-        compact={compact}
-        date={
-          <div className="relative flex items-center justify-end">
-            <div
-              className={cn(
-                "flex items-center justify-end gap-1.5",
-                showActions &&
-                  "group-hover:invisible group-has-[:focus-visible]:invisible",
-              )}
-            >
-              {thread.hasAttachments ? (
-                <PaperclipIcon
-                  aria-label="Has attachments"
-                  className="size-3.5 shrink-0 text-muted-foreground"
+      {swipeEnabled ? <RowSwipeReveal isUnread={isUnread} /> : null}
+      <div
+        className="relative group-data-[swiping]/swipe:bg-background"
+        ref={swipe.layerRef}
+      >
+        <MailThreadRow
+          accountAvatar={
+            account ? (
+              <AccountMarker
+                account={account}
+                colorClassName={accountColorClassName}
+              />
+            ) : null
+          }
+          compact={compact}
+          date={
+            <div className="relative flex items-center justify-end">
+              <div
+                className={cn(
+                  "flex items-center justify-end gap-1.5",
+                  showActions &&
+                    "group-hover:invisible group-has-[:focus-visible]:invisible",
+                )}
+              >
+                {thread.hasAttachments ? (
+                  <PaperclipIcon
+                    aria-label="Has attachments"
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                  />
+                ) : null}
+                {sentMessageOpen ? (
+                  <SentMessageOpenStatus compact open={sentMessageOpen} />
+                ) : null}
+                <EmailDate
+                  className="font-normal text-xs"
+                  date={internalDateToDate(message.internalDate)}
                 />
-              ) : null}
-              {sentMessageOpen ? (
-                <SentMessageOpenStatus compact open={sentMessageOpen} />
-              ) : null}
-              <EmailDate
-                className="font-normal text-xs"
-                date={internalDateToDate(message.internalDate)}
-              />
+              </div>
             </div>
-          </div>
-        }
-        actions={
-          showActions && rowActions ? (
-            // Over the date column, which the row hides on hover.
-            <div
-              className={cn(
-                "absolute hidden rounded-md bg-background shadow-sm group-hover:flex group-has-[:focus-visible]:flex",
-                layout === "list" ? "right-5" : "right-3.5",
-                expandedPreview ? "top-2" : "-translate-y-1/2 top-1/2",
-              )}
-            >
-              <ThreadRowActions
-                handlers={rowActions}
-                isArchived={isThreadArchived(thread.messages)}
-                isStarred={isThreadStarred(thread.messages)}
-                isUnread={isThreadUnread(thread.messages)}
-                threadKey={getListThreadKey(thread)}
-              />
-            </div>
-          ) : null
-        }
-        expandedPreview={expandedPreview}
-        hasAnySelection={hasAnySelection}
-        index={index}
-        insight={insight ? <InsightText line={insight} /> : null}
-        isDraft={isDraft}
-        isFocused={isFocused}
-        isSelected={isSelected}
-        isStarred={isThreadStarred(thread.messages)}
-        isUnread={isThreadUnread(thread.messages)}
-        labels={chips.map((label) => (
-          <MailLabelChip color={label.color} key={label.id} name={label.name} />
-        ))}
-        layout={layout}
-        messageCount={thread.messages.length}
-        onOpen={onOpen}
-        onSelectRangeTo={onSelectRangeTo}
-        onToggleSelect={onToggleSelect}
-        participantSummary={participantSummary}
-        renderSelectionControl={({ ariaLabel, checked, onClick, visible }) => (
-          // Opening above would cover the select-all checkbox for the first row.
-          // A click selects at once; a tooltip it left open would also take
-          // the Escape that clears the selection.
-          <Tooltip openOnClick={false} shortcuts={["select"]} side="right">
-            <Checkbox
-              // A pointer control only: inside the option it would prefix every
-              // row's name, and aria-selected already says it is selected.
-              aria-hidden
-              aria-label={ariaLabel}
-              checked={checked}
-              className={cn(
-                mailCheckboxClassName,
-                // Below `lg` there's no hover to reveal it, and a finger needs
-                // a 44px target around the small box.
-                "relative transition-opacity max-lg:before:absolute max-lg:before:-inset-[15px] max-lg:before:content-['']",
-                visible
-                  ? "opacity-100"
-                  : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
-              )}
-              onClick={onClick}
-              // Not on the hidden checkbox: the click puts focus on its row,
-              // where J/K, Enter, Space and Escape carry on.
-              onMouseDown={(event) => event.preventDefault()}
-              // The listbox moves focus between rows; Space, `x` and Shift+click
-              // select, so a tab stop per row would only bury the rest of the page.
-              tabIndex={-1}
+          }
+          actions={
+            showActions && rowActions ? (
+              // Over the date column, which the row hides on hover.
+              <div
+                className={cn(
+                  "absolute hidden rounded-md bg-background shadow-sm group-hover:flex group-has-[:focus-visible]:flex",
+                  layout === "list" ? "right-5" : "right-3.5",
+                  expandedPreview ? "top-2" : "-translate-y-1/2 top-1/2",
+                )}
+              >
+                <ThreadRowActions
+                  handlers={rowActions}
+                  isArchived={isThreadArchived(thread.messages)}
+                  isStarred={isThreadStarred(thread.messages)}
+                  isUnread={isUnread}
+                  threadKey={threadKey}
+                />
+              </div>
+            ) : null
+          }
+          expandedPreview={expandedPreview}
+          hasAnySelection={hasAnySelection}
+          index={index}
+          insight={insight ? <InsightText line={insight} /> : null}
+          isDraft={isDraft}
+          isFocused={isFocused}
+          isSelected={isSelected}
+          isStarred={isThreadStarred(thread.messages)}
+          isUnread={isUnread}
+          labels={chips.map((label) => (
+            <MailLabelChip
+              color={label.color}
+              key={label.id}
+              name={label.name}
             />
-          </Tooltip>
-        )}
-        rowRef={rowRef}
-        selectionEnabled={selectionEnabled}
-        snippet={decodeSnippet(
-          // The provider's thread snippet follows the newest message, a draft too.
-          isDraft
-            ? message.snippet || thread.snippet
-            : thread.snippet || message.snippet,
-        )}
-        subject={message.headers.subject}
-      />
+          ))}
+          layout={layout}
+          messageCount={thread.messages.length}
+          onOpen={onOpen}
+          onSelectRangeTo={onSelectRangeTo}
+          onToggleSelect={onToggleSelect}
+          participantSummary={participantSummary}
+          renderSelectionControl={({
+            ariaLabel,
+            checked,
+            onClick,
+            visible,
+          }) => (
+            // Opening above would cover the select-all checkbox for the first row.
+            // A click selects at once; a tooltip it left open would also take
+            // the Escape that clears the selection.
+            <Tooltip openOnClick={false} shortcuts={["select"]} side="right">
+              <Checkbox
+                // A pointer control only: inside the option it would prefix every
+                // row's name, and aria-selected already says it is selected.
+                aria-hidden
+                aria-label={ariaLabel}
+                checked={checked}
+                className={cn(
+                  mailCheckboxClassName,
+                  // Below `lg` there's no hover to reveal it, and a finger needs
+                  // a 44px target around the small box.
+                  "relative transition-opacity max-lg:before:absolute max-lg:before:-inset-[15px] max-lg:before:content-['']",
+                  visible
+                    ? "opacity-100"
+                    : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 max-lg:opacity-100",
+                )}
+                onClick={onClick}
+                // Not on the hidden checkbox: the click puts focus on its row,
+                // where J/K, Enter, Space and Escape carry on.
+                onMouseDown={(event) => event.preventDefault()}
+                // The listbox moves focus between rows; Space, `x` and Shift+click
+                // select, so a tab stop per row would only bury the rest of the page.
+                tabIndex={-1}
+              />
+            </Tooltip>
+          )}
+          rowRef={rowRef}
+          selectionEnabled={selectionEnabled}
+          snippet={decodeSnippet(
+            // The provider's thread snippet follows the newest message, a draft too.
+            isDraft
+              ? message.snippet || thread.snippet
+              : thread.snippet || message.snippet,
+          )}
+          subject={message.headers.subject}
+        />
+      </div>
     </div>
   );
 });
+
+/**
+ * What a swipe will do, revealed behind the row as it moves: muted until the
+ * commit point, then the action's color. Decoration only; the same actions
+ * are on the keyboard, the toolbar and the hover buttons.
+ */
+function RowSwipeReveal({ isUnread }: { isUnread: boolean }) {
+  const ReadIcon = isUnread ? MailOpenIcon : MailIcon;
+  const side =
+    "absolute inset-0 hidden items-center bg-muted px-6 text-muted-foreground transition-colors duration-150";
+  const icon =
+    "size-5 scale-90 transition-transform duration-150 group-data-[armed]/swipe:scale-110";
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0">
+      <div
+        className={cn(
+          side,
+          "justify-start group-data-[swiping=toggleRead]/swipe:flex group-data-[armed]/swipe:bg-primary group-data-[armed]/swipe:text-primary-foreground",
+        )}
+        data-testid="row-swipe-reveal-read"
+      >
+        <ReadIcon className={icon} />
+      </div>
+      <div
+        className={cn(
+          side,
+          "justify-end group-data-[swiping=archive]/swipe:flex group-data-[armed]/swipe:bg-emerald-600 group-data-[armed]/swipe:text-white",
+        )}
+        data-testid="row-swipe-reveal-archive"
+      >
+        <ArchiveIcon className={icon} />
+      </div>
+    </div>
+  );
+}
 
 const REPLY_TRACKING_LABELS = new Set([
   getRuleLabel(SystemType.TO_REPLY),
