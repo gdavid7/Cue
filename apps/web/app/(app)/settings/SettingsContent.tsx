@@ -16,6 +16,7 @@ import { McpSection } from "@/app/(app)/[emailAccountId]/settings/McpSection";
 import { EmailOtpSection } from "@/app/(app)/settings/EmailOtpSection";
 import { AppearanceSection } from "@/app/(app)/settings/AppearanceSection";
 import { NotificationsSection } from "@/app/(app)/settings/NotificationsSection";
+import { TodayWeatherSetting } from "@/app/(app)/settings/TodayWeatherSetting";
 import { BillingSection } from "@/app/(app)/[emailAccountId]/settings/BillingSection";
 import { CleanupDraftsSection } from "@/app/(app)/[emailAccountId]/settings/CleanupDraftsSection";
 import { SentMessageOpenTrackingSetting } from "@/app/(app)/[emailAccountId]/settings/SentMessageOpenTrackingSetting";
@@ -136,6 +137,7 @@ export function SettingsContent() {
           <EmailOtpSection hasMultipleAccounts={emailAccounts.length > 1} />
           <ItemSeparator />
           <AppearanceSection />
+          <TodayWeatherSetting />
           <NotificationsSection />
           {activeEmailAccountId && (
             <>

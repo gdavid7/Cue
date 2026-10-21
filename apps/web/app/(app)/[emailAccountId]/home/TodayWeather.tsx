@@ -20,12 +20,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { useUser } from "@/hooks/useUser";
+import { useTodayWeather } from "@/hooks/useTodayWeather";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { saveTodayWeatherAction } from "@/utils/actions/today-weather";
 import type { TodayWeatherLocation } from "@/utils/actions/today-weather.validation";
 import { createBrowserCache } from "@/utils/browser-cache";
-import { coarseLocation } from "@/utils/weather/coarse-location";
 import {
   describeWeather,
   fetchWeather,
@@ -65,9 +63,8 @@ const ICONS: Record<WeatherKind, LucideIcon> = {
  */
 export function TodayWeather() {
   const { emailAccountId } = useAccount();
-  const { data: user, mutate } = useUser();
+  const { user, location, dismissed, save: saveSetting } = useTodayWeather();
   const [open, setOpen] = useState(false);
-  const location = user?.todayWeather ?? null;
   const unit =
     typeof navigator === "undefined"
       ? "celsius"
@@ -94,23 +91,15 @@ export function TodayWeather() {
 
   // The slot keeps its height while the user loads, so nothing below it moves.
   if (!user) return <div aria-hidden className={SLOT} />;
-  if (!location && user.todayWeatherDismissed) return null;
+  // Settings or the command palette bring the offer back.
+  if (!location && dismissed) return null;
 
-  const save = async (
+  const save = (
     next: TodayWeatherLocation | null,
-    { dismissed = false } = {},
+    options?: { dismissed?: boolean },
   ) => {
-    const stored = next ? coarseLocation(next) : null;
-    mutate(
-      { ...user, todayWeather: stored, todayWeatherDismissed: dismissed },
-      { revalidate: false },
-    );
     setOpen(false);
-    const result = await saveTodayWeatherAction({
-      location: stored,
-      dismissed,
-    });
-    if (result?.serverError || result?.validationErrors) mutate();
+    return saveSetting(next, options);
   };
 
   const trigger = location ? (

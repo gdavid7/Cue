@@ -569,6 +569,7 @@ describe("getHomeData: what's next", () => {
 
     expect(home.calendar).toEqual({
       connected: true,
+      clearThroughTomorrow: false,
       next: {
         title: "Design review",
         at: "2026-10-13T21:00:00.000Z",
@@ -673,7 +674,71 @@ describe("getHomeData: what's next", () => {
 
     const home = await run(mockProvider({}));
 
-    expect(home.calendar).toEqual({ connected: true, next: null });
+    expect(home.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: true,
+      next: null,
+    });
+  });
+
+  it.each([
+    {
+      label: "every calendar read in full, with only all-day items",
+      result: {
+        complete: true,
+        events: [
+          event("holiday", "Holiday", "2026-10-14T00:00:00Z", { allDay: true }),
+        ],
+      },
+      clear: true,
+    },
+    {
+      label: "only a declined invite",
+      result: {
+        complete: true,
+        events: [
+          event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z", {
+            declined: true,
+          }),
+        ],
+      },
+      clear: true,
+    },
+    {
+      label: "a meeting in progress",
+      result: {
+        complete: true,
+        events: [event("now", "Standup", "2026-10-13T15:45:00Z")],
+      },
+      clear: false,
+    },
+    {
+      label: "a calendar that failed or was cut short",
+      result: { complete: false, events: [] },
+      clear: false,
+    },
+  ])("calls the calendar clear through tomorrow only when it is: $label", async ({
+    result,
+    clear,
+  }) => {
+    mocks.fetchEvents.mockResolvedValue(result);
+
+    const home = await run(mockProvider({}));
+
+    expect(home.calendar.clearThroughTomorrow).toBe(clear);
+  });
+
+  it("never calls a calendar that couldn't be read clear", async () => {
+    mocks.fetchEvents.mockRejectedValue(new Error("Calendar down"));
+
+    const home = await run(mockProvider({}));
+
+    // Still connected, so Today doesn't ask to connect it either.
+    expect(home.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: false,
+      next: null,
+    });
   });
 
   it.each([
@@ -697,7 +762,11 @@ describe("getHomeData: what's next", () => {
 
     const home = await run(mockProvider({}));
 
-    expect(home.calendar).toEqual({ connected, next: null });
+    expect(home.calendar).toEqual({
+      connected,
+      clearThroughTomorrow: false,
+      next: null,
+    });
   });
 
   it("merges the next meetings with work due from connected apps, soonest first", async () => {
