@@ -20,14 +20,18 @@ const reply: PreSendContext = {
   ownEmails: [OWN],
 };
 
-const draft = (overrides: Partial<PreSendDraft> = {}): PreSendDraft => ({
-  to: "Alex <alex@example.com>",
-  cc: "sam@example.com",
-  subject: "Re: Lunch",
-  bodyText: "Sounds good, see you at noon.",
-  attachmentCount: 0,
-  ...overrides,
-});
+const draft = (overrides: Partial<PreSendDraft> = {}): PreSendDraft => {
+  const bodyText = overrides.bodyText ?? "Sounds good, see you at noon.";
+  return {
+    to: "Alex <alex@example.com>",
+    cc: "sam@example.com",
+    subject: "Re: Lunch",
+    bodyText,
+    placeholderText: bodyText,
+    attachmentCount: 0,
+    ...overrides,
+  };
+};
 
 const ids = (draftValue: PreSendDraft, context: PreSendContext = reply) =>
   getPreSendWarnings(draftValue, context).map((warning) => warning.id);
@@ -161,6 +165,49 @@ describe("getPreSendWarnings", () => {
     });
   });
 
+  describe("placeholders", () => {
+    it("lists up to three placeholders and counts the rest", () => {
+      const warnings = getPreSendWarnings(
+        draft({
+          bodyText: "Hi {name}, welcome to [Company] on <insert date>.",
+        }),
+        reply,
+      );
+      expect(warnings).toEqual([
+        {
+          id: "placeholders",
+          message:
+            "The message still has placeholders to fill in: {name}, [Company], <insert date>.",
+          fix: "body",
+          selectText: "{name}",
+        },
+      ]);
+      const many = getPreSendWarnings(
+        draft({ bodyText: "{name} [Company] TBD XXX" }),
+        reply,
+      );
+      expect(many[0]?.message).toBe(
+        "The message still has placeholders to fill in: {name}, [Company], TBD and 1 more.",
+      );
+    });
+
+    it("names a single placeholder", () => {
+      const [warning] = getPreSendWarnings(
+        draft({ bodyText: "Hi [Name]," }),
+        reply,
+      );
+      expect(warning?.message).toBe(
+        "The message still has a placeholder to fill in: [Name].",
+      );
+    });
+
+    it("flags nothing in ordinary text", () => {
+      expect(ids(draft({ bodyText: "See [1] at https://x.com/{id}" }))).toEqual(
+        [],
+      );
+    });
+  });
+
   describe("attachment", () => {
     it("warns when the message mentions an attachment and has none", () => {
       expect(ids(draft({ bodyText: "The contract is attached." }))).toEqual([
@@ -227,6 +274,32 @@ describe("mentionsAttachment", () => {
 });
 
 describe("getComposeBodyText", () => {
+  it("can leave out code, which may hold a placeholder on purpose", () => {
+    const html = "<p>Use <code>{name}</code> here</p><pre>[Company]</pre>";
+    expect(getComposeBodyText(html, { forPlaceholders: true })).toBe(
+      "Use  here",
+    );
+    expect(getComposeBodyText(html)).toContain("{name}");
+  });
+
+  it("can leave out link text, which the placeholder check does not read", () => {
+    const html = '<p>Hi <a href="https://x.com">[Click Here]</a> {name}</p>';
+    expect(getComposeBodyText(html, { forPlaceholders: true })).toBe(
+      "Hi  {name}",
+    );
+  });
+
+  it("keeps code for the other checks", () => {
+    const html = "<p>Attached</p><pre>&amp;lt;p&amp;gt;</pre>";
+    const bodyText = getComposeBodyText(html);
+    expect(
+      ids(draft({ bodyText, placeholderText: "Attached" }), reply),
+    ).toContain("escaped-markup");
+    expect(
+      mentionsAttachment(getComposeBodyText("<code>attached</code>")),
+    ).toBe(true);
+  });
+
   it("keeps what the user wrote and drops the quoted or forwarded message", () => {
     const html = `<p>Looks good to me</p><div class="gmail_quote">See the attached file</div><blockquote>Report attached</blockquote>`;
     expect(getComposeBodyText(html)).toBe("Looks good to me");

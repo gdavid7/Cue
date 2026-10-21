@@ -165,6 +165,7 @@ import {
 } from "./queued-reply";
 import { beginUndoSend, UNDO_SEND_DELAY_MS } from "./undo-send";
 import { PreSendConfirmation } from "./PreSendConfirmation";
+import { selectPlaceholderIn } from "./select-placeholder";
 import {
   getComposeBodyText,
   getPreSendWarnings,
@@ -1374,14 +1375,17 @@ function ComposeEmailFormContent({
       }
 
       if (preSendCheckEnabled) {
+        const editableHtml =
+          editorRef.current?.getValue().editableHtml ??
+          initialDraft.editableHtml;
         const warnings = getPreSendWarnings(
           {
             ...recipients,
             subject: data.subject ?? "",
-            bodyText: getComposeBodyText(
-              editorRef.current?.getValue().editableHtml ??
-                initialDraft.editableHtml,
-            ),
+            bodyText: getComposeBodyText(editableHtml),
+            placeholderText: getComposeBodyText(editableHtml, {
+              forPlaceholders: true,
+            }),
             attachmentCount:
               attachmentsRef.current.length +
               (replyingToEmail?.forwardedAttachments?.length ?? 0) +
@@ -1872,13 +1876,18 @@ function ComposeEmailFormContent({
       (preSend?.markDone && sendAndMarkDoneButtonRef.current) || undefined,
     );
   }, [preSend]);
-  const fixPreSend = (fix: PreSendWarningFix) => {
+  const fixPreSend = (fix: PreSendWarningFix, selectText?: string) => {
     shownPreSendWarnings.current = undefined;
     setPreSend(undefined);
     if (fix === "attach") attachmentInputRef.current?.click();
     else if (fix === "subject") setFocus("subject");
-    else if (fix === "body") editorRef.current?.focus();
-    else if (showInlineReplySummary) openInlineReplyFields();
+    else if (fix === "body") {
+      editorRef.current?.focus();
+      const editable = formRef.current?.querySelector<HTMLElement>(
+        "[contenteditable='true']",
+      );
+      if (editable && selectText) selectPlaceholderIn(editable, selectText);
+    } else if (showInlineReplySummary) openInlineReplyFields();
     else formRef.current?.querySelector<HTMLElement>("#to")?.focus();
   };
 
