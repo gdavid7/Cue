@@ -123,7 +123,8 @@ export type MailSidebarProps = {
   /** Offered above a single account's inbox when there are inboxes to combine. */
   allInboxesHref?: string;
   /** Today's briefing, which lives outside the mail view. */
-  todayHref?: string;
+  /** Undefined hides Today; null keeps its place until there is an account. */
+  todayHref?: string | null;
   /** The pointer or focus reached the Today row, so it may well open next. */
   onTodayIntent?: () => void;
   /** The pointer or focus left the Today row. */
@@ -419,9 +420,9 @@ function MailSidebarContent({
               prefetch={activeType === "today" ? true : undefined}
             />
           )}
-          {todayHref ? (
+          {todayHref !== undefined ? (
             <NavRow
-              href={todayHref}
+              href={todayHref ?? undefined}
               active={activeType === "today"}
               icon={<SunIcon className="size-4 shrink-0" />}
               name="Today"

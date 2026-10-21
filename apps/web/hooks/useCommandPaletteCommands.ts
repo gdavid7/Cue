@@ -49,7 +49,7 @@ export function useCommandPaletteCommands({
 
   const commands = useMemo<Command[]>(() => {
     const navigationItems = [
-      ...manageItems,
+      ...manageItems.filter((item) => !item.disabled),
       ...toolsItems,
       // Lives in the account menu rather than the sidebar, for the provider
       // whose rule it wraps.
