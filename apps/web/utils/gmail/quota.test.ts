@@ -1088,6 +1088,51 @@ describe("Gmail quota gate", () => {
     );
   });
 
+  // PF-3a: while background work kept the bucket at its floor, the reader's
+  // context ran at background too and came back 503 for about a third of
+  // opens. The reserved slice above background's floor holds a whole open.
+  it.each([
+    ["user/thread-context", "admitted"],
+    ["user/thread-brief", "admitted"],
+    // What a caller nobody listed as interactive would meet.
+    ["user/thread-context-unlisted", "deferred"],
+  ])("gives %s's reads room while background work keeps the bucket at its floor (%s)", async (source, expected) => {
+    const account = `account-reader-${source}`;
+    const read = (cost: number) =>
+      meterGmailCall({ emailAccountId: account, cost }, async () => undefined);
+    let stop = false;
+    const insights = runWithAuditContext(
+      { source: "user/inbox-insights" },
+      async () => {
+        while (!stop) await read(100).catch(() => sleep(1000));
+      },
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // The open thread, then three participants' listings and their two other
+    // threads in full, then the topic search and four matches' headers.
+    const outcome = runWithAuditContext({ source }, () =>
+      runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, async () => {
+        await read(120);
+        for (let participant = 0; participant < 3; participant++) {
+          await read(10);
+          await read(240);
+        }
+        await read(10);
+        await read(160);
+        return "admitted";
+      }),
+    ).catch((error: unknown) =>
+      error instanceof GmailCallDeferredError ? "deferred" : error,
+    );
+    await vi.advanceTimersByTimeAsync(OPEN_THREAD_GMAIL_WAIT_MS + 1000);
+    expect(await outcome).toBe(expected);
+
+    stop = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await insights;
+  });
+
   it("answers the open thread's AI within its wait budget at interactive priority, not after a wait per call", async () => {
     const account = "account-open-thread-ai";
     const read = (cost: number) =>

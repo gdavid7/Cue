@@ -1683,8 +1683,9 @@ export class GmailProvider implements EmailProvider {
   async getThreadsWithParticipant(options: {
     participantEmail: string;
     maxThreads?: number;
+    excludeThreadId?: string;
   }): Promise<EmailThread[]> {
-    const { participantEmail, maxThreads = 5 } = options;
+    const { participantEmail, maxThreads = 5, excludeThreadId } = options;
 
     const query = `from:${participantEmail} OR to:${participantEmail}`;
     const { threads: gmailThreads } = await getThreadsWithNextPageToken({
@@ -1696,7 +1697,7 @@ export class GmailProvider implements EmailProvider {
 
     const threadIds = gmailThreads
       .map((t) => t.id)
-      .filter((id): id is string => !!id);
+      .filter((id): id is string => !!id && id !== excludeThreadId);
 
     if (threadIds.length === 0) {
       return [];

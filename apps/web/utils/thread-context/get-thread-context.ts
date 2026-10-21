@@ -28,9 +28,12 @@ import { fetchLinkedPages, linksIn } from "@/utils/thread-context/linked-pages";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { ParsedMessage } from "@/utils/types";
 
-// Every related thread is a Gmail threads.get at 40 quota units, so one open
-// costs about 40 + 3 × (10 + 3 × 40) + (10 + 5 × 40) = 640 units of the
-// account's 6,000 per minute. Keep the fan-out small and cache the result.
+// The gate charges the open thread and each participant's thread as full
+// reads (120 units) and a topic match as a metadata read (40), so one open
+// costs at most 120 + 3 × (10 + 3 × 120) + (10 + 5 × 40) = 1,440 units of the
+// account's per-minute budget, less 120 for each participant whose latest
+// threads include the open one, which is not read again. Keep the fan-out
+// small.
 const MAX_PARTICIPANTS = 3;
 const THREADS_PER_PARTICIPANT = 3;
 const PARTICIPANT_CONCURRENCY = 2;
@@ -155,6 +158,7 @@ export async function collectThreadContext({
           .getThreadsWithParticipant({
             participantEmail: p.email,
             maxThreads: THREADS_PER_PARTICIPANT,
+            excludeThreadId: thread.id,
           })
           .catch((error) => {
             if (isGmailCallDeferredError(error)) throw error;

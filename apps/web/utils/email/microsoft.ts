@@ -1676,8 +1676,9 @@ export class OutlookProvider implements EmailProvider {
   async getThreadsWithParticipant(options: {
     participantEmail: string;
     maxThreads?: number;
+    excludeThreadId?: string;
   }): Promise<EmailThread[]> {
-    const { participantEmail, maxThreads = 5 } = options;
+    const { participantEmail, maxThreads = 5, excludeThreadId } = options;
     const maxSearchResults = Math.min(20, Math.max(10, maxThreads * 4));
 
     // IMPORTANT:
@@ -1701,7 +1702,9 @@ export class OutlookProvider implements EmailProvider {
     const relevant = filterMessagesForParticipant(messages, participantLower);
 
     // Extract unique conversationIds (thread IDs) from parsed messages
-    const conversationIds = getUniqueThreadIds(relevant, maxThreads);
+    const conversationIds = getUniqueThreadIds(relevant, maxThreads).filter(
+      (id) => id !== excludeThreadId,
+    );
 
     this.logger.info("Outlook participant search completed", {
       rawMessageCount: messages.length,
