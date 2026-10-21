@@ -14,7 +14,9 @@ const {
   mockCheckHasAccess,
   mockGetEmailAccountWithAi,
   mockReserveDigestSummarySlot,
+  mockGetMessage,
 } = vi.hoisted(() => ({
+  mockGetMessage: vi.fn(),
   mockAiSummarizeEmailForDigest: vi.fn(),
   mockCheckHasAccess: vi.fn(),
   mockGetEmailAccountWithAi: vi.fn(),
@@ -49,6 +51,12 @@ vi.mock("@/utils/digest/summary-limit", () => ({
   releaseDigestSummarySlot: vi.fn(),
 }));
 
+vi.mock("@/utils/email/provider", () => ({
+  createEmailProvider: vi
+    .fn()
+    .mockResolvedValue({ getMessage: mockGetMessage }),
+}));
+
 vi.mock("@/utils/ai/digest/summarize-email-for-digest", () => ({
   aiSummarizeEmailForDigest: mockAiSummarizeEmailForDigest,
 }));
@@ -70,6 +78,21 @@ describe("digest route action ownership", () => {
     });
     mockAiSummarizeEmailForDigest.mockResolvedValue({
       content: "Summarized",
+    });
+    prisma.digest.findFirst.mockResolvedValue({
+      id: "digest-a",
+      items: [],
+    } as unknown as Awaited<ReturnType<typeof prisma.digest.findFirst>>);
+    mockGetMessage.mockResolvedValue({
+      id: "message-1",
+      threadId: "thread-1",
+      headers: {
+        from: "sender@example.com",
+        to: "user@example.com",
+        subject: "Important update",
+      },
+      textPlain: "Please summarize this.",
+      snippet: "",
     });
   });
 
@@ -142,6 +165,78 @@ describe("digest route action ownership", () => {
       }),
     );
   });
+
+  it("reads the message from the mailbox, since the job only names it", async () => {
+    prisma.executedAction.findFirst.mockResolvedValue({
+      executedRule: { rule: { name: "Newsletters" } },
+    } as unknown as Awaited<
+      ReturnType<typeof prisma.executedAction.findFirst>
+    >);
+
+    const response = await POST(createRequest("owned-action-id"));
+
+    expect(response.status).toBe(200);
+    expect(mockGetMessage).toHaveBeenCalledWith("message-1");
+    expect(mockAiSummarizeEmailForDigest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageToSummarize: {
+          id: "message-1",
+          threadId: "thread-1",
+          from: "sender@example.com",
+          to: "user@example.com",
+          subject: "Important update",
+          content: "Please summarize this.",
+        },
+      }),
+    );
+  });
+
+  it("skips a message deleted while the job waited", async () => {
+    prisma.executedAction.findFirst.mockResolvedValue({
+      executedRule: { rule: { name: "Newsletters" } },
+    } as unknown as Awaited<
+      ReturnType<typeof prisma.executedAction.findFirst>
+    >);
+    mockGetMessage.mockRejectedValue(
+      new Error("Requested entity was not found."),
+    );
+
+    const response = await POST(createRequest("owned-action-id"));
+
+    expect(response.status).toBe(200);
+    expect(mockAiSummarizeEmailForDigest).not.toHaveBeenCalled();
+    expect(mockReserveDigestSummarySlot).not.toHaveBeenCalled();
+  });
+
+  it("still handles a job queued with the message itself, reading it by id", async () => {
+    prisma.executedAction.findFirst.mockResolvedValue({
+      executedRule: { rule: { name: "Newsletters" } },
+    } as unknown as Awaited<
+      ReturnType<typeof prisma.executedAction.findFirst>
+    >);
+
+    const response = await POST(
+      new NextRequest("http://localhost:3000/api/ai/digest", {
+        method: "POST",
+        body: JSON.stringify({
+          emailAccountId: "account-a",
+          actionId: "owned-action-id",
+          message: {
+            id: "message-1",
+            threadId: "thread-1",
+            from: "sender@example.com",
+            to: "user@example.com",
+            subject: "Important update",
+            content: "Please summarize this.",
+          },
+        }),
+      }) as Parameters<typeof POST>[0],
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockGetMessage).toHaveBeenCalledWith("message-1");
+    expect(mockAiSummarizeEmailForDigest).toHaveBeenCalled();
+  });
 });
 
 function createRequest(actionId: string) {
@@ -150,14 +245,8 @@ function createRequest(actionId: string) {
     body: JSON.stringify({
       emailAccountId: "account-a",
       actionId,
-      message: {
-        id: "message-1",
-        threadId: "thread-1",
-        from: "sender@example.com",
-        to: "user@example.com",
-        subject: "Important update",
-        content: "Please summarize this.",
-      },
+      messageId: "message-1",
+      threadId: "thread-1",
     }),
   }) as Parameters<typeof POST>[0];
 }

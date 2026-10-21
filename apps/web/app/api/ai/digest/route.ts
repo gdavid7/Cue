@@ -12,6 +12,9 @@ import {
 } from "@/utils/digest/summary-limit";
 import { checkHasAccess } from "@/utils/premium/server";
 import { upsertDigest } from "@/app/api/ai/digest/upsert-digest";
+import { createEmailProvider } from "@/utils/email/provider";
+import { isThreadNotFoundError } from "@/utils/email/thread-not-found";
+import { emailToContentForAI } from "@/utils/ai/content-sanitizer";
 
 export const POST = withError(
   "digest",
@@ -20,9 +23,9 @@ export const POST = withError(
 
     try {
       const body = digestBody.parse(await request.json());
-      const { emailAccountId, actionId, message } = body;
+      const { emailAccountId, actionId, messageId, threadId } = body;
 
-      logger = logger.with({ emailAccountId, messageId: message.id });
+      logger = logger.with({ emailAccountId, messageId });
 
       const emailAccount = await getEmailAccountWithAi({ emailAccountId });
       if (!emailAccount) {
@@ -38,18 +41,42 @@ export const POST = withError(
         return new NextResponse("OK", { status: 200 });
       }
 
-      // Don't summarize Digest emails (this will actually block all emails that we send, but that's okay)
-      if (message.from === env.RESEND_FROM_EMAIL) {
-        logger.info("Skipping digest item because it is from us");
-        return new NextResponse("OK", { status: 200 });
-      }
-
       const ruleName = actionId
         ? await getRuleNameByExecutedAction(actionId, emailAccountId)
         : null;
 
       if (!ruleName) {
         logger.warn("Rule name not found for executed action", { actionId });
+        return new NextResponse("OK", { status: 200 });
+      }
+
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider: emailAccount.account.provider,
+        logger,
+      });
+      const parsedMessage = await emailProvider
+        .getMessage(messageId)
+        .catch((error) => {
+          if (isThreadNotFoundError(error)) return null;
+          throw error;
+        });
+      if (!parsedMessage) {
+        logger.info("Skipping digest item because the message is gone");
+        return new NextResponse("OK", { status: 200 });
+      }
+      const message = {
+        id: messageId,
+        threadId,
+        from: parsedMessage.headers.from,
+        to: parsedMessage.headers.to || "",
+        subject: parsedMessage.headers.subject,
+        content: emailToContentForAI(parsedMessage),
+      };
+
+      // Don't summarize Digest emails (this will actually block all emails that we send, but that's okay)
+      if (message.from === env.RESEND_FROM_EMAIL) {
+        logger.info("Skipping digest item because it is from us");
         return new NextResponse("OK", { status: 200 });
       }
 
@@ -70,10 +97,7 @@ export const POST = withError(
         const summary = await aiSummarizeEmailForDigest({
           ruleName,
           emailAccount,
-          messageToSummarize: {
-            ...message,
-            to: message.to || "",
-          },
+          messageToSummarize: message,
         });
 
         if (!summary?.content) {
@@ -84,8 +108,8 @@ export const POST = withError(
         }
 
         await upsertDigest({
-          messageId: message.id || "",
-          threadId: message.threadId || "",
+          messageId,
+          threadId,
           emailAccountId,
           actionId,
           content: summary,
