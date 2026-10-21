@@ -2,14 +2,41 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 import useSWR, { type ScopedMutator } from "swr";
+import { z } from "zod";
+import type { OperationStatus } from "@inboxzero/mail-core/operations";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
 import { useAllAccountsList } from "@/hooks/useAllAccountsList";
+import {
+  getActiveMailClient,
+  observeOperationOnActiveEngine,
+  subscribeActiveMailClient,
+  subscribeMailEngineLogout,
+} from "@/utils/mail-engine/active-client";
 
 export type HiddenDrafts = { emailAccountId: string; messageIds: string[] };
 
-const NO_HIDDEN_DRAFTS: HiddenDrafts[] = [];
+// A queued or held send outlives the page that sent it, so its drafts stay
+// hidden on the next page in this tab. Ids only, never content.
+const SENDING_DRAFTS_STORAGE_KEY = "cue:sending-drafts";
+const MAX_STORED_SENDS = 50;
+// Sends that won't go out: their drafts are the user's again.
+const UNSENT_STATUSES = new Set<OperationStatus>([
+  "cancelled",
+  "superseded",
+  "failed",
+  "needs_attention",
+]);
+
+const storedSendSchema = z.object({
+  emailAccountId: z.string().min(1),
+  operationId: z.string().min(1),
+  messageIds: z.array(z.string().min(1)).max(50),
+});
+type SendingDrafts = HiddenDrafts & { operationId?: string };
+
+const NO_HIDDEN_DRAFTS: SendingDrafts[] = [];
 const NO_HIDDEN_BY_ACCOUNT: HiddenDrafts[] = [];
-let sendingDrafts = NO_HIDDEN_DRAFTS;
+let sendingDrafts: SendingDrafts[] = readStoredSends();
 const listeners = new Set<() => void>();
 
 const SCHEDULED_EMAILS_PATH = "/api/user/scheduled-emails";
@@ -88,6 +115,7 @@ export function useHiddenDraftMessageIds(emailAccountId: string) {
   );
   return useMemo(
     () => [
+      ...(data?.sentDraftMessageIds ?? []),
       ...getScheduledDraftMessageIds(data?.scheduledEmails ?? []),
       ...sending
         .filter((entry) => entry.emailAccountId === emailAccountId)
@@ -115,11 +143,12 @@ export function useAllAccountsHiddenDraftMessageIds(
   return useMemo(() => {
     if (accountKey === undefined) return NO_HIDDEN_BY_ACCOUNT;
     const hidden = accountKey.split("\n").flatMap((emailAccountId) => {
-      const scheduled =
-        data?.byAccount.find((entry) => entry.accountId === emailAccountId)
-          ?.data.scheduledEmails ?? [];
+      const upcoming = data?.byAccount.find(
+        (entry) => entry.accountId === emailAccountId,
+      )?.data;
       const messageIds = [
-        ...getScheduledDraftMessageIds(scheduled),
+        ...(upcoming?.sentDraftMessageIds ?? []),
+        ...getScheduledDraftMessageIds(upcoming?.scheduledEmails ?? []),
         ...sending
           .filter((entry) => entry.emailAccountId === emailAccountId)
           .flatMap((entry) => entry.messageIds),
@@ -133,20 +162,66 @@ export function useAllAccountsHiddenDraftMessageIds(
 /**
  * Hides a draft from this tab while its send is held for undo or queued on the
  * device, before the server knows about it, or once it is discarded and until
- * sync drops it. Returns a function that shows it again.
+ * sync drops it. A send's drafts stay hidden across a reload, until
+ * `resumeSendingDrafts` sees it won't go out. Returns a function that shows
+ * them again.
  */
 export function hideSendingDraftMessages(
   emailAccountId: string,
   messageIds: string[],
+  operationId?: string,
 ) {
   if (!messageIds.length) return () => {};
-  const entry = { emailAccountId, messageIds };
+  const entry: SendingDrafts = operationId
+    ? { emailAccountId, messageIds, operationId }
+    : { emailAccountId, messageIds };
   sendingDrafts = [...sendingDrafts, entry];
+  if (operationId) storeSends();
   notify();
-  return () => {
-    if (!sendingDrafts.includes(entry)) return;
-    sendingDrafts = sendingDrafts.filter((item) => item !== entry);
+  return () => showDrafts(entry);
+}
+
+/**
+ * Watches the sends whose drafts an earlier page in this tab hid, once this
+ * page's engine is running, and shows a draft again if its send is undone or
+ * fails. Signing out forgets them. Returns a function that stops watching.
+ */
+export function resumeSendingDrafts() {
+  const restored = sendingDrafts.filter((entry) => entry.operationId);
+  const handles: Array<{ close(): void }> = [];
+  const stopLogout = subscribeMailEngineLogout(() => {
+    sendingDrafts = NO_HIDDEN_DRAFTS;
+    removeSession(SENDING_DRAFTS_STORAGE_KEY);
     notify();
+  });
+  const watch = () => {
+    const client = getActiveMailClient();
+    if (!client) return;
+    stopWaiting();
+    for (const entry of restored) {
+      if (!entry.operationId) continue;
+      const handle = observeOperationOnActiveEngine(client, {
+        accountId: entry.emailAccountId,
+        operationId: entry.operationId,
+      });
+      handles.push(handle);
+      const inspect = () => {
+        const status = handle.getSnapshot().data?.status;
+        if (status && UNSENT_STATUSES.has(status)) {
+          handle.close();
+          showDrafts(entry);
+        }
+      };
+      handle.subscribe(inspect);
+      inspect();
+    }
+  };
+  const stopWaiting = subscribeActiveMailClient(watch);
+  watch();
+  return () => {
+    stopWaiting();
+    stopLogout();
+    for (const handle of handles) handle.close();
   };
 }
 
@@ -158,6 +233,48 @@ export function getScheduledDraftMessageIds(
       ? row.draftMessageIds
       : [],
   );
+}
+
+function showDrafts(entry: SendingDrafts) {
+  if (!sendingDrafts.includes(entry)) return;
+  sendingDrafts = sendingDrafts.filter((item) => item !== entry);
+  if (entry.operationId) storeSends();
+  notify();
+}
+
+function storeSends() {
+  const sends = sendingDrafts
+    .filter((entry) => entry.operationId)
+    .slice(-MAX_STORED_SENDS);
+  try {
+    if (sends.length)
+      globalThis.sessionStorage?.setItem(
+        SENDING_DRAFTS_STORAGE_KEY,
+        JSON.stringify(sends),
+      );
+    else removeSession(SENDING_DRAFTS_STORAGE_KEY);
+  } catch {
+    // The drafts stay hidden on this page; they just won't be after a reload.
+  }
+}
+
+function readStoredSends(): SendingDrafts[] {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(SENDING_DRAFTS_STORAGE_KEY);
+    if (!raw) return NO_HIDDEN_DRAFTS;
+    const parsed = z.array(storedSendSchema).safeParse(JSON.parse(raw));
+    return parsed.success && parsed.data.length
+      ? parsed.data
+      : NO_HIDDEN_DRAFTS;
+  } catch {
+    return NO_HIDDEN_DRAFTS;
+  }
+}
+
+function removeSession(key: string) {
+  try {
+    globalThis.sessionStorage?.removeItem(key);
+  } catch {}
 }
 
 function subscribe(listener: () => void) {

@@ -158,6 +158,24 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       testInfo,
       "all-inboxes-draft-scheduled",
     );
+
+    // Once the server has sent it, it stays out of the merged Drafts though
+    // this device hasn't synced that account's mailbox since.
+    await withClient((client) =>
+      client.query(
+        `UPDATE "ScheduledEmail" SET status = 'SENT', "sentAt" = now() WHERE "emailAccountId" = $1 AND status = 'PENDING'`,
+        [second.id],
+      ),
+    );
+    await page.reload();
+    await expect(conversations).toBeVisible({ timeout: 60_000 });
+    await expect(
+      draftRows.filter({ has: accountMarker(page, primaryEmail) }),
+    ).toHaveCount(1, { timeout: 60_000 });
+    await expect(
+      draftRows.filter({ has: accountMarker(page, second.email) }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "all-inboxes-draft-sent");
   } finally {
     await unstarSentMessage(page).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
