@@ -409,11 +409,11 @@ async function variantMailbox(): Promise<{
       changes: VARIANT_MESSAGES.map((message, index) =>
         messagePatch(
           {
-            ...message,
+            id: message.id,
+            subject: message.subject,
             from: "sender@example.com",
             to: ["me@example.com"],
             read: true,
-            html: null,
           },
           index,
         ),
