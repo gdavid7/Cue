@@ -22,6 +22,9 @@ const GMAIL_THREAD = "thr_playwright_1";
 const OUTLOOK_THREAD = "thr_playwright_linked_outlook";
 const OUTLOOK_SUBJECT = "Linked Outlook Message";
 const SEED_PREFIX = "playwright-mixed-";
+// The linked emulator's calendar holding only "Outlook design review"; see
+// writeLinkedMicrosoftSeed in playwright.config.mjs.
+const OUTLOOK_MEETING_CALENDAR = "cal_playwright_linked_design";
 const commandModifier = process.platform === "darwin" ? "Meta" : "Control";
 
 test.skip(
@@ -53,6 +56,12 @@ test.beforeEach(async ({ page }) => {
   await expect
     .poll(() => calendarConnections(outlook.id), { timeout: 30_000 })
     .toBe(1);
+  // The emulator seeds its own meetings on the default calendars, ahead of the
+  // Gmail one; turned off, as the person can, they leave Next up to the two
+  // meetings this spec is about.
+  await expect
+    .poll(() => onlyOutlookMeetingCalendar(outlook.id), { timeout: 30_000 })
+    .toBe(true);
   for (const [account, threadId] of [
     [gmail, GMAIL_THREAD],
     [outlook, OUTLOOK_THREAD],
@@ -112,12 +121,17 @@ test("Today across a Gmail and an Outlook account names each one's mail, drafts 
   }
 
   // With a Gmail and an Outlook calendar connected, a meeting says whose
-  // calendar it's on. (The Outlook emulator's meetings don't reach Today in
-  // this run yet: MA-5a.)
+  // calendar it's on.
   const nextUp = page.getByRole("region", { name: "Next up" });
   await expect(nextUp.getByText(`Calendar · ${gmail.email}`)).toBeVisible({
     timeout: 90_000,
   });
+  await expect(
+    nextUp
+      .getByRole("listitem")
+      .filter({ hasText: "Outlook design review" })
+      .getByText(`Calendar · ${outlook.email}`),
+  ).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "today-mixed-desktop");
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -240,6 +254,25 @@ async function calendarConnections(emailAccountId: string) {
       [emailAccountId],
     );
     return result.rowCount ?? 0;
+  });
+}
+
+async function onlyOutlookMeetingCalendar(emailAccountId: string) {
+  return withClient(async (client) => {
+    const synced = await client.query(
+      `SELECT 1 FROM "Calendar" calendar
+       JOIN "CalendarConnection" connection ON connection.id = calendar."connectionId"
+       WHERE connection."emailAccountId" = $1 AND calendar."calendarId" = $2`,
+      [emailAccountId, OUTLOOK_MEETING_CALENDAR],
+    );
+    if (!synced.rowCount) return false;
+    await client.query(
+      `UPDATE "Calendar" SET "isEnabled" = false
+       WHERE "calendarId" <> $2 AND "connectionId" IN
+         (SELECT id FROM "CalendarConnection" WHERE "emailAccountId" = $1)`,
+      [emailAccountId, OUTLOOK_MEETING_CALENDAR],
+    );
+    return true;
   });
 }
 

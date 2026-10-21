@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TZDate } from "@date-fns/tz";
 import { createTestLogger } from "@/__tests__/helpers";
 import { MicrosoftCalendarEventProvider } from "@/utils/calendar/providers/microsoft-events";
 
@@ -612,6 +613,22 @@ describe("MicrosoftCalendarEventProvider reading calendars", () => {
       ["Lab", "2026-10-15T15:00:00.000Z"],
       ["Standup", "2026-10-15T16:00:00.000Z"],
     ]);
+  });
+
+  // A zoned date prints its offset ("+02:00"), and Graph reads an unencoded
+  // "+" in the query string as a space, so the calendar came back empty.
+  it("asks Graph for a window given in the user's zone in UTC", async () => {
+    graphMocks.get.mockResolvedValue({ value: [] });
+
+    await createProvider().fetchEvents({
+      timeMin: new TZDate(2026, 9, 21, 9, 30, 0, "Europe/Berlin"),
+      timeMax: new TZDate(2026, 9, 23, 0, 0, 0, "UTC"),
+    });
+
+    expect(graphMocks.query).toHaveBeenCalledWith({
+      startDateTime: "2026-10-21T07:30:00.000Z",
+      endDateTime: "2026-10-23T00:00:00.000Z",
+    });
   });
 
   it("keeps an all-day item on its own date", async () => {

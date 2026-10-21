@@ -31,8 +31,8 @@ describe("getNextUp", () => {
 
   it("names each meeting's calendar when the user has more than one", async () => {
     prisma.calendarConnection.findMany.mockResolvedValue([
-      { email: "me@gmail.example" },
-      { email: "me@outlook.example" },
+      connection("google", "me@gmail.example"),
+      connection("microsoft", "me@outlook.example"),
     ] as never);
 
     const { nextUp } = await nextUpFor();
@@ -45,8 +45,22 @@ describe("getNextUp", () => {
 
   it("says only Calendar when there is one calendar to tell apart", async () => {
     prisma.calendarConnection.findMany.mockResolvedValue([
-      { email: "me@gmail.example" },
-      { email: "ME@gmail.example" },
+      connection("google", "me@gmail.example"),
+      connection("google", "ME@gmail.example"),
+    ] as never);
+
+    const { nextUp } = await nextUpFor();
+
+    expect(nextUp.map(({ source, detail }) => [source, detail])).toEqual([
+      ["Calendar", undefined],
+      ["Calendar", undefined],
+    ]);
+  });
+
+  it("does not count a disconnected calendar as a second one", async () => {
+    prisma.calendarConnection.findMany.mockResolvedValue([
+      connection("google", "me@gmail.example"),
+      connection("microsoft", "me@outlook.example", { isConnected: false }),
     ] as never);
 
     const { nextUp } = await nextUpFor();
@@ -66,6 +80,16 @@ function nextUpFor() {
     logger: createTestLogger(),
     now: NOW,
   });
+}
+
+let connectionId = 0;
+function connection(
+  provider: string,
+  email: string,
+  { isConnected = true }: { isConnected?: boolean } = {},
+) {
+  connectionId += 1;
+  return { id: `connection-${connectionId}`, provider, email, isConnected };
 }
 
 function event(

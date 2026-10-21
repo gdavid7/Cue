@@ -95,6 +95,8 @@ const emulateSeedPath = writeEmulateSeed({
   playwrightTestEmail,
   runId,
 });
+// Keep in sync with mixed-provider-accounts.spec.ts.
+const LINKED_OUTLOOK_CALENDAR_ID = "cal_playwright_linked_design";
 const linkedOutlookEmail =
   `playwright-outlook+${runId}@outlook.com`.toLowerCase();
 const linkedMicrosoftSeedPath = linkedMicrosoftBaseUrl
@@ -467,7 +469,8 @@ function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
   );
   const receivedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   // Just after the Google calendar's meeting, so Today's next meetings come
-  // from both calendars.
+  // from both calendars. It is on its own calendar because the emulator also
+  // seeds earlier meetings on the default ones, which the spec turns off.
   const meetingStart = new Date(Date.now() + 135 * 60 * 1000);
   const meetingEnd = new Date(meetingStart.getTime() + 30 * 60 * 1000);
   fs.mkdirSync(outputDir, { recursive: true });
@@ -499,10 +502,14 @@ function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
       parent_folder_id: inbox
       is_read: false
       received_date_time: "${receivedAt}"
+  calendars:
+    - id: ${LINKED_OUTLOOK_CALENDAR_ID}
+      user_email: ${linkedOutlookEmail}
+      name: Design
   calendar_events:
     - id: evt_playwright_linked_outlook
       user_email: ${linkedOutlookEmail}
-      calendar_id: primary
+      calendar_id: ${LINKED_OUTLOOK_CALENDAR_ID}
       subject: Outlook design review
       start_date_time: "${meetingStart.toISOString()}"
       end_date_time: "${meetingEnd.toISOString()}"
