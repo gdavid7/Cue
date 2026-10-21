@@ -1020,6 +1020,7 @@ function TaskRow({
             <AccountMarker
               account={task.account}
               colorClassName={accountColorClassName}
+              inInbox
             />
           ) : null}
           <span className="truncate font-medium text-foreground text-sm">

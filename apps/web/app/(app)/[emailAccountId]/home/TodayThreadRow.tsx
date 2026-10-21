@@ -85,6 +85,7 @@ export function TodayThreadRow({
             <AccountMarker
               account={thread.account}
               colorClassName={accountColorClassName}
+              inInbox
             />
           ) : null
         }

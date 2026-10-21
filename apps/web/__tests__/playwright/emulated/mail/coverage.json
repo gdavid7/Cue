@@ -343,7 +343,9 @@
     "app/(app)/[emailAccountId]/mail/ScheduledEmailList.tsx",
     "app/(app)/[emailAccountId]/mail/SnoozedThreadList.tsx",
     "hooks/useAllAccountsList.ts",
-    "hooks/useHiddenDraftMessageIds.ts"
+    "hooks/useHiddenDraftMessageIds.ts",
+    "hooks/useLabelCounts.ts",
+    "utils/mail-engine/label-count-targets.ts"
   ],
   "swipe-actions.spec.ts": [
     "app/(app)/[emailAccountId]/mail/ThreadRow.tsx",

@@ -41,6 +41,8 @@ export type ThreadListProps = {
   labelsByAccount?: Record<string, EmailLabels>;
   /** Each All inboxes account's position, which picks its row marker color. */
   accountColorIndexById?: Record<string, number>;
+  /** The rows are the inbox's, so each account marker names an inbox. */
+  inInbox?: boolean;
   selectionEnabled?: boolean;
   /** The row `J`/`K` sits on. */
   focusedIndex: number;
@@ -73,6 +75,7 @@ export const ThreadList = memo(function ThreadList({
   userLabels,
   labelsByAccount,
   accountColorIndexById,
+  inInbox,
   selectionEnabled = true,
   focusedIndex,
   isSelected,
@@ -206,6 +209,7 @@ export const ThreadList = memo(function ThreadList({
                 )
               : undefined
           }
+          inInbox={inInbox}
           thread={row.item}
           userEmail={userEmail}
           userLabels={
