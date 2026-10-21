@@ -349,5 +349,9 @@
     "utils/attachments/attachment-preview.ts",
     "utils/attachments/docx-frame.ts",
     "utils/attachments/office-package.ts"
+  ],
+  "wake-catch-up.spec.ts": [
+    "utils/mail-engine/wake-catch-up.ts",
+    "app/api/user/inbox-catch-up/route.ts"
   ]
 }
