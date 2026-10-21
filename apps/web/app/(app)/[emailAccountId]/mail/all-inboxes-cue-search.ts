@@ -4,6 +4,7 @@ import {
   getNextWidening,
   getWideningLadder,
   type getWideningStep,
+  localOnly,
   type WideningStep,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import {
@@ -448,27 +449,4 @@ export function holdRowOrder<T extends ActionableThread>(
     ),
     order: nextOrder,
   };
-}
-
-/** A search's local part alone, for its own account only. */
-function localOnly(predicate: MailPredicate): MailPredicate {
-  switch (predicate.kind) {
-    case "search":
-      return predicate.accountIds
-        ? {
-            kind: "all",
-            predicates: [
-              { kind: "account", ids: predicate.accountIds },
-              predicate.local,
-            ],
-          }
-        : predicate.local;
-    case "all":
-    case "any":
-      return { ...predicate, predicates: predicate.predicates.map(localOnly) };
-    case "not":
-      return { ...predicate, predicate: localOnly(predicate.predicate) };
-    default:
-      return predicate;
-  }
 }

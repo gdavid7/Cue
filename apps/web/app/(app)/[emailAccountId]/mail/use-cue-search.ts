@@ -19,6 +19,7 @@ import {
   getSearchAnswerRequest,
   getWideningLadder,
   keepFrozenRows,
+  localOnly,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import {
   type CueRankingContext,
@@ -173,7 +174,7 @@ export function useCueSearch({
     searches,
     timeZone,
     unreadOnly: Boolean(intent?.unreadOnly),
-    providerSearch: true,
+    providerSearches: "all",
     enabled: natural && searches.length > 0,
   });
 
@@ -191,14 +192,15 @@ export function useCueSearch({
   }, [ladder, step, onProvider]);
   // Each tier reads the local mail alone, so climbing the ladder stays fast;
   // the first search already asked the provider. Only when nothing at all
-  // turns up does the last tier go to the provider too. Unread is a
-  // narrowing condition, which widening drops.
+  // turns up does the last tier go to the provider, as one search: its
+  // first, with the rest still read locally. Unread is a narrowing
+  // condition, which widening drops.
   const wider = useCueFoundThreads({
     emailAccountId,
     searches: widening?.searches ?? NO_SEARCHES,
     timeZone,
     unreadOnly: false,
-    providerSearch: onProvider,
+    providerSearches: onProvider ? "first" : "none",
     enabled: Boolean(widening),
   });
   const primaryKeys = useMemo(
@@ -280,7 +282,7 @@ function useCueFoundThreads({
   searches,
   timeZone,
   unreadOnly,
-  providerSearch,
+  providerSearches,
   enabled,
 }: {
   emailAccountId: string;
@@ -289,8 +291,8 @@ function useCueFoundThreads({
   timeZone: string | undefined;
   /** Keeps only unread mail, for a provider whose search can't. */
   unreadOnly: boolean;
-  /** False reads the local mail alone. */
-  providerSearch: boolean;
+  /** Which of `searches` also go to the provider; "none" reads the local mail alone. */
+  providerSearches: "all" | "first" | "none";
   enabled: boolean;
 }): { threads: ListThread[]; window: { settled: boolean; count: number } } {
   const { userLabels } = useLabels();
@@ -301,9 +303,12 @@ function useCueFoundThreads({
       provider: searchProvider(provider),
       timeZone,
     };
-    const predicates = searches.map((q) =>
-      threadsQueryToPredicate({ q }, undefined, context),
-    );
+    const predicates = searches.map((q, index) => {
+      const predicate = threadsQueryToPredicate({ q }, undefined, context);
+      return providerSearches === "first" && index > 0
+        ? localOnly(predicate)
+        : predicate;
+    });
     const matching: MailPredicate | undefined =
       predicates.length < 2 ? predicates[0] : { kind: "any", predicates };
     // Outside the search, so the provider's matches are filtered too.
@@ -312,12 +317,12 @@ function useCueFoundThreads({
       kind: "all",
       predicates: [matching, { kind: "read", value: false }],
     };
-  }, [searches, timeZone, unreadOnly, userLabels, provider]);
+  }, [searches, timeZone, unreadOnly, userLabels, provider, providerSearches]);
   const state = useEngineMailThreads({
     emailAccountId,
     query: PREDICATE_ONLY_QUERY,
     predicate,
-    providerSearch,
+    providerSearch: providerSearches !== "none",
     enabled: enabled && !!predicate,
   });
   const settled =
