@@ -106,7 +106,7 @@ describe("SnoozedThreadList across accounts", () => {
       expect.stringContaining("Later one"),
     ]);
     expect(
-      within(items[0]).getByRole("img", { name: "Inbox: b@example.com" }),
+      within(items[0]).getByRole("img", { name: "Account: b@example.com" }),
     ).toBeTruthy();
 
     fireEvent.click(within(items[0]).getByText("Sooner one"));
@@ -164,7 +164,7 @@ describe("ScheduledEmailList across accounts", () => {
     const [first] = within(list).getAllByRole("listitem");
     expect(first.textContent).toContain("Second");
     expect(
-      within(first).getByRole("img", { name: "Inbox: b@example.com" }),
+      within(first).getByRole("img", { name: "Account: b@example.com" }),
     ).toBeTruthy();
 
     await act(async () => {

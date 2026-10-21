@@ -47,10 +47,7 @@ export function mailboxCountTargets(input: {
       id: "DRAFT",
       name: "Drafts",
       kind: "system",
-      predicate: withoutHiddenDrafts(
-        { kind: "role", role: "draft" },
-        input.hiddenDraftMessageIds ?? [],
-      ),
+      predicate: draftsCountPredicate(input.hiddenDraftMessageIds ?? []),
     },
   ];
 
@@ -73,6 +70,34 @@ export function mailboxCountTargets(input: {
   }
 
   return targets.slice(0, MAX_MAILBOX_COUNT_TARGETS);
+}
+
+/**
+ * All inboxes' Drafts count: one target per account, each counted as that
+ * account's own Drafts count, to be summed. A message id names a message only
+ * within its own account, so each account hides only its own drafts.
+ */
+export function allInboxesDraftsCountTargets(
+  accounts: Array<{ id: string; hiddenDraftMessageIds: string[] }>,
+): Array<Pick<MailboxCountTarget, "id" | "predicate">> {
+  return accounts.map((account) => ({
+    id: account.id,
+    predicate: {
+      kind: "all",
+      predicates: [
+        { kind: "account", ids: [account.id] },
+        draftsCountPredicate(account.hiddenDraftMessageIds),
+      ],
+    },
+  }));
+}
+
+/** Drafts a pending send stands in for are hidden from Drafts like in its list. */
+function draftsCountPredicate(hiddenDraftMessageIds: string[]): MailPredicate {
+  return withoutHiddenDrafts(
+    { kind: "role", role: "draft" },
+    hiddenDraftMessageIds,
+  );
 }
 
 function userFolders(

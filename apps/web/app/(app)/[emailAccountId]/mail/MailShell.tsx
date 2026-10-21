@@ -2634,6 +2634,9 @@ export function MailShell() {
                       userLabels={isAllAccounts ? NO_LABELS : userLabels}
                       labelsByAccount={labelsByAccount}
                       accountColorIndexById={accountColorIndexById}
+                      inInbox={
+                        isAllAccounts && !searchQuery && !allInboxesMailboxType
+                      }
                       focusedIndex={clampedIndex - cueRowCount}
                       isSelected={selection.isSelected}
                       selectedCount={selection.selectedCount}
