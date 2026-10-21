@@ -541,6 +541,28 @@ describe("getHomeData", () => {
     );
   });
 
+  it("leaves what Reading shows out of the rest of the inbox, even when the inbox listing doesn't name its label", async () => {
+    const filed = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    // Outlook names a message's categories only once it knows them.
+    const unnamed = {
+      ...filed,
+      messages: filed.messages.map((m) => ({
+        ...m,
+        labelIds: ["INBOX", "UNREAD"],
+      })),
+    };
+    const provider = mockProvider({ INBOX: [unnamed], Newsletter: [filed] });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
+  });
+
   it("shows a newsletter that needs a reply only under Needs reply", async () => {
     const newsletter = thread("weekly", {
       from: "Field Notes <hello@fieldnotes.example>",

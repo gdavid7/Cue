@@ -965,7 +965,10 @@ function ReadingSection({
             )}
             label="Reading"
           >
-            {threads.map((thread) => renderTodayRow(thread, rowContext))}
+            {/* Every row here is a newsletter; the lane already says so. */}
+            {threads.map((thread) =>
+              renderTodayRow({ ...thread, tag: undefined }, rowContext),
+            )}
           </ThreadList>
         </div>
       ) : null}

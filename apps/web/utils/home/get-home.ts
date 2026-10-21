@@ -295,10 +295,6 @@ export async function getHomeData({
         PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
         b.at.localeCompare(a.at),
     );
-  const inboxRows = lane(inbox)
-    .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t, handledIds))
-    .map(toRow)
-    .filter(isDefined);
   // Exactly the newsletters the rest of the inbox leaves out as filed.
   const readingIds = new Set(readingId ? [readingId] : []);
   const reading = lane(readingResult);
@@ -307,6 +303,18 @@ export async function getHomeData({
     .map(toRow)
     .filter(isDefined)
     .filter((row) => row.unread && row.inInbox);
+  // Outlook's inbox listing names a message's categories only once it knows
+  // them, so what Reading shows is left out by thread too.
+  const readingThreadIds = new Set(readingRows.map((row) => row.threadId));
+  const inboxRows = lane(inbox)
+    .filter(
+      (t) =>
+        !shownIds.has(t.id) &&
+        !readingThreadIds.has(t.id) &&
+        !isRecentlyFiled(t, handledIds),
+    )
+    .map(toRow)
+    .filter(isDefined);
   // Only mail someone else sent can have a reply waiting; waiting-on
   // conversations are the user's own move.
   const drafted = await getReadySuggestionMessageIds({
