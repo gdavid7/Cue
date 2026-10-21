@@ -1,4 +1,5 @@
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
+import { contactNameMessages, splitNameWords } from "./contact-name-search";
 import type { SqlValue } from "./driver";
 import { searchMatchQuery } from "./search-text";
 
@@ -158,8 +159,13 @@ export function compilePredicate(
 }
 
 // `complete` means every message has a search row, so the index alone answers
-// text predicates.
-export type SearchSupport = { fts5: boolean; complete: boolean };
+// text predicates. `contactNames` are the typed words that also match people
+// by name (see contact-name-search.ts).
+export type SearchSupport = {
+  fts5: boolean;
+  complete: boolean;
+  contactNames?: { words: ReadonlySet<string>; accountIds: string[] };
+};
 
 // When the index is complete and the predicate requires a text match, the
 // query starts from the index hits and joins each to its message, so a search
@@ -172,18 +178,15 @@ export function searchDrivenSource(
   if (!search.fts5 || !search.complete) return null;
   const clauses = topLevelClauses(predicate);
   for (const [index, clause] of clauses.entries()) {
-    const driven = drivenClause(clause);
+    const driven = drivenClause(clause, search);
     if (!driven) continue;
     const others = clauses.filter((_clause, position) => position !== index);
-    const hits = `SELECT k.account_id, k.message_id
-            FROM message_fts CROSS JOIN message_fts_keys k ON k.fts_rowid = message_fts.rowid
-            WHERE message_fts MATCH ?`;
     const join = `CROSS JOIN effective_messages e
             ON e.account_id = hit.account_id AND e.message_id = hit.message_id`;
     if (!driven.matched) {
       return {
-        from: `(${hits}) hit ${join}`,
-        bindings: [driven.match],
+        from: `(${driven.hits.sql}) hit ${join}`,
+        bindings: driven.hits.bindings,
         rest: { kind: "all", predicates: [...others, ...driven.rest] },
       };
     }
@@ -206,10 +209,13 @@ export function searchDrivenSource(
           };
     });
     return {
-      from: `(${[hits, ...lookups.map((lookup) => lookup.sql)].join(
+      from: `(${[driven.hits.sql, ...lookups.map((lookup) => lookup.sql)].join(
         "\n            UNION\n            ",
       )}) hit ${join}`,
-      bindings: [driven.match, ...lookups.flatMap((lookup) => lookup.bindings)],
+      bindings: [
+        ...driven.hits.bindings,
+        ...lookups.flatMap((lookup) => lookup.bindings),
+      ],
       rest: {
         kind: "all",
         predicates: [
@@ -229,7 +235,8 @@ export function searchDrivenSource(
 }
 
 type DrivenClause = {
-  match: string;
+  /** The (account_id, message_id) rows the query starts from. */
+  hits: { sql: string; bindings: SqlValue[] };
   rest: MailPredicate[];
   /** The provider's matches, and the condition they are listed under. */
   matched?: {
@@ -240,21 +247,21 @@ type DrivenClause = {
 
 // A clause the index can start from: a text match, alone or with conditions
 // beside it, optionally or one of the provider's matches.
-function drivenClause(clause: MailPredicate): DrivenClause | null {
-  if (clause.kind === "text") {
-    const match = textMatchQuery(clause);
-    return match ? { match, rest: [] } : null;
-  }
+function drivenClause(
+  clause: MailPredicate,
+  search: SearchSupport,
+): DrivenClause | null {
+  if (clause.kind === "text") return drivenText(clause, search, []);
   if (clause.kind === "all") {
     const parts = clause.predicates;
     for (const [index, part] of parts.entries()) {
       if (part.kind !== "text") continue;
-      const match = textMatchQuery(part);
-      if (match)
-        return {
-          match,
-          rest: parts.filter((_part, position) => position !== index),
-        };
+      const driven = drivenText(
+        part,
+        search,
+        parts.filter((_part, position) => position !== index),
+      );
+      if (driven) return driven;
     }
     return null;
   }
@@ -264,10 +271,60 @@ function drivenClause(clause: MailPredicate): DrivenClause | null {
     if (!messages?.length) continue;
     const other = clause.predicates[1 - index];
     if (other.kind === "any") return null;
-    const driven = drivenClause(other);
+    const driven = drivenClause(other, search);
     return driven ? { ...driven, matched: { messages, filter: part } } : null;
   }
   return null;
+}
+
+// A name's rows are its text matches and its people's mail, and they are
+// intersected with the other words' text matches, so a common word beside a
+// name never lists most of the mailbox.
+function drivenText(
+  text: Extract<MailPredicate, { kind: "text" }>,
+  search: SearchSupport,
+  rest: MailPredicate[],
+): DrivenClause | null {
+  const { names, others } = splitNameWords(text, search);
+  const parts: Array<{ sql: string; bindings: SqlValue[] }> = [];
+  if (others.length || !names.length) {
+    const match = textMatchQuery(
+      names.length ? { ...text, value: others.join(" ") } : text,
+    );
+    if (!match) return null;
+    parts.push(indexHits(match));
+  }
+  for (const name of names) {
+    const match = textMatchQuery({ ...text, value: name });
+    if (!match) return null;
+    const textHits = indexHits(match);
+    const people = contactNameMessages(name, search);
+    parts.push({
+      sql: `SELECT account_id, message_id FROM (${textHits.sql}
+            UNION
+            ${people.sql})`,
+      bindings: [...textHits.bindings, ...people.bindings],
+    });
+  }
+  if (parts.length === 1) return { hits: parts[0], rest };
+  return {
+    hits: {
+      sql: `SELECT account_id, message_id FROM (${parts
+        .map((part) => part.sql)
+        .join("\n            INTERSECT\n            ")})`,
+      bindings: parts.flatMap((part) => part.bindings),
+    },
+    rest,
+  };
+}
+
+function indexHits(match: string) {
+  return {
+    sql: `SELECT k.account_id, k.message_id
+            FROM message_fts CROSS JOIN message_fts_keys k ON k.fts_rowid = message_fts.rowid
+            WHERE message_fts MATCH ?`,
+    bindings: [match] as SqlValue[],
+  };
 }
 
 // The messages a condition is limited to: a message list, alternatives of
@@ -295,6 +352,44 @@ function listedMessages(
 // missing while the backlog catches up. Stored bodies are compressed, so a
 // body only becomes searchable once it is indexed.
 function compileTextPredicate(
+  predicate: Extract<MailPredicate, { kind: "text" }>,
+  search: SearchSupport,
+  alias: string,
+): { sql: string; bindings: SqlValue[] } {
+  const { names, others } = splitNameWords(predicate, search);
+  if (!names.length) return compileWordsPredicate(predicate, search, alias);
+  // Each name matches as text or through its people's mail; the other words
+  // still match as text, together.
+  const parts = [
+    ...(others.length
+      ? [
+          compileWordsPredicate(
+            { ...predicate, value: others.join(" ") },
+            search,
+            alias,
+          ),
+        ]
+      : []),
+    ...names.map((name) => {
+      const words = compileWordsPredicate(
+        { ...predicate, value: name },
+        search,
+        alias,
+      );
+      const people = contactNameMessages(name, search);
+      return {
+        sql: `(${words.sql} OR (${alias}.account_id, ${alias}.message_id) IN (${people.sql}))`,
+        bindings: [...words.bindings, ...people.bindings],
+      };
+    }),
+  ];
+  return {
+    sql: `(${parts.map((part) => part.sql).join(" AND ")})`,
+    bindings: parts.flatMap((part) => part.bindings),
+  };
+}
+
+function compileWordsPredicate(
   predicate: Extract<MailPredicate, { kind: "text" }>,
   search: SearchSupport,
   alias: string,

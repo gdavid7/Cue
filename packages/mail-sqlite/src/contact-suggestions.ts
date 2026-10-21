@@ -3,6 +3,10 @@ import type {
   ContactSuggestionQuery,
 } from "@inboxzero/mail-core/queries";
 import type { MessageKey } from "@inboxzero/mail-core/identities";
+import {
+  insertContactNameTokens,
+  migrateContactNameTokens,
+} from "./contact-name-search";
 import type { SqlTransaction } from "./driver";
 
 export async function migrateContactSuggestions(tx: SqlTransaction) {
@@ -35,6 +39,7 @@ export async function migrateContactSuggestions(tx: SqlTransaction) {
     INSERT OR IGNORE INTO contact_backfill_state VALUES (1, 0, 0);
     INSERT OR IGNORE INTO schema_migrations VALUES (10, '0010-contact-suggestions');
   `);
+  await migrateContactNameTokens(tx);
 }
 
 export async function indexContactMessage(tx: SqlTransaction, key: MessageKey) {
@@ -132,10 +137,11 @@ export async function indexContactMessage(tx: SqlTransaction, key: MessageKey) {
     }
     const previousEmails = new Set(previous.map((row) => String(row.email)));
     for (const email of previousEmails) {
-      await tx.execute(
-        "DELETE FROM contact_tokens WHERE account_id = ? AND email = ?",
-        [key.accountId, email],
-      );
+      for (const table of ["contact_tokens", "contact_name_tokens"])
+        await tx.execute(
+          `DELETE FROM ${table} WHERE account_id = ? AND email = ?`,
+          [key.accountId, email],
+        );
       const names = await tx.query(
         "SELECT DISTINCT name FROM contact_stats WHERE account_id = ? AND email = ?",
         [key.accountId, email],
@@ -277,6 +283,7 @@ async function insertContactTokens(
         "INSERT OR IGNORE INTO contact_tokens VALUES (?, ?, ?)",
         [accountId, token, email],
       );
+  await insertContactNameTokens(tx, accountId, email, displayName);
 }
 
 export async function deleteAccountContactSuggestions(
@@ -287,6 +294,7 @@ export async function deleteAccountContactSuggestions(
     "contact_interactions",
     "contact_stats",
     "contact_tokens",
+    "contact_name_tokens",
     "contact_indexed_messages",
   ]) {
     await tx.execute(`DELETE FROM ${table} WHERE account_id = ?`, [accountId]);
