@@ -103,7 +103,10 @@ export interface MiddlewareOptions {
   maxDuration?: number;
   /**
    * A POST that only reads, such as mail sync. Like a GET it trusts the
-   * session cookie cache instead of checking the session in the database.
+   * session cookie cache (up to a minute stale after revocation) instead of
+   * checking the session in the database. Side effects such a route may have
+   * must be bookkeeping the caller cannot steer, like the debounced Gmail
+   * catch-up nudge mail/v1 changes schedules.
    */
   readOnly?: boolean;
   requestTiming?: {
@@ -839,13 +842,13 @@ export function withError(
 export function withAuth(
   scope: string,
   handler: NextHandler<RequestWithAuth>,
-  options?: Pick<MiddlewareOptions, "maxDuration">,
+  options?: Pick<MiddlewareOptions, "maxDuration" | "readOnly">,
 ): NextHandler;
 export function withAuth(handler: NextHandler<RequestWithAuth>): NextHandler;
 export function withAuth(
   scopeOrHandler: string | NextHandler<RequestWithAuth>,
   handler?: NextHandler<RequestWithAuth>,
-  options?: Pick<MiddlewareOptions, "maxDuration">,
+  options?: Pick<MiddlewareOptions, "maxDuration" | "readOnly">,
 ): NextHandler {
   if (typeof scopeOrHandler === "string") {
     return withMiddleware(handler!, authMiddleware, options, scopeOrHandler);

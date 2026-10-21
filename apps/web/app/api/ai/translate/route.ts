@@ -9,30 +9,33 @@ export const maxDuration = 300;
 
 export type TranslateResponse = { translations: string[] };
 
-export const POST = withEmailAccount(async (request) => {
-  const emailAccountId = request.auth.emailAccountId;
+export const POST = withEmailAccount(
+  async (request) => {
+    const emailAccountId = request.auth.emailAccountId;
 
-  const json = await request.json();
-  const body = translateBody.parse(json);
+    const json = await request.json();
+    const body = translateBody.parse(json);
 
-  const emailAccount = await getEmailAccountWithAi({ emailAccountId });
+    const emailAccount = await getEmailAccountWithAi({ emailAccountId });
 
-  if (!emailAccount) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
-  }
+    if (!emailAccount) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
 
-  await assertHasAiAccess({
-    userId: emailAccount.userId,
-    hasUserApiKey: !!emailAccount.user.aiApiKey,
-  });
+    await assertHasAiAccess({
+      userId: emailAccount.userId,
+      hasUserApiKey: !!emailAccount.user.aiApiKey,
+    });
 
-  const translations = await aiTranslateEmails({
-    texts: body.texts,
-    targetLanguage: body.targetLanguage,
-    emailAccount,
-  });
+    const translations = await aiTranslateEmails({
+      texts: body.texts,
+      targetLanguage: body.targetLanguage,
+      emailAccount,
+    });
 
-  return NextResponse.json({
-    translations: translations.map((translation) => translation.text),
-  } satisfies TranslateResponse);
-});
+    return NextResponse.json({
+      translations: translations.map((translation) => translation.text),
+    } satisfies TranslateResponse);
+  },
+  { readOnly: true },
+);

@@ -6,36 +6,39 @@ import { getEmailAccountWithAi } from "@/utils/user/get";
 import { emailToContentForAI } from "@/utils/ai/content-sanitizer";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 
-export const POST = withEmailAccount(async (request) => {
-  const emailAccountId = request.auth.emailAccountId;
+export const POST = withEmailAccount(
+  async (request) => {
+    const emailAccountId = request.auth.emailAccountId;
 
-  const json = await request.json();
-  const body = summariseBody.parse(json);
+    const json = await request.json();
+    const body = summariseBody.parse(json);
 
-  const prompt = emailToContentForAI({
-    textHtml: body.textHtml || undefined,
-    textPlain: body.textPlain || undefined,
-    snippet: "",
-  });
+    const prompt = emailToContentForAI({
+      textHtml: body.textHtml || undefined,
+      textPlain: body.textPlain || undefined,
+      snippet: "",
+    });
 
-  if (!prompt)
-    return NextResponse.json({ error: "No text provided" }, { status: 400 });
+    if (!prompt)
+      return NextResponse.json({ error: "No text provided" }, { status: 400 });
 
-  const userAi = await getEmailAccountWithAi({ emailAccountId });
+    const userAi = await getEmailAccountWithAi({ emailAccountId });
 
-  if (!userAi)
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
+    if (!userAi)
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-  await assertHasAiAccess({
-    userId: userAi.userId,
-    hasUserApiKey: !!userAi.user.aiApiKey,
-  });
+    await assertHasAiAccess({
+      userId: userAi.userId,
+      hasUserApiKey: !!userAi.user.aiApiKey,
+    });
 
-  const stream = await summarise({
-    text: prompt,
-    userEmail: userAi.email,
-    userAi,
-  });
+    const stream = await summarise({
+      text: prompt,
+      userEmail: userAi.email,
+      userAi,
+    });
 
-  return stream.toTextStreamResponse();
-});
+    return stream.toTextStreamResponse();
+  },
+  { readOnly: true },
+);

@@ -2,8 +2,6 @@ import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { MailSplitFilterKind } from "@/generated/prisma/enums";
 import type { Account } from "better-auth";
 import { setSessionCookie } from "better-auth/cookies";
-import { memoryAdapter } from "better-auth/adapters/memory";
-import { makeSignature } from "better-auth/crypto";
 import { cookies } from "next/headers";
 import { createReferral } from "@/utils/referral/referral-code";
 import { captureException } from "@/utils/error";
@@ -22,6 +20,10 @@ import prisma from "@/utils/__mocks__/prisma";
 import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { expectReplyTrackingOn } from "@/__tests__/helpers";
+import {
+  signedInBetterAuth,
+  TEST_AUTH_ORIGIN,
+} from "@/__tests__/better-auth-session";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
 import { updateAccountSeats } from "@/utils/premium/seats";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
@@ -242,7 +244,11 @@ describe("session revocation", () => {
       toFake: ["Date"],
       now: new Date("2026-01-01T00:00:00Z"),
     });
-    const { realAuth, cookie, token } = await signedInWithConfiguredSession();
+    const {
+      auth: realAuth,
+      cookie,
+      token,
+    } = await signedInWithConfiguredSession();
     const context = await realAuth.$context;
 
     await context.internalAdapter.deleteSession(token);
@@ -264,11 +270,15 @@ describe("session revocation", () => {
   });
 
   it("clears the cache cookie on sign-out", async () => {
-    const { realAuth, cookie, token } = await signedInWithConfiguredSession();
+    const {
+      auth: realAuth,
+      cookie,
+      token,
+    } = await signedInWithConfiguredSession();
     const response = await realAuth.handler(
-      new Request("http://localhost:3000/api/auth/sign-out", {
+      new Request(`${TEST_AUTH_ORIGIN}/api/auth/sign-out`, {
         method: "POST",
-        headers: { cookie, origin: "http://localhost:3000" },
+        headers: { cookie, origin: TEST_AUTH_ORIGIN },
       }),
     );
 
@@ -1020,49 +1030,8 @@ function mockNewGoogleMailbox() {
   ] as never);
 }
 
-// A real Better Auth instance on the app's own session settings, signed in
-// with both the session token and its cookie cache, as a browser holds them.
-async function signedInWithConfiguredSession() {
-  const { betterAuth } =
-    await vi.importActual<typeof import("better-auth")>("better-auth");
-  const now = new Date();
-  const realAuth = betterAuth({
-    baseURL: "http://localhost:3000",
-    secret: "test-secret-with-enough-entropy-for-session-cache",
-    database: memoryAdapter({
-      user: [
-        {
-          id: "owner",
-          email: "owner@example.invalid",
-          name: "Owner",
-          emailVerified: true,
-          createdAt: now,
-          updatedAt: now,
-        },
-      ],
-      session: [],
-      account: [],
-      verification: [],
-    }),
+function signedInWithConfiguredSession() {
+  return signedInBetterAuth({
     session: (betterAuthConfig as any).options.session,
-    rateLimit: { enabled: false },
   });
-  const context = await realAuth.$context;
-  const session = await context.internalAdapter.createSession("owner");
-  if (!session) throw new Error("No session");
-  const tokenCookie = `better-auth.session_token=${encodeURIComponent(`${session.token}.${await makeSignature(session.token, context.secret)}`)}`;
-  const { headers: setHeaders } = await realAuth.api.getSession({
-    headers: new Headers({ cookie: tokenCookie }),
-    returnHeaders: true,
-  });
-  const cacheCookies = setHeaders
-    .getSetCookie()
-    .filter((setCookie) => setCookie.startsWith("better-auth.session_data"))
-    .map((setCookie) => setCookie.split(";")[0]);
-  if (cacheCookies.length === 0) throw new Error("No cookie cache");
-  return {
-    realAuth,
-    token: session.token,
-    cookie: [tokenCookie, ...cacheCookies].join("; "),
-  };
 }
