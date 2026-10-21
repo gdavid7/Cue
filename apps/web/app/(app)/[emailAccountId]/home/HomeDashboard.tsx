@@ -74,6 +74,7 @@ import {
   TodayThreadRow,
 } from "./TodayThreadRow";
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
+import { useLocalInboxRows } from "./use-local-inbox-rows";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
@@ -87,7 +88,7 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  * shortcuts and undo, through the same mail engine commands.
  */
 export function HomeDashboard() {
-  const { emailAccountId, accountIds } = useAccount();
+  const { emailAccountId, accountIds, userEmail } = useAccount();
   const { data: accountsData } = useAccounts();
   // Set on Today across accounts, which shows every account in All inboxes
   // as one account's Today shows it.
@@ -144,6 +145,39 @@ export function HomeDashboard() {
     ).catch(() => undefined);
   }, [allInboxesAccounts, emailAccountId, mailClient]);
 
+  // Until the server's answer has the rest of the inbox, the browser's own
+  // copy of it shows instead of placeholders.
+  const localAccounts = useMemo<TodayAccount[]>(() => {
+    if (allInboxesAccounts)
+      return allInboxesAccounts.map(({ id, email }) => ({ id, email }));
+    return emailAccountId ? [{ id: emailAccountId, email: userEmail }] : [];
+  }, [allInboxesAccounts, emailAccountId, userEmail]);
+  const { handledLabelIdsByAccount } = all;
+  const singleHandledLabelIds = single.data?.handledLabelIds;
+  const handledLabelIds = useMemo(() => {
+    if (merged) return handledLabelIdsByAccount;
+    if (!singleHandledLabelIds) return;
+    return { [emailAccountId]: singleHandledLabelIds };
+  }, [merged, handledLabelIdsByAccount, emailAccountId, singleHandledLabelIds]);
+  const localInbox = useLocalInboxRows({
+    accounts: localAccounts,
+    named: Boolean(allInboxesAccounts),
+    handledLabelIds,
+    enabled: !data || data.pending.includes("alsoInInbox"),
+  });
+  const alsoInInbox = useMemo(() => {
+    if (!localInbox) return data?.alsoInInbox ?? [];
+    // Each conversation shows once on Today, as in the server's answer.
+    const needsYou = new Set(data?.needsYou.map(rowKey));
+    return localInbox.filter((thread) => !needsYou.has(rowKey(thread)));
+  }, [data, localInbox]);
+  const visibleAlsoInInbox = useMemo(
+    () =>
+      alsoInInbox
+        .filter((thread) => !hidden.has(rowKey(thread)))
+        .slice(0, ALSO_IN_INBOX_LIMIT),
+    [alsoInInbox, hidden],
+  );
   const lanes = useMemo(() => {
     if (!data) return null;
     const visible = (threads: TodayThread[]) =>
@@ -151,9 +185,9 @@ export function HomeDashboard() {
     return {
       needsYou: visible(data.needsYou),
       waiting: visible(data.waiting),
-      alsoInInbox: visible(data.alsoInInbox).slice(0, ALSO_IN_INBOX_LIMIT),
+      alsoInInbox: visibleAlsoInInbox,
     };
-  }, [data, hidden]);
+  }, [data, hidden, visibleAlsoInInbox]);
   const notice =
     data && lanes && !earlierDay
       ? cueNotice(data.cue, emailAccountId, {
@@ -162,7 +196,13 @@ export function HomeDashboard() {
         })
       : null;
   // Gmail couldn't serve these in time; they load on the next refresh.
-  const pending = useMemo(() => new Set(data?.pending), [data]);
+  const pending = useMemo(
+    () =>
+      new Set(
+        data?.pending.filter((lane) => !(lane === "alsoInInbox" && localInbox)),
+      ),
+    [data, localInbox],
+  );
   const failed = useMemo(() => new Set(data?.failed), [data]);
   // Whether the Needs reply lane is what Cue knows, rather than empty because
   // it hasn't loaded.
@@ -189,14 +229,13 @@ export function HomeDashboard() {
             ...(allClear && !waitingShown ? [] : lanes.waiting),
             ...lanes.alsoInInbox,
           ]
-        : [],
-    [lanes, allClear, waitingShown],
+        : visibleAlsoInInbox,
+    [lanes, allClear, waitingShown, visibleAlsoInInbox],
   );
   const focused = rows.find((thread) => rowKey(thread) === focusedId);
   const allRows = useMemo(
-    () =>
-      data ? [...data.needsYou, ...data.waiting, ...data.alsoInInbox] : [],
-    [data],
+    () => [...(data?.needsYou ?? []), ...(data?.waiting ?? []), ...alsoInInbox],
+    [data, alsoInInbox],
   );
   const actionable = useMemo<ActionableThread[]>(
     () =>
@@ -470,6 +509,14 @@ export function HomeDashboard() {
     });
   };
 
+  const rowContext: TodayRowContext = {
+    accountColorIndexById,
+    canChange: engineReady,
+    focusedId: focused ? focusedId : null,
+    handlers,
+    layout: isLargeScreen ? "list" : "split",
+  };
+
   return (
     <div
       className="mx-auto w-full max-w-3xl space-y-8 px-4 py-6 outline-none md:px-8"
@@ -512,7 +559,15 @@ export function HomeDashboard() {
         error={error}
         loading={isLoading}
         loadingComponent={
-          <HomeSkeleton layout={isLargeScreen ? "list" : "split"} />
+          <>
+            <HomeSkeleton layout={isLargeScreen ? "list" : "split"} />
+            {/* Cue's lanes wait for the server; the inbox is already here.
+                No Needs reply correction: whether Cue is on isn't known yet. */}
+            <AlsoInInboxSection
+              threads={visibleAlsoInInbox}
+              rowContext={rowContext}
+            />
+          </>
         }
       >
         {data && lanes ? (
@@ -526,9 +581,7 @@ export function HomeDashboard() {
             emailAccountId={emailAccountId}
             accountIds={allInboxesAccounts?.map((account) => account.id)}
             accountColorIndexById={accountColorIndexById}
-            focusedId={focused ? focusedId : null}
-            handlers={handlers}
-            canChange={engineReady}
+            rowContext={rowContext}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
             // Past the last refresh a pending lane would load forever.
@@ -572,9 +625,7 @@ function HomeLanes({
   emailAccountId,
   accountIds,
   accountColorIndexById,
-  focusedId,
-  handlers,
-  canChange,
+  rowContext,
   layout,
   threadHref,
   onCorrect,
@@ -596,10 +647,7 @@ function HomeLanes({
   /** Across accounts: every account Today shows. */
   accountIds?: string[];
   accountColorIndexById: Record<string, number>;
-  focusedId: string | null;
-  handlers: TodayRowHandlers;
-  /** Whether the mail engine is up to take archive, delete and the rest. */
-  canChange: boolean;
+  rowContext: TodayRowContext;
   layout: "list" | "split";
   threadHref: (thread: { threadId: string; account?: TodayAccount }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
@@ -608,35 +656,15 @@ function HomeLanes({
   outdated: ReadonlySet<HomeLane>;
 }) {
   const { cue, stats } = data;
-  const mailHref = useMailHref();
   const now = new Date();
   const drafts = data.agentTasks.filter((task) => task.kind === "draft");
   const otherTasks = data.agentTasks.filter((task) => task.kind !== "draft");
   const row = (
     thread: TodayThread,
     options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
-  ) => (
-    <TodayThreadRow
-      accountColorClassName={
-        thread.account
-          ? getAccountColorClassName(
-              accountColorIndexById[thread.account.id] ?? 0,
-            )
-          : undefined
-      }
-      canChange={canChange}
-      correction={options.correction}
-      handlers={handlers}
-      isFocused={rowKey(thread) === focusedId}
-      key={rowKey(thread)}
-      layout={layout}
-      rowKey={rowKey(thread)}
-      thread={thread}
-      waiting={options.waiting}
-    />
-  );
+  ) => renderTodayRow(thread, rowContext, options);
   const hasFocus = (threads: TodayThread[]) =>
-    threads.some((thread) => rowKey(thread) === focusedId);
+    threads.some((thread) => rowKey(thread) === rowContext.focusedId);
 
   return (
     <>
@@ -765,38 +793,102 @@ function HomeLanes({
       ) : null}
 
       {pending.has("alsoInInbox") ? <HomeSkeleton layout={layout} /> : null}
-      {lanes.alsoInInbox.length > 0 ? (
-        <Section
-          title="Also in your inbox"
-          outdated={outdated.has("alsoInInbox")}
-          action={
-            <Link
-              className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
-              href={mailHref()}
-            >
-              Open inbox
-            </Link>
-          }
-        >
-          <ThreadList
-            hasFocusedRow={hasFocus(lanes.alsoInInbox)}
-            label="Also in your inbox"
-          >
-            {lanes.alsoInInbox.map((thread) =>
-              row(thread, {
-                correction: cue.aiAccess
-                  ? {
-                      label: "Needs reply",
-                      icon: FlagIcon,
-                      onClick: () => onCorrect(thread, true),
-                    }
-                  : undefined,
-              }),
-            )}
-          </ThreadList>
-        </Section>
-      ) : null}
+      <AlsoInInboxSection
+        threads={lanes.alsoInInbox}
+        outdated={outdated.has("alsoInInbox")}
+        rowContext={rowContext}
+        correctionFor={
+          cue.aiAccess
+            ? (thread) => ({
+                label: "Needs reply",
+                icon: FlagIcon,
+                onClick: () => onCorrect(thread, true),
+              })
+            : undefined
+        }
+      />
     </>
+  );
+}
+
+/** The rest of the inbox, from the server's answer or the browser's own mail. */
+function AlsoInInboxSection({
+  threads,
+  outdated,
+  rowContext,
+  correctionFor,
+}: {
+  threads: TodayThread[];
+  outdated?: boolean;
+  rowContext: TodayRowContext;
+  /** Moving a row to Needs reply, once Cue is known to be on. */
+  correctionFor?: (thread: TodayThread) => TodayRowCorrection;
+}) {
+  const mailHref = useMailHref();
+  if (!threads.length) return null;
+  return (
+    <Section
+      title="Also in your inbox"
+      outdated={outdated}
+      action={
+        <Link
+          className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
+          href={mailHref()}
+        >
+          Open inbox
+        </Link>
+      }
+    >
+      <ThreadList
+        hasFocusedRow={threads.some(
+          (thread) => rowKey(thread) === rowContext.focusedId,
+        )}
+        label="Also in your inbox"
+      >
+        {threads.map((thread) =>
+          renderTodayRow(thread, rowContext, {
+            correction: correctionFor?.(thread),
+          }),
+        )}
+      </ThreadList>
+    </Section>
+  );
+}
+
+type TodayRowContext = {
+  accountColorIndexById: Record<string, number>;
+  /** Whether the mail engine is up to take archive, delete and the rest. */
+  canChange: boolean;
+  focusedId: string | null;
+  handlers: TodayRowHandlers;
+  layout: "list" | "split";
+};
+
+function renderTodayRow(
+  thread: TodayThread,
+  context: TodayRowContext,
+  options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
+) {
+  const key = rowKey(thread);
+  return (
+    <TodayThreadRow
+      accountColorClassName={
+        thread.account
+          ? getAccountColorClassName(
+              context.accountColorIndexById[thread.account.id] ?? 0,
+            )
+          : undefined
+      }
+      canChange={context.canChange}
+      correction={options.correction}
+      handlers={context.handlers}
+      isFocused={key === context.focusedId}
+      key={key}
+      layout={context.layout}
+      rowKey={key}
+      thread={thread}
+      waiting={options.waiting}
+    />
   );
 }
 
