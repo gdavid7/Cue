@@ -7,12 +7,16 @@ import type { SearchSupport } from "./queries";
 // header or body the text index holds. Names are read from the contact index
 // the store already keeps, folded so "jose" finds José, and only for people
 // you have written to, so a stranger putting a friend's name on their mail
-// doesn't join the friend's results.
+// doesn't join the friend's results. A name only counts from mail you sent
+// or from the person's own From line: anyone can write any name beside
+// someone else's address on the To or Cc line of mail they send you.
+
+// Rows of contact_stats whose name the reader or the person wrote.
+const TRUSTED_NAME = "name != '' AND (sent = 1 OR sender = email)";
+// Backfill rows per call, so a large mailbox's first open isn't held up.
+const BACKFILL_BATCH = 200;
 
 export async function migrateContactNameTokens(tx: SqlTransaction) {
-  const [existing] = await tx.query(
-    "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'contact_name_tokens'",
-  );
   await tx.exec(`
     CREATE TABLE IF NOT EXISTS contact_name_tokens (
       account_id TEXT NOT NULL, token TEXT NOT NULL, email TEXT NOT NULL,
@@ -20,36 +24,82 @@ export async function migrateContactNameTokens(tx: SqlTransaction) {
     );
     CREATE INDEX IF NOT EXISTS contact_name_tokens_email
       ON contact_name_tokens(account_id, email);
-  `);
-  if (existing) return;
-  // Mail indexed before this table existed: its names are in contact_stats.
-  const rows = await tx.query(
-    "SELECT DISTINCT account_id, email, name FROM contact_stats WHERE name != ''",
-  );
-  for (const row of rows)
-    await insertContactNameTokens(
-      tx,
-      String(row.account_id),
-      String(row.email),
-      String(row.name),
+    CREATE TABLE IF NOT EXISTS contact_name_backfill_state (
+      id INTEGER PRIMARY KEY CHECK(id = 1), after_rowid INTEGER NOT NULL, complete INTEGER NOT NULL
     );
+  `);
+  const applied = await tx.query(
+    "SELECT 1 FROM schema_migrations WHERE id = 13",
+  );
+  if (applied.length) return;
+  // Contacts indexed before names were are read in by indexContactNameBacklog.
+  await tx.exec(`
+    INSERT OR REPLACE INTO contact_name_backfill_state VALUES (1, 0, 0);
+    INSERT INTO schema_migrations(id, name) VALUES (13, '0013-contact-name-tokens');
+  `);
 }
 
-export async function insertContactNameTokens(
+/** Indexes one batch of the people indexed before names were. */
+export async function indexContactNameBacklog(
+  tx: SqlTransaction,
+): Promise<{ remaining: boolean }> {
+  const [state] = await tx.query(
+    "SELECT after_rowid, complete FROM contact_name_backfill_state WHERE id = 1",
+  );
+  if (!state || Number(state.complete) === 1) return { remaining: false };
+  const rows = await tx.query(
+    `SELECT rowid, account_id, email FROM contact_stats
+     WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+    [Number(state.after_rowid), BACKFILL_BATCH],
+  );
+  const people = new Map(
+    rows.map((row) => [
+      `${row.account_id}\u0000${row.email}`,
+      [String(row.account_id), String(row.email)] as const,
+    ]),
+  );
+  for (const [accountId, email] of people.values())
+    await replaceContactNameTokens(tx, accountId, email);
+  if (rows.length)
+    await tx.execute(
+      "UPDATE contact_name_backfill_state SET after_rowid = ? WHERE id = 1",
+      [Number(rows.at(-1)?.rowid)],
+    );
+  else
+    await tx.execute(
+      "UPDATE contact_name_backfill_state SET complete = 1 WHERE id = 1",
+    );
+  return { remaining: rows.length > 0 };
+}
+
+/** Rebuilds one person's name tokens from the names they can be trusted by. */
+export async function replaceContactNameTokens(
   tx: SqlTransaction,
   accountId: string,
   email: string,
-  displayName: string,
 ) {
-  // A name that is just the address says nothing the address doesn't.
-  if (!displayName || displayName.toLowerCase() === email) return;
-  const tokens = new Set(foldName(displayName).split(/[^\p{L}\p{N}]+/u));
+  await tx.execute(
+    "DELETE FROM contact_name_tokens WHERE account_id = ? AND email = ?",
+    [accountId, email],
+  );
+  const names = await tx.query(
+    `SELECT DISTINCT name FROM contact_stats
+     WHERE account_id = ? AND email = ? AND ${TRUSTED_NAME}`,
+    [accountId, email],
+  );
+  const tokens = new Set<string>();
+  for (const row of names) {
+    const name = String(row.name);
+    // A name that is an address says nothing about the person.
+    if (name.includes("@")) continue;
+    for (const token of foldName(name).split(/[^\p{L}\p{N}]+/u))
+      if (token) tokens.add(token);
+  }
   for (const token of tokens)
-    if (token)
-      await tx.execute(
-        "INSERT OR IGNORE INTO contact_name_tokens VALUES (?, ?, ?)",
-        [accountId, token, email],
-      );
+    await tx.execute(
+      "INSERT OR IGNORE INTO contact_name_tokens VALUES (?, ?, ?)",
+      [accountId, token, email],
+    );
 }
 
 /**
@@ -115,7 +165,8 @@ export function contactNameMessages(
   word: string,
   search: SearchSupport,
 ): { sql: string; bindings: SqlValue[] } {
-  const token = nameToken(word) ?? "";
+  const token = nameToken(word);
+  if (!token) throw new Error("Not a name word");
   const accountIds = search.contactNames?.accountIds ?? [];
   // CROSS JOIN keeps the plan on the name's tokens, and the index on each
   // person lists their messages; left to itself SQLite reads every

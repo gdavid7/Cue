@@ -84,6 +84,32 @@ describe("searching for a person by name", () => {
     ]);
   });
 
+  it("takes names only from mail you sent or the person's own From line", async () => {
+    const lee = "lee@acme.example";
+    const { store } = await setup([
+      message("to-lee", { from: ME, to: [lee], sent: true }),
+      message("from-lee", { from: `Lee Park <${lee}>`, subject: "Hi" }),
+      // A stranger labels Lee, whom you write to, with Dana's name.
+      message("spoof-cc", {
+        from: "x9@spoof.example",
+        cc: [`Dana Ruiz <${lee}>`],
+      }),
+      message("spoof-to", {
+        from: "x9@spoof.example",
+        to: [ME, `"dana@acme.example" <${lee}>`],
+      }),
+    ]);
+
+    expect(await conversations(store, text("dana"))).toEqual([]);
+    expect(await conversations(store, text("ruiz"))).toEqual([]);
+    expect(await conversations(store, text("park"))).toEqual([
+      "from-lee",
+      "spoof-cc",
+      "spoof-to",
+      "to-lee",
+    ]);
+  });
+
   it("does not read your own name as a person, on any address you send from", async () => {
     const work = "Sam Owner <sam@work.example>";
     const { store } = await setup([
@@ -155,6 +181,17 @@ describe("searching for a person by name", () => {
         ],
       }),
     ).toEqual(["to-dana"]);
+    // The same word outside the negation doesn't make the negation a name.
+    expect(
+      await conversations(store, {
+        kind: "all",
+        predicates: [
+          { kind: "mailbox", mailbox: "all" },
+          text("ruiz"),
+          { kind: "not", predicate: text("ruiz") },
+        ],
+      }),
+    ).toEqual(["from-dana", "to-dana"]);
   });
 
   it("answers a typed search with the provider's matches beside it", async () => {
@@ -175,20 +212,34 @@ describe("searching for a person by name", () => {
     ).toEqual(["from-dana", "provider-only", "to-dana"]);
   });
 
-  it("finds people indexed before names were, once the store opens again", async () => {
+  it("finds people indexed before names were, in paced batches after the store opens", async () => {
     const { store, driver } = await setup([
       message("to-dana", { from: ME, to: [DANA], sent: true }),
       message("from-dana", { from: "dana@acme.example" }),
+      ...Array.from({ length: 300 }, (_, i) =>
+        message(`to-friend-${i}`, {
+          from: ME,
+          to: [`Friend ${i} <friend${i}@acme.example>`],
+          sent: true,
+        }),
+      ),
     ]);
     await driver.write(async (tx) => {
       await tx.exec("DROP TABLE contact_name_tokens");
+      await tx.exec("DELETE FROM schema_migrations WHERE id = 13");
       await migrateMailbox(tx, "ignored");
     });
+    expect(await conversations(store, text("ruiz"))).toEqual([]);
 
-    expect(await conversations(store, text("dana"))).toEqual([
+    let batches = 0;
+    while ((await store.indexContactBacklog()).remaining) batches += 1;
+
+    expect(batches).toBeGreaterThan(1);
+    expect(await conversations(store, text("ruiz"))).toEqual([
       "from-dana",
       "to-dana",
     ]);
+    expect(await conversations(store, text("299"))).toEqual(["to-friend-299"]);
   });
 });
 

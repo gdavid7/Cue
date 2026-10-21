@@ -32,7 +32,12 @@ export function compilePredicate(
       };
     }
     case "not": {
-      const inner = compilePredicate(predicate.predicate, search, alias);
+      // Leaving a person out of the results stays a matter of their text.
+      const inner = compilePredicate(
+        predicate.predicate,
+        { ...search, contactNames: undefined },
+        alias,
+      );
       return { sql: `(NOT ${inner.sql})`, bindings: inner.bindings };
     }
     case "role": {

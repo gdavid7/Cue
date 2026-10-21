@@ -4,8 +4,9 @@ import type {
 } from "@inboxzero/mail-core/queries";
 import type { MessageKey } from "@inboxzero/mail-core/identities";
 import {
-  insertContactNameTokens,
+  indexContactNameBacklog,
   migrateContactNameTokens,
+  replaceContactNameTokens,
 } from "./contact-name-search";
 import type { SqlTransaction } from "./driver";
 
@@ -137,11 +138,10 @@ export async function indexContactMessage(tx: SqlTransaction, key: MessageKey) {
     }
     const previousEmails = new Set(previous.map((row) => String(row.email)));
     for (const email of previousEmails) {
-      for (const table of ["contact_tokens", "contact_name_tokens"])
-        await tx.execute(
-          `DELETE FROM ${table} WHERE account_id = ? AND email = ?`,
-          [key.accountId, email],
-        );
+      await tx.execute(
+        "DELETE FROM contact_tokens WHERE account_id = ? AND email = ?",
+        [key.accountId, email],
+      );
       const names = await tx.query(
         "SELECT DISTINCT name FROM contact_stats WHERE account_id = ? AND email = ?",
         [key.accountId, email],
@@ -153,6 +153,11 @@ export async function indexContactMessage(tx: SqlTransaction, key: MessageKey) {
       if (!previousEmails.has(row.email))
         await insertContactTokens(tx, key.accountId, row.email, row.name);
     }
+    for (const email of new Set([
+      ...previousEmails,
+      ...next.map((row) => row.email),
+    ]))
+      await replaceContactNameTokens(tx, key.accountId, email);
   }
   await tx.execute(
     "INSERT OR IGNORE INTO contact_indexed_messages VALUES (?, ?)",
@@ -164,7 +169,8 @@ export async function indexContactBacklog(tx: SqlTransaction) {
   const [state] = await tx.query(
     "SELECT * FROM contact_backfill_state WHERE id = 1",
   );
-  if (state.complete) return { remaining: false };
+  // Names come after every message is indexed, from what that indexed.
+  if (state.complete) return indexContactNameBacklog(tx);
   const rows = await tx.query(
     `SELECT m.rowid, m.account_id, m.message_id FROM messages m
     LEFT JOIN contact_indexed_messages i ON i.account_id = m.account_id AND i.message_id = m.message_id
@@ -176,16 +182,17 @@ export async function indexContactBacklog(tx: SqlTransaction) {
       accountId: String(row.account_id),
       messageId: String(row.message_id),
     });
-  if (rows.length)
-    await tx.execute(
-      "UPDATE contact_backfill_state SET after_rowid = ? WHERE id = 1",
-      [Number(rows.at(-1)?.rowid)],
-    );
-  else
+  if (!rows.length) {
     await tx.execute(
       "UPDATE contact_backfill_state SET complete = 1 WHERE id = 1",
     );
-  return { remaining: rows.length > 0 };
+    return indexContactNameBacklog(tx);
+  }
+  await tx.execute(
+    "UPDATE contact_backfill_state SET after_rowid = ? WHERE id = 1",
+    [Number(rows.at(-1)?.rowid)],
+  );
+  return { remaining: true };
 }
 
 export async function readContactSuggestions(
@@ -283,7 +290,6 @@ async function insertContactTokens(
         "INSERT OR IGNORE INTO contact_tokens VALUES (?, ?, ?)",
         [accountId, token, email],
       );
-  await insertContactNameTokens(tx, accountId, email, displayName);
 }
 
 export async function deleteAccountContactSuggestions(
