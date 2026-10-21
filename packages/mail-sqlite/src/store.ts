@@ -335,13 +335,12 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
-        const read = await readOrder(tx, input.requestedAt, digest);
-        for (const change of input.page.changes) {
-          await applyChange(tx, change, read);
-        }
+        // Targets go in first so the messages this page finds show the
+        // change while later pages are still being read.
+        const newTargets: MessageKey[] = [];
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
-          await tx.execute(
+          const inserted = await tx.execute(
             `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
              VALUES (?, ?, ?, ?)`,
             [
@@ -351,7 +350,13 @@ export async function createSqliteMailStore(
               input.page.conversation.conversationId,
             ],
           );
+          if (inserted.changedRows > 0) newTargets.push(key);
         }
+        const read = await readOrder(tx, input.requestedAt, digest);
+        for (const change of input.page.changes) {
+          await applyChange(tx, change, read);
+        }
+        await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
            SET next_page = ?, complete = ?

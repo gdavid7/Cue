@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
-import type { LocalRevision } from "@inboxzero/mail-core/identities";
+import type {
+  LocalRevision,
+  MessageKey,
+} from "@inboxzero/mail-core/identities";
 import type {
   ClaimedWork,
   MailStore,
@@ -155,6 +158,102 @@ describe("provider reads sent before a confirmed local change", () => {
     });
 
     expect((await readConfirmedM1(store))?.starred).toBe(true);
+    await store.close();
+  });
+
+  // Label and category changes on a whole conversation resolve its messages
+  // first; the change confirmed for them must hold the same way.
+  it("keeps an Outlook category set on a conversation when a sync page read before it lands", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, BLUE, [M1]);
+
+    await applyPage(store, "1", "2", [patch("microsoft")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ categoryIds: ["Blue"] });
+    expect(await claim(store, "hydrate")).toMatchObject({ keys: [M1] });
+    await store.close();
+  });
+
+  it("keeps a conversation's category on a message its preparation found", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, BLUE, [M1, M2]);
+
+    await applyPage(
+      store,
+      "1",
+      "2",
+      [patch("microsoft"), patch("microsoft", {}, null, "m2", "c-m1")],
+      requestedAt,
+    );
+
+    const inspection = await store.inspect();
+    expect(
+      inspection.messages.map((message) => [
+        message.messageId,
+        message.effective?.categoryIds,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["m1", ["Blue"]],
+        ["m2", ["Blue"]],
+      ]),
+    );
+    await store.close();
+  });
+
+  it("keeps a Gmail label set on a complete conversation when a read at the same version lands", async () => {
+    const store = await mailbox("google");
+    await store.applyConversationMembership({
+      session: SESSION,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: "open-1",
+        keys: [M1],
+        changes: [patch("google")],
+        nextPage: null,
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, WORK_LABEL, [M1]);
+
+    await applyPage(store, "1", "2", [patch("google")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({
+      labelIds: expect.arrayContaining(["Work"]),
+    });
+    await store.close();
+  });
+
+  it("applies a newer change to a conversation's category read after it", async () => {
+    const store = await mailbox("microsoft");
+    await confirmConversation(store, BLUE, [M1]);
+    const requestedAt = await store.readRevision();
+
+    // Category cleared in Outlook on the web afterwards.
+    await applyPage(store, "1", "2", [patch("microsoft")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ categoryIds: [] });
+    await store.close();
+  });
+
+  it("still applies a deletion read before a conversation's category change", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, BLUE, [M1]);
+
+    await applyPage(
+      store,
+      "1",
+      "2",
+      [{ kind: "message_deleted", key: M1, evidence: "deleted" }],
+      requestedAt,
+    );
+
+    expect(await readM1(store)).toBeNull();
     await store.close();
   });
 
@@ -499,8 +598,60 @@ describe("provider reads sent before a confirmed local change", () => {
   });
 });
 
+describe("a conversation command being prepared", () => {
+  it("shows a conversation's pending category on a message found before its preparation finishes", async () => {
+    const store = await mailbox("microsoft");
+    const admission = await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "blue-c1",
+      conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+      change: BLUE,
+      observedRevision: (await store.inspect()).revision,
+    });
+    expect(admission.status).toBe("preparing");
+    const work = await claim(store, "prepare");
+
+    await store.applyPreparationPage({
+      accountId: "acc-1",
+      commandId: "blue-c1",
+      attemptId: work.attemptId,
+      session: work.session,
+      previousPage: work.page,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: work.resolutionId,
+        keys: [M2],
+        changes: [patch("microsoft", {}, null, "m2", "c-m1")],
+        nextPage: "page-2",
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+
+    const inspection = await store.inspect();
+    expect(
+      inspection.messages.find((message) => message.messageId === "m2")
+        ?.effective,
+    ).toMatchObject({ categoryIds: ["Blue"] });
+    await store.close();
+  });
+});
+
 const SESSION = { accountId: "acc-1", generation: "g1" };
 const M1 = { accountId: "acc-1", messageId: "m1" };
+const M2 = { accountId: "acc-1", messageId: "m2" };
+const BLUE: MetadataChange = {
+  kind: "set_membership",
+  membership: "category",
+  id: "Blue",
+  present: true,
+};
+const WORK_LABEL: MetadataChange = {
+  kind: "set_membership",
+  membership: "label",
+  id: "Work",
+  present: true,
+};
 const STAR: MetadataChange = { kind: "set_starred", starred: true };
 const ARCHIVE: MetadataChange = { kind: "archive" };
 const UNARCHIVE: MetadataChange = { kind: "unarchive" };
@@ -538,6 +689,57 @@ async function confirm(
       receiptId: null,
       observations,
       targets: [{ key: M1, outcome: "applied", code: null }],
+    },
+  });
+}
+
+// Admits the change for conversation c-m1, resolves it to `keys` when it
+// isn't complete yet, and confirms it with no fresh copy of any message.
+async function confirmConversation(
+  store: MailStore,
+  change: MetadataChange,
+  keys: MessageKey[],
+) {
+  const commandId = `${change.kind}-${Math.random()}`;
+  const admission = await store.admitConversations({
+    accountId: "acc-1",
+    commandId,
+    conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+    change,
+    observedRevision: (await store.inspect()).revision,
+  });
+  if (admission.status === "preparing") {
+    const work = await claim(store, "prepare");
+    await store.applyPreparationPage({
+      accountId: "acc-1",
+      commandId,
+      attemptId: work.attemptId,
+      session: work.session,
+      previousPage: work.page,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: work.resolutionId,
+        keys,
+        changes: keys.map((key) =>
+          patch("microsoft", {}, null, key.messageId, "c-m1"),
+        ),
+        nextPage: null,
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+  } else {
+    expect(admission.status).toBe("queued");
+  }
+  const work = await claim(store, "command");
+  await store.settleAttempt({
+    attemptId: work.attemptId,
+    operation: work.operation,
+    result: {
+      status: "confirmed",
+      receiptId: null,
+      observations: [],
+      targets: keys.map((key) => ({ key, outcome: "applied", code: null })),
     },
   });
 }
@@ -662,6 +864,7 @@ function patch(
   fields: { starred?: boolean; read?: boolean; archived?: boolean } = {},
   version: string | null = provider === "google" ? "10" : null,
   messageId = "m1",
+  conversationId = `c-${messageId}`,
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   return {
     kind: "message_patch",
@@ -669,7 +872,7 @@ function patch(
     reference: {
       provider,
       messageId,
-      conversationId: `c-${messageId}`,
+      conversationId,
       version,
     },
     fields: {
