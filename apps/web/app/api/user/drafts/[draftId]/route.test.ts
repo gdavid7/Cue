@@ -6,13 +6,9 @@ import { DELETE, GET, PUT } from "./route";
 
 const createEmailProvider = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => vi.fn());
-const getEmailAccountMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider }));
 vi.mock("@/utils/auth", () => ({ auth: authMock }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: getEmailAccountMock,
-}));
 vi.mock("@/utils/prisma");
 
 const emailAccountId = "account-1";
@@ -28,9 +24,9 @@ describe("/api/user/drafts/[draftId]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    getEmailAccountMock.mockResolvedValue("developer@example.com");
     prisma.emailAccount.findUnique.mockResolvedValue({
-      id: emailAccountId,
+      userId: "user-1",
+      email: "developer@example.com",
       account: { provider: "google" },
     } as never);
     provider.createDraft.mockResolvedValue({ id: "draft-created" });
@@ -96,9 +92,9 @@ describe("/api/user/drafts/[draftId]", () => {
   it("distinguishes an unavailable account from a missing draft", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue(null);
     const response = await read("draft-1");
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: "Email account not found",
+      error: "Invalid account ID",
       isKnownError: true,
     });
     expect(provider.getDraft).not.toHaveBeenCalled();

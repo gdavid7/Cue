@@ -8,14 +8,10 @@ import { PUT } from "./route";
 
 const createEmailProvider = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => vi.fn());
-const getEmailAccountMock = vi.hoisted(() => vi.fn());
 const redisStore = vi.hoisted(() => new Map<string, unknown>());
 
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider }));
 vi.mock("@/utils/auth", () => ({ auth: authMock }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: getEmailAccountMock,
-}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
   redis: {
@@ -44,9 +40,9 @@ describe("/api/user/drafts/[draftId]/attachments/uploads/[uploadId]", () => {
     redisStore.clear();
     vi.stubGlobal("fetch", fetchMock);
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    getEmailAccountMock.mockResolvedValue("developer@example.com");
     prisma.emailAccount.findUnique.mockResolvedValue({
-      id: "account-1",
+      userId: "user-1",
+      email: "developer@example.com",
       account: { provider: "google" },
     } as never);
     createEmailProvider.mockResolvedValue(provider);
@@ -193,7 +189,8 @@ function putChunk({
 }) {
   if (accountId !== "account-1")
     prisma.emailAccount.findUnique.mockResolvedValue({
-      id: accountId,
+      userId: "user-1",
+      email: "developer@example.com",
       account: { provider: "google" },
     } as never);
   return PUT(

@@ -5,6 +5,7 @@ import {
   getEmailAccount,
   invalidateAccountOwnership,
   readKeyForOwnedAccounts,
+  startEmailAccountOwnershipCheck,
 } from "./account-validation";
 
 vi.mock("server-only", () => ({}));
@@ -54,6 +55,60 @@ describe("getEmailAccount", () => {
     prisma.emailAccount.findUnique.mockResolvedValueOnce(null);
     expect(await getEmailAccount(key)).toBeNull();
     expect(recordingRedis.everythingWritten()).not.toContain("me@example.com");
+  });
+});
+
+describe("startEmailAccountOwnershipCheck", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    recordingRedis.reset();
+  });
+
+  it("answers with the address and provider only for the account's owner", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "me@example.com",
+      account: { provider: "google" },
+    } as never);
+
+    const check = startEmailAccountOwnershipCheck("account-1");
+
+    expect(prisma.emailAccount.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.emailAccount.findUnique).toHaveBeenCalledWith({
+      where: { id: "account-1" },
+      select: {
+        userId: true,
+        email: true,
+        account: { select: { provider: true } },
+      },
+    });
+    expect(await check("user-1")).toEqual({
+      email: "me@example.com",
+      provider: "google",
+    });
+    expect(await check("user-2")).toBeNull();
+    expect(await check("")).toBeNull();
+    expect(prisma.emailAccount.findUnique).toHaveBeenCalledTimes(1);
+    expect(recordingRedis.everythingWritten()).not.toContain("me@example.com");
+  });
+
+  it("answers null for an account that does not exist", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue(null);
+
+    expect(
+      await startEmailAccountOwnershipCheck("missing")("user-1"),
+    ).toBeNull();
+  });
+
+  it("passes a failed read to the check, and only to it", async () => {
+    prisma.emailAccount.findUnique.mockRejectedValue(new Error("db down"));
+
+    // Never checked, as for a request without a session: no unhandled
+    // rejection fails this test.
+    startEmailAccountOwnershipCheck("account-1");
+    const check = startEmailAccountOwnershipCheck("account-1");
+
+    await expect(check("user-1")).rejects.toThrow("db down");
   });
 });
 

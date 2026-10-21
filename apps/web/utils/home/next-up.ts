@@ -94,7 +94,7 @@ export async function getNextUp({
 }: {
   emailAccountId: string;
   /** Every address the user has connected. */
-  ownAddresses: string[];
+  ownAddresses: string[] | Promise<string[]>;
   timeZone: string;
   logger: Logger;
   now: Date;
@@ -103,7 +103,7 @@ export async function getNextUp({
   const tomorrow = addDays(today, 1);
   const dayAfter = addDays(today, 2);
 
-  const [calendar, deadlines, calendarAccounts] = await Promise.all([
+  const [calendar, deadlines, calendarAccounts, addresses] = await Promise.all([
     upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
     getDeadlines({
       emailAccountId,
@@ -116,6 +116,7 @@ export async function getNextUp({
       where: calendarConnectionsWhere(emailAccountId),
       select: { email: true },
     }),
+    ownAddresses,
   ]);
   const suggestion = deadlines.connected
     ? null
@@ -124,7 +125,7 @@ export async function getNextUp({
   // Events come from all of the person's calendars, so a decline by any of
   // their connected addresses or the calendars' own addresses counts.
   const self = new Set(
-    [...ownAddresses, ...calendarAccounts.map((account) => account.email)].map(
+    [...addresses, ...calendarAccounts.map((account) => account.email)].map(
       (email) => email.toLowerCase(),
     ),
   );

@@ -27,6 +27,36 @@ export async function getEmailAccount({
 }
 
 /**
+ * {@link getEmailAccount} for a request whose user is not known yet: the
+ * account is read now, alongside the session, and the returned check answers
+ * only for the user the session then names, with the account's address and
+ * mail provider, or null when the account is not theirs.
+ */
+export function startEmailAccountOwnershipCheck(emailAccountId: string) {
+  const read = prisma.emailAccount.findUnique({
+    where: { id: emailAccountId },
+    select: {
+      userId: true,
+      email: true,
+      account: { select: { provider: true } },
+    },
+  });
+  // Starts the query, and keeps a failure nobody waits for (no session) from
+  // surfacing as an unhandled rejection; the check still sees it.
+  read.catch(() => undefined);
+
+  return async (userId: string) => {
+    if (!userId) return null;
+    const emailAccount = await read;
+    if (!emailAccount || emailAccount.userId !== userId) return null;
+    return {
+      email: emailAccount.email,
+      provider: emailAccount.account.provider,
+    };
+  };
+}
+
+/**
  * Reads one key per account for the accounts the user owns, in the same
  * command as the ownership check, so a frequent poll costs one Redis read.
  * Unowned accounts are left out. Ownership not cached yet is read from the

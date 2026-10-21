@@ -22,7 +22,6 @@ import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import prisma from "@/utils/__mocks__/prisma";
 import { auth } from "@/utils/auth";
 import { isAdmin } from "@/utils/admin";
-import { getEmailAccount } from "@/utils/redis/account-validation";
 import { captureException, checkCommonErrors, SafeError } from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
@@ -57,7 +56,7 @@ vi.mock("@/utils/auth", () => ({
   auth: vi.fn(),
 }));
 
-vi.mock("@/utils/redis/account-validation");
+vi.mock("@/utils/redis");
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/admin", () => ({
   isAdmin: vi.fn(),
@@ -93,7 +92,6 @@ vi.mock("@/utils/error", async (importActual) => {
 vi.mock("@/utils/error.server");
 
 const mockAuth = vi.mocked(auth);
-const mockGetEmailAccount = vi.mocked(getEmailAccount);
 const mockCheckCommonErrors = vi.mocked(checkCommonErrors);
 const mockCaptureException = vi.mocked(captureException);
 const mockIsAdmin = vi.mocked(isAdmin);
@@ -225,6 +223,34 @@ describe("Middleware", () => {
           expect(lines[0]).toContain('"status": 200');
           expect(lines[0]).toContain('"durationMs": 1500');
           expect(lines[0]).not.toContain("someone");
+        } finally {
+          consoleLogSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+
+      it("says how long the request spent before its handler ran", async () => {
+        vi.useFakeTimers();
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          mockAuth.mockImplementation(async () => {
+            vi.advanceTimersByTime(400);
+            return { user: { id: "user-1" } } as any;
+          });
+          const wrappedHandler = withAuth("user/test", async () => {
+            vi.advanceTimersByTime(1200);
+            return NextResponse.json({ ok: true });
+          });
+
+          await wrappedHandler(mockReq, mockContext);
+
+          const lines = completionLines(consoleLogSpy);
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toContain('"durationMs": 1600');
+          expect(lines[0]).toContain('"preHandlerMs": 400');
+          expect(lines[0]).toContain('"preHandlerDbCalls": 0');
         } finally {
           consoleLogSpy.mockRestore();
           vi.useRealTimers();
@@ -772,7 +798,7 @@ describe("Middleware", () => {
       mockReq = createMockRequest("GET", "http://localhost/api/test", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
       });
-      mockGetEmailAccount.mockResolvedValue(mockEmail);
+      mockOwnedAccount(mockUserId, mockEmail);
 
       const handler = vi.fn(async (_req: RequestWithAuthAndEmail, _ctx: any) =>
         NextResponse.json({ success: true }),
@@ -781,10 +807,6 @@ describe("Middleware", () => {
 
       await wrappedHandler(mockReq, mockContext);
 
-      expect(getEmailAccount).toHaveBeenCalledWith({
-        userId: mockUserId,
-        emailAccountId: mockAccountId,
-      });
       expect(handler).toHaveBeenCalledWith(
         expect.objectContaining({
           auth: {
@@ -802,7 +824,7 @@ describe("Middleware", () => {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
         cookie: "display=compact",
       });
-      mockGetEmailAccount.mockResolvedValue(mockEmail);
+      mockOwnedAccount(mockUserId, mockEmail);
       const handler = vi.fn(async (request: RequestWithEmailAccount) =>
         NextResponse.json({
           pathname: request.nextUrl.pathname,
@@ -828,7 +850,7 @@ describe("Middleware", () => {
       const responseBody = await response.json();
 
       expect(auth).toHaveBeenCalledTimes(1);
-      expect(getEmailAccount).not.toHaveBeenCalled();
+      expect(mockPrismaEmailAccountFindUnique).not.toHaveBeenCalled();
       expect(handler).not.toHaveBeenCalled();
       expect(response.status).toBe(403);
       expect(responseBody).toEqual({
@@ -841,7 +863,7 @@ describe("Middleware", () => {
       mockReq = createMockRequest("GET", "http://localhost/api/test", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
       });
-      mockGetEmailAccount.mockResolvedValue(null);
+      mockPrismaEmailAccountFindUnique.mockResolvedValue(null);
 
       const handler = createEmailAccountHandler();
       const wrappedHandler = withEmailAccount(handler);
@@ -850,15 +872,167 @@ describe("Middleware", () => {
       const responseBody = await response.json();
 
       expect(auth).toHaveBeenCalledTimes(1);
-      expect(getEmailAccount).toHaveBeenCalledWith({
-        userId: mockUserId,
-        emailAccountId: mockAccountId,
-      });
       expect(handler).not.toHaveBeenCalled();
       expect(response.status).toBe(403);
       expect(responseBody).toEqual({
         error: "Invalid account ID",
         isKnownError: true,
+      });
+    });
+
+    it("refuses another user's account with the same 403 as a missing one", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/test", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount("someone-else", mockEmail);
+      const handler = createEmailAccountHandler();
+
+      const response = await withEmailAccount(handler)(mockReq, mockContext);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid account ID",
+        isKnownError: true,
+      });
+    });
+
+    it("answers a request without a session with the 401, whoever owns the account", async () => {
+      mockAuth.mockResolvedValue(null as any);
+      mockReq = createMockRequest("GET", "http://localhost/api/test", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      const handler = createEmailAccountHandler();
+
+      for (const owner of [mockUserId, "someone-else"]) {
+        mockOwnedAccount(owner, mockEmail);
+        const response = await withEmailAccount(handler)(mockReq, mockContext);
+        expect(response.status).toBe(401);
+        await expect(response.json()).resolves.toEqual({
+          error: "Unauthorized",
+          errorCode: "SESSION_EXPIRED",
+          isKnownError: true,
+        });
+      }
+
+      // Nor does a failed account read turn a missing session into a 500.
+      mockPrismaEmailAccountFindUnique.mockRejectedValue(new Error("db down"));
+      const response = await withEmailAccount(handler)(mockReq, mockContext);
+      expect(response.status).toBe(401);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("reads the account alongside the session, not after it", async () => {
+      let resolveSession: (session: unknown) => void = () => undefined;
+      mockAuth.mockReturnValue(
+        new Promise((resolve) => {
+          resolveSession = resolve;
+        }) as any,
+      );
+      mockReq = createMockRequest("GET", "http://localhost/api/test", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount(mockUserId, mockEmail);
+      const handler = createEmailAccountHandler();
+
+      const response = withEmailAccount(handler)(mockReq, mockContext);
+      await vi.waitFor(() =>
+        expect(mockPrismaEmailAccountFindUnique).toHaveBeenCalled(),
+      );
+      resolveSession({ user: { id: mockUserId } });
+
+      expect((await response).status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    describe("org admins", () => {
+      const adminUserId = "admin-1";
+
+      beforeEach(() => {
+        mockAuth.mockResolvedValue({ user: { id: adminUserId } } as any);
+        mockReq = createMockRequest("GET", "http://localhost/api/test", {
+          [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+        });
+        // The target account belongs to a member, not to the admin.
+        mockOwnedAccount(mockUserId, mockEmail);
+      });
+
+      it("refuses a caller who is not an admin of the account's organization", async () => {
+        prisma.emailAccount.findFirst.mockResolvedValue(null);
+        const handler = createEmailAccountHandler();
+
+        const response = await withEmailAccount(handler, {
+          allowOrgAdmins: true,
+        })(mockReq, mockContext);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toEqual({
+          error: "Insufficient permissions",
+          isKnownError: true,
+        });
+      });
+
+      it("refuses an admin when the member has not allowed analytics access", async () => {
+        prisma.emailAccount.findFirst.mockResolvedValue({
+          id: "admin-account",
+        } as any);
+        prisma.member.findFirst.mockResolvedValue({
+          allowOrgAdminAnalytics: false,
+        } as any);
+        const handler = createEmailAccountHandler();
+
+        const response = await withEmailAccount(handler, {
+          allowOrgAdmins: true,
+        })(mockReq, mockContext);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toEqual({
+          error: "Analytics access not permitted by this member",
+          isKnownError: true,
+        });
+      });
+
+      it("lets an admin in when the member has allowed analytics access", async () => {
+        prisma.emailAccount.findFirst.mockResolvedValue({
+          id: "admin-account",
+        } as any);
+        prisma.member.findFirst.mockResolvedValue({
+          allowOrgAdminAnalytics: true,
+        } as any);
+        const handler = createEmailAccountHandler();
+
+        const response = await withEmailAccount(handler, {
+          allowOrgAdmins: true,
+        })(mockReq, mockContext);
+
+        expect(response.status).toBe(200);
+        expect(handler).toHaveBeenCalledWith(
+          expect.objectContaining({
+            auth: {
+              userId: adminUserId,
+              emailAccountId: mockAccountId,
+              email: mockEmail,
+            },
+          }),
+          mockContext,
+        );
+      });
+
+      it("does not let an admin into a member's account on a route without org admin access", async () => {
+        prisma.emailAccount.findFirst.mockResolvedValue({
+          id: "admin-account",
+        } as any);
+        prisma.member.findFirst.mockResolvedValue({
+          allowOrgAdminAnalytics: true,
+        } as any);
+        const handler = createEmailAccountHandler();
+
+        const response = await withEmailAccount(handler)(mockReq, mockContext);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(response.status).toBe(403);
       });
     });
   });
@@ -876,11 +1050,7 @@ describe("Middleware", () => {
       mockReq = createMockRequest("GET", "http://localhost/api/assistant", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
       });
-      mockGetEmailAccount.mockResolvedValue(mockEmail);
-      mockPrismaEmailAccountFindUnique.mockResolvedValue({
-        id: mockAccountId,
-        account: { provider: "google" },
-      } as any);
+      mockOwnedAccount(mockUserId, mockEmail);
       mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
       mockCheckCommonErrors.mockReturnValue(null);
       const respond = (error: unknown) =>
@@ -918,11 +1088,7 @@ describe("Middleware", () => {
           cookie: "display=compact",
         },
       );
-      mockGetEmailAccount.mockResolvedValue(mockEmail);
-      mockPrismaEmailAccountFindUnique.mockResolvedValue({
-        id: mockAccountId,
-        account: { provider: "google" },
-      } as any);
+      mockOwnedAccount(mockUserId, mockEmail);
       const emailProvider = { name: "provider" };
       mockCreateEmailProvider.mockResolvedValue(emailProvider as any);
       const handler = vi.fn(async (request: RequestWithEmailProvider) =>
@@ -942,6 +1108,67 @@ describe("Middleware", () => {
         display: "compact",
         hasEmailProvider: true,
       });
+    });
+
+    it("checks the account and finds its provider in one read", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount(mockUserId, mockEmail, "microsoft");
+      mockCreateEmailProvider.mockResolvedValue({ name: "microsoft" } as any);
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+
+      const response = await withEmailProvider(handler)(mockReq, mockContext);
+
+      expect(response.status).toBe(200);
+      expect(mockPrismaEmailAccountFindUnique).toHaveBeenCalledTimes(1);
+      expect(mockPrismaEmailAccountFindUnique).toHaveBeenCalledWith({
+        where: { id: mockAccountId },
+        select: {
+          userId: true,
+          email: true,
+          account: { select: { provider: true } },
+        },
+      });
+      expect(mockCreateEmailProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          emailAccountId: mockAccountId,
+          provider: "microsoft",
+        }),
+      );
+    });
+
+    it("refuses another user's account before creating a provider for it", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount("someone-else", mockEmail);
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+
+      const response = await withEmailProvider(handler)(mockReq, mockContext);
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid account ID",
+        isKnownError: true,
+      });
+      expect(mockCreateEmailProvider).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("answers a request without a session with the 401", async () => {
+      mockAuth.mockResolvedValue(null as any);
+      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount(mockUserId, mockEmail);
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+
+      const response = await withEmailProvider(handler)(mockReq, mockContext);
+
+      expect(response.status).toBe(401);
+      expect(mockCreateEmailProvider).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -967,11 +1194,7 @@ describe("Middleware", () => {
       mockReq = createMockRequest("GET", "http://localhost/api/labels", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
       });
-      mockGetEmailAccount.mockResolvedValue(mockEmail);
-      mockPrismaEmailAccountFindUnique.mockResolvedValue({
-        id: mockAccountId,
-        account: { provider },
-      } as any);
+      mockOwnedAccount(mockUserId, mockEmail, provider);
 
       const rateLimitError = new Error("Rate-limit mode active");
       mockCreateEmailProvider.mockRejectedValue(rateLimitError);
@@ -1019,6 +1242,14 @@ function createMockRequest(
     headers: new Headers(headers),
   });
   return request;
+}
+
+function mockOwnedAccount(userId: string, email: string, provider = "google") {
+  vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+    userId,
+    email,
+    account: { provider },
+  } as any);
 }
 
 function createEmailAccountHandler() {

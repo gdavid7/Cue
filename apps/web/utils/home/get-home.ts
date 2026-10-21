@@ -126,7 +126,7 @@ export async function getHomeData({
   emailAccountId: string;
   userEmail: string;
   /** Every address the user has connected; a meeting any of them declined is off. */
-  ownAddresses?: string[];
+  ownAddresses?: string[] | Promise<string[]>;
   emailProvider: EmailProvider;
   logger: Logger;
   /** The user's IANA time zone, which decides where "today" starts. */
