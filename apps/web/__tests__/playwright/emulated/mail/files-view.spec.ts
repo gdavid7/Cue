@@ -77,10 +77,16 @@ test("lists a message's files from the sidebar and filters them by type, name an
   await expect(row(files, logo)).toHaveCount(0);
   await capturePlaywrightCheckpoint(page, testInfo, "files-view-desktop");
 
-  await page.getByRole("radio", { name: "Spreadsheets" }).click();
+  await page
+    .getByRole("group", { name: "File type" })
+    .getByRole("button", { name: "Spreadsheets", exact: true })
+    .click();
   await expect(row(files, sheet)).toBeVisible();
   await expect(row(files, pdf)).toHaveCount(0);
-  await page.getByRole("radio", { name: "All" }).click();
+  await page
+    .getByRole("group", { name: "File type" })
+    .getByRole("button", { name: "All", exact: true })
+    .click();
 
   const search = page.getByRole("searchbox", { name: "Search file names" });
   await search.fill(`contract ${token}`);

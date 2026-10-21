@@ -53,7 +53,7 @@ export function searchableAttachments(
 // Builds an FTS5 query where each term, or the whole phrase, is one quoted
 // string: quoting makes FTS5 read operators, column filters, and punctuation
 // as plain text, and the trailing * matches words as they are being typed.
-// A term also matches other forms of its word (see stemPrefix), a hyphenated
+// A term also matches other forms of its word (see stemCandidate), a hyphenated
 // term also matches written as one word, the way a joined compound is
 // indexed, and two words also match as that one whole word. Resolves null
 // when nothing in the input can match an indexed token.
@@ -84,16 +84,33 @@ export function searchMatchQuery(
 // What each word of an attachment-name search looks for in one file's name,
 // so a message that matches is narrowed to the files the words name: per
 // word, the stem searchMatchQuery matches it by (or the word), and the word
-// written joined.
+// written joined. Forms are folded as foldForMatch folds a name.
 export function attachmentNameForms(value: string): string[][] {
   return value
     .split(/\s+/)
     .filter((part) => TOKEN_CHARACTER.test(part))
     .map((part) => {
-      const word = part.toLowerCase();
-      const stem = stemPrefix(part)?.slice(1, -2) ?? word;
+      const word = foldForMatch(part);
+      const stem = stemCandidate(word) ?? word;
       return [...new Set([stem, word.replace(HYPHENS, "")])];
     });
+}
+
+// Folds text for comparing names in any script the way the index's unicode61
+// tokenizer compares words: case folded beyond ASCII, accents removed.
+// SQLite's own LOWER and LIKE fold ASCII letters only.
+export function foldForMatch(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replaceAll("ß", "ss");
+}
+
+// The stem as a prefix query term, or null to match the word as typed.
+function stemPrefix(part: string): string | null {
+  const candidate = stemCandidate(part);
+  return candidate === null ? null : `"${candidate}"*`;
 }
 
 // The index keeps words as written, so the query matches the word's stem as
@@ -106,7 +123,7 @@ export function attachmentNameForms(value: string): string[][] {
 // "s", and a stem under four letters ("running" to "run") leaves the word as
 // typed. A stem prefix still reaches words derived from it ("guide" also
 // finds "guidance"), which is the price of finding the singular.
-function stemPrefix(part: string): string | null {
+function stemCandidate(part: string): string | null {
   if (!PLAIN_LATIN_WORD.test(part)) return null;
   const word = part.toLowerCase();
   const stemmed = stemmer(word);
@@ -126,7 +143,7 @@ function stemPrefix(part: string): string | null {
     word.length - candidate.length > MAX_STEMMED_ENDING
   )
     return null;
-  return `"${candidate}"*`;
+  return candidate;
 }
 
 // Runs during sync for every HTML-only body, in a worker or Node process with

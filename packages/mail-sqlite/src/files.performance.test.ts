@@ -96,7 +96,7 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
 
     // Walks mail with files newest first through its own index, never a
     // sort of the whole mailbox.
-    const read = queries.find(({ sql }) => sql.includes("json_each"));
+    const read = queries.find(({ sql }) => sql.includes("AS indexed"));
     if (!read) throw new Error("readFiles ran no query");
     const plan = await driver.read((tx) =>
       tx.query(`EXPLAIN QUERY PLAN ${read.sql}`, read.bindings),

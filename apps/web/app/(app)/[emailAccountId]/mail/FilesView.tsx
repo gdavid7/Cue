@@ -7,6 +7,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronsUpDownIcon,
   DownloadIcon,
+  FileBadgeIcon,
   FileIcon,
   FileSpreadsheetIcon,
   FileTextIcon,
@@ -26,8 +27,8 @@ import type {
   FilesPage,
   FilesQuery,
 } from "@inboxzero/mail-core/queries";
-import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountRowMarker } from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AttachmentPreviewDialogContent } from "@/components/email-list/EmailAttachments";
 import { LoadingContent } from "@/components/LoadingContent";
 import { toastError } from "@/components/Toast";
@@ -75,7 +76,7 @@ const KIND_ICONS: Record<FileKind, LucideIcon> = {
   document: FileTextIcon,
   spreadsheet: FileSpreadsheetIcon,
   presentation: PresentationIcon,
-  pdf: FileTextIcon,
+  pdf: FileBadgeIcon,
   image: ImageIcon,
   other: FileIcon,
 };
@@ -241,11 +242,11 @@ export function FilesView({
         <div
           aria-label="File type"
           className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-1 scrollbar-none"
-          role="radiogroup"
+          role="group"
         >
           {KIND_FILTERS.map((filter) => (
             <button
-              aria-checked={kind === filter.kind}
+              aria-pressed={kind === filter.kind}
               className={cn(
                 "h-7 shrink-0 rounded-full border px-3 text-xs transition-colors active:scale-[0.97] motion-reduce:active:scale-100",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -255,7 +256,6 @@ export function FilesView({
               )}
               key={filter.label}
               onClick={() => setKind(filter.kind)}
-              role="radio"
               type="button"
             >
               {filter.label}

@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import {
@@ -105,7 +106,11 @@ describe("FilesView", () => {
     renderView();
     await screen.findByText("budget.xlsx");
 
-    fireEvent.click(screen.getByRole("radio", { name: "PDFs" }));
+    const types = screen.getByRole("group", { name: "File type" });
+    fireEvent.click(within(types).getByRole("button", { name: "PDFs" }));
+    expect(
+      within(types).getByRole("button", { name: "PDFs", pressed: true }),
+    ).toBeTruthy();
 
     await waitFor(() => expect(screen.queryByText("budget.xlsx")).toBeNull());
     expect(screen.getByText("contract.pdf")).toBeTruthy();
@@ -135,14 +140,14 @@ describe("FilesView", () => {
     mocks.queryFiles.mockResolvedValue({ files: [], nextPage: null });
     renderView();
 
-    fireEvent.click(await screen.findByRole("radio", { name: "Images" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Images" }));
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Clear filters" }),
     );
     expect(
-      screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked"),
-    ).toBe("true");
+      screen.getByRole("button", { name: "All", pressed: true }),
+    ).toBeTruthy();
   });
 });
 

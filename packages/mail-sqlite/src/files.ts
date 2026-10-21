@@ -9,10 +9,19 @@ import type {
 import { parseAddress } from "./contact-suggestions";
 import type { SqlTransaction, SqlValue } from "./driver";
 import type { SearchSupport } from "./queries";
-import { attachmentNameForms, searchMatchQuery } from "./search-text";
+import {
+  attachmentNameForms,
+  foldForMatch,
+  searchMatchQuery,
+} from "./search-text";
 
 const MIGRATION_ID = 15;
+// The sender filter offers the people who sent the most files; past this many
+// the rest are left out, which keeps the typeahead's list small to send and
+// search on every keystroke.
 const SENDER_LIMIT = 500;
+// A narrow filter can skip most messages, so each read looks at a few more.
+const MIN_BATCH_MESSAGES = 100;
 
 // The mail the Files view lists files from. SQLite only uses a partial index
 // for a query that repeats its WHERE clause, so the index and the reads share
@@ -46,6 +55,11 @@ export async function migrateFilesIndex(tx: SqlTransaction) {
  * One page of every real attachment on stored mail. A message's files come
  * from the details stored with its body, so mail whose body was never
  * downloaded lists its files once it is.
+ *
+ * SQLite reads candidate messages newest first through the files index, and
+ * each file is then checked here: SQLite's LOWER and LIKE fold case in ASCII
+ * only, and names and addresses come in every script. Messages are read in
+ * batches until the page is full, so a narrow filter still fills its pages.
  */
 export async function readFiles(
   tx: SqlTransaction,
@@ -62,62 +76,95 @@ export async function readFiles(
     `+e.account_id IN (${placeholders(accountIds)})`,
   ];
   const bindings: SqlValue[] = [...accountIds];
-  where.push("json_extract(a.value, '$.inline') = 0");
-  if (query.kind) {
-    where.push(`${fileKindSql("a")} = ?`);
-    bindings.push(query.kind);
-  }
-  if (query.sender) {
-    const sender = query.sender.trim().toLowerCase();
-    where.push(
-      `(LOWER(e.from_address) = ? OR LOWER(e.from_address) LIKE ? ESCAPE '\\')`,
-    );
-    bindings.push(sender, `%<${escapeLike(sender)}>`);
+  const sender = query.sender ? foldAddress(query.sender) : null;
+  // Only an ASCII address can be narrowed by LIKE without missing a match.
+  if (sender && /^[\x20-\x7e]+$/.test(sender)) {
+    where.push(`e.from_address LIKE ? ESCAPE '\\'`);
+    bindings.push(`%${escapeLike(sender)}%`);
   }
   const name = query.name?.trim();
+  const nameForms = name ? attachmentNameForms(name) : [];
+  let indexedColumn = "1";
   if (name) {
-    const clause = nameClause(name, search);
-    if (!clause) return { files: [], nextPage: null };
-    where.push(clause.sql);
-    bindings.push(...clause.bindings);
+    if (!nameForms.length) return { files: [], nextPage: null };
+    const candidates = nameCandidates(name, search);
+    if (candidates === null) return { files: [], nextPage: null };
+    if (candidates) {
+      where.push(candidates.sql);
+      bindings.push(...candidates.bindings);
+      indexedColumn = candidates.indexed;
+    } else indexedColumn = "0";
   }
-  const cursor = query.after ? parseCursor(query.after) : null;
-  if (cursor) {
-    where.push(
-      "(e.received_at_ms < ? OR (e.received_at_ms = ? AND (e.account_id, e.message_id, a.key) > (?, ?, ?)))",
+
+  const pageCursor = query.after ? parseCursor(query.after) : null;
+  let after: (FileCursor & { inclusive: boolean }) | null = pageCursor
+    ? { ...pageCursor, inclusive: true }
+    : null;
+  const batchSize = Math.max(query.pageSize, MIN_BATCH_MESSAGES);
+  const files: Array<FileEntry & { position: number }> = [];
+  while (files.length <= query.pageSize) {
+    const cursorSql = after
+      ? [
+          `(e.received_at_ms < ? OR (e.received_at_ms = ? AND (e.account_id, e.message_id) ${after.inclusive ? ">=" : ">"} (?, ?)))`,
+        ]
+      : [];
+    const rows = await tx.query(
+      `SELECT e.account_id, e.message_id, e.conversation_id, e.subject,
+              e.from_address, e.received_at_ms, c.attachments_json,
+              ${indexedColumn} AS indexed
+       FROM effective_messages e
+       CROSS JOIN message_content c
+         ON c.account_id = e.account_id AND c.message_id = e.message_id
+       WHERE ${[...where, ...cursorSql].join(" AND ")}
+       ORDER BY e.received_at_ms DESC, e.account_id, e.message_id
+       LIMIT ?`,
+      [
+        ...bindings,
+        ...(after
+          ? [
+              after.receivedAtMs,
+              after.receivedAtMs,
+              after.accountId,
+              after.messageId,
+            ]
+          : []),
+        batchSize,
+      ],
     );
-    bindings.push(
-      cursor.receivedAtMs,
-      cursor.receivedAtMs,
-      cursor.accountId,
-      cursor.messageId,
-      cursor.position,
-    );
+    for (const row of rows) {
+      if (sender && parseAddress(String(row.from_address))?.email !== sender)
+        continue;
+      const skipThrough =
+        pageCursor &&
+        pageCursor.accountId === String(row.account_id) &&
+        pageCursor.messageId === String(row.message_id)
+          ? pageCursor.position
+          : -1;
+      for (const entry of messageFiles(row, query.kind, nameForms)) {
+        if (entry.position > skipThrough) files.push(entry);
+      }
+    }
+    const last = rows.at(-1);
+    if (rows.length < batchSize || !last) break;
+    after = {
+      receivedAtMs: Number(last.received_at_ms),
+      accountId: String(last.account_id),
+      messageId: String(last.message_id),
+      position: 0,
+      inclusive: false,
+    };
   }
-  const rows = await tx.query(
-    `SELECT e.account_id, e.message_id, e.conversation_id, e.subject,
-            e.from_address, e.received_at_ms, a.key AS position,
-            a.value AS attachment, ${fileKindSql("a")} AS kind
-     FROM effective_messages e
-     CROSS JOIN message_content c
-       ON c.account_id = e.account_id AND c.message_id = e.message_id
-     CROSS JOIN json_each(c.attachments_json) a
-     WHERE ${where.join(" AND ")}
-     ORDER BY e.received_at_ms DESC, e.account_id, e.message_id, a.key
-     LIMIT ?`,
-    [...bindings, query.pageSize + 1],
-  );
-  const listed = rows.slice(0, query.pageSize);
-  const last = listed.at(-1);
+  const page = files.slice(0, query.pageSize);
+  const lastFile = page.at(-1);
   return {
-    files: listed.flatMap(toFileEntry),
+    files: page.map(({ position: _position, ...entry }) => entry),
     nextPage:
-      rows.length > query.pageSize && last
+      files.length > query.pageSize && lastFile
         ? JSON.stringify([
-            Number(last.received_at_ms),
-            String(last.account_id),
-            String(last.message_id),
-            Number(last.position),
+            lastFile.receivedAtMs,
+            lastFile.accountId,
+            lastFile.messageId,
+            lastFile.position,
           ])
         : null,
   };
@@ -180,7 +227,7 @@ export async function readFileSenders(
  * label files `application/octet-stream`, its name. Earlier rules win, so a
  * PDF named `.pdf` is a PDF whatever its type says.
  */
-export const FILE_KIND_RULES: ReadonlyArray<{
+const FILE_KIND_RULES: ReadonlyArray<{
   kind: Exclude<FileKind, "other">;
   types: readonly string[];
   extensions: readonly string[];
@@ -189,8 +236,8 @@ export const FILE_KIND_RULES: ReadonlyArray<{
   {
     kind: "spreadsheet",
     types: [
-      "%spreadsheet%",
-      "%ms-excel%",
+      "*spreadsheet*",
+      "*ms-excel*",
       "text/csv",
       "text/tab-separated-values",
       "application/vnd.apple.numbers",
@@ -200,8 +247,8 @@ export const FILE_KIND_RULES: ReadonlyArray<{
   {
     kind: "presentation",
     types: [
-      "%presentation%",
-      "%ms-powerpoint%",
+      "*presentation*",
+      "*ms-powerpoint*",
       "application/vnd.apple.keynote",
     ],
     extensions: ["ppt", "pptx", "pps", "ppsx", "odp", "key"],
@@ -209,9 +256,9 @@ export const FILE_KIND_RULES: ReadonlyArray<{
   {
     kind: "document",
     types: [
-      "%wordprocessing%",
-      "%msword%",
-      "%opendocument.text%",
+      "*wordprocessing*",
+      "*msword*",
+      "*opendocument.text*",
       "application/rtf",
       "text/rtf",
       "text/plain",
@@ -232,7 +279,7 @@ export const FILE_KIND_RULES: ReadonlyArray<{
   },
   {
     kind: "image",
-    types: ["image/%"],
+    types: ["image/*"],
     extensions: [
       "png",
       "jpg",
@@ -249,100 +296,129 @@ export const FILE_KIND_RULES: ReadonlyArray<{
   },
 ];
 
-/** The kind of the attachment in json_each row `alias`, as SQL. */
-function fileKindSql(alias: string) {
-  const type = `LOWER(json_extract(${alias}.value, '$.mimeType'))`;
-  const name = `json_extract(${alias}.value, '$.filename')`;
-  const cases = FILE_KIND_RULES.map(({ kind, types, extensions }) => {
-    const tests = [
-      ...types.map((pattern) => `${type} LIKE '${pattern}'`),
-      ...extensions.map((extension) => `${name} LIKE '%.${extension}'`),
-    ];
-    return `WHEN ${tests.join(" OR ")} THEN '${kind}'`;
-  });
-  return `(CASE ${cases.join(" ")} ELSE 'other' END)`;
-}
-
-// A file matches a name search when its message matches it in the search
-// index, as local search finds attachments, and the file's own name holds
-// the words. When none of a matching message's files hold them as written
-// (the index also folds accents), all its files stay listed rather than
-// none. Mail not indexed yet is matched by the file's name alone.
-function nameClause(
+// Messages a name search lists files from: those the search index matches,
+// as local search finds attachments, and, until the index is complete, mail
+// not indexed yet. Resolves undefined when every message is a candidate
+// (no index), and null when nothing in the name can match.
+function nameCandidates(
   name: string,
   search: SearchSupport,
-): { sql: string; bindings: SqlValue[] } | null {
-  const forms = attachmentNameForms(name);
-  if (!forms.length) return null;
-  const named = (alias: string) => ({
-    sql: forms
-      .map(
-        (group) =>
-          `(${group
-            .map(
-              () =>
-                `LOWER(json_extract(${alias}.value, '$.filename')) LIKE ? ESCAPE '\\'`,
-            )
-            .join(" OR ")})`,
-      )
-      .join(" AND "),
-    bindings: forms.flatMap((group) =>
-      group.map((form) => `%${escapeLike(form)}%`),
-    ),
-  });
-  const own = named("a");
-  if (!search.fts5) return own;
+): { sql: string; bindings: SqlValue[]; indexed: string } | null | undefined {
+  if (!search.fts5) return;
   const match = searchMatchQuery(name, "term");
   if (!match) return null;
-  const sibling = named("b");
-  const indexed = {
-    sql: `((e.account_id, e.message_id) IN (
-        SELECT k.account_id, k.message_id FROM message_fts_keys k
-        WHERE k.fts_rowid IN (SELECT rowid FROM message_fts WHERE message_fts MATCH ?)
-      ) AND (${own.sql} OR NOT EXISTS (
-        SELECT 1 FROM json_each(c.attachments_json) b
-        WHERE json_extract(b.value, '$.inline') = 0 AND ${sibling.sql}
-      )))`,
-    bindings: [
-      `attachments : (${match})`,
-      ...own.bindings,
-      ...sibling.bindings,
-    ],
-  };
-  if (search.complete) return indexed;
-  return {
-    sql: `(${indexed.sql} OR (NOT EXISTS (
-        SELECT 1 FROM message_fts_keys k
-        WHERE k.account_id = e.account_id AND k.message_id = e.message_id
-      ) AND ${own.sql}))`,
-    bindings: [...indexed.bindings, ...own.bindings],
-  };
+  const hit = `(e.account_id, e.message_id) IN (
+      SELECT k.account_id, k.message_id FROM message_fts_keys k
+      WHERE k.fts_rowid IN (SELECT rowid FROM message_fts WHERE message_fts MATCH ?)
+    )`;
+  const bindings = [`attachments : (${match})`];
+  if (search.complete) return { sql: hit, bindings, indexed: "1" };
+  const indexed = `EXISTS (
+      SELECT 1 FROM message_fts_keys k
+      WHERE k.account_id = e.account_id AND k.message_id = e.message_id
+    )`;
+  return { sql: `(${hit} OR NOT ${indexed})`, bindings, indexed };
 }
 
-function toFileEntry(row: Record<string, SqlValue>): FileEntry[] {
-  let value: unknown;
+// A message's real files that pass the type and name filters. A file passes
+// a name search when its own name holds every word; a message the index
+// matched whose files hold none of them as written keeps them all, since the
+// index found the words some other way.
+function messageFiles(
+  row: Record<string, SqlValue>,
+  kind: FileKind | null,
+  nameForms: string[][],
+): Array<FileEntry & { position: number }> {
+  const files = storedAttachments(row.attachments_json).filter(
+    ({ attachment }) => !attachment.inline,
+  );
+  let named = files;
+  if (nameForms.length) {
+    named = files.filter(({ attachment }) =>
+      nameHolds(attachment.filename, nameForms),
+    );
+    if (!named.length && Number(row.indexed) === 1) named = files;
+  }
+  return named.flatMap(({ attachment, position }) => {
+    const fileKind = fileKindOf(attachment);
+    if (kind && fileKind !== kind) return [];
+    return [
+      {
+        accountId: String(row.account_id),
+        conversationId: String(row.conversation_id),
+        messageId: String(row.message_id),
+        subject: String(row.subject),
+        from: String(row.from_address),
+        receivedAtMs: Number(row.received_at_ms),
+        kind: fileKind,
+        attachment,
+        position,
+      },
+    ];
+  });
+}
+
+function nameHolds(filename: string, forms: string[][]) {
+  const folded = foldForMatch(filename);
+  return forms.every((group) => group.some((form) => folded.includes(form)));
+}
+
+/** What kind of file an attachment is, by the first rule it meets. */
+function fileKindOf(attachment: {
+  mimeType: string;
+  filename: string;
+}): FileKind {
+  const type = attachment.mimeType.toLowerCase();
+  const name = attachment.filename.toLowerCase();
+  const rule = FILE_KIND_RULES.find(
+    ({ types, extensions }) =>
+      types.some((pattern) => matchesType(type, pattern)) ||
+      extensions.some((extension) => name.endsWith(`.${extension}`)),
+  );
+  return rule?.kind ?? "other";
+}
+
+// `*` stands for any run of characters, as in `image/*`.
+function matchesType(type: string, pattern: string) {
+  const [first, ...rest] = pattern.split("*");
+  if (!rest.length) return type === pattern;
+  if (!type.startsWith(first)) return false;
+  let from = first.length;
+  for (const [index, part] of rest.entries()) {
+    if (index === rest.length - 1) return type.slice(from).endsWith(part);
+    const found = type.indexOf(part, from);
+    if (found < 0) return false;
+    from = found + part.length;
+  }
+  return true;
+}
+
+function storedAttachments(value: SqlValue | undefined) {
+  let parsed: unknown;
   try {
-    value = JSON.parse(String(row.attachment));
+    parsed = JSON.parse(String(value ?? "[]"));
   } catch {
     return [];
   }
-  const attachment = messageAttachmentDescriptorSchema.safeParse(value);
-  if (!attachment.success) return [];
-  return [
-    {
-      accountId: String(row.account_id),
-      conversationId: String(row.conversation_id),
-      messageId: String(row.message_id),
-      subject: String(row.subject),
-      from: String(row.from_address),
-      receivedAtMs: Number(row.received_at_ms),
-      kind: String(row.kind) as FileKind,
-      attachment: attachment.data,
-    },
-  ];
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((item, position) => {
+    const result = messageAttachmentDescriptorSchema.safeParse(item);
+    return result.success ? [{ attachment: result.data, position }] : [];
+  });
 }
 
-function parseCursor(value: string) {
+function foldAddress(value: string) {
+  return value.trim().normalize("NFC").toLowerCase();
+}
+
+type FileCursor = {
+  receivedAtMs: number;
+  accountId: string;
+  messageId: string;
+  position: number;
+};
+
+function parseCursor(value: string): FileCursor | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed) || parsed.length !== 4) return null;

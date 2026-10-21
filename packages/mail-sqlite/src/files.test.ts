@@ -206,6 +206,81 @@ describe("readFiles", () => {
   });
 });
 
+// Names and addresses in other scripts fold case the way the search index
+// does, not only in ASCII.
+const MULTILINGUAL: Seed[] = [
+  {
+    id: "report",
+    from: "Ирина <Irina@Пример.рф>",
+    subject: "Отчет",
+    attachments: [
+      file("Отчет за март.pdf", "application/pdf"),
+      file("Прочее.txt", "text/plain"),
+    ],
+  },
+  {
+    id: "overview",
+    from: "Jürgen <JÜRGEN@bücher.de>",
+    subject: "Übersicht",
+    attachments: [
+      file("ÜBERSICHT Ärzte.docx", "application/msword"),
+      file("Anhang.pdf", "application/pdf"),
+    ],
+  },
+];
+
+describe("names and senders in any script", () => {
+  for (const indexed of [true, false])
+    it(`matches capitalized Cyrillic and German names ${indexed ? "through the index" : "before indexing"}`, async () => {
+      const store = await filesMailbox({ indexed, mailbox: MULTILINGUAL });
+
+      expect(await names(store, { name: "отчет" })).toEqual([
+        "Отчет за март.pdf",
+      ]);
+      expect(await names(store, { name: "übersicht" })).toEqual([
+        "ÜBERSICHT Ärzte.docx",
+      ]);
+      expect(await names(store, { name: "ärzte" })).toEqual([
+        "ÜBERSICHT Ärzte.docx",
+      ]);
+      await store.close();
+    });
+
+  it("filters by a sender address whatever its case, in any script", async () => {
+    const store = await filesMailbox({ mailbox: MULTILINGUAL });
+
+    expect(await names(store, { sender: "jürgen@bücher.de" })).toEqual([
+      "ÜBERSICHT Ärzte.docx",
+      "Anhang.pdf",
+    ]);
+    expect(await names(store, { sender: "irina@пример.рф" })).toEqual([
+      "Отчет за март.pdf",
+      "Прочее.txt",
+    ]);
+    await store.close();
+  });
+
+  it("pages a filtered list without repeating or skipping files", async () => {
+    const store = await filesMailbox({ indexed: false });
+
+    const all: string[] = [];
+    let after: string | null = null;
+    do {
+      const page = await store.readFiles(
+        query({ kind: "pdf", pageSize: 1, after }),
+      );
+      all.push(...page.files.map((entry) => entry.attachment.filename));
+      after = page.nextPage;
+    } while (after);
+    expect(all).toEqual([
+      "invoice-march.pdf",
+      "terms.pdf",
+      "Contract-2026.pdf",
+    ]);
+    await store.close();
+  });
+});
+
 describe("files index migration", () => {
   it("adds the files index to a mailbox opened before it existed", async () => {
     const driver = createNodeSqliteDriver();
@@ -257,7 +332,13 @@ function query(overrides: Partial<FilesQuery> = {}): FilesQuery {
   };
 }
 
-async function filesMailbox({ indexed = true } = {}) {
+async function filesMailbox({
+  indexed = true,
+  mailbox = MAILBOX,
+}: {
+  indexed?: boolean;
+  mailbox?: Seed[];
+} = {}) {
   const driver = createNodeSqliteDriver();
   const store = await createSqliteMailStore(driver);
   for (const accountId of ["acc-1", "acc-2"]) {
@@ -266,7 +347,7 @@ async function filesMailbox({ indexed = true } = {}) {
       provider: "google",
       generation: "g1",
     });
-    const seeds = MAILBOX.filter(
+    const seeds = mailbox.filter(
       (seed) => (seed.account ?? "acc-1") === accountId,
     );
     await store.applySyncPage({
@@ -277,7 +358,7 @@ async function filesMailbox({ indexed = true } = {}) {
         from: { streamId: "primary", generation: "g1", checkpoint: null },
         to: { streamId: "primary", generation: "g1", checkpoint: "1" },
         changes: seeds.map((seed) =>
-          messagePatch(accountId, seed, MAILBOX.indexOf(seed)),
+          messagePatch(accountId, seed, mailbox.indexOf(seed)),
         ),
         requiredHydration: [],
         roundComplete: true,
