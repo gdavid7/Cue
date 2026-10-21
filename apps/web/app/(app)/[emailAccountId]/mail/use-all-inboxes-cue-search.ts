@@ -4,13 +4,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import {
+  type AccountCueSearch,
   type AccountSearchPhase,
   type CueSearchAccount,
   getAccountCueSearches,
   getAccountsCuePredicate,
   getCueRankingSearch,
   getFinishedProviderSearches,
-  keepFrozenRowsFirst,
+  getProviderSearchStarts,
+  holdRowOrder,
   scheduleAccountSearches,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes-cue-search";
 import {
@@ -26,15 +28,19 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import type { GetSearchIntentResponse } from "@/app/api/user/search-intent/route";
+import { useLabels } from "@/hooks/useLabels";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { swrFetcher } from "@/providers/swr-fetcher";
+import { readableSearch } from "@/utils/mail-search/generated-search";
 import { looksLikeNaturalLanguage } from "@/utils/mail-search/natural-language-search";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
 const SEARCH_INTENT_PATH = "/api/user/search-intent";
-const MAX_LABELS = 300;
 const NO_THREADS: ListThread[] = [];
 const NO_ACCOUNTS: AllInboxesAccount[] = [];
+const NO_SEARCHES: AccountCueSearch[] = [];
+const NO_IDS: string[] = [];
+const NO_STARTS: Record<string, number> = {};
 // The predicate carries the searches; the query only names the window.
 const PREDICATE_ONLY_QUERY: ThreadsQuery = { q: "" };
 
@@ -45,20 +51,34 @@ type Run = {
   readingLate: boolean;
   /** The rows on screen when the budget ran out. */
   frozenKeys: string[] | null;
-  /** When each account's provider search began. */
-  startedAtMs: Record<string, number>;
+  /**
+   * Each account's search, fixed when the reading arrives, so labels that
+   * load later never start a search the queue didn't schedule.
+   */
+  searches: AccountCueSearch[] | null;
+  /** Accounts whose provider search Cue has queued. */
+  queued: string[];
   /** Accounts whose provider has answered, or never will. */
   finished: string[];
+  /** Accounts whose provider took too long, and was stopped. */
+  timedOut: string[];
+  /**
+   * When the engine began each account's search. Kept once seen, so a
+   * window reloading for a new query doesn't restart an account's clock.
+   */
+  started: Record<string, number>;
 };
 
 /**
  * Cue's search of a sentence typed in All inboxes. The model reads it once,
- * and that reading becomes a search in each included account's own syntax
- * and labels. Every account's local mail is read at once; their providers a
- * few at a time, each within a time box, so a slow account never holds up
- * the others. What they find is ranked together on one scale and each row
- * keeps its account, so it opens there. Accounts left out of All inboxes are
- * never searched.
+ * for the routed account, and that reading becomes a search in each
+ * included account's own syntax and labels. Every account's local mail is
+ * read at once. Their providers' searches are queued a couple at a time
+ * (the engine runs them one by one), and each is timed from when the engine
+ * began it, then cancelled if it runs too long, so a slow account never
+ * holds up the others. What they find is ranked together on one scale and
+ * each row keeps its account, so it opens there. Accounts left out of All
+ * inboxes are never searched.
  */
 export function useAllInboxesCueSearch({
   emailAccountId,
@@ -78,35 +98,13 @@ export function useAllInboxesCueSearch({
   enabled: boolean;
 }) {
   const natural = Boolean(enabled && query && looksLikeNaturalLanguage(query));
-  const searchAccounts = useMemo<CueSearchAccount[]>(
-    () =>
-      accounts.map((account) => ({
-        id: account.id,
-        provider: account.provider,
-        labels: Object.values(labelsByAccount[account.id] ?? {}).map(
-          (label) => ({
-            id: label.id,
-            name: label.name,
-            accountId: account.id,
-          }),
-        ),
-      })),
-    [accounts, labelsByAccount],
-  );
-  // Every account's label names, so the searches Cue shows can name a label
-  // any of them has. A ref, not part of the key: a label that loads later
-  // mustn't read the search again.
+  // The same request as a single account's search, with the routed
+  // account's labels, so both views share one reading of the search.
+  const { userLabels, isLoading: labelsLoading } = useLabels();
   const labelNamesRef = useRef<string[]>([]);
-  labelNamesRef.current = [
-    ...new Set(
-      searchAccounts.flatMap((account) =>
-        account.labels.map((label) => label.name),
-      ),
-    ),
-  ].slice(0, MAX_LABELS);
-  // The same key a single account's search uses: one model call per search.
+  labelNamesRef.current = userLabels.map((label) => label.name);
   const { data, error } = useSWR<GetSearchIntentResponse>(
-    natural && query
+    natural && query && !labelsLoading
       ? ([SEARCH_INTENT_PATH, emailAccountId, query] as const)
       : null,
     ([path, accountId, q]: readonly [string, string, string]) =>
@@ -130,7 +128,7 @@ export function useAllInboxesCueSearch({
     answeredRef.current = answered;
   }, [answered]);
   // The budget runs from commit, as for one account. Past it the rows on
-  // screen hold their place, and a slower account's mail lands below them.
+  // screen hold their places, and a slower account's mail lands below them.
   useEffect(() => {
     if (!natural || !query) return;
     setRun({
@@ -138,8 +136,11 @@ export function useAllInboxesCueSearch({
       expired: false,
       readingLate: false,
       frozenKeys: null,
-      startedAtMs: {},
+      searches: null,
+      queued: [],
       finished: [],
+      timedOut: [],
+      started: {},
     });
     const timeout = setTimeout(() => {
       setRun((current) =>
@@ -164,64 +165,72 @@ export function useAllInboxesCueSearch({
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new reading is a new now
   const now = useMemo(() => new Date(), [intent]);
   const timeZone = intent?.timeZone ?? "UTC";
-  const searches = useMemo(
+  const searchAccounts = useMemo<CueSearchAccount[]>(
+    () =>
+      accounts.map((account) => ({
+        id: account.id,
+        provider: account.provider,
+        labels: Object.values(labelsByAccount[account.id] ?? {}).map(
+          (label) => ({
+            id: label.id,
+            name: label.name,
+            accountId: account.id,
+          }),
+        ),
+      })),
+    [accounts, labelsByAccount],
+  );
+  const builtSearches = useMemo(
     () =>
       intent?.parts
         ? getAccountCueSearches(intent.parts, searchAccounts, {
             now,
             timeZone,
           })
-        : [],
+        : NO_SEARCHES,
     [intent, searchAccounts, now, timeZone],
   );
+  const frozenSearches = current?.searches;
+  const searches = frozenSearches ?? builtSearches;
+  const hasIntent = Boolean(intent);
+  useEffect(() => {
+    if (!hasIntent || frozenSearches || !query) return;
+    setRun((run) =>
+      run?.query === query && !run.searches
+        ? { ...run, searches: builtSearches }
+        : run,
+    );
+  }, [hasIntent, frozenSearches, builtSearches, query]);
   const searchedIds = useMemo(
     () => searches.map((search) => search.accountId),
     [searches],
   );
 
-  // Which accounts' providers search now. It looks again whenever one
-  // answers, and when the next one's time box runs out.
+  // Which accounts' providers search now: it looks again whenever one
+  // answers or begins, and when a running one's time box runs out.
   const [clockMs, setClockMs] = useState(() => Date.now());
-  const startedAtMs = current?.startedAtMs;
+  const started = current?.started;
+  const queuedIds = useMemo(() => new Set(current?.queued), [current?.queued]);
   const finishedIds = useMemo(
     () => new Set(current?.finished),
     [current?.finished],
   );
-  const schedule = useMemo(
+  const timedOutIds = useMemo(
+    () => new Set(current?.timedOut),
+    [current?.timedOut],
+  );
+  const { phases, toQueue, toTimeOut, nextDeadlineMs } = useMemo(
     () =>
       scheduleAccountSearches({
         accountIds: searchedIds,
-        startedAtMs: startedAtMs ?? {},
+        queuedIds,
         finishedIds,
+        timedOutIds,
+        startedAtMs: started ?? NO_STARTS,
         nowMs: clockMs,
       }),
-    [searchedIds, startedAtMs, finishedIds, clockMs],
+    [searchedIds, queuedIds, finishedIds, timedOutIds, started, clockMs],
   );
-  const { phases, toStart, nextDeadlineMs } = schedule;
-  useEffect(() => {
-    if (!toStart.length || !query) return;
-    const startedAt = Date.now();
-    setRun((run) =>
-      run?.query === query
-        ? {
-            ...run,
-            startedAtMs: {
-              ...run.startedAtMs,
-              ...Object.fromEntries(toStart.map((id) => [id, startedAt])),
-            },
-          }
-        : run,
-    );
-  }, [toStart, query]);
-  useEffect(() => {
-    if (nextDeadlineMs === null) return;
-    const timeout = setTimeout(
-      () => setClockMs(Date.now()),
-      Math.max(0, nextDeadlineMs - Date.now()),
-    );
-    return () => clearTimeout(timeout);
-  }, [nextDeadlineMs]);
-
   const providerAccountIds = useMemo(
     () =>
       new Set(
@@ -256,19 +265,51 @@ export function useAllInboxesCueSearch({
     enabled: natural && Boolean(predicate),
   });
 
+  const newStarts = Object.entries(
+    getProviderSearchStarts(state.providerSearchAccounts),
+  ).filter(([id]) => providerAccountIds.has(id) && started?.[id] === undefined);
   const answeredByProvider = getFinishedProviderSearches(
     state.providerSearchAccounts,
   ).filter((id) => providerAccountIds.has(id) && !finishedIds.has(id));
-  const answeredKey = answeredByProvider.join("\n");
+  const changesKey = JSON.stringify([
+    toQueue,
+    toTimeOut,
+    answeredByProvider,
+    newStarts,
+  ]);
   useEffect(() => {
-    if (!answeredKey || !query) return;
-    const ids = answeredKey.split("\n");
+    const [queue, timeOut, finish, starts] = JSON.parse(changesKey) as [
+      string[],
+      string[],
+      string[],
+      [string, number][],
+    ];
+    if (
+      !query ||
+      !(queue.length || timeOut.length || finish.length || starts.length)
+    )
+      return;
     setRun((run) =>
       run?.query === query
-        ? { ...run, finished: [...new Set([...run.finished, ...ids])] }
+        ? {
+            ...run,
+            queued: [...new Set([...run.queued, ...queue])],
+            timedOut: [...new Set([...run.timedOut, ...timeOut])],
+            finished: [...new Set([...run.finished, ...finish])],
+            started: { ...Object.fromEntries(starts), ...run.started },
+          }
         : run,
     );
-  }, [answeredKey, query]);
+  }, [changesKey, query]);
+  useEffect(() => {
+    if (nextDeadlineMs === null) return;
+    // Pushed to the deadline, so a timer that fires early still lands on it.
+    const timeout = setTimeout(
+      () => setClockMs(Math.max(Date.now(), nextDeadlineMs)),
+      Math.max(0, nextDeadlineMs - Date.now()),
+    );
+    return () => clearTimeout(timeout);
+  }, [nextDeadlineMs]);
 
   // An account's turn to search its provider changes the window's query;
   // its rows stay while the new window loads, so they don't blink out.
@@ -302,14 +343,25 @@ export function useAllInboxesCueSearch({
     rowKeysRef.current = liveThreads.map(getListThreadKey);
   }, [liveThreads]);
   const frozenKeys = current?.frozenKeys ?? null;
-  const threads = useMemo(
-    () => keepFrozenRowsFirst(liveThreads, frozenKeys),
-    [liveThreads, frozenKeys],
-  );
+  const orderRef = useRef<{ query: string | null; order: string[] }>({
+    query: null,
+    order: NO_IDS,
+  });
+  const held = useMemo(() => {
+    if (!frozenKeys) return null;
+    const order =
+      orderRef.current.query === query ? orderRef.current.order : frozenKeys;
+    return holdRowOrder(liveThreads, order);
+  }, [liveThreads, frozenKeys, query]);
+  if (held) orderRef.current = { query, order: held.order };
+  const threads = held?.threads ?? liveThreads;
 
-  // As a string, so the same accounts keep the same list from render to render.
+  // As strings, so the same accounts keep the same lists from render to render.
   const pendingKey = searchedIds
     .filter((id) => isPending(phases[id]))
+    .join("\n");
+  const timedOutKey = searchedIds
+    .filter((id) => phases[id] === "timedOut")
     .join("\n");
   const settled =
     natural &&
@@ -328,25 +380,50 @@ export function useAllInboxesCueSearch({
     widening: false,
     widened: { settled: false, count: 0 },
   });
-  const stillSearching = useMemo(() => {
-    if (stage !== "done" || !pendingKey) return NO_ACCOUNTS;
-    const pending = new Set(pendingKey.split("\n"));
-    return accounts.filter((account) => pending.has(account.id));
-  }, [stage, pendingKey, accounts]);
+  const stillSearching = useMemo(
+    () => (stage === "done" ? accountsIn(accounts, pendingKey) : NO_ACCOUNTS),
+    [stage, pendingKey, accounts],
+  );
+  const timedOut = useMemo(
+    () => accountsIn(accounts, timedOutKey),
+    [timedOutKey, accounts],
+  );
+  // What Cue ran, as each account's own search, rather than the routed
+  // account's alone.
+  const shownIntent = useMemo(() => {
+    if (!intent) return null;
+    const shown = [...new Set(searches.map(({ search }) => search))];
+    return {
+      ...intent,
+      searches: shown,
+      editableSearches: shown.map((search) =>
+        readableSearch(search, intent.timeZone),
+      ),
+    };
+  }, [intent, searches]);
 
   return {
     natural,
     stage,
-    intent: intent ?? null,
+    intent: shownIntent,
     threads,
     foundNothing: stage === "done" && settled && !liveThreads.length,
     widening: null,
+    // The routed account's own searches: the answer is read from its mail.
     answerRequest: getSearchAnswerRequest({ query, natural, intent, stage }),
     /** Accounts Cue is still searching once it has shown what it found. */
     stillSearching,
+    /** Accounts whose provider took too long; only their local mail shows. */
+    timedOut,
   };
 }
 
 function isPending(phase: AccountSearchPhase | undefined) {
   return phase === "waiting" || phase === "searching";
+}
+
+function accountsIn(accounts: AllInboxesAccount[], idsKey: string) {
+  if (!idsKey) return NO_ACCOUNTS;
+  const ids = new Set(idsKey.split("\n"));
+  return accounts.filter((account) => ids.has(account.id));
 }

@@ -5,7 +5,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
-  CUE_PROVIDER_SEARCH_CONCURRENCY,
+  CUE_PROVIDER_SEARCH_QUEUE,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes-cue-search";
 import { CUE_SEARCH_BUDGET_MS } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
@@ -19,13 +19,28 @@ const state = vi.hoisted(() => ({
   rows: {} as Record<string, Row[]>,
   /** Accounts whose provider has answered. */
   answered: new Set<string>(),
+  /** When the engine began each account's search; absent while queued. */
+  startedAt: {} as Record<string, number>,
+  routedLabels: [] as { name: string }[],
+  fetcher: undefined as undefined | (() => unknown),
+  fetchBodies: [] as unknown[],
   windows: [] as { accountIds: string[]; predicate?: MailPredicate }[],
 }));
 
 vi.mock("swr", () => ({
-  default: (key: unknown) => {
+  default: (key: unknown, fetcher: (key: unknown) => unknown) => {
     state.swrKeys.push(key);
+    state.fetcher = () => fetcher(key);
     return { data: key ? state.intent : undefined, error: undefined };
+  },
+}));
+vi.mock("@/hooks/useLabels", () => ({
+  useLabels: () => ({ userLabels: state.routedLabels, isLoading: false }),
+}));
+vi.mock("@/providers/swr-fetcher", () => ({
+  swrFetcher: (_path: string, init: { body: string }) => {
+    state.fetchBodies.push(JSON.parse(init.body));
+    return Promise.resolve(state.intent);
   },
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
@@ -70,6 +85,10 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
         accountId,
         state: state.answered.has(accountId) ? "complete" : "searching",
         answered: state.answered.has(accountId),
+        ...(state.answered.has(accountId) ||
+        state.startedAt[accountId] === undefined
+          ? {}
+          : { startedAtMs: state.startedAt[accountId] }),
       })),
     };
   },
@@ -117,6 +136,9 @@ beforeEach(() => {
   state.swrKeys = [];
   state.windows = [];
   state.answered = new Set();
+  state.startedAt = {};
+  state.routedLabels = [];
+  state.fetchBodies = [];
   state.rows = {};
   state.intent = {
     searches: ["from:sarah lease"],
@@ -198,7 +220,7 @@ describe("useAllInboxesCueSearch", () => {
 
   it("asks a few providers at a time, and the next once one answers", () => {
     const { rerender } = render([WORK, HOME, SIDE]);
-    expect(CUE_PROVIDER_SEARCH_CONCURRENCY).toBe(2);
+    expect(CUE_PROVIDER_SEARCH_QUEUE).toBe(2);
     expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
       "work",
       "home",
@@ -214,10 +236,10 @@ describe("useAllInboxesCueSearch", () => {
     ]);
   });
 
-  it("shows what it found without waiting on a slow account, then stops waiting", () => {
+  it("shows what it found without waiting on a slow account, then stops it", () => {
     state.rows = { work: [{ id: "w1", subject: "Lease from Sarah" }] };
     state.answered = new Set(["work"]);
-    const { result } = render([WORK, HOME]);
+    const { result, rerender } = render([WORK, HOME]);
     expect(result.current.stage).toBe("searching");
 
     act(() => {
@@ -229,6 +251,18 @@ describe("useAllInboxesCueSearch", () => {
       "home",
     ]);
 
+    // Its wait in the engine's queue doesn't count against it...
+    act(() => {
+      vi.advanceTimersByTime(CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
+    });
+    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+      "work",
+      "home",
+    ]);
+
+    // ...only the time from when the engine began it.
+    state.startedAt = { home: Date.now() };
+    rerender();
     act(() => {
       vi.advanceTimersByTime(CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
     });
@@ -237,7 +271,66 @@ describe("useAllInboxesCueSearch", () => {
       "work",
     ]);
     expect(result.current.stillSearching).toEqual([]);
+    expect(result.current.timedOut.map((account) => account.id)).toEqual([
+      "home",
+    ]);
     expect(result.current.foundNothing).toBe(false);
+  });
+
+  it("asks with the routed account's labels and shows each account's searches", async () => {
+    state.routedLabels = [{ name: "Receipts" }];
+    const parts = (state.intent as { parts: Record<string, unknown> }).parts;
+    state.intent = {
+      ...(state.intent as object),
+      parts: { ...parts, hasAttachment: true },
+    };
+    const { result } = renderHook(() =>
+      useAllInboxesCueSearch({
+        emailAccountId: "work",
+        accounts: [WORK, HOME],
+        labelsByAccount: {
+          home: { L1: { id: "L1", name: "Family", type: "user" } },
+        } as never,
+        query: SENTENCE,
+        enabled: true,
+      }),
+    );
+
+    // The routed account's labels alone, as its own search sends.
+    await state.fetcher?.();
+    expect(state.fetchBodies).toEqual([{ q: SENTENCE, labels: ["Receipts"] }]);
+    expect(result.current.intent?.searches).toEqual([
+      "from:sarah lease has:attachment",
+      "from:sarah lease hasattachments:true",
+    ]);
+    expect(result.current.answerRequest).toBeNull();
+  });
+
+  it("keeps each account's search once read, though its labels load later", () => {
+    const parts = (state.intent as { parts: Record<string, unknown> }).parts;
+    state.intent = {
+      ...(state.intent as object),
+      parts: { ...parts, label: "Receipts" },
+    };
+    let labelsByAccount = {};
+    const { rerender } = renderHook(() =>
+      useAllInboxesCueSearch({
+        emailAccountId: "work",
+        accounts: [WORK],
+        labelsByAccount,
+        query: SENTENCE,
+        enabled: true,
+      }),
+    );
+    const before = searchesOf(state.windows.at(-1)?.predicate);
+
+    labelsByAccount = {
+      work: { L1: { id: "L1", name: "Receipts", type: "user" } },
+    };
+    rerender();
+    rerender();
+
+    expect(searchesOf(state.windows.at(-1)?.predicate)).toEqual(before);
   });
 
   it("puts mail a slow account finds late below the rows already shown", () => {

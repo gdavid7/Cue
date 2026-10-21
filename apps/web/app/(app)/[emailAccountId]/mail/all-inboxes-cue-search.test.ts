@@ -2,14 +2,17 @@ import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { describe, expect, it } from "vitest";
 import {
   CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
-  CUE_PROVIDER_SEARCH_CONCURRENCY,
+  CUE_PROVIDER_SEARCH_QUEUE,
   getAccountCueSearches,
   getAccountsCuePredicate,
   getCueRankingSearch,
   getFinishedProviderSearches,
-  keepFrozenRowsFirst,
+  getProviderSearchStarts,
+  holdRowOrder,
   scheduleAccountSearches,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes-cue-search";
+import { rankCueFoundThreads } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import type { SearchIntentParts } from "@/utils/mail-search/generated-search";
 
 const NOW = new Date("2026-10-20T12:00:00Z");
@@ -142,57 +145,132 @@ describe("getAccountsCuePredicate", () => {
 
 describe("scheduleAccountSearches", () => {
   const ids = ["a", "b", "c", "d"];
-
-  it("starts only as many provider searches as the cap allows", () => {
-    const { phases, toStart } = scheduleAccountSearches({
+  const none = new Set<string>();
+  const schedule = (
+    input: Partial<Parameters<typeof scheduleAccountSearches>[0]>,
+  ) =>
+    scheduleAccountSearches({
       accountIds: ids,
+      queuedIds: none,
+      finishedIds: none,
+      timedOutIds: none,
       startedAtMs: {},
-      finishedIds: new Set(),
       nowMs: 0,
+      ...input,
     });
 
-    expect(toStart).toEqual(ids.slice(0, CUE_PROVIDER_SEARCH_CONCURRENCY));
+  it("queues only as many provider searches as the queue holds", () => {
+    const { phases, toQueue } = schedule({});
+
+    expect(toQueue).toEqual(ids.slice(0, CUE_PROVIDER_SEARCH_QUEUE));
     expect(phases.c).toBe("waiting");
   });
 
   it("gives an answered account's turn to the next one", () => {
-    const { phases, toStart } = scheduleAccountSearches({
-      accountIds: ids,
-      startedAtMs: { a: 0, b: 0 },
+    const { phases, toQueue } = schedule({
+      queuedIds: new Set(["a", "b"]),
       finishedIds: new Set(["a"]),
-      nowMs: 1000,
-      concurrency: 2,
+      queueSize: 2,
     });
 
     expect(phases).toMatchObject({ a: "finished", b: "searching" });
-    expect(toStart).toEqual(["c"]);
+    expect(toQueue).toEqual(["c"]);
   });
 
-  it("times out a slow account and moves on without it", () => {
-    const { phases, toStart, nextDeadlineMs } = scheduleAccountSearches({
-      accountIds: ids,
-      startedAtMs: { a: 0, b: 1000 },
-      finishedIds: new Set(),
-      nowMs: CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
-      concurrency: 2,
+  it("never counts the wait in the engine's queue against an account", () => {
+    const { phases, toTimeOut, nextDeadlineMs } = schedule({
+      queuedIds: new Set(["a", "b"]),
+      // a began long ago; b is still waiting behind it.
+      startedAtMs: { a: 1000 },
+      nowMs: 1000 + CUE_ACCOUNT_SEARCH_TIMEOUT_MS - 1,
+      queueSize: 2,
     });
 
-    expect(phases).toMatchObject({ a: "timedOut", b: "searching" });
-    expect(toStart).toEqual(["c"]);
-    // The next look is when b's time box ends.
+    expect(phases).toMatchObject({ a: "searching", b: "searching" });
+    expect(toTimeOut).toEqual([]);
     expect(nextDeadlineMs).toBe(1000 + CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
   });
 
-  it("has nothing to wait for once every account is done", () => {
-    const { toStart, nextDeadlineMs } = scheduleAccountSearches({
-      accountIds: ["a", "b"],
-      startedAtMs: { a: 0, b: 0 },
-      finishedIds: new Set(["a"]),
+  it("times out an account from when the engine began it, and moves on", () => {
+    const { phases, toQueue, toTimeOut } = schedule({
+      queuedIds: new Set(["a", "b"]),
+      startedAtMs: { a: 0 },
       nowMs: CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
+      queueSize: 2,
     });
 
-    expect(toStart).toEqual([]);
+    expect(phases).toMatchObject({ a: "timedOut", b: "searching" });
+    expect(toTimeOut).toEqual(["a"]);
+    expect(toQueue).toEqual(["c"]);
+  });
+
+  it("keeps a timed-out account out of the queue", () => {
+    const { phases, toQueue, nextDeadlineMs } = schedule({
+      accountIds: ["a", "b"],
+      queuedIds: new Set(["a", "b"]),
+      finishedIds: new Set(["b"]),
+      timedOutIds: new Set(["a"]),
+    });
+
+    expect(phases).toEqual({ a: "timedOut", b: "finished" });
+    expect(toQueue).toEqual([]);
     expect(nextDeadlineMs).toBeNull();
+  });
+});
+
+describe("getProviderSearchStarts", () => {
+  it("reads when the engine began each running search", () => {
+    expect(
+      getProviderSearchStarts([
+        {
+          accountId: "a",
+          state: "searching",
+          answered: false,
+          startedAtMs: 5,
+        },
+        { accountId: "b", state: "searching", answered: false },
+      ]),
+    ).toEqual({ a: 5 });
+  });
+});
+
+describe("cross-account ranking", () => {
+  it("demotes Cue's own newsletter label only in the account that has it", () => {
+    // Gmail numbers labels per account, so the same id means different
+    // labels in different accounts.
+    const thread = (accountId: string): ListThread =>
+      ({
+        id: `${accountId}-1`,
+        snippet: "",
+        account: {
+          id: accountId,
+          email: `${accountId}@example.com`,
+          name: null,
+          image: null,
+          provider: "google",
+        },
+        messages: [
+          {
+            id: `${accountId}-m`,
+            threadId: `${accountId}-1`,
+            labelIds: ["Label_3"],
+            internalDate: String(NOW.getTime() - (accountId === "b" ? 1 : 0)),
+            headers: { subject: "Lease", from: "", to: "", date: "" },
+          },
+        ],
+      }) as unknown as ListThread;
+    const ranked = rankCueFoundThreads([thread("a"), thread("b")], {
+      searches: ["lease"],
+      labels: [
+        { id: "Label_3", name: "Newsletter", accountId: "a" },
+        { id: "Label_3", name: "Clients", accountId: "b" },
+      ],
+      now: NOW,
+      timeZone: "UTC",
+      provider: "google",
+    });
+
+    expect(ranked.map((row) => row.id)).toEqual(["b-1", "a-1"]);
   });
 });
 
@@ -211,25 +289,39 @@ describe("getFinishedProviderSearches", () => {
   });
 });
 
-describe("keepFrozenRowsFirst", () => {
+describe("holdRowOrder", () => {
   const row = (accountId: string, id: string) => ({
     id,
     account: { id: accountId },
   });
 
-  it("keeps the rows on screen in place and adds late ones below", () => {
-    const live = [row("b", "late"), row("a", "1"), row("a", "2")];
-
-    expect(keepFrozenRowsFirst(live, ["a:1", "a:2"])).toEqual([
+  it("keeps the rows on screen in place and adds each later batch below", () => {
+    const first = holdRowOrder(
+      [row("b", "late"), row("a", "2"), row("a", "1")],
+      ["a:1", "a:2"],
+    );
+    expect(first.threads).toEqual([
       row("a", "1"),
       row("a", "2"),
       row("b", "late"),
     ]);
+
+    // A later, better-ranked batch still lands below what is shown.
+    const second = holdRowOrder(
+      [row("c", "best"), row("b", "late"), row("a", "2"), row("a", "1")],
+      first.order,
+    );
+    expect(second.threads.map((thread) => thread.id)).toEqual([
+      "1",
+      "2",
+      "late",
+      "best",
+    ]);
   });
 
-  it("changes nothing before the budget is spent", () => {
-    const live = [row("b", "1"), row("a", "1")];
-    expect(keepFrozenRowsFirst(live, null)).toBe(live);
+  it("keeps the same order when nothing new arrives", () => {
+    const order = ["a:1"];
+    expect(holdRowOrder([row("a", "1")], order).order).toBe(order);
   });
 });
 

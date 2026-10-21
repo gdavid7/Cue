@@ -2548,6 +2548,9 @@ export function MailShell() {
                       ? allInboxesCueSearch.stillSearching
                       : undefined
                   }
+                  timedOut={
+                    isAllAccounts ? allInboxesCueSearch.timedOut : undefined
+                  }
                   widening={cueSearch.widening}
                 />
               ) : null}

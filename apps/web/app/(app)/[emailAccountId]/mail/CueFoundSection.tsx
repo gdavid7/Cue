@@ -56,6 +56,7 @@ export function CueFoundSection({
   labelsByAccount,
   accountColorIndexById,
   stillSearching,
+  timedOut,
   focusedIndex,
   hasAnySelection,
   isSelected,
@@ -89,6 +90,8 @@ export function CueFoundSection({
   accountColorIndexById?: Record<string, number>;
   /** All inboxes: accounts Cue is still searching, after showing what it found. */
   stillSearching?: { id: string; email: string }[];
+  /** All inboxes: accounts whose server search took too long. */
+  timedOut?: { id: string; email: string }[];
   /** The mail screen's cursor; a row here when it is below `threads.length`. */
   focusedIndex: number;
   hasAnySelection: boolean;
@@ -227,6 +230,14 @@ export function CueFoundSection({
             >
               Still searching{" "}
               {stillSearching.map((account) => account.email).join(", ")}…
+            </p>
+          ) : null}
+          {timedOut?.length && !pending ? (
+            <p className="px-4 pb-2 text-muted-foreground text-xs">
+              Couldn&apos;t finish searching{" "}
+              {timedOut.map((account) => account.email).join(", ")} in time, so
+              only {timedOut.length === 1 ? "its" : "their"} mail on this device
+              is included.
             </p>
           ) : null}
           {foundNothing ? (

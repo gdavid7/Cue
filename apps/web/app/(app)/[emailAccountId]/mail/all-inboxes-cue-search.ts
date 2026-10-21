@@ -14,15 +14,16 @@ import {
 } from "@/utils/mail-search/search-query-predicate";
 
 /**
- * How many accounts' providers Cue searches at once in All inboxes. A search
- * is user-triggered, so it runs at interactive priority (D-086); the cap
- * keeps a user with many accounts from spending every account's quota at
- * the same moment.
+ * How many accounts' provider searches Cue has queued at once in All
+ * inboxes. The engine runs them one at a time, so this bounds the queue: a
+ * user with many accounts never lines up every account's search, at
+ * interactive priority (D-086), behind one slow one.
  */
-export const CUE_PROVIDER_SEARCH_CONCURRENCY = 2;
+export const CUE_PROVIDER_SEARCH_QUEUE = 2;
 /**
- * How long one account's provider may take before Cue stops waiting on it
- * and gives its turn to the next account. Its local mail still counts.
+ * How long one account's provider may take, from when the engine began its
+ * search, before Cue stops waiting on it, cancels it and gives its turn to
+ * the next account. Its local mail still counts.
  */
 export const CUE_ACCOUNT_SEARCH_TIMEOUT_MS = 8000;
 
@@ -80,57 +81,80 @@ export type AccountSearchPhase =
   | "timedOut";
 
 /**
- * Where each account's provider search is. At most `concurrency` search at
- * once, in the accounts' order; an account waiting its turn reads its local
- * mail alone. One whose provider hasn't answered within `timeoutMs` is
- * timed out, which frees its turn. `toStart` are the accounts whose turn has
- * come, which the caller marks started at `nowMs`.
+ * Where each account's provider search is. At most `queueSize` are queued
+ * or running at once, in the accounts' order; an account waiting its turn
+ * reads its local mail alone. An account is timed out `timeoutMs` after the
+ * engine began its search (`startedAtMs`), never counting its wait in the
+ * queue, which frees its turn. `toQueue` are the accounts whose turn has
+ * come and `toTimeOut` the ones whose time ran out, for the caller to
+ * record.
  */
 export function scheduleAccountSearches({
   accountIds,
-  startedAtMs,
+  queuedIds,
   finishedIds,
+  timedOutIds,
+  startedAtMs,
   nowMs,
-  concurrency = CUE_PROVIDER_SEARCH_CONCURRENCY,
+  queueSize = CUE_PROVIDER_SEARCH_QUEUE,
   timeoutMs = CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
 }: {
   accountIds: string[];
-  startedAtMs: Readonly<Record<string, number>>;
+  queuedIds: ReadonlySet<string>;
   finishedIds: ReadonlySet<string>;
+  timedOutIds: ReadonlySet<string>;
+  /** When the engine began each running account's search. */
+  startedAtMs: Readonly<Record<string, number>>;
   nowMs: number;
-  concurrency?: number;
+  queueSize?: number;
   timeoutMs?: number;
 }): {
   phases: Record<string, AccountSearchPhase>;
-  toStart: string[];
-  /** When the next searching account times out, to look again then. */
+  toQueue: string[];
+  toTimeOut: string[];
+  /** When the next running search times out, to look again then. */
   nextDeadlineMs: number | null;
 } {
   const phases: Record<string, AccountSearchPhase> = {};
+  const toTimeOut: string[] = [];
   let searching = 0;
-  for (const id of accountIds) {
-    const startedAt = startedAtMs[id];
-    if (finishedIds.has(id)) phases[id] = "finished";
-    else if (startedAt === undefined) phases[id] = "waiting";
-    else if (nowMs - startedAt >= timeoutMs) phases[id] = "timedOut";
-    else {
-      phases[id] = "searching";
-      searching++;
-    }
-  }
-  const toStart = accountIds
-    .filter((id) => phases[id] === "waiting")
-    .slice(0, Math.max(0, concurrency - searching));
-  for (const id of toStart) phases[id] = "searching";
-
   let nextDeadlineMs: number | null = null;
   for (const id of accountIds) {
-    if (phases[id] !== "searching") continue;
-    const deadline = (startedAtMs[id] ?? nowMs) + timeoutMs;
-    nextDeadlineMs =
-      nextDeadlineMs === null ? deadline : Math.min(nextDeadlineMs, deadline);
+    const started = startedAtMs[id];
+    if (finishedIds.has(id)) phases[id] = "finished";
+    else if (timedOutIds.has(id)) phases[id] = "timedOut";
+    else if (!queuedIds.has(id)) phases[id] = "waiting";
+    else if (started !== undefined && nowMs - started >= timeoutMs) {
+      phases[id] = "timedOut";
+      toTimeOut.push(id);
+    } else {
+      phases[id] = "searching";
+      searching++;
+      if (started !== undefined)
+        nextDeadlineMs = Math.min(
+          nextDeadlineMs ?? Number.POSITIVE_INFINITY,
+          started + timeoutMs,
+        );
+    }
   }
-  return { phases, toStart, nextDeadlineMs };
+  const toQueue = accountIds
+    .filter((id) => phases[id] === "waiting")
+    .slice(0, Math.max(0, queueSize - searching));
+  for (const id of toQueue) phases[id] = "searching";
+  return { phases, toQueue, toTimeOut, nextDeadlineMs };
+}
+
+/** When the engine began each account's search that is still running. */
+export function getProviderSearchStarts(
+  providerSearch: NonNullable<MailboxView["providerSearch"]>,
+): Record<string, number> {
+  return Object.fromEntries(
+    providerSearch.flatMap((account) =>
+      account.startedAtMs === undefined
+        ? []
+        : [[account.accountId, account.startedAtMs] as const],
+    ),
+  );
 }
 
 /**
@@ -206,21 +230,27 @@ export function getAccountsCuePredicate({
 }
 
 /**
- * Cue's rows once its time is spent: the rows on screen then keep their
- * place, and mail a slower account finds afterwards lands below them, so
- * nothing moves above what is being read.
+ * Cue's rows once its time is spent. The rows on screen then keep their
+ * places, and each batch a slower account finds afterwards lands below
+ * them in the order it arrived, so nothing on screen moves. `order` is the
+ * keys in their places so far; the result's order adds the new ones.
  */
-export function keepFrozenRowsFirst<T extends ActionableThread>(
+export function holdRowOrder<T extends ActionableThread>(
   threads: T[],
-  frozenKeys: string[] | null,
-): T[] {
-  if (!frozenKeys) return threads;
-  const frozen = new Set(frozenKeys);
-  const kept: T[] = [];
-  const late: T[] = [];
-  for (const thread of threads)
-    (frozen.has(getListThreadKey(thread)) ? kept : late).push(thread);
-  return late.length ? [...kept, ...late] : kept;
+  order: string[],
+): { threads: T[]; order: string[] } {
+  const known = new Set(order);
+  const added = threads.map(getListThreadKey).filter((key) => !known.has(key));
+  const nextOrder = added.length ? [...order, ...added] : order;
+  const position = new Map(nextOrder.map((key, index) => [key, index]));
+  return {
+    threads: [...threads].sort(
+      (a, b) =>
+        (position.get(getListThreadKey(a)) ?? 0) -
+        (position.get(getListThreadKey(b)) ?? 0),
+    ),
+    order: nextOrder,
+  };
 }
 
 /** A search's local part alone, for its own account only. */
