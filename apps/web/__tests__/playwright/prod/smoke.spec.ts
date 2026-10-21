@@ -482,6 +482,9 @@ async function checkSuggestionText(
   // Delivered mail's subject words, for the cleanup search.
   const subjectWords = ["suggestion", "probe", tag];
   metrics.suggestionShown = false;
+  // Sub-timings say whether a slow step was the IMAP append, the probe
+  // syncing into the inbox, Cue writing the reply, or the cleanup.
+  const started = Date.now();
   try {
     await appendInboxMessages(credentials, [
       {
@@ -491,6 +494,8 @@ async function checkSuggestionText(
         messageId: `<cue-qa-suggestion-${tag}@cue-qa.invalid>`,
       },
     ]);
+    metrics.appendMs = Date.now() - started;
+    const appended = Date.now();
     await page.goto(appUrl(page, `/mail/u/${accountIndex}/inbox`));
     const probe = page
       .getByRole("listbox", { name: "Conversations" })
@@ -503,7 +508,9 @@ async function checkSuggestionText(
     }, "the suggestion probe reaches the inbox").toPass({
       timeout: PROBE_ARRIVAL_TIMEOUT_MS,
     });
+    metrics.probeArrivalMs = Date.now() - appended;
     await probe.click();
+    const clicked = Date.now();
 
     const reader = page.getByTestId("thread-reader");
     const shown = reader.getByText("Suggested by Cue");
@@ -526,10 +533,13 @@ async function checkSuggestionText(
       }
       if (!asked && (await draftButton.isVisible())) {
         asked = true;
+        metrics.draftButtonAfterMs = Date.now() - clicked;
         await draftButton.click();
       }
       await page.waitForTimeout(1000);
     }
+    metrics.suggestionWaitMs = Date.now() - clicked;
+    metrics.draftButtonClicked = asked;
     if (!(await shown.isVisible())) {
       throw new StepSkippedError("skipped: no suggestion");
     }
@@ -552,9 +562,11 @@ async function checkSuggestionText(
       `the suggested reply shows escaped HTML (${leaks.join(", ")})`,
     ).toEqual([]);
   } finally {
+    const cleanup = Date.now();
     await trashMessagesWithSubject(credentials, subjectWords).catch(
       () => undefined,
     );
+    metrics.cleanupMs = Date.now() - cleanup;
   }
 }
 
