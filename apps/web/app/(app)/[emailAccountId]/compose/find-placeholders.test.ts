@@ -8,17 +8,36 @@ describe("findPlaceholders", () => {
     ["Dear {{ first_name }},", ["{{ first_name }}"]],
     ["Dear {{customer.name}},", ["{{customer.name}}"]],
     ["Hi [Name],", ["[Name]"]],
-    ["Welcome to [COMPANY]", ["[COMPANY]"]],
+    ["Welcome to [Company]", ["[Company]"]],
     ["Hi [First Name], from [YOUR NAME]", ["[First Name]", "[YOUR NAME]"]],
+    ["Sign off with <Signature>", ["<Signature>"]],
     ["Meeting on <insert date>", ["<insert date>"]],
     ["Hola <nombre del cliente>", ["<nombre del cliente>"]],
     ["Total: XXX", ["XXX"]],
-    ["Call us at XXXX-XXXX", ["XXXX"]],
     ["Launch date: TBD.", ["TBD"]],
     ["Hallo [Vorname],", ["[Vorname]"]],
     ["Привет, [Имя]!", ["[Имя]"]],
   ])("finds the placeholder in %j", (text, expected) => {
     expect(findPlaceholders(text)).toEqual(expected);
+  });
+
+  it("stays fast on long unbroken text", () => {
+    const blob = "QUJD".repeat(25_000);
+    for (const text of [
+      blob,
+      `${blob}@`,
+      `[${blob}`,
+      `{{${blob}`,
+      "[".repeat(100_000),
+      "<".repeat(100_000),
+      "`".repeat(100_000),
+      "X".repeat(100_000),
+      `{{${" ".repeat(100_000)}`,
+    ]) {
+      const start = performance.now();
+      findPlaceholders(text);
+      expect(performance.now() - start).toBeLessThan(500);
+    }
   });
 
   it("lists each placeholder once, in the order written", () => {
@@ -51,6 +70,9 @@ describe("findPlaceholders", () => {
     "The 3 XXXL shirts",
     "Roman numeral [IV] and [Q3] and [A1]",
     "[Q3] plan",
+    "[EXTERNAL] [URGENT] [CONFIDENTIAL] [DRAFT]",
+    "Card XXX-1234 and XXXX-XXXX and XXXX1234",
+    "Use <b>bold</b> and <small> and Promise<void> and Map<String>",
   ])("does not flag %j", (text) => {
     expect(findPlaceholders(text)).toEqual([]);
   });

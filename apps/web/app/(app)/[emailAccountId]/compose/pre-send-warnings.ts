@@ -12,6 +12,8 @@ export type PreSendDraft = {
   subject: string;
   /** The text the user wrote, without the quoted message or signature. */
   bodyText: string;
+  /** `bodyText` without code, which can hold placeholders on purpose. */
+  bodyTextWithoutCode: string;
   /** Files, inline images and files the message carries from elsewhere. */
   attachmentCount: number;
 };
@@ -104,7 +106,7 @@ export function getPreSendWarnings(
     });
   }
 
-  const placeholders = findPlaceholders(draft.bodyText);
+  const placeholders = findPlaceholders(draft.bodyTextWithoutCode);
   if (placeholders.length) {
     warnings.push({
       id: "placeholders",
@@ -170,13 +172,15 @@ export function mentionsAttachment(text: string) {
 
 /**
  * The text the user wrote in the editor, leaving out a forwarded or quoted
- * message, which can mention attachments the user never meant to send, and
- * code, which can hold placeholders or markup on purpose.
+ * message, which can mention attachments the user never meant to send.
  */
-export function getComposeBodyText(html: string) {
+export function getComposeBodyText(html: string, { withoutCode = false } = {}) {
   const document = new DOMParser().parseFromString(html, "text/html");
+  if (withoutCode)
+    for (const code of document.body.querySelectorAll("pre, code"))
+      code.remove();
   for (const quoted of document.body.querySelectorAll(
-    "blockquote, .gmail_quote, pre, code",
+    "blockquote, .gmail_quote",
   ))
     quoted.remove();
   // textContent runs blocks together ("Hi BobAttached"), which hides words.

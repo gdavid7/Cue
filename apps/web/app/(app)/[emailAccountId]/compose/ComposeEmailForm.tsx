@@ -165,7 +165,7 @@ import {
 } from "./queued-reply";
 import { beginUndoSend, UNDO_SEND_DELAY_MS } from "./undo-send";
 import { PreSendConfirmation } from "./PreSendConfirmation";
-import { selectTextIn } from "./select-text-in";
+import { selectPlaceholderIn } from "./select-placeholder";
 import {
   getComposeBodyText,
   getPreSendWarnings,
@@ -1370,14 +1370,17 @@ function ComposeEmailFormContent({
       }
 
       if (preSendCheckEnabled) {
+        const editableHtml =
+          editorRef.current?.getValue().editableHtml ??
+          initialDraft.editableHtml;
         const warnings = getPreSendWarnings(
           {
             ...recipients,
             subject: data.subject ?? "",
-            bodyText: getComposeBodyText(
-              editorRef.current?.getValue().editableHtml ??
-                initialDraft.editableHtml,
-            ),
+            bodyText: getComposeBodyText(editableHtml),
+            bodyTextWithoutCode: getComposeBodyText(editableHtml, {
+              withoutCode: true,
+            }),
             attachmentCount:
               attachmentsRef.current.length +
               (replyingToEmail?.forwardedAttachments?.length ?? 0) +
@@ -1877,7 +1880,7 @@ function ComposeEmailFormContent({
       const editable = formRef.current?.querySelector<HTMLElement>(
         "[contenteditable='true']",
       );
-      if (editable && selectText) selectTextIn(editable, selectText);
+      if (editable && selectText) selectPlaceholderIn(editable, selectText);
     } else if (showInlineReplySummary) openInlineReplyFields();
     else formRef.current?.querySelector<HTMLElement>("#to")?.focus();
   };
