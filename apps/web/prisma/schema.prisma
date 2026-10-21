@@ -1004,6 +1004,7 @@ model ScheduledEmail {
   @@index([reminderStatus, remindAt])
   @@index([reminderStatus, reminderStartedAt])
   @@index([emailAccountId, threadId])
+  @@index([emailAccountId, status, sentAt])
 }
 
 enum ScheduledEmailStatus {

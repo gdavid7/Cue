@@ -20,6 +20,7 @@ import {
   reopenUndoneComposer,
   resumeUndoSend,
 } from "@/app/(app)/[emailAccountId]/compose/undo-send";
+import { resumeSendingDrafts } from "@/hooks/useHiddenDraftMessageIds";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
 import {
   EmailAccountScopeProvider,
@@ -229,6 +230,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   // An account switch reloads the page, so a send still held for undo is
   // taken up again here, and a new message it undid opens again.
   useEffect(resumeUndoSend, []);
+  useEffect(resumeSendingDrafts, []);
   useEffect(() => {
     if (emailAccountId)
       return reopenUndoneComposer(emailAccountId, openCompose);

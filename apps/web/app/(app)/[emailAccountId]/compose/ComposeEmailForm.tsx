@@ -1608,11 +1608,12 @@ function ComposeEmailFormContent({
             attachments: attachmentsRef.current.flatMap(toAttachmentReference),
             online,
             threadId: readerThreadId,
-            onQueued: async () => {
+            onQueued: async (operationId) => {
               deliveryAccepted = true;
               showDraftAgain = hideSendingDraftMessages(
                 selectedEmailAccountId,
                 draftMessageIds,
+                operationId,
               );
               if (replyingToEmail?.threadId?.trim()) {
                 await mutate([
