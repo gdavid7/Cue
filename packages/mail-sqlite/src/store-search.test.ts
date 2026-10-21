@@ -217,7 +217,7 @@ describe("local text search", () => {
     const { driver, close } = await searchableMailbox();
     // Reopening after forgetting the latest index migration rebuilds it empty.
     await driver.write((tx) =>
-      tx.execute("DELETE FROM schema_migrations WHERE id = 12"),
+      tx.execute("DELETE FROM schema_migrations WHERE id = 13"),
     );
     const reopened = await createSqliteMailStore(driver);
 
@@ -387,7 +387,7 @@ describe("word variants and attachments", () => {
       await tx.exec(
         `DROP TABLE message_fts;
          CREATE VIRTUAL TABLE message_fts USING fts5(subject, preview, from_address, body, content = '', contentless_delete = 1, tokenize = 'unicode61');
-         DELETE FROM schema_migrations WHERE id = 12;`,
+         DELETE FROM schema_migrations WHERE id = 13;`,
       );
     });
 
