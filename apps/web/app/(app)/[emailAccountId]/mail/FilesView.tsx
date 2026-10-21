@@ -204,6 +204,42 @@ export function FilesView({
     }
   };
 
+  // A page can find nothing in the mail it read and still have older mail
+  // to read, so the list keeps going before it says there is nothing.
+  const emptyState = hasMore ? (
+    <p
+      className="px-6 py-12 text-center text-muted-foreground text-sm"
+      role="status"
+    >
+      Looking through older mail…
+    </p>
+  ) : (
+    <div className="flex flex-col items-center gap-3 px-6 py-12 text-center text-muted-foreground text-sm">
+      <PaperclipIcon aria-hidden="true" className="size-6" />
+      {filtered ? (
+        <>
+          <p>No files match these filters.</p>
+          <Button
+            onClick={() => {
+              setKind(null);
+              setSender(null);
+              setName("");
+            }}
+            size="sm"
+            variant="outline"
+          >
+            Clear filters
+          </Button>
+        </>
+      ) : (
+        <p>
+          No files yet. Attachments on your mail show up here once it&apos;s on
+          this device.
+        </p>
+      )}
+    </div>
+  );
+
   if (!client || !readFiles)
     return (
       <p className="px-6 py-12 text-center text-muted-foreground text-sm">
@@ -272,30 +308,7 @@ export function FilesView({
           loading={!pages.data && pages.isLoading}
         >
           {files.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center text-muted-foreground text-sm">
-              <PaperclipIcon aria-hidden="true" className="size-6" />
-              {filtered ? (
-                <>
-                  <p>No files match these filters.</p>
-                  <Button
-                    onClick={() => {
-                      setKind(null);
-                      setSender(null);
-                      setName("");
-                    }}
-                    size="sm"
-                    variant="outline"
-                  >
-                    Clear filters
-                  </Button>
-                </>
-              ) : (
-                <p>
-                  No files yet. Attachments on your mail show up here once
-                  it&apos;s on this device.
-                </p>
-              )}
-            </div>
+            emptyState
           ) : (
             <ul
               aria-label="Files"
@@ -321,7 +334,7 @@ export function FilesView({
               })}
             </ul>
           )}
-          {loadingMore ? (
+          {loadingMore && files.length > 0 ? (
             <p className="py-3 text-center text-muted-foreground text-xs">
               Loading more files…
             </p>

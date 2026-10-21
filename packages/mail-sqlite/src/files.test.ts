@@ -260,6 +260,27 @@ describe("names and senders in any script", () => {
     await store.close();
   });
 
+  it("matches a sender stored in decomposed form, as the sender list offers it", async () => {
+    const decomposed = "Jose\u0301 <JOSE\u0301@example.com>";
+    const store = await filesMailbox({
+      mailbox: [
+        {
+          id: "nfd",
+          from: decomposed,
+          attachments: [file("plan.pdf", "application/pdf")],
+        },
+      ],
+    });
+
+    const [offered] = await store.readFileSenders(["acc-1"]);
+    expect(offered.email).toBe("jos\u00e9@example.com");
+    expect(await names(store, { sender: offered.email })).toEqual(["plan.pdf"]);
+    expect(await names(store, { sender: "JOSE\u0301@example.com" })).toEqual([
+      "plan.pdf",
+    ]);
+    await store.close();
+  });
+
   it("pages a filtered list without repeating or skipping files", async () => {
     const store = await filesMailbox({ indexed: false });
 

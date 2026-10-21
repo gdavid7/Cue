@@ -136,6 +136,29 @@ describe("FilesView", () => {
     expect(onOpenThread).toHaveBeenCalledWith("c-m2", "a");
   });
 
+  it("keeps reading past pages that found nothing yet", async () => {
+    let releaseFar: () => void = () => undefined;
+    const far = new Promise<void>((resolve) => {
+      releaseFar = resolve;
+    });
+    mocks.queryFiles.mockImplementation(async (query: FilesQuery) => {
+      if (query.after === null) return { files: [], nextPage: "near" };
+      if (query.after === "near") return { files: [], nextPage: "far" };
+      await far;
+      return { files: [entry("old.pdf", "pdf", "m9")], nextPage: null };
+    });
+    renderView();
+
+    await waitFor(() => expect(mocks.queryFiles).toHaveBeenCalledTimes(3));
+    // Still looking, so it neither says there are no files nor stops.
+    expect(screen.queryByText(/No files/)).toBeNull();
+    expect(screen.getByText("Looking through older mail…")).toBeTruthy();
+
+    releaseFar();
+    expect(await screen.findByText("old.pdf")).toBeTruthy();
+    expect(screen.queryByText(/No files/)).toBeNull();
+  });
+
   it("offers to clear filters that match nothing", async () => {
     mocks.queryFiles.mockResolvedValue({ files: [], nextPage: null });
     renderView();

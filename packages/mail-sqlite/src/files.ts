@@ -22,6 +22,10 @@ const MIGRATION_ID = 15;
 const SENDER_LIMIT = 500;
 // A narrow filter can skip most messages, so each read looks at a few more.
 const MIN_BATCH_MESSAGES = 100;
+// A filter that matches little would otherwise read every message with files
+// in one transaction. Past this many, a page comes back short (even empty)
+// with a cursor after the last message read, and the next page goes on.
+const MAX_SCANNED_MESSAGES = 2000;
 
 // The mail the Files view lists files from. SQLite only uses a partial index
 // for a query that repeats its WHERE clause, so the index and the reads share
@@ -59,7 +63,8 @@ export async function migrateFilesIndex(tx: SqlTransaction) {
  * SQLite reads candidate messages newest first through the files index, and
  * each file is then checked here: SQLite's LOWER and LIKE fold case in ASCII
  * only, and names and addresses come in every script. Messages are read in
- * batches until the page is full, so a narrow filter still fills its pages.
+ * batches until the page is full or MAX_SCANNED_MESSAGES have been read, so
+ * a page can be short, even empty, and still have a next page.
  */
 export async function readFiles(
   tx: SqlTransaction,
@@ -97,9 +102,13 @@ export async function readFiles(
   }
 
   const pageCursor = query.after ? parseCursor(query.after) : null;
+  // A cursor inside a message starts there; one that read a message through
+  // starts after it.
   let after: (FileCursor & { inclusive: boolean }) | null = pageCursor
-    ? { ...pageCursor, inclusive: true }
+    ? { ...pageCursor, inclusive: pageCursor.position !== null }
     : null;
+  let scanned = 0;
+  let scannedThrough: FileCursor | null = null;
   const batchSize = Math.max(query.pageSize, MIN_BATCH_MESSAGES);
   const files: Array<FileEntry & { position: number }> = [];
   while (files.length <= query.pageSize) {
@@ -131,11 +140,12 @@ export async function readFiles(
         batchSize,
       ],
     );
+    scanned += rows.length;
     for (const row of rows) {
-      if (sender && parseAddress(String(row.from_address))?.email !== sender)
-        continue;
+      if (sender && senderOf(row) !== sender) continue;
       const skipThrough =
         pageCursor &&
+        pageCursor.position !== null &&
         pageCursor.accountId === String(row.account_id) &&
         pageCursor.messageId === String(row.message_id)
           ? pageCursor.position
@@ -146,27 +156,32 @@ export async function readFiles(
     }
     const last = rows.at(-1);
     if (rows.length < batchSize || !last) break;
-    after = {
+    const through = {
       receivedAtMs: Number(last.received_at_ms),
       accountId: String(last.account_id),
       messageId: String(last.message_id),
-      position: 0,
-      inclusive: false,
+      position: null,
     };
+    if (files.length <= query.pageSize && scanned >= MAX_SCANNED_MESSAGES) {
+      scannedThrough = through;
+      break;
+    }
+    after = { ...through, inclusive: false };
   }
   const page = files.slice(0, query.pageSize);
   const lastFile = page.at(-1);
+  let next: FileCursor | null = scannedThrough;
+  if (files.length > query.pageSize && lastFile) next = lastFile;
   return {
     files: page.map(({ position: _position, ...entry }) => entry),
-    nextPage:
-      files.length > query.pageSize && lastFile
-        ? JSON.stringify([
-            lastFile.receivedAtMs,
-            lastFile.accountId,
-            lastFile.messageId,
-            lastFile.position,
-          ])
-        : null,
+    nextPage: next
+      ? JSON.stringify([
+          next.receivedAtMs,
+          next.accountId,
+          next.messageId,
+          next.position,
+        ])
+      : null,
   };
 }
 
@@ -198,6 +213,7 @@ export async function readFileSenders(
   for (const row of rows) {
     const address = parseAddress(String(row.from_address));
     if (!address) continue;
+    address.email = foldAddress(address.email);
     const files = Number(row.files);
     const sender = senders.get(address.email) ?? {
       files: 0,
@@ -407,6 +423,12 @@ function storedAttachments(value: SqlValue | undefined) {
   });
 }
 
+// The stored sender's address, compared folded the same way as the filter's.
+function senderOf(row: Record<string, SqlValue>) {
+  const address = parseAddress(String(row.from_address));
+  return address ? foldAddress(address.email) : null;
+}
+
 function foldAddress(value: string) {
   return value.trim().normalize("NFC").toLowerCase();
 }
@@ -415,7 +437,8 @@ type FileCursor = {
   receivedAtMs: number;
   accountId: string;
   messageId: string;
-  position: number;
+  /** The last file listed in the message, or null once it was read through. */
+  position: number | null;
 };
 
 function parseCursor(value: string): FileCursor | null {
@@ -427,7 +450,7 @@ function parseCursor(value: string): FileCursor | null {
       typeof receivedAtMs !== "number" ||
       typeof accountId !== "string" ||
       typeof messageId !== "string" ||
-      typeof position !== "number"
+      (typeof position !== "number" && position !== null)
     )
       return null;
     return { receivedAtMs, accountId, messageId, position };

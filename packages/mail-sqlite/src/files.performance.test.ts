@@ -9,6 +9,9 @@ const MESSAGES = 10_000;
 // One message in four carries files, a heavy mailbox for attachments.
 const FILES_EVERY = 4;
 const BUDGET_MS = 100;
+// One capped scan of messages with files, in batches of 100.
+const MAX_QUERIES_PER_CALL = 21;
+const SCAN_BUDGET_MS = 250;
 
 it("shows the first page of files in under 100 ms on a 10k-message mailbox", async () => {
   const { driver, queries } = recordingDriver();
@@ -24,6 +27,9 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
       for (let i = 0; i < MESSAGES; i++) {
         const accountId = i % 2 ? "b" : "a";
         const files = i % FILES_EVERY === 0;
+        // The only presentation is on the oldest message, so finding it means
+        // passing every other message with files.
+        const deck = i === 0;
         await tx.execute(
           `INSERT INTO effective_messages(account_id,message_id,conversation_id,subject,preview,from_address,to_json,cc_json,received_at_ms,read,starred,label_ids_json,category_ids_json,roles_json,in_inbox,in_sent,in_draft,in_trash,in_spam,has_attachments,pending_operation_ids_json)
            VALUES (?, ?, ?, 'Subject', '', ?, '[]', '[]', ?, 1, 0, '[]', '[]', '["inbox"]', 1, 0, 0, 0, 0, ?, '[]')`,
@@ -47,6 +53,9 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
                     attachment(`logo-${i}.png`, "image/png", true),
                     attachment(`report-${i}.pdf`, "application/pdf"),
                     attachment(`sheet-${i}.xlsx`, "application/octet-stream"),
+                    ...(deck
+                      ? [attachment("launch.pptx", "application/octet-stream")]
+                      : []),
                   ]
                 : [],
             ),
@@ -93,6 +102,31 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
     );
     for (const value of Object.values(medians))
       expect(value).toBeLessThan(BUDGET_MS);
+
+    // A filter almost nothing matches reads a bounded share of the mailbox
+    // per call and hands back where it stopped, rather than holding one read
+    // open across all of it.
+    let after: string | null = null;
+    let calls = 0;
+    const found: string[] = [];
+    do {
+      queries.length = 0;
+      const start = performance.now();
+      const page = await store.readFiles({
+        ...query,
+        kind: "presentation",
+        after,
+      });
+      const elapsed = performance.now() - start;
+      calls += 1;
+      expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES_PER_CALL);
+      expect(elapsed).toBeLessThan(SCAN_BUDGET_MS);
+      found.push(...page.files.map((file) => file.attachment.filename));
+      after = page.nextPage;
+    } while (after && calls < 10);
+    expect(found).toEqual(["launch.pptx"]);
+    expect(after).toBeNull();
+    expect(calls).toBeGreaterThan(1);
 
     // Walks mail with files newest first through its own index, never a
     // sort of the whole mailbox.
