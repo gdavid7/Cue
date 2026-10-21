@@ -526,8 +526,15 @@ test("keeps a held send's draft out of Drafts across a reload, and back once und
   const { emailAccountId, conversations } = await openMail(page);
   const subject = `Playwright Held Draft ${testInfo.retry}-${Date.now()}`;
   const draftInList = conversationWithSubject(page, conversations, subject);
+  // A draft that stays listed shows the list has loaded after the reload.
+  const seededDraft = conversationWithSubject(
+    page,
+    conversations,
+    "Seeded Draft Message",
+  );
   try {
     await openMailboxFromSidebar(page, "Drafts");
+    await expect(seededDraft).toBeVisible({ timeout: 60_000 });
     const dialog = await composeMailboxDraft(page, emailAccountId, subject);
     await expect(draftInList).toBeVisible({ timeout: 60_000 });
     await dialog.getByRole("button", { name: "Send", exact: true }).click();
@@ -540,9 +547,9 @@ test("keeps a held send's draft out of Drafts across a reload, and back once und
       name: "Notifications alt+T",
     });
     const undo = notifications.getByRole("button", { name: /^Undo/ });
-    await expect(undo).toBeVisible({ timeout: 20_000 });
-    await expect(conversations).toBeVisible();
+    await expect(seededDraft).toBeVisible({ timeout: 20_000 });
     await expect(draftInList).toHaveCount(0);
+    await expect(undo).toBeVisible();
     await capturePlaywrightCheckpoint(page, testInfo, "held-send-draft-hidden");
 
     await undo.click();
