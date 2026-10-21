@@ -118,6 +118,10 @@ const featureGroups = [
     ],
   },
   {
+    name: "mail-files",
+    specs: ["mail/files-view.spec.ts"],
+  },
+  {
     name: "mail-reader",
     specs: [
       "mail/reader-visuals.spec.ts",

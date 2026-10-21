@@ -49,6 +49,14 @@ describe("buildMailPath", () => {
       "/mail/u/0/drafts",
     ],
     [
+      {
+        accountIndex: 1,
+        allInboxes: true,
+        view: { kind: "type", type: "files" },
+      },
+      "/mail/u/1/all-inboxes/files",
+    ],
+    [
       { accountIndex: 0, view: { kind: "type", type: "inbox" } },
       "/mail/u/0/inbox",
     ],
@@ -97,6 +105,11 @@ describe("parseMailPath", () => {
     const urls: MailUrl[] = [
       { accountIndex: 0, view: { kind: "inbox" } },
       { accountIndex: 3, view: { kind: "type", type: "trash" } },
+      {
+        accountIndex: 0,
+        view: { kind: "type", type: "files" },
+        threadId: "t3",
+      },
       { accountIndex: 0, view: { kind: "type", type: "CATEGORY_UPDATES" } },
       { accountIndex: 0, view: { kind: "type", type: "some_new_type" } },
       { accountIndex: 0, view: { kind: "split", slug: "reading" } },

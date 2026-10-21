@@ -363,6 +363,13 @@
     "utils/attachments/docx-frame.ts",
     "utils/attachments/office-package.ts"
   ],
+  "files-view.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/FilesView.tsx",
+    "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
+    "components/email-list/EmailAttachments.tsx",
+    "utils/attachments/download.ts",
+    "utils/mail-url.ts"
+  ],
   "pre-send-check.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
     "app/(app)/[emailAccountId]/compose/PreSendConfirmation.tsx",
