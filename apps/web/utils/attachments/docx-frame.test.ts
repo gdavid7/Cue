@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { renderAsync } from "docx-preview";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFrameElementFactory,
   DOCX_RENDER_OPTIONS,
@@ -62,6 +62,13 @@ describe("createFrameElementFactory", () => {
 });
 
 describe("rendering a hostile document", () => {
+  // docx-preview sizes VML drawings with getBBox, which jsdom lacks.
+  beforeAll(() => {
+    Object.assign(SVGElement.prototype, {
+      getBBox: () => ({ x: 0, y: 0, width: 0, height: 0 }),
+    });
+  });
+
   // External hyperlink, remote and missing images, and an altChunk page with
   // a remote image, @import and script.
   it("keeps every remote reference out of the rendered frame", async () => {
@@ -86,7 +93,12 @@ describe("rendering a hostile document", () => {
     );
     for (const img of body.querySelectorAll("img"))
       expect(img.getAttribute("src")).toBeNull();
-    expect(frameDoc.documentElement.innerHTML).not.toContain("tracker.invalid");
+    // The VML shape's inline background URL is left to the frame's CSP.
+    for (const element of frameDoc.querySelectorAll("[src], [href]"))
+      for (const name of ["src", "href"])
+        expect(element.getAttribute(name) ?? "").not.toContain(
+          "tracker.invalid",
+        );
     expect(body.querySelector("a")?.getAttribute("href")).toBe(
       "https://phish.invalid/login",
     );
@@ -113,6 +125,19 @@ describe("handleFrameLinkClick", () => {
     const { event, open } = clickLink(href);
     expect(event.defaultPrevented).toBe(true);
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("still finds a bookmark whose name isn't valid percent-encoding", () => {
+    const target = document.createElement("span");
+    target.id = "50%off";
+    target.scrollIntoView = vi.fn();
+    document.body.append(target);
+
+    const { event } = clickLink("#50%off");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(target.scrollIntoView).toHaveBeenCalled();
+    target.remove();
   });
 
   it("scrolls to a bookmark in the document", () => {

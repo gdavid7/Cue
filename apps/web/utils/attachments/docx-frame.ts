@@ -23,14 +23,18 @@ export const DOCX_RENDER_OPTIONS = {
   renderFooters: true,
 };
 
-/** Elements a Word document has no business putting in the preview. */
+/**
+ * Elements a Word document has no business putting in the preview. Defence in
+ * depth: the frame's sandbox and CSP already stop them running or loading.
+ */
 const BLOCKED_TAGS = new Set(["iframe", "frame", "object", "embed", "script"]);
 
 /**
  * docx-preview's element factory, building in the frame's own document so
- * every load is governed by the frame's CSP, never this page's. An image only
- * ever gets an embedded data: source: docx-preview sets `null` for a missing
- * or external part, which would otherwise request "<app>/null".
+ * every load is governed by the frame's CSP, never this page's; the CSP is
+ * what blocks remote loads. As defence in depth an image only ever takes a
+ * data: source, which also keeps the `null` docx-preview sets for a missing
+ * or external part from becoming a request for "null".
  */
 export function createFrameElementFactory(doc: Document) {
   const h = (elem: HElement | Node | string): Node => {
@@ -81,13 +85,22 @@ export function handleFrameLinkClick(
   event.preventDefault();
   const href = link.getAttribute("href") ?? "";
   if (href.startsWith("#")) {
-    const id = decodeURIComponent(href.slice(1));
+    const id = decodeBookmark(href.slice(1));
     const doc = link.ownerDocument;
     (doc.getElementById(id) ?? doc.getElementsByName(id)[0])?.scrollIntoView();
     return;
   }
   const url = parseExternalUrl(href);
   if (url) open(url);
+}
+
+function decodeBookmark(id: string) {
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    // A malformed escape like "%E0%A4%A"; look the name up as written.
+    return id;
+  }
 }
 
 function parseExternalUrl(href: string) {

@@ -10,8 +10,9 @@ const FIXTURES = "__tests__/playwright/emulated/mail/fixtures";
 const DOCX = "planning-notes.docx";
 const XLSX = "team-budget.xlsx";
 const PPTX = "launch-deck.pptx";
-// An external hyperlink, remote and missing images, and an altChunk HTML page
-// with a remote image, @import and script.
+// An external hyperlink, a javascript: link, a bookmark link, remote and
+// missing images, a VML shape with a remote background, and an altChunk HTML
+// page with a remote image, @import and script.
 const HOSTILE = "hostile.docx";
 const WORD_TYPE =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -97,11 +98,26 @@ test("keeps a hostile Word document from loading or navigating anything", async 
   await expect(
     document.getByText("Hostile document", { exact: true }),
   ).toBeVisible();
-  expect(
-    await frame.evaluate(
+  const frameUrl = () =>
+    frame.evaluate(
       (element: HTMLIFrameElement) => element.contentWindow?.location.href,
-    ),
-  ).toBe("about:srcdoc");
+    );
+  expect(await frameUrl()).toBe("about:srcdoc");
+
+  // A javascript: link neither runs, nor opens anything, nor navigates.
+  const dialogs: string[] = [];
+  page.on("dialog", (shown) => {
+    dialogs.push(shown.message());
+    shown.dismiss().catch(() => undefined);
+  });
+  const pagesBefore = context.pages().length;
+  await document.getByText("Run the script").click();
+  // A bookmark link stays inside the document.
+  await document.getByText("Jump to the end").click();
+  await expect(document.getByText("End of hostile document")).toBeInViewport();
+  expect(await frameUrl()).toBe("about:srcdoc");
+  expect(context.pages()).toHaveLength(pagesBefore);
+  expect(dialogs).toEqual([]);
 
   // Give any late image or stylesheet load time to show up.
   await page.waitForTimeout(1000);

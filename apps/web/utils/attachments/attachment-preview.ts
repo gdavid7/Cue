@@ -1,4 +1,4 @@
-import { unzipSync } from "fflate";
+import { readOfficePackage } from "@/utils/attachments/office-package";
 
 const rasterTypes = new Set([
   "image/png",
@@ -12,16 +12,8 @@ const DOCX_MIME_TYPE =
 const XLSX_MIME_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const ZIP_SIGNATURE = [80, 75, 3, 4];
-/**
- * Office renderers parse on the page, so a hostile package (a zip bomb, or
- * just an enormous workbook) must be turned away before it is unpacked.
- */
+/** Office renderers parse on the page, so their input is kept small. */
 export const OFFICE_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
-const OFFICE_MAX_UNPACKED_BYTES = 100 * 1024 * 1024;
-const OFFICE_MAX_ENTRIES = 5000;
-// Office XML compresses about 10-20x; far beyond that is a bomb.
-const OFFICE_MAX_RATIO = 200;
-const OFFICE_RATIO_FLOOR_BYTES = 1024 * 1024;
 // Bounds the RGBA buffer a sender can make us allocate (~100 MB).
 const MAX_TIFF_PIXELS = 25_000_000;
 
@@ -80,6 +72,7 @@ export type AttachmentPreviewTarget =
 export async function getAttachmentPreviewTarget(
   blob: Blob,
   attachment: { mimeType: string; filename: string },
+  signal?: AbortSignal,
 ): Promise<AttachmentPreviewTarget | undefined> {
   const file = await getAttachmentPreview(blob);
   if (file) return { kind: "file", file };
@@ -88,40 +81,18 @@ export async function getAttachmentPreviewTarget(
   const header = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
   if (!matches(header, ZIP_SIGNATURE)) return;
   if (blob.size > OFFICE_PREVIEW_MAX_BYTES) return { kind: "tooLarge" };
-  const fits = isSafeToUnpack(new Uint8Array(await blob.arrayBuffer()));
-  return fits ? { kind: office, file: blob } : { kind: "tooLarge" };
-}
-
-/**
- * Reads only the zip's central directory (nothing is inflated) and checks the
- * sizes it declares. Undeclared growth is still possible in theory, but the
- * renderers decompress against these same entries.
- */
-export function isSafeToUnpack(bytes: Uint8Array) {
-  let entries = 0;
-  let unpacked = 0;
-  let bomb = false;
-  try {
-    unzipSync(bytes, {
-      filter: ({ size, originalSize }) => {
-        entries++;
-        unpacked += originalSize;
-        if (
-          originalSize > OFFICE_RATIO_FLOOR_BYTES &&
-          originalSize > Math.max(size, 1) * OFFICE_MAX_RATIO
-        )
-          bomb = true;
-        return false;
-      },
-    });
-  } catch {
-    return false;
-  }
-  return (
-    !bomb &&
-    entries <= OFFICE_MAX_ENTRIES &&
-    unpacked <= OFFICE_MAX_UNPACKED_BYTES
+  const read = await readOfficePackage(
+    new Uint8Array(await blob.arrayBuffer()),
+    signal,
   );
+  if ("refused" in read)
+    return read.refused === "tooLarge" ? { kind: "tooLarge" } : undefined;
+  // The renderers get the counted, repacked bytes, never the original zip.
+  // zipSync allocates a plain ArrayBuffer, never a shared one.
+  return {
+    kind: office,
+    file: new Blob([read.package as Uint8Array<ArrayBuffer>]),
+  };
 }
 
 export async function getAttachmentPreview(

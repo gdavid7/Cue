@@ -246,10 +246,11 @@ function AttachmentPreviewDialogContent({
       maxBytes,
     })
       .then(async (blob) => {
-        const target = await getAttachmentPreviewTarget(blob, {
-          mimeType,
-          filename,
-        });
+        const target = await getAttachmentPreviewTarget(
+          blob,
+          { mimeType, filename },
+          controller.signal,
+        );
         if (controller.signal.aborted) return;
         setFile(blob);
         if (!target) {

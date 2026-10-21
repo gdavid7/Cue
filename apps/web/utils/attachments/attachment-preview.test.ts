@@ -1,4 +1,4 @@
-import { zipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
 import { encodeImage } from "utif2";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,7 +6,6 @@ import {
   getAttachmentPreview,
   getAttachmentPreviewTarget,
   isPreviewableAttachment,
-  isSafeToUnpack,
   OFFICE_PREVIEW_MAX_BYTES,
   isPreviewableImageType,
 } from "./attachment-preview";
@@ -235,20 +234,12 @@ describe("attachment preview routing", () => {
     const bomb = zipSync({
       "word/document.xml": new Uint8Array(2 * 1024 * 1024),
     });
-    expect(isSafeToUnpack(bomb)).toBe(false);
     expect(
       await getAttachmentPreviewTarget(new Blob([bomb]), {
         mimeType: DOCX,
         filename: "bomb.docx",
       }),
     ).toEqual({ kind: "tooLarge" });
-  });
-
-  it("refuses a package with an absurd number of parts", () => {
-    const parts: Record<string, Uint8Array> = {};
-    for (let index = 0; index < 5001; index++)
-      parts[`xl/part${index}.xml`] = new Uint8Array(0);
-    expect(isSafeToUnpack(zipSync(parts))).toBe(false);
   });
 
   it("refuses a file over the Office preview cap without unpacking it", async () => {
@@ -264,7 +255,26 @@ describe("attachment preview routing", () => {
     ).toEqual({ kind: "tooLarge" });
   });
 
-  it("refuses a file that only starts like a zip", () => {
-    expect(isSafeToUnpack(new Uint8Array([80, 75, 3, 4, 1, 2, 3]))).toBe(false);
+  it("has no preview for a file that only starts like a zip", async () => {
+    expect(
+      await getAttachmentPreviewTarget(
+        new Blob([new Uint8Array([80, 75, 3, 4, 1, 2, 3])]),
+        { mimeType: DOCX, filename: "broken.docx" },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("hands the renderer the repacked parts, not the original zip", async () => {
+    const original = zip();
+    const target = await getAttachmentPreviewTarget(original, {
+      mimeType: DOCX,
+      filename: "notes.docx",
+    });
+    if (!target || !("file" in target)) throw new Error("no preview");
+    const repacked = unzipSync(new Uint8Array(await target.file.arrayBuffer()));
+    expect(repacked).toEqual(
+      unzipSync(new Uint8Array(await original.arrayBuffer())),
+    );
+    expect(target.file).not.toBe(original);
   });
 });

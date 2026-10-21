@@ -69,7 +69,7 @@ test("springs a row back when the swipe stops short", async ({ page }) => {
 test("swipes a row right to flip its read state", async ({
   page,
 }, testInfo) => {
-  const { conversations } = await openMail(page);
+  const { conversations, emailAccountId } = await openMail(page);
   const row = conversationWithSubject(page, conversations, SUBJECT);
   await expect(row).toBeVisible();
   const wasUnread = await isUnread(row);
@@ -82,12 +82,16 @@ test("swipes a row right to flip its read state", async ({
   await capturePlaywrightCheckpoint(page, testInfo, "swipe-read-armed");
   await swipe.end();
   await expect.poll(() => isUnread(row)).toBe(!wasUnread);
+  // The keyboard's and toolbar's read-state command, settled before the row
+  // is swiped back, so the second swipe reads the mailbox's settled state.
+  await expectReadState(page, emailAccountId, wasUnread);
   await expect(page.locator("[data-swiping]")).toHaveCount(0);
 
   // And back, leaving the shared mailbox as it was.
   swipe = await touchSwipe(page, row, { from: "left" });
   await swipe.moveBy(200);
   await swipe.end();
+  await expectReadState(page, emailAccountId, !wasUnread);
   await expect.poll(() => isUnread(row)).toBe(wasUnread);
 });
 
@@ -184,6 +188,25 @@ async function expectMutation(
           emailAccountId,
           kind,
           threadId: THREAD,
+        }),
+      { timeout: 60_000 },
+    )
+    .toMatchObject({ status: "succeeded" });
+}
+
+async function expectReadState(
+  page: Page,
+  emailAccountId: string,
+  read: boolean,
+) {
+  await expect
+    .poll(
+      () =>
+        readLatestMailMutation(page, {
+          emailAccountId,
+          kind: "set_read_state",
+          threadId: THREAD,
+          payload: { read },
         }),
       { timeout: 60_000 },
     )

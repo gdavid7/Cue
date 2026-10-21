@@ -43,7 +43,9 @@ export default function DocxAttachmentPreview({
       handleFrameLinkClick(event, (url) =>
         window.open(url, "_blank", "noopener,noreferrer"),
       );
+    // auxclick is a middle click, which would open the link on its own.
     doc.addEventListener("click", onClick);
+    doc.addEventListener("auxclick", onClick);
     renderAsync(file, body, styles, {
       ...DOCX_RENDER_OPTIONS,
       h: createFrameElementFactory(doc),
@@ -58,6 +60,7 @@ export default function DocxAttachmentPreview({
     return () => {
       cancelled = true;
       doc.removeEventListener("click", onClick);
+      doc.removeEventListener("auxclick", onClick);
       styles.replaceChildren();
       body.replaceChildren();
     };
