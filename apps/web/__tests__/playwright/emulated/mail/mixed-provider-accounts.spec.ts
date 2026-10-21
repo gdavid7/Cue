@@ -108,6 +108,27 @@ test("Today across a Gmail and an Outlook account names each one's mail, drafts 
     ).toBeVisible();
   }
 
+  // TEMP diagnostics for the Outlook calendar in CI.
+  const diag = await withClient(async (client) => {
+    const rows = await client.query(
+      `SELECT c.id, c.provider, c."isConnected", c."expiresAt", c."accessToken",
+         (SELECT json_agg(json_build_object('calendarId', k."calendarId", 'enabled', k."isEnabled")) FROM "Calendar" k WHERE k."connectionId" = c.id) AS calendars
+       FROM "CalendarConnection" c WHERE c."emailAccountId" = $1`,
+      [outlook.id],
+    );
+    return rows.rows;
+  });
+  for (const row of diag) {
+    const { accessToken, ...rest } = row;
+    const base = process.env.MICROSOFT_BASE_URL;
+    const start = new Date().toISOString();
+    const end = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    const res = await page.request.get(
+      `${base}/v1.0/me/calendar/calendarView?startDateTime=${start}&endDateTime=${end}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    console.log("MA5DIAG", JSON.stringify(rest), base, res.status(), (await res.text()).slice(0, 400));
+  }
   // Each calendar's meeting says whose calendar it's on.
   const nextUp = page.getByRole("region", { name: "Next up" });
   await expect(nextUp.getByText(gmail.email)).toBeVisible({ timeout: 90_000 });
