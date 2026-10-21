@@ -16,9 +16,11 @@ import { useSetAtom } from "jotai";
 import type { KeyedMutator } from "swr";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { CheckIcon, FlagIcon, MailSearchIcon, PauseIcon } from "lucide-react";
+import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -32,6 +34,7 @@ import { toastError, toastSuccess, undoLatestToast } from "@/components/Toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
+import { useAccounts } from "@/hooks/useAccounts";
 import { useHome } from "@/hooks/useHome";
 import {
   ALSO_IN_INBOX_LIMIT,
@@ -63,6 +66,8 @@ import {
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatTime } from "./today-format";
+import { GetStartedChecklist } from "./GetStartedChecklist";
+import { TodayWeather } from "./TodayWeather";
 import {
   type TodayRowCorrection,
   type TodayRowHandlers,
@@ -82,7 +87,8 @@ const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
  * shortcuts and undo, through the same mail engine commands.
  */
 export function HomeDashboard() {
-  const { emailAccountId, emailAccount, accountIds } = useAccount();
+  const { emailAccountId, accountIds } = useAccount();
+  const { data: accountsData } = useAccounts();
   // Set on Today across accounts, which shows every account in All inboxes
   // as one account's Today shows it.
   const allInboxesAccounts = useTodayAccounts();
@@ -107,7 +113,7 @@ export function HomeDashboard() {
     [allInboxesAccounts],
   );
   const greetingText = useGreeting();
-  const firstName = (emailAccount?.name || "").split(" ")[0];
+  const firstName = getUserFirstName(accountsData?.emailAccounts);
   const mailHref = useMailHref();
   const router = useRouter();
   const isLargeScreen = useIsLargeScreen();
@@ -405,6 +411,7 @@ export function HomeDashboard() {
     if (!target) return;
     const id = rowKey(target);
     setMailCommandContext({
+      account: target.account?.email,
       actions: {
         archive: () => handlers.archive(id),
         moveToInbox: target.inInbox
@@ -478,10 +485,13 @@ export function HomeDashboard() {
       tabIndex={-1}
     >
       <header>
-        <PageHeading>
-          {greetingText}
-          {firstName ? `, ${firstName}` : ""}
-        </PageHeading>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <PageHeading>
+            {greetingText}
+            {firstName ? `, ${firstName}` : ""}
+          </PageHeading>
+          <TodayWeather />
+        </div>
         {earlierDay ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
             {refreshFailed
@@ -494,6 +504,8 @@ export function HomeDashboard() {
           </p>
         ) : null}
       </header>
+
+      <GetStartedChecklist />
 
       <LoadingContent
         hasData={Boolean(data)}
@@ -689,6 +701,13 @@ function HomeLanes({
           <div className="-mx-4 sm:mx-0 border-border/60 border-t">
             {[...drafts, ...otherTasks].map((task) => (
               <TaskRow
+                accountColorClassName={
+                  task.account
+                    ? getAccountColorClassName(
+                        accountColorIndexById[task.account.id] ?? 0,
+                      )
+                    : undefined
+                }
                 href={threadHref(task)}
                 key={`${task.account?.id ?? ""}:${task.id}`}
                 task={task}
@@ -886,7 +905,16 @@ function ThreadList({
   );
 }
 
-function TaskRow({ task, href }: { task: TodayAgentTask; href: string }) {
+function TaskRow({
+  task,
+  href,
+  accountColorClassName,
+}: {
+  task: TodayAgentTask;
+  href: string;
+  /** Across accounts: the color of the marker naming the task's account. */
+  accountColorClassName?: string;
+}) {
   return (
     <Link
       // Text starts where the lanes' rows put it, past their unread-dot slot.
@@ -894,8 +922,17 @@ function TaskRow({ task, href }: { task: TodayAgentTask; href: string }) {
       href={href}
     >
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-foreground text-sm">
-          {task.title}
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Where the inbox row puts it: just before the subject. */}
+          {task.account ? (
+            <AccountMarker
+              account={task.account}
+              colorClassName={accountColorClassName}
+            />
+          ) : null}
+          <span className="truncate font-medium text-foreground text-sm">
+            {task.title}
+          </span>
         </div>
         <div className="truncate text-muted-foreground text-xs">
           {task.detail}
@@ -958,6 +995,24 @@ function useGreeting() {
     );
   }, []);
   return text;
+}
+
+/**
+ * The user's own first name: their profile's, or, without one, the name on
+ * their own mailbox. Never another mailbox's display name, which can be a
+ * team's or a shared inbox's, and never an address.
+ */
+function getUserFirstName(
+  emailAccounts: GetEmailAccountsResponse["emailAccounts"] | undefined,
+) {
+  const user = emailAccounts?.[0]?.user;
+  if (!user) return "";
+  const ownMailbox = emailAccounts.find(
+    (account) => account.email.toLowerCase() === user.email.toLowerCase(),
+  );
+  const name = (user.name || ownMailbox?.name || "").trim();
+  if (name.includes("@")) return "";
+  return name.split(/\s+/)[0] ?? "";
 }
 
 /** Lists are capped, so a full one reads "10+", and an empty one shows no pill. */

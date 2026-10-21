@@ -16,7 +16,8 @@ export const GET = withEmailProvider(
     const home = await getHomeData({
       emailAccountId,
       userEmail: request.auth.email,
-      ownAddresses: await ownAddresses({
+      // Only Next up needs them, late: they load alongside Today's reads.
+      ownAddresses: ownAddresses({
         userId,
         email: request.auth.email,
         logger: request.logger,

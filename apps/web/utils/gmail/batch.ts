@@ -14,10 +14,17 @@ import {
   withGmailInflightSlot,
 } from "@/utils/gmail/inflight";
 import { isRetryableError } from "@/utils/gmail/retry";
+import { timeRequestDependency } from "@/utils/request-metrics";
 
 const logger = createScopedLogger("gmail/batch");
 
 const BATCH_LIMIT = 100;
+// Sync pages measured 12-22s, mostly this fetch, and a timeout rejects the whole
+// getBatch (discarding loaded chunks), so sync-priority 100-item batches need
+// room. On 30s-maxDuration routes the platform limit fires first (interactive
+// batches are small). getBatch does not retry the timeout itself; only callers
+// wrapped in withGmailRetry do, so it surfaces as an error rather than hanging.
+export const GMAIL_BATCH_FETCH_TIMEOUT_MS = 45_000;
 
 // Uses Gmail batch API to get multiple responses in one request
 // https://developers.google.com/gmail/api/guides/batch
@@ -67,22 +74,24 @@ async function sendBatch(
   });
   const { textRes, contentType } = await withGmailInflightSlot(
     { emailAccountId, priority: ticket.priority, weight: ids.length },
-    async () => {
-      const res = await fetch(getGoogleGmailBatchUrl(), {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "multipart/mixed; boundary=batch_boundary",
-          "Accept-Encoding": "gzip",
-          "User-Agent": "Cue (gzip)",
-        },
-        body: batchRequestBody,
-      });
-      return {
-        textRes: await res.text(),
-        contentType: res.headers.get("Content-Type"),
-      };
-    },
+    () =>
+      timeRequestDependency("gmailBatch", async () => {
+        const res = await fetch(getGoogleGmailBatchUrl(), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "multipart/mixed; boundary=batch_boundary",
+            "Accept-Encoding": "gzip",
+            "User-Agent": "Cue (gzip)",
+          },
+          body: batchRequestBody,
+          signal: AbortSignal.timeout(GMAIL_BATCH_FETCH_TIMEOUT_MS),
+        });
+        return {
+          textRes: await res.text(),
+          contentType: res.headers.get("Content-Type"),
+        };
+      }),
   );
 
   const batch = parseBatchResponse(textRes, contentType);

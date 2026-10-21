@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { getDefaultStore } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Command } from "@/lib/commands/types";
 import type { ShortcutHandlers } from "@/lib/shortcuts/registry";
 import { CommandK } from "./CommandK";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
@@ -63,8 +71,15 @@ vi.mock("@/providers/ComposeModalProvider", () => ({
   useComposeModal: () => ({ onOpen: vi.fn() }),
 }));
 vi.mock("@/components/Toast", () => ({ toastError: notifications.error }));
+const palette = vi.hoisted(() => ({
+  commands: [] as Command[],
+  mailCommands: [] as Command[],
+}));
 vi.mock("@/hooks/useCommandPaletteCommands", () => ({
-  useCommandPaletteCommands: () => ({ commands: [], isLoading: false }),
+  useCommandPaletteCommands: () => ({
+    commands: palette.commands,
+    isLoading: false,
+  }),
 }));
 vi.mock("@/lib/shortcuts/useShortcuts", () => ({
   useShortcuts: (handlers: ShortcutHandlers) => {
@@ -79,7 +94,7 @@ vi.mock("@/lib/shortcuts/registry", () => ({
   MAIL_SHORTCUT_SCOPES: [],
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/mail-command-palette", () => ({
-  buildMailCommandPalette: () => [],
+  buildMailCommandPalette: () => palette.mailCommands,
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ShortcutsDialog", () => ({
   ShortcutsDialog: () => null,
@@ -94,7 +109,17 @@ vi.mock("@/hooks/useSnoozeDateParser", () => ({
 vi.mock("@/components/ui/command", () => ({
   CommandDialog: ({ children }: { children: React.ReactNode }) => children,
   CommandEmpty: () => null,
-  CommandGroup: ({ children }: { children: React.ReactNode }) => children,
+  CommandGroup: ({
+    children,
+    heading,
+  }: {
+    children: React.ReactNode;
+    heading: string;
+  }) => (
+    <div aria-label={heading} role="group">
+      {children}
+    </div>
+  ),
   CommandInput: () => null,
   CommandItem: ({ children }: { children: React.ReactNode }) => children,
   CommandList: ({ children }: { children: React.ReactNode }) => children,
@@ -281,5 +306,57 @@ describe("CommandK snooze date parser", () => {
     render(<CommandK />);
 
     expect(vi.mocked(useSnoozeDateParser)).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe("CommandK across accounts", () => {
+  afterEach(() => {
+    cleanup();
+    const store = getDefaultStore();
+    store.set(commandPaletteOpenAtom, false);
+    store.set(mailCommandContextAtom, null);
+    palette.commands = [];
+    palette.mailCommands = [];
+  });
+
+  it("says which account the selected mail's actions run in", () => {
+    displayedEmail.threadId = null;
+    palette.mailCommands = [
+      { id: "archive", label: "Archive", section: "actions", action: vi.fn() },
+    ];
+    const store = getDefaultStore();
+    store.set(mailCommandContextAtom, {
+      account: "b@example.com",
+      actions: { archive: vi.fn() },
+      hasRead: false,
+      hasUnread: true,
+      targetCount: 1,
+    });
+
+    render(<CommandK />);
+
+    const actions = screen.getByRole("group", {
+      name: "Actions · b@example.com",
+    });
+    expect(within(actions).getByText("Archive")).toBeTruthy();
+  });
+
+  it("names the account an account's own page opens in", () => {
+    displayedEmail.threadId = null;
+    palette.commands = [
+      {
+        id: "nav-rules",
+        label: "Go to Rules",
+        account: "a@example.com",
+        section: "navigation",
+        action: vi.fn(),
+      },
+    ];
+
+    render(<CommandK />);
+
+    const navigation = screen.getByRole("group", { name: "Navigation" });
+    expect(within(navigation).getByText("Go to Rules")).toBeTruthy();
+    expect(within(navigation).getByText("a@example.com")).toBeTruthy();
   });
 });

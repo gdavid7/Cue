@@ -98,6 +98,9 @@ export async function createBrowserMailEngine(
     releasePrewarmedMailEngineWorker();
     await finishPendingLocalMailboxWipe();
     if (isLocalMailboxWipePending()) {
+      logger.warn(
+        "A pending sign-out wipe could not finish; the mail engine stays unavailable",
+      );
       throw new Error("The signed-out mailbox could not be wiped");
     }
   }
@@ -328,6 +331,8 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "queryContactSuggestions", [query]),
     searchMessages: (query) =>
       callWorker(worker, pending, "searchMessages", [query]),
+    queryPersonCard: (query) =>
+      callWorker(worker, pending, "queryPersonCard", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),
     observeMailboxCounts: (query) => observe("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

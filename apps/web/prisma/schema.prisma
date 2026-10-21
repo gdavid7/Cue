@@ -98,6 +98,9 @@ model User {
   aiApiKey             String?
   decisionModelEnabled Boolean? // null follows DEFAULT_DECISION_MODEL_ENABLED
   webhookSecret        String?
+  // Today's weather, which the user turned on: { latitude, longitude, label? },
+  // rounded to about 10 km. Null is off. Never inferred from IP or mail.
+  todayWeather         Json?
 
   // referral system
   referralCode String? @unique // User's own referral code

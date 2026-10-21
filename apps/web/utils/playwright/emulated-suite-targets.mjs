@@ -12,6 +12,7 @@ const featureGroups = [
     providers: ["google", "microsoft"],
     specs: [
       "onboarding/first-run.spec.ts",
+      "onboarding/get-started.spec.ts",
       "attachments/attachment-onboarding.spec.ts",
     ],
   },
@@ -81,6 +82,7 @@ const featureGroups = [
       "mail/draft-send-recovery.spec.ts",
       "mail/draft-deletion.spec.ts",
       "mail/attachment-previews.spec.ts",
+      "mail/office-attachment-previews.spec.ts",
     ],
   },
   {
@@ -113,6 +115,7 @@ const featureGroups = [
       "mail/reader-visuals.spec.ts",
       "mail/thread-states.spec.ts",
       "mail/reader-transition.spec.ts",
+      "mail/person-card.spec.ts",
     ],
   },
   {
@@ -122,6 +125,7 @@ const featureGroups = [
       "mail/triage-actions.spec.ts",
       "mail/assistant-catch-up.spec.ts",
       "mail/starring.spec.ts",
+      "mail/swipe-actions.spec.ts",
     ],
   },
   {
@@ -148,6 +152,7 @@ const featureGroups = [
       "mail/today.spec.ts",
       "mail/today-all-accounts.spec.ts",
       "mail/today-inbox-switch.spec.ts",
+      "mail/today-quiet.spec.ts",
       "mail/all-inboxes-context.spec.ts",
     ],
   },

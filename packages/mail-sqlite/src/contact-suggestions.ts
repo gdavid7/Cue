@@ -237,7 +237,7 @@ export async function readContactSuggestions(
   }));
 }
 
-function parseAddress(address: string) {
+export function parseAddress(address: string) {
   const match = address.trim().match(/^(.*?)<([^<>]+)>\s*$/u);
   const email = (match?.[2] ?? address).trim().toLowerCase();
   if (!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/u.test(email)) return null;
@@ -247,7 +247,7 @@ function parseAddress(address: string) {
   };
 }
 
-function isAutomatedAddress(email: string) {
+export function isAutomatedAddress(email: string) {
   const local = email.split("@")[0];
   return (
     /^(?:notifications|mailer-daemon|postmaster|bounce)(?:[+._-]|$)/i.test(

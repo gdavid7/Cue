@@ -5,12 +5,8 @@ import prisma from "@/utils/__mocks__/prisma";
 import { DELETE } from "./route";
 
 const authMock = vi.hoisted(() => vi.fn());
-const getEmailAccountMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/utils/auth", () => ({ auth: authMock }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: getEmailAccountMock,
-}));
 vi.mock("@/utils/prisma");
 
 const emailAccountId = "account-1";
@@ -19,7 +15,11 @@ describe("DELETE /api/user/scheduled-emails/[id]/reminder", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    getEmailAccountMock.mockResolvedValue("developer@example.com");
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "developer@example.com",
+      account: { provider: "google" },
+    } as never);
   });
 
   it("rejects a request without a session", async () => {

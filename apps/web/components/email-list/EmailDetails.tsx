@@ -1,4 +1,10 @@
+import { PersonCardTrigger } from "@/components/person-card/PersonCard";
 import type { ThreadMessage } from "@/components/email-list/types";
+import {
+  extractEmailAddress,
+  extractNameFromEmail,
+  splitRecipientList,
+} from "@/utils/email";
 
 export function EmailDetails({ message }: { message: ThreadMessage }) {
   const headers = message.headers;
@@ -21,7 +27,20 @@ export function EmailDetails({ message }: { message: ThreadMessage }) {
                 className="grid grid-cols-[3rem_minmax(0,1fr)] gap-2"
               >
                 <span className="text-muted-foreground">{label}</span>
-                <span className="break-words text-foreground">{value}</span>
+                <span className="break-words text-foreground">
+                  {splitRecipientList(value).map((participant, index) => (
+                    <span key={`${index}:${participant}`}>
+                      {index > 0 && ", "}
+                      <PersonCardTrigger
+                        className="inline break-words hover:underline"
+                        email={extractEmailAddress(participant)}
+                        name={extractNameFromEmail(participant)}
+                      >
+                        {participant}
+                      </PersonCardTrigger>
+                    </span>
+                  ))}
+                </span>
               </div>
             ),
         )}

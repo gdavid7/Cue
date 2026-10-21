@@ -140,3 +140,17 @@ declare global {
     __inboxZeroMailMaxPendingOperations?: number;
   }
 }
+
+const UNSUPPORTED_METHOD = "unsupported method";
+
+/** What an engine answers when asked for a method it doesn't have. */
+export function unsupportedMethodMessage(method: string) {
+  return `${UNSUPPORTED_METHOD} ${method}`;
+}
+
+// A tab that relays to another tab's engine can reach one too old to answer.
+export function isUnsupportedMethodError(error: unknown) {
+  return (
+    error instanceof Error && error.message.startsWith(`${UNSUPPORTED_METHOD} `)
+  );
+}

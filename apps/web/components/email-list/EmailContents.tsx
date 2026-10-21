@@ -29,7 +29,7 @@ import {
   getAttachmentUrl,
 } from "@/utils/attachments/download";
 import { queueAttachmentDownload } from "@/utils/attachments/download-queue";
-import { getAttachmentImagePreview } from "@/utils/attachments/image-preview";
+import { getAttachmentImagePreview } from "@/utils/attachments/attachment-preview";
 import { useDarkEmailMode } from "@/hooks/useDarkEmailMode";
 
 const NO_INLINE_ATTACHMENTS: ParsedMessage["inline"] = [];

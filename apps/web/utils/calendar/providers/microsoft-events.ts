@@ -29,6 +29,7 @@ const MICROSOFT_TEAMS_PROVIDER = "teamsForBusiness";
 
 export interface MicrosoftCalendarConnectionParams {
   accessToken: string | null;
+  calendarEmail?: string;
   /** Calendars to read events from; the default calendar when empty. */
   calendarIds?: string[];
   emailAccountId: string;
@@ -75,9 +76,11 @@ type MicrosoftOnlineMeetingFields = {
 export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
   private readonly connection: MicrosoftCalendarConnectionParams;
   private readonly logger: Logger;
+  readonly calendarEmail?: string;
 
   constructor(connection: MicrosoftCalendarConnectionParams, logger: Logger) {
     this.connection = connection;
+    this.calendarEmail = connection.calendarEmail;
     this.logger = logger;
   }
 
@@ -174,9 +177,11 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
           // calendarView returns events overlapping the range, unlike /events
           const response = await client
             .api(path)
+            // A zoned date (TZDate) prints its offset, and Graph reads the
+            // query's unencoded "+" as a space, so always send UTC.
             .query({
-              startDateTime: timeMin.toISOString(),
-              endDateTime: timeMax.toISOString(),
+              startDateTime: new Date(timeMin.getTime()).toISOString(),
+              endDateTime: new Date(timeMax.getTime()).toISOString(),
             })
             .top(top)
             .orderby("start/dateTime")

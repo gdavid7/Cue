@@ -130,6 +130,133 @@ describe("useCombinedMailThreads", () => {
   });
 });
 
+describe("useCombinedMailThreads merged mailboxes", () => {
+  afterEach(() => {
+    cleanup();
+    liveSubscriptions.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["sent", "sent"],
+    ["starred", "starred"],
+  ] as const)("reads %s from every included account in place of the inbox, ahead of the open tab", async (mailboxType, mailbox) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const engine = fakeEngine(
+      mailboxSnapshot({
+        conversations: [
+          conversation("outlook", "o-1"),
+          conversation("gmail", "g-1"),
+        ],
+        coverage: [coverage("gmail", 10), coverage("outlook", 20)],
+      }),
+    );
+
+    const { result } = renderHook(
+      () =>
+        useCombinedMailThreads({
+          accounts: [GMAIL, OUTLOOK],
+          emailAccountId: "gmail",
+          enabled: true,
+          // The inbox's unread tab and label tab don't narrow another mailbox.
+          isUnread: true,
+          labelNames: ["Customers"],
+          mailboxType,
+        }),
+      { wrapper: engine.wrapper },
+    );
+
+    expect(engine.client.observeMailbox).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        accountIds: ["gmail", "outlook"],
+        predicate: { kind: "mailbox", mailbox },
+      }),
+    );
+    expect(
+      result.current.threads.map((thread) => [
+        thread.id,
+        (thread as { account?: { email: string } }).account?.email,
+      ]),
+    ).toEqual([
+      ["o-1", OUTLOOK.email],
+      ["g-1", GMAIL.email],
+    ]);
+    // Only Drafts reads the sends that hide their drafts.
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves out each account's drafts that a waiting send stands in for, read as that account", async () => {
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const accountId = new Headers(init?.headers).get("X-Email-Account-ID");
+      return Response.json({
+        scheduledEmails:
+          accountId === "outlook"
+            ? [
+                {
+                  id: "send-1",
+                  status: "PENDING",
+                  sendAt: new Date(Date.now() + 60_000).toISOString(),
+                  draftMessageIds: ["outlook-draft"],
+                },
+              ]
+            : [],
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const engine = fakeEngine(
+      mailboxSnapshot({
+        conversations: [conversation("gmail", "g-1")],
+        coverage: [coverage("gmail", 10), coverage("outlook", 20)],
+      }),
+    );
+
+    renderHook(
+      () =>
+        useCombinedMailThreads({
+          accounts: [GMAIL, OUTLOOK],
+          emailAccountId: "gmail",
+          enabled: true,
+          isUnread: false,
+          mailboxType: "draft",
+        }),
+      { wrapper: engine.wrapper },
+    );
+
+    await waitFor(() =>
+      expect(engine.client.observeMailbox).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          accountIds: ["gmail", "outlook"],
+          predicate: {
+            kind: "all",
+            predicates: [
+              { kind: "mailbox", mailbox: "drafts" },
+              {
+                kind: "not",
+                predicate: {
+                  kind: "any",
+                  predicates: [
+                    {
+                      kind: "message",
+                      accountId: "outlook",
+                      ids: ["outlook-draft"],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(
+      fetch.mock.calls.map(([, init]) =>
+        new Headers(init?.headers).get("X-Email-Account-ID"),
+      ),
+    ).toEqual(["gmail", "outlook"]);
+  });
+});
+
 describe("labelNamesToAccountScopedPredicate", () => {
   it("resolves the same label name to each account's own label id", () => {
     expect(

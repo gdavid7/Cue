@@ -6,7 +6,6 @@ import { POST } from "./route";
 
 const processScheduledEmail = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => vi.fn());
-const getEmailAccountMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/utils/scheduled-email/service", async (importActual) => {
   const actual =
@@ -14,9 +13,6 @@ vi.mock("@/utils/scheduled-email/service", async (importActual) => {
   return { ...actual, processScheduledEmail };
 });
 vi.mock("@/utils/auth", () => ({ auth: authMock }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: getEmailAccountMock,
-}));
 vi.mock("@/utils/prisma");
 
 const userId = "user-1";
@@ -27,7 +23,11 @@ describe("POST /api/user/scheduled-emails", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authMock.mockResolvedValue({ user: { id: userId } });
-    getEmailAccountMock.mockResolvedValue("developer@example.com");
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: userId,
+      email: "developer@example.com",
+      account: { provider: "google" },
+    } as never);
     processScheduledEmail.mockResolvedValue(undefined);
   });
 
@@ -54,11 +54,15 @@ describe("POST /api/user/scheduled-emails", () => {
       error: "Email account ID is required",
       isKnownError: true,
     });
-    expect(getEmailAccountMock).not.toHaveBeenCalled();
+    expect(prisma.emailAccount.findUnique).not.toHaveBeenCalled();
   });
 
   it("rejects an email account the user does not own", async () => {
-    getEmailAccountMock.mockResolvedValue(null);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "someone-else",
+      email: "developer@example.com",
+      account: { provider: "google" },
+    } as never);
 
     const response = await post(futurePayload());
 
@@ -66,10 +70,6 @@ describe("POST /api/user/scheduled-emails", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Invalid account ID",
       isKnownError: true,
-    });
-    expect(getEmailAccountMock).toHaveBeenCalledWith({
-      userId,
-      emailAccountId,
     });
     expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
   });

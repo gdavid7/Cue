@@ -4,10 +4,7 @@ import { useState } from "react";
 import { AlertCircleIcon, ClockIcon, LoaderCircleIcon } from "lucide-react";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
-import {
-  AccountRowMarker,
-  useAllAccountsList,
-} from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
+import { AccountRowMarker } from "@/app/(app)/[emailAccountId]/mail/all-accounts-list";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { InlineActionButton } from "@/components/InlineActionButton";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -19,11 +16,9 @@ import { getActionErrorMessage } from "@/utils/error";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useMailHref } from "@/hooks/useMailHref";
 import {
-  scheduledEmailsRefreshInterval,
+  useAllAccountsUpcomingScheduledEmails,
   useUpcomingScheduledEmails,
 } from "@/hooks/useHiddenDraftMessageIds";
-
-const SCHEDULED_PATH = "/api/user/scheduled-emails";
 
 type ScheduledEmail =
   UpcomingScheduledEmailsResponse["scheduledEmails"][number];
@@ -44,16 +39,7 @@ export function ScheduledEmailList({
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
   const one = useUpcomingScheduledEmails(accounts ? null : emailAccountId);
-  const all = useAllAccountsList<UpcomingScheduledEmailsResponse>(
-    SCHEDULED_PATH,
-    accounts,
-    {
-      refreshInterval: (current) =>
-        scheduledEmailsRefreshInterval(
-          current?.byAccount.flatMap(({ data }) => data.scheduledEmails) ?? [],
-        ),
-    },
-  );
+  const all = useAllAccountsUpcomingScheduledEmails(accounts);
   const { isLoading, error, mutate } = accounts ? all : one;
 
   const runScheduledAction = async (

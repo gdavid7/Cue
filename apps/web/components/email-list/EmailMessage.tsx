@@ -60,6 +60,7 @@ import { EmailDetails } from "@/components/email-list/EmailDetails";
 import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
 import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
+import { PersonCardTrigger } from "@/components/person-card/PersonCard";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
 import { useIsCoarsePointer } from "@/hooks/use-mobile";
@@ -780,21 +781,15 @@ function MessageHeader({
       ? "max-w-40 shrink font-semibold text-foreground"
       : "w-24 shrink-0 font-medium text-secondary-foreground sm:w-28",
   );
-  const identity = (
-    <>
-      {avatar}
-      <span className={senderNameClassName}>{senderName}</span>
-      {!expanded && (
-        <span className="line-clamp-1 min-w-0 flex-1 break-all text-muted-foreground text-sm">
-          {decodeSnippet(message.snippet)}
-        </span>
-      )}
-    </>
+  const snippet = !expanded && (
+    <span className="line-clamp-1 min-w-0 flex-1 break-all text-muted-foreground text-sm">
+      {decodeSnippet(message.snippet)}
+    </span>
   );
 
   return (
-    // A collapsed row opens from anywhere on it, as the pointer expects; the
-    // toggle button is what keyboards and screen readers use.
+    // A row opens or closes from anywhere on it, as the pointer expects; the
+    // toggle and Collapse buttons are what keyboards and screen readers use.
     // biome-ignore lint/a11y/useKeyWithClickEvents: the toggle button inside handles the keyboard
     <div
       className={cn(
@@ -802,11 +797,19 @@ function MessageHeader({
         !expanded && onToggle && "cursor-pointer",
       )}
       onClick={
-        !expanded && onToggle
+        onToggle
           ? (event) => {
+              const selection = window.getSelection();
               if (
-                event.target instanceof Element &&
-                event.target.closest("button, a, [role='menu']")
+                !(event.target instanceof Element) ||
+                event.target.closest("button, a, [role='menu']") ||
+                // A click in the person card, portaled out of the row,
+                // still bubbles here through React.
+                !event.currentTarget.contains(event.target) ||
+                // Ending a text selection in the header isn't a request to
+                // toggle; one left elsewhere on the page doesn't count.
+                (selection?.isCollapsed === false &&
+                  event.currentTarget.contains(selection.anchorNode))
               )
                 return;
               onToggle();
@@ -814,13 +817,10 @@ function MessageHeader({
           : undefined
       }
     >
-      {onToggle ? (
+      {onToggle && !expanded ? (
         <button
-          aria-expanded={expanded}
-          className={cn(
-            "flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            !expanded && "flex-1",
-          )}
+          aria-expanded={false}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
           data-message-toggle
           onClick={(event) => {
             event.stopPropagation();
@@ -828,10 +828,25 @@ function MessageHeader({
           }}
           type="button"
         >
-          {identity}
+          {avatar}
+          <span className={senderNameClassName}>{senderName}</span>
+          {snippet}
         </button>
       ) : (
-        <div className="flex min-w-0 items-center gap-2">{identity}</div>
+        <>
+          {/* An open message's sender opens what you have going on with
+              them; it collapses from the Collapse button or the row. */}
+          <PersonCardTrigger
+            className="flex min-w-0 items-center gap-2"
+            email={isSent ? "" : senderEmail}
+            name={extractNameFromEmail(message.headers.from)}
+            sender
+          >
+            {avatar}
+            <span className={senderNameClassName}>{senderName}</span>
+          </PersonCardTrigger>
+          {snippet}
+        </>
       )}
       {expanded && (
         <button
@@ -952,7 +967,9 @@ function MessageHeader({
             {expanded && onToggle && (
               <Tooltip content="Collapse">
                 <Button
+                  aria-expanded
                   aria-label="Collapse message"
+                  data-message-toggle
                   onClick={(event) => {
                     event.stopPropagation();
                     onToggle();

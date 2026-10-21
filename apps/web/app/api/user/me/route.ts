@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/utils/prisma";
 import { withError } from "@/utils/middleware";
 import { SafeError } from "@/utils/error";
+import { todayWeatherSettingSchema } from "@/utils/actions/today-weather.validation";
 import { auth } from "@/utils/auth";
 import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
 import {
@@ -39,6 +40,7 @@ async function getUser({
       webhookSecret: true,
       announcementDismissedAt: true,
       dismissedHints: true,
+      todayWeather: true,
       premium: {
         select: {
           ...billingAccessPremiumSelect,
@@ -110,6 +112,7 @@ async function getUser({
     decisionModelEnabled: isDecisionModelEnabledForUser(user),
     announcementDismissedAt: user.announcementDismissedAt,
     dismissedHints: user.dismissedHints,
+    ...todayWeatherSetting(user.todayWeather),
     premium,
     // Resolved here so the client never compares periods against its own clock.
     unsubscribeCreditsRemaining: getRemainingUnsubscribeCredits(
@@ -149,3 +152,12 @@ export const GET = withError("user/me", async (request) => {
 
   return NextResponse.json(user);
 });
+
+/** Where Today's weather is for, and whether the user declined it. */
+function todayWeatherSetting(stored: unknown) {
+  const setting = todayWeatherSettingSchema.safeParse(stored).data;
+  if (!setting) return { todayWeather: null, todayWeatherDismissed: false };
+  if ("dismissed" in setting)
+    return { todayWeather: null, todayWeatherDismissed: true };
+  return { todayWeather: setting, todayWeatherDismissed: false };
+}

@@ -4,6 +4,7 @@ import {
   runWhenIdle,
   scheduleSummaryFlush,
 } from "@/utils/analytics/summary-flush";
+import { noteShortcutForGetStarted } from "@/utils/get-started/client-steps";
 
 // Pressed many times a minute, so counted and sent as one summary.
 const NAVIGATION_SHORTCUT_IDS = new Set<string>([
@@ -25,6 +26,7 @@ export function trackMailAction({
   source: "shortcut" | "palette";
   shortcut?: string;
 }) {
+  if (source === "shortcut") noteShortcutForGetStarted(action);
   if (source === "shortcut" && NAVIGATION_SHORTCUT_IDS.has(action)) {
     navigationCounts[action] = (navigationCounts[action] ?? 0) + 1;
     if (!navigationFlushScheduled) {

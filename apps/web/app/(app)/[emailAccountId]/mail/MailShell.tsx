@@ -21,6 +21,8 @@ import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import {
+  ALL_INBOXES_MAILBOX_TYPES,
+  ALL_INBOXES_VIEW_TYPES,
   getMailboxName,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
@@ -78,6 +80,7 @@ import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePick
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
+import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -103,6 +106,8 @@ import type { ThreadMessage } from "@/components/email-list/types";
 import { useMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-mail-threads";
 import { useCombinedMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-combined-mail-threads";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { openSenderPersonCard } from "@/components/person-card/PersonCard";
+import { getActionAccountLabel } from "@/app/(app)/[emailAccountId]/mail/mail-command-palette";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
@@ -520,7 +525,10 @@ export function MailShell() {
       return mailTypeToThreadsQuery(scopeType);
     return null;
   }, [scopeFolderId, scopeLabelId, scopeType]);
-  const isScoped = !isAllAccounts && scopeQuery !== null;
+  // All inboxes merges only the views every account has, each in full.
+  const isAllInboxesView =
+    isAllAccounts && !!scopeType && ALL_INBOXES_VIEW_TYPES.has(scopeType);
+  const isScoped = scopeQuery !== null && (!isAllAccounts || isAllInboxesView);
 
   const searchEditIdentity = JSON.stringify([
     emailAccountId,
@@ -546,6 +554,13 @@ export function MailShell() {
   const isScheduledView = !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
   // The mailbox doesn't know what's snoozed or until when; our database does.
   const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
+  const allInboxesMailboxType =
+    isAllInboxesView &&
+    !searchQuery &&
+    scopeType &&
+    ALL_INBOXES_MAILBOX_TYPES.has(scopeType)
+      ? scopeType
+      : undefined;
   const [settledSearch, setSettledSearch] = useState(searchQuery);
   useEffect(() => {
     const timeout = setTimeout(() => setSettledSearch(searchQuery), 250);
@@ -560,6 +575,7 @@ export function MailShell() {
       setSearchDraft(undefined);
       setSettledSearch(q);
       noteRumSearchCommit(q);
+      if (q) noteGetStartedStep("ask");
       updateLocation((current) => {
         const view = current.view ?? INBOX_VIEW;
         if (q) {
@@ -686,6 +702,7 @@ export function MailShell() {
     emailAccountId,
     enabled:
       isAllAccounts && searchSettled && !isScheduledView && !isSnoozedView,
+    mailboxType: allInboxesMailboxType,
     isUnread:
       !searchQuery &&
       !!activeSplit?.filters.length &&
@@ -697,6 +714,28 @@ export function MailShell() {
     providerSearch,
   });
   const { labelsByAccount } = combinedThreadState;
+  const personCardAccounts = useMemo(
+    () =>
+      isAllAccounts
+        ? combinedAccounts.map((account) => ({
+            id: account.id,
+            labels: labelsByAccount[account.id] ?? NO_LABELS,
+          }))
+        : undefined,
+    [combinedAccounts, isAllAccounts, labelsByAccount],
+  );
+  // A search from the reader shows its results, which a full-width reader
+  // would cover.
+  const searchFromReader = useCallback(
+    (query: string) => {
+      if (layout === "list") {
+        forgetOpenedFrom();
+        setOpenThread(null);
+      }
+      setSearch(query);
+    },
+    [layout, setOpenThread, setSearch],
+  );
   const splitCountAccountIds = useMemo(
     () =>
       isAllAccounts
@@ -1124,6 +1163,7 @@ export function MailShell() {
     if (isAllAccounts) {
       let scope: MatchingScope | null = null;
       if (searchQuery) scope = { q: searchQuery };
+      else if (allInboxesMailboxType) scope = { type: allInboxesMailboxType };
       else if (!activeSplit?.filters.length) scope = { type: "inbox" };
       return scope
         ? combinedAccounts.map((account) => ({ id: account.id, scope }))
@@ -1133,6 +1173,7 @@ export function MailShell() {
     return scope ? [{ id: emailAccountId, scope }] : null;
   }, [
     activeSplit?.filters.length,
+    allInboxesMailboxType,
     combinedAccounts,
     emailAccountId,
     isAllAccounts,
@@ -1691,8 +1732,16 @@ export function MailShell() {
     singleActionTarget !== undefined &&
     singleActionTarget.key === openThreadKey;
 
+  const actionAccount = isAllAccounts
+    ? getActionAccountLabel(
+        actionTargets.map((target) => target.selection.emailAccountId),
+        combinedAccounts,
+      )
+    : undefined;
+
   const mailCommandContext = useMemo(
     () => ({
+      account: actionAccount,
       actions: {
         archive: archiveTargets,
         moveToInbox:
@@ -1733,6 +1782,7 @@ export function MailShell() {
       targetCount: actionTargets.length,
     }),
     [
+      actionAccount,
       archiveTargets,
       moveToInboxTargets,
       targetsArchived,
@@ -1933,17 +1983,21 @@ export function MailShell() {
       reply: () => openReply(false),
       replyAll: () => openReply(true),
       markRead: markReadTargets,
-      // The combined inbox has no per-account mailboxes to go to.
-      goToInbox: isAllAccounts ? undefined : () => goToMailbox("inbox"),
-      goToStarred: isAllAccounts ? undefined : () => goToMailbox("starred"),
-      goToSent: isAllAccounts ? undefined : () => goToMailbox("sent"),
-      goToDrafts: isAllAccounts ? undefined : () => goToMailbox("draft"),
+      // All inboxes goes to its own merged views; it has no merged All Mail.
+      goToInbox: () => goToMailbox("inbox"),
+      goToStarred: () => goToMailbox("starred"),
+      goToSent: () => goToMailbox("sent"),
+      goToDrafts: () => goToMailbox("draft"),
       goToAllMail: isAllAccounts ? undefined : () => goToMailbox("all"),
       forward: singleActionTarget ? requestForwardTarget : undefined,
       moreActions: openThreadId
         ? () => setIsMenuOpen((open) => !open)
         : undefined,
       openTeamComments,
+      showPersonCard:
+        openThreadId && readerSelectionSettled && !isMailOverlayOpen
+          ? openSenderPersonCard
+          : undefined,
       openExternal:
         isReaderTarget && openExternalUrl
           ? () => window.open(openExternalUrl, "_blank", "noopener,noreferrer")
@@ -1980,6 +2034,7 @@ export function MailShell() {
   function goToMailbox(type: string) {
     const href = buildMailPath({
       accountIndex: mailLocation.accountIndex,
+      ...(isAllAccounts ? { allInboxes: true } : {}),
       view: getMailNavView({ kind: "type", type }, mailSlugs),
     });
     if (!showMailView(href)) router.push(href);
@@ -2595,7 +2650,7 @@ export function MailShell() {
                       }
                       listKey={
                         isAllAccounts
-                          ? `all-accounts:${searchQuery ?? displayedActiveSplitId}`
+                          ? `all-accounts:${searchQuery ?? allInboxesMailboxType ?? displayedActiveSplitId}`
                           : JSON.stringify(query)
                       }
                     />
@@ -2627,6 +2682,8 @@ export function MailShell() {
                 }
                 onReady={setVisibleReaderThreadKey}
                 onClose={closeReader}
+                personCardAccounts={personCardAccounts}
+                onSearch={searchFromReader}
                 showFixWithChat
                 onAskCue={onAskCueAboutThread}
                 lastMessage={openMessages.at(-1) ?? null}
@@ -2739,7 +2796,10 @@ function getMailViewTitle({
   labelTerm: string;
 }): string | null {
   if (searchQuery) return "Search results";
-  if (isAllAccounts) return null;
+  if (isAllAccounts)
+    return scopeType && ALL_INBOXES_VIEW_TYPES.has(scopeType)
+      ? (getMailboxName(scopeType) ?? null)
+      : null;
   if (labelName) return `${labelTerm}: ${labelName}`;
   if (folderName) return folderName;
   if (scopeType && scopeType !== "inbox")

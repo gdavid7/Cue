@@ -4,7 +4,6 @@ import prisma from "@/utils/__mocks__/prisma";
 import { auth } from "@/utils/auth";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { createEmailProvider } from "@/utils/email/provider";
-import { getEmailAccount } from "@/utils/redis/account-validation";
 import { toggleRule } from "@/utils/rule/toggle-rule";
 import { SafeError } from "@/utils/error";
 import * as mailSplits from "@/utils/split-inbox/splits.server";
@@ -15,9 +14,6 @@ import { GET as presets } from "./presets/route";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: vi.fn(),
-}));
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
 vi.mock("@/utils/email/rate-limit", () => ({
   recordRateLimitFromApiError: vi.fn(),
@@ -36,8 +32,9 @@ describe("mail v1 split routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(auth).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(getEmailAccount).mockResolvedValue("user@example.com");
     prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "user@example.com",
       account: { provider: "google" },
       mailSplits: [saved],
     } as never);
@@ -64,7 +61,12 @@ describe("mail v1 split routes", () => {
   it.each(
     handlers,
   )("rejects accounts the user does not own (%#)", async (handler) => {
-    vi.mocked(getEmailAccount).mockResolvedValue(null);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "someone-else",
+      email: "user@example.com",
+      account: { provider: "google" },
+      mailSplits: [saved],
+    } as never);
     const response = await handler(request("POST", draft), context());
     expect(response.status).toBe(403);
     expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -318,6 +320,8 @@ describe("mail v1 split routes", () => {
 
   it("resolves presets, hides unavailable labels, and marks matching splits", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "user@example.com",
       account: { provider: "google" },
       mailSplits: [
         {
@@ -360,6 +364,8 @@ describe("mail v1 split routes", () => {
 
   it("matches unordered preset filters and system presets by name like web", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "user@example.com",
       account: { provider: "google" },
       mailSplits: [
         {
@@ -400,6 +406,8 @@ describe("mail v1 split routes", () => {
 
   it("does not mark a modified ordinary preset as added", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "user@example.com",
       account: { provider: "google" },
       mailSplits: [
         {

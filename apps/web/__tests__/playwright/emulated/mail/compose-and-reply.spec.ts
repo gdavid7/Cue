@@ -476,7 +476,7 @@ test("moves a sent reply from its composer into the thread without a gap", async
   );
   await expect(sourceMessage).toHaveAttribute("data-selected", "false");
   await expect(
-    sourceMessage.locator("[aria-expanded]").first(),
+    sourceMessage.locator("[data-message-toggle][aria-expanded]"),
   ).toHaveAttribute("aria-expanded", "true");
   await expect(sentRow.locator("time")).toBeVisible();
   await expect(sentRow.getByText("Sending…")).toHaveCount(0);

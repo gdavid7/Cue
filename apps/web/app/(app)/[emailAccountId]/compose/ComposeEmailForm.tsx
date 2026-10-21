@@ -55,7 +55,7 @@ import {
 import { useFirstSuggestedReplySent } from "@/app/(app)/[emailAccountId]/compose/use-first-suggested-reply-sent";
 import {
   hideSendingDraftMessages,
-  upcomingScheduledEmailsKey,
+  refreshUpcomingScheduledEmails,
 } from "@/hooks/useHiddenDraftMessageIds";
 import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { VoiceInput } from "@/components/voice/VoiceInput";
@@ -106,7 +106,12 @@ import {
   recordReplySuggestionStageAction,
   recordSuggestedReplyDraftAction,
 } from "@/utils/actions/thread-assist";
-import { formatRecipientNames, splitRecipientList } from "@/utils/email";
+import {
+  extractEmailAddresses,
+  formatRecipientNames,
+  isSameEmailAddress,
+  splitRecipientList,
+} from "@/utils/email";
 import type {
   ReplySuggestionOrigin,
   StoredReplyDraft,
@@ -224,6 +229,8 @@ type ComposeEmailFormProps = {
   draftMode?: ReplyDraftMode;
   draftSessionId?: string;
   replyingToEmail?: ReplyingToEmail;
+  /** A new message's first recipient; added to a saved draft's own. */
+  initialTo?: string;
   refetch?: () => void;
   onSuccess?: (messageId: string, threadId: string) => void;
   onMarkDone?: () => void;
@@ -395,6 +402,7 @@ function ComposeEmailFormContent({
   onMovedDraftApplied,
   draftLoadError,
   replyingToEmail,
+  initialTo,
   fromAccounts,
   accountProvider,
   accountSignatureHtml,
@@ -608,10 +616,10 @@ function ComposeEmailFormContent({
     setValue,
   } = useForm<ComposeFormValues>({
     defaultValues: movedDraft?.values ??
-      storedDraft?.content?.values ?? {
+      withRecipient(storedDraft?.content?.values, initialTo) ?? {
         replyToEmail: getReplyToEmailPayload(replyingToEmail),
         subject: replyingToEmail?.subject,
-        to: replyingToEmail?.to,
+        to: replyingToEmail?.to ?? initialTo,
         cc: replyingToEmail?.cc,
         bcc: replyingToEmail?.bcc,
       },
@@ -2539,6 +2547,17 @@ const RECIPIENT_LABELS: Record<ComposeRecipientField, string> = {
   bcc: "Bcc",
 };
 
+function withRecipient(
+  values: ComposeFormValues | undefined,
+  to: string | undefined,
+): ComposeFormValues | undefined {
+  if (!values || !to) return values;
+  const existing = extractEmailAddresses(values.to ?? "");
+  if (existing.some((address) => isSameEmailAddress(address, to)))
+    return values;
+  return { ...values, to: values.to ? `${values.to}, ${to}` : to };
+}
+
 function createComposeAttachmentMetadata(
   file: File,
   disposition: ComposeAttachment["disposition"],
@@ -2641,11 +2660,14 @@ async function refreshScheduledEmails(
   emailAccountId: string,
   threadId: string | null,
 ) {
-  const keys = [
-    upcomingScheduledEmailsKey(emailAccountId),
-    ...(threadId ? [threadScheduledEmailsKey(emailAccountId, threadId)] : []),
-  ];
-  await Promise.all(keys.map((key) => mutate(key).catch(() => {})));
+  await Promise.all([
+    refreshUpcomingScheduledEmails(mutate, emailAccountId),
+    threadId
+      ? mutate(threadScheduledEmailsKey(emailAccountId, threadId)).catch(
+          () => {},
+        )
+      : undefined,
+  ]);
 }
 
 // Unexpected server failures are usually transient and the autosave retries

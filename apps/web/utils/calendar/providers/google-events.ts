@@ -21,6 +21,7 @@ import type { Logger } from "@/utils/logger";
 
 export interface GoogleCalendarConnectionParams {
   accessToken: string | null;
+  calendarEmail?: string;
   /** Calendars to read events from; the primary calendar when empty. */
   calendarIds?: string[];
   connectionId: string;
@@ -32,9 +33,11 @@ export interface GoogleCalendarConnectionParams {
 export class GoogleCalendarEventProvider implements CalendarEventProvider {
   private readonly connection: GoogleCalendarConnectionParams;
   private readonly logger: Logger;
+  readonly calendarEmail?: string;
 
   constructor(connection: GoogleCalendarConnectionParams, logger: Logger) {
     this.connection = connection;
+    this.calendarEmail = connection.calendarEmail;
     this.logger = logger;
   }
 

@@ -16,6 +16,7 @@ import type { Command } from "@/lib/commands/types";
 import { useNavigation } from "@/components/SideNav";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useRules } from "@/hooks/useRules";
+import { useAllAccountsScope } from "@/hooks/useTodayHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { prefixPath } from "@/utils/path";
 import { isGoogleProvider } from "@/utils/email/provider-types";
@@ -33,7 +34,9 @@ export function useCommandPaletteCommands({
 } = {}) {
   const router = useRouter();
   const { openSettings } = useSettingsDialog();
-  const { emailAccountId, provider } = useAccount();
+  const { emailAccountId, emailAccount, provider } = useAccount();
+  // Across accounts, the open account's own pages and rules say whose they are.
+  const account = useAllAccountsScope() ? emailAccount?.email : undefined;
   const { manageItems, toolsItems } = useNavigation();
   const { data: rulesData, isLoading: rulesLoading } = useRules(
     undefined,
@@ -51,6 +54,7 @@ export function useCommandPaletteCommands({
             {
               name: "Cold Email Blocker",
               href: prefixPath(emailAccountId, "/cold-email-blocker"),
+              account,
               icon: ShieldCheckIcon,
               keywords: ["block", "cold", "spam", "filter"],
             },
@@ -61,6 +65,7 @@ export function useCommandPaletteCommands({
       (item, index) => ({
         id: `nav-${item.name.toLowerCase().replace(/[^a-z]+/g, "-")}`,
         label: `Go to ${item.name}`,
+        account: item.account,
         icon: item.icon,
         section: "navigation",
         priority: index + 10,
@@ -86,6 +91,7 @@ export function useCommandPaletteCommands({
         id: "settings-rules",
         label: "Rules settings",
         description: "Signature, snippets and writing style",
+        account,
         icon: SlidersHorizontalIcon,
         section: "settings",
         priority: 2,
@@ -104,6 +110,7 @@ export function useCommandPaletteCommands({
         id: "settings-usage",
         label: "Usage",
         description: "View usage statistics",
+        account,
         icon: BarChartBigIcon,
         section: "settings",
         priority: 3,
@@ -146,6 +153,7 @@ export function useCommandPaletteCommands({
           id: `rule-${rule.id}`,
           label: rule.name,
           description: rule.instructions || "View rule",
+          account,
           icon: ScrollTextIcon,
           section: "rules" as const,
           priority: index + 1,
@@ -159,6 +167,7 @@ export function useCommandPaletteCommands({
 
     return [...navigationCommands, ...settingsCommands, ...ruleCommands];
   }, [
+    account,
     emailAccountId,
     includeRules,
     manageItems,

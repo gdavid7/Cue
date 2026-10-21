@@ -6,10 +6,7 @@ import { toastSuccess } from "@/components/Toast";
 import { useUser } from "@/hooks/useUser";
 import { dismissHintAction } from "@/utils/actions/hints";
 import { ONBOARDING_ANALYTICS_EVENTS } from "@/utils/analytics/product";
-
-export function getFirstReplySentHintId(emailAccountId: string) {
-  return `first-reply-sent:${emailAccountId}`;
-}
+import { getFirstReplySentHintId } from "@/utils/get-started/checklist";
 
 /**
  * Records each reply sent from Cue's suggestion. The first one is the moment

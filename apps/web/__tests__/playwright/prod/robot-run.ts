@@ -103,6 +103,11 @@ export class RobotRun {
     try {
       await run(metrics);
     } catch (error) {
+      if (error instanceof StepSkippedError) {
+        step.status = "skipped";
+        step.error = error.message;
+        return;
+      }
       step.status = "failed";
       step.error = describeError(error);
       if (describePageOnFailure)
@@ -165,6 +170,9 @@ export class RobotRun {
     return null;
   }
 }
+
+/** Thrown by a step that could not run its check; it is reported, not failed. */
+export class StepSkippedError extends Error {}
 
 /** First line of a Playwright error, without mail content or addresses. */
 export function describeError(error: unknown) {

@@ -92,7 +92,10 @@ export async function fetchCalendarEventsInWindow({
         providerLogger.trace("Completed calendar provider event fetch", {
           eventCount: events.length,
         });
-        return events;
+        const { calendarEmail } = provider;
+        return calendarEmail
+          ? events.map((event) => ({ ...event, calendarEmail }))
+          : events;
       } catch (error) {
         providerLogger.error("Failed calendar provider event fetch", {
           error,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadInboxPreview } from "./inbox-preview.server";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
+import { GMAIL_RECENT_WINDOW_MS } from "@/utils/mail-api/source";
 import { parsedMessagePatch } from "@/utils/mail-api/observations";
 import type { ParsedMessage } from "@/utils/types";
 
@@ -89,6 +90,37 @@ describe("loadInboxPreview", () => {
       splitId: "primary",
       threads: [expect.objectContaining({ id: "t1" })],
     });
+  });
+
+  it("catches a mailbox that fell behind up with twenty inbox messages, handing the engine all of them", async () => {
+    passPlansThrough();
+    const now = Date.now();
+    mocks.getMessagesWithPagination.mockResolvedValue({
+      messages: [
+        message("m1", "t1", now - 1000),
+        message("m2", "t2", now - GMAIL_RECENT_WINDOW_MS - 24 * 3_600_000),
+      ],
+    });
+
+    const preview = await loadInboxPreview({
+      emailAccountId: "acc-1",
+      provider: "google",
+      catchUp: true,
+    });
+
+    expect(mocks.getMessagesWithPagination).toHaveBeenCalledWith({
+      inboxOnly: true,
+      maxResults: 20,
+      format: "metadata",
+      allowPartial: true,
+    });
+    // Unlike a tab's, these are the inbox's own newest, so none is left out
+    // for being older than a first sync reaches.
+    expect(
+      preview?.changes.map(
+        (change) => change.kind === "message_patch" && change.key.messageId,
+      ),
+    ).toEqual(["m1", "m2"]);
   });
 
   it("marks rows read from the whole inbox as no tab's", async () => {

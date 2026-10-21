@@ -8,7 +8,8 @@ import {
   GMAIL_INFLIGHT_LIMIT,
   resetGmailInflightState,
 } from "@/utils/gmail/inflight";
-import { getBatch } from "./batch";
+import { GMAIL_BATCH_FETCH_TIMEOUT_MS, getBatch } from "./batch";
+import { extractErrorInfo, isRetryableError } from "./retry";
 
 vi.mock("@/utils/gmail/oauth", () => ({
   getGoogleGmailBatchUrl: () => "https://example.com/batch/gmail/v1",
@@ -58,6 +59,34 @@ describe("getBatch", () => {
     expect(cutBudget).toHaveBeenCalledTimes(1);
     // Only 40 units went through in the last minute, so the floor holds.
     await expect(cutBudget.mock.results[0]?.value).resolves.toBe(1200);
+  });
+
+  it("gives the batch request a timeout signal, and a timeout is retryable", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(init.signal.reason),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    // Native timeout signals ignore fake timers, so use a short real one.
+    const shortTimeout = AbortSignal.timeout(5);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(shortTimeout);
+
+    const error = await getBatch(
+      ["m1"],
+      "/gmail/v1/users/me/messages",
+      "t",
+    ).catch((e: Error) => e);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(GMAIL_BATCH_FETCH_TIMEOUT_MS);
+    expect(error).toMatchObject({ name: "TimeoutError" });
+    expect(isRetryableError(extractErrorInfo(error)).retryable).toBe(true);
+    timeoutSpy.mockRestore();
   });
 
   it("holds one in-flight slot per request in the batch", async () => {

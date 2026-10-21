@@ -55,12 +55,20 @@ export type PoppedOutReply = {
 
 type Context = {
   onOpen: () => void;
+  /**
+   * Opens a new message to `to`, from `fromAccountId` when it names a
+   * connected account All inboxes includes, else from the page's account. A
+   * composer that is already open stays as it is; that account's saved
+   * new-message draft gets `to` added to its recipients.
+   */
+  composeTo: (to: string, fromAccountId?: string) => void;
   popOutReply: (reply: PoppedOutReply) => void;
   poppedOutDraftSessionId?: string;
 };
 
 const ComposeModalContext = createContext<Context>({
   onOpen: async () => {},
+  composeTo: () => {},
   popOutReply: () => {},
 });
 
@@ -82,6 +90,8 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [composerKey, setComposerKey] = useState(0);
   const [poppedOutReply, setPoppedOutReply] = useState<PoppedOutReply>();
+  const [initialTo, setInitialTo] = useState<string>();
+  const [composeAccountId, setComposeAccountId] = useState<string>();
   const isAllAccountsMailView = Boolean(
     parseMailPath(pathname, searchParams)?.allInboxes,
   );
@@ -101,11 +111,20 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     (isAllAccountsMailView && otherReplyAccount)
       ? poppedOutReply
       : undefined;
+  // Not tied to All inboxes, unlike a popped-out reply: a new message already
+  // open from another account stays open, draft and all, when the view changes.
+  const composeAccount =
+    composeAccountId && composeAccountId !== emailAccountId
+      ? accountsData?.emailAccounts.find(
+          (account) => account.id === composeAccountId,
+        )
+      : undefined;
   const fromAccounts =
     accountsData && accountsData.emailAccounts.length > 1
       ? accountsData.emailAccounts
       : undefined;
   const isOpen = isModalOpen && (!poppedOutReply || Boolean(reply));
+  const composedFrom = composeAccountId;
   // However the composer closes, a timing it never finished is dropped.
   useEffect(() => {
     if (!isOpen) return;
@@ -122,15 +141,42 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     const active = document.activeElement;
     opener.current = active instanceof HTMLElement ? active : null;
   }, [isOpen]);
-  const openCompose = useCallback(() => {
-    rememberOpener();
-    returnOpenReply();
-    setIsExpanded(false);
-    setPoppedOutReply(undefined);
-    // A composer that is already open stays as it is, and reports no ready.
-    if (!isOpen || poppedOutReply) beginRumAction("compose_open");
-    openModal();
-  }, [openModal, returnOpenReply, rememberOpener, isOpen, poppedOutReply]);
+  const openComposeFrom = useCallback(
+    (accountId: string | undefined) => {
+      rememberOpener();
+      returnOpenReply();
+      setIsExpanded(false);
+      setPoppedOutReply(undefined);
+      setInitialTo(undefined);
+      // A composer that is already open stays as it is, and reports no ready.
+      if (!isOpen || poppedOutReply) {
+        setComposeAccountId(accountId);
+        beginRumAction("compose_open");
+      }
+      openModal();
+    },
+    [openModal, returnOpenReply, rememberOpener, isOpen, poppedOutReply],
+  );
+  const openCompose = useCallback(
+    () => openComposeFrom(undefined),
+    [openComposeFrom],
+  );
+  const composeTo = useCallback(
+    (to: string, fromAccountId?: string) => {
+      const opening = !isOpen || Boolean(poppedOutReply);
+      const from = accountsData?.emailAccounts.find(
+        (account) =>
+          account.id === fromAccountId &&
+          account.includeInAllAccounts &&
+          account.account.disconnectedAt === null,
+      );
+      openComposeFrom(from?.id);
+      if (!opening) return;
+      setInitialTo(to);
+      setComposerKey((key) => key + 1);
+    },
+    [openComposeFrom, isOpen, poppedOutReply, accountsData],
+  );
   const popOutReply = useCallback(
     (nextReply: PoppedOutReply) => {
       rememberOpener();
@@ -190,10 +236,11 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const contextValue = useMemo(
     () => ({
       onOpen: openCompose,
+      composeTo,
       popOutReply,
       poppedOutDraftSessionId: isOpen ? reply?.draftSessionId : undefined,
     }),
-    [openCompose, popOutReply, isOpen, reply?.draftSessionId],
+    [openCompose, composeTo, popOutReply, isOpen, reply?.draftSessionId],
   );
 
   return (
@@ -329,22 +376,32 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
                   />
                 </EmailAccountScopeProvider>
               ) : (
-                <ComposeEmailFormLazy
-                  key={composerKey}
-                  draftSessionId="compose:new-message"
-                  fromAccounts={fromAccounts}
-                  layout="window"
-                  onClose={closeCompose}
-                  onDiscard={() => {
-                    closeCompose();
-                    return true;
-                  }}
-                  onRestore={() => {
-                    setComposerKey((key) => key + 1);
-                    openCompose();
-                  }}
-                  onSuccess={closeCompose}
-                />
+                <EmailAccountScopeProvider emailAccount={composeAccount}>
+                  <ComposeEmailFormLazy
+                    key={composerKey}
+                    draftSessionId="compose:new-message"
+                    fromAccounts={fromAccounts}
+                    initialTo={initialTo}
+                    layout="window"
+                    onClose={closeCompose}
+                    onDiscard={() => {
+                      closeCompose();
+                      return true;
+                    }}
+                    onRestore={() => {
+                      returnOpenReply();
+                      setPoppedOutReply(undefined);
+                      setInitialTo(undefined);
+                      // The undone message's draft is the account's it was
+                      // composed from, even if Compose opened from another
+                      // account since.
+                      setComposeAccountId(composedFrom);
+                      setComposerKey((key) => key + 1);
+                      openModal();
+                    }}
+                    onSuccess={closeCompose}
+                  />
+                </EmailAccountScopeProvider>
               )}
             </div>
           </div>

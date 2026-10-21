@@ -21,6 +21,7 @@ production with an email code it reads from the QA inbox over IMAP.
 | inbox shows real mail | a row appears; no "Gmail is limiting" banner, no "Waiting to sync" | `timeToFirstRowMs`, `inboxRows` |
 | thread shows reply actions | the seeded class announcement shows Reply, Reply all, Forward | |
 | reply to self lands in Sent | a probe sent to itself arrives, the reply shows in Sent | `inboundSyncMs`, `replyToSentMs` |
+| suggested reply text is clean | a seeded message from an example.com sender (one model call) gets Cue's suggested reply, which must hold no `&#`, `&amp;`, `&lt;`, `&gt;`, `&quot;`, `<p>` or `<br>`. No suggestion within 60 seconds records the step as `skipped: no suggestion`, not a failure. Never sent; the seeded mail is trashed afterwards | `suggestionShown`, `suggestionChars` |
 | Today shows its sections | a lane heading or status line appears | `todayLoadMs`, `todaySections` |
 | chat answers about seeded mail | "When is milestone 2 due?" gets a non-error answer | `chatAnswerMs`, `chatMentionsDueDay` |
 | Settings / Integrations / Rules | each page renders; Integrations is not "limited rollout" | |

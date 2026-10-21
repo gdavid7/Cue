@@ -20,6 +20,11 @@ export const shortcutsDialogOpenAtom = atom(false);
 export const feedbackDialogOpenAtom = atom(false);
 
 export type MailCommandContext = {
+  /**
+   * Across accounts: the account the actions run in, or how many when the
+   * selection spans several.
+   */
+  account?: string;
   actions: {
     archive: () => void;
     moveToInbox?: () => void;

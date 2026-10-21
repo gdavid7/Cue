@@ -23,6 +23,12 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => mockUseAccount(),
 }));
 
+// The reader's person card opens compose, whose server actions need a server.
+vi.mock("@/components/person-card/PersonCard", () => ({
+  PersonCardTrigger: ({ children }: { children: React.ReactNode }) => children,
+  openSenderPersonCard: vi.fn(),
+}));
+
 vi.mock("@/components/assistant-chat/email-lookup-context", () => ({
   useEmailLookup: () => mockUseEmailLookup(),
 }));

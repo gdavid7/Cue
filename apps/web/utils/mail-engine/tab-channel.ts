@@ -8,6 +8,7 @@ import {
   observeByKind,
   pageConnectivityOnline,
   requestSyncUnlessOffline,
+  unsupportedMethodMessage,
   type WorkerObserveKind,
 } from "@/utils/mail-engine/worker-protocol";
 
@@ -130,7 +131,7 @@ export function bindTabMailOwner(input: {
       input.bus.post({
         type: "error",
         id: message.id,
-        message: `unsupported method ${message.method}`,
+        message: unsupportedMethodMessage(message.method),
       });
       return;
     }
@@ -310,6 +311,7 @@ export function createTabFollowerClient(input: {
     // Answered by the tab that owns the engine; it fails over to the
     // provider search if that tab can't.
     searchMessages: (query) => call("searchMessages", [query]) as never,
+    queryPersonCard: (query) => call("queryPersonCard", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

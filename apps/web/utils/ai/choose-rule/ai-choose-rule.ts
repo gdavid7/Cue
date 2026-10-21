@@ -393,7 +393,7 @@ function logAiChooseRuleResult<
   };
 
   if (resolvedRuleNames.length === 0) {
-    logger.warn("AI choose rule returned no usable rule", logPayload);
+    logger.info("AI choose rule returned no usable rule", logPayload);
   } else {
     logger.info("AI choose rule completed", logPayload);
   }

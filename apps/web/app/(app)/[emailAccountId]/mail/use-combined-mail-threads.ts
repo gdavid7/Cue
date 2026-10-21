@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo } from "react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
-import type { MailPredicate } from "@inboxzero/mail-core/queries";
+import {
+  MAX_MESSAGE_PREDICATE_IDS,
+  type MailPredicate,
+} from "@inboxzero/mail-core/queries";
 import useSWR from "swr";
 import { useSWRConfig } from "swr";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
@@ -16,6 +19,11 @@ import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import { searchQueryForAccounts } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
+import {
+  type HiddenDrafts,
+  useAllAccountsHiddenDraftMessageIds,
+} from "@/hooks/useHiddenDraftMessageIds";
 
 const EMPTY_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
 const MAX_MAIL_PREDICATE_CHILDREN = 32;
@@ -25,6 +33,7 @@ export function useCombinedMailThreads({
   emailAccountId,
   enabled,
   isUnread,
+  mailboxType,
   labelNames,
   searchQuery,
   providerSearch,
@@ -33,6 +42,8 @@ export function useCombinedMailThreads({
   emailAccountId: string;
   enabled: boolean;
   isUnread: boolean;
+  /** Drafts, Sent or Starred, merged in place of the inbox. */
+  mailboxType?: string;
   labelNames?: string[];
   searchQuery?: string;
   /** False while a search is still being typed: it reads local mail only. */
@@ -47,17 +58,32 @@ export function useCombinedMailThreads({
     [accounts],
   );
   const labelsByAccount = useLabelsByAccount(enabled ? accountIds : []);
-  const predicate = useMemo(
-    () =>
-      labelNames?.length
-        ? labelNamesToAccountScopedPredicate({
-            accountIds,
-            labelsByAccount,
-            labelNames,
-          })
-        : undefined,
-    [accountIds, labelNames, labelsByAccount],
+  const isDrafts = !searchQuery && mailboxType === "draft";
+  const hiddenDrafts = useAllAccountsHiddenDraftMessageIds(
+    enabled && isDrafts ? accounts : undefined,
   );
+  const predicate = useMemo(() => {
+    // A conversation stays in Drafts only through drafts that aren't hidden.
+    if (isDrafts)
+      return hiddenDrafts.length
+        ? withoutAccountsHiddenDrafts(hiddenDrafts)
+        : undefined;
+    if (mailboxType) return;
+    return labelNames?.length
+      ? labelNamesToAccountScopedPredicate({
+          accountIds,
+          labelsByAccount,
+          labelNames,
+        })
+      : undefined;
+  }, [
+    accountIds,
+    hiddenDrafts,
+    isDrafts,
+    labelNames,
+    labelsByAccount,
+    mailboxType,
+  ]);
   // Each account reads the search in its own provider's syntax, and
   // `label:Name` by its own labels.
   const searchPredicate = useMemo(
@@ -80,12 +106,13 @@ export function useCombinedMailThreads({
   );
   const query = useMemo<ThreadsQuery>(() => {
     if (searchQuery) return { q: searchQuery };
+    if (mailboxType) return { type: mailboxType };
     if (labelNames?.length) {
       return { type: "inbox" };
     }
     if (isUnread) return { type: "unread" };
     return { type: "inbox" };
-  }, [isUnread, labelNames, searchQuery]);
+  }, [isUnread, labelNames, mailboxType, searchQuery]);
   const state = useEngineMailThreads({
     emailAccountId,
     accountIds: accountIds.length ? accountIds : [emailAccountId],
@@ -227,6 +254,30 @@ export function labelNamesToAccountScopedPredicate({
   return {
     kind: "all",
     predicates: [{ kind: "role", role: "inbox" }, anyPredicate(predicates)],
+  };
+}
+
+/**
+ * Drafts, leaving out each account's drafts that a send stands in for. Ids are
+ * matched within their own account, as another account's message could share
+ * one.
+ */
+function withoutAccountsHiddenDrafts(hidden: HiddenDrafts[]): MailPredicate {
+  return {
+    kind: "all",
+    predicates: [
+      threadsQueryToPredicate({ type: "draft" }),
+      {
+        kind: "not",
+        predicate: anyPredicate(
+          hidden.map(({ emailAccountId, messageIds }) => ({
+            kind: "message",
+            accountId: emailAccountId,
+            ids: messageIds.slice(-MAX_MESSAGE_PREDICATE_IDS),
+          })),
+        ),
+      },
+    ],
   };
 }
 

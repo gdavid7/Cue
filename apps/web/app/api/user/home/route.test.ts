@@ -54,9 +54,24 @@ describe("GET /api/user/home", () => {
 
     await getToday();
 
-    expect(vi.mocked(getHomeData).mock.calls[0][0].ownAddresses).toEqual(
+    expect(await vi.mocked(getHomeData).mock.calls[0][0].ownAddresses).toEqual(
       expect.arrayContaining(["other@example.com"]),
     );
+  });
+
+  it("starts Today's reads without waiting for the user's addresses", async () => {
+    let resolveAddresses: (addresses: string[]) => void = () => undefined;
+    vi.mocked(getUserOwnAddresses).mockReturnValue(
+      new Promise((resolve) => {
+        resolveAddresses = resolve;
+      }),
+    );
+
+    const response = getToday();
+    await vi.waitFor(() => expect(getHomeData).toHaveBeenCalled());
+    resolveAddresses(["other@example.com"]);
+
+    expect((await response).status).toBe(200);
   });
 
   it("still loads Today when the user's addresses can't be read", async () => {
@@ -65,9 +80,9 @@ describe("GET /api/user/home", () => {
     const response = await getToday();
 
     expect(response.status).toBe(200);
-    expect(vi.mocked(getHomeData).mock.calls[0][0].ownAddresses).toHaveLength(
-      1,
-    );
+    expect(
+      await vi.mocked(getHomeData).mock.calls[0][0].ownAddresses,
+    ).toHaveLength(1);
   });
 });
 

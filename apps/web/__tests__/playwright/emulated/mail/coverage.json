@@ -32,7 +32,24 @@
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
     "utils/home/get-home.ts",
-    "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx"
+    "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx",
+    "app/(app)/[emailAccountId]/home/TodayWeather.tsx"
+  ],
+  "today-quiet.spec.ts": [
+    "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
+    "app/(app)/[emailAccountId]/home/AllClear.tsx",
+    "utils/weather/open-meteo.ts",
+    "utils/actions/today-weather.ts",
+    "utils/home/next-up.ts"
+  ],
+  "mixed-provider-accounts.spec.ts": [
+    "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
+    "app/(app)/[emailAccountId]/home/NextUp.tsx",
+    "utils/home/next-up.ts",
+    "utils/calendar/fetch-events-in-window.ts",
+    "components/CommandK.tsx",
+    "hooks/useCommandPaletteCommands.ts",
+    "app/(app)/[emailAccountId]/clean/CleanAccountPicker.tsx"
   ],
   "today-all-accounts.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
@@ -201,6 +218,12 @@
     "utils/mail-engine/wasm-sqlite.ts",
     "utils/mail-engine/active-client.ts"
   ],
+  "person-card.spec.ts": [
+    "components/person-card/PersonCard.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "components/email-list/EmailDetails.tsx",
+    "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"
+  ],
   "plain-text-links.spec.ts": ["components/email-list/EmailMessage.tsx"],
   "reader-transition.spec.ts": [
     "app/(app)/[emailAccountId]/mail/BufferedThreadReader.tsx",
@@ -305,5 +328,26 @@
     "lib/shortcuts/useShortcuts.ts",
     "app/(app)/[emailAccountId]/mail/thread-list-behavior.ts",
     "components/email-list/EmailThread.tsx"
+  ],
+  "all-inboxes-folders.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/use-combined-mail-threads.ts",
+    "app/(app)/[emailAccountId]/mail/all-accounts-list.tsx",
+    "app/(app)/[emailAccountId]/mail/ScheduledEmailList.tsx",
+    "app/(app)/[emailAccountId]/mail/SnoozedThreadList.tsx",
+    "hooks/useAllAccountsList.ts",
+    "hooks/useHiddenDraftMessageIds.ts"
+  ],
+  "swipe-actions.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/ThreadRow.tsx",
+    "app/(app)/[emailAccountId]/mail/use-row-swipe.ts",
+    "app/(app)/[emailAccountId]/mail/row-swipe.ts"
+  ],
+  "office-attachment-previews.spec.ts": [
+    "components/email-list/EmailAttachments.tsx",
+    "components/email-list/DocxAttachmentPreview.tsx",
+    "components/email-list/XlsxAttachmentPreview.tsx",
+    "utils/attachments/attachment-preview.ts",
+    "utils/attachments/docx-frame.ts",
+    "utils/attachments/office-package.ts"
   ]
 }

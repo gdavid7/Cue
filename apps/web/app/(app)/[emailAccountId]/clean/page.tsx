@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getLastJob } from "@/app/(app)/[emailAccountId]/clean/helpers";
+import { CleanAccountPicker } from "@/app/(app)/[emailAccountId]/clean/CleanAccountPicker";
 import { ConfirmationStep } from "@/app/(app)/[emailAccountId]/clean/ConfirmationStep";
 import { Card } from "@/components/ui/card";
 import { Loading } from "@/components/Loading";
@@ -20,6 +21,7 @@ export default async function CleanPage({
 
   return (
     <Card className="my-4 max-w-2xl p-6 sm:mx-4 md:mx-auto">
+      <CleanAccountPicker />
       <Suspense fallback={<Loading />}>
         <ConfirmationStep
           showFooter

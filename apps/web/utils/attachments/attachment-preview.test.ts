@@ -1,10 +1,14 @@
+import { unzipSync, zipSync } from "fflate";
 import { encodeImage } from "utif2";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getAttachmentImagePreview,
   getAttachmentPreview,
+  getAttachmentPreviewTarget,
+  isPreviewableAttachment,
+  OFFICE_PREVIEW_MAX_BYTES,
   isPreviewableImageType,
-} from "./image-preview";
+} from "./attachment-preview";
 
 describe("attachment image previews", () => {
   it.each([
@@ -163,3 +167,114 @@ function stubCanvas() {
   );
   return drawn;
 }
+
+describe("attachment preview routing", () => {
+  const DOCX =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const XLSX =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const PPTX =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  const zip = () =>
+    new Blob([
+      zipSync({
+        "word/document.xml": new TextEncoder().encode("<w:document/>"),
+      }),
+    ]);
+
+  it.each([
+    [DOCX, "notes", "docx"],
+    ["application/octet-stream", "Notes.DOCX", "docx"],
+    [XLSX, "budget", "xlsx"],
+    ["application/octet-stream", "budget.xlsx", "xlsx"],
+  ] as const)("previews a %s named %s as %s", async (mimeType, filename, kind) => {
+    expect(isPreviewableAttachment({ mimeType, filename })).toBe(true);
+    const target = await getAttachmentPreviewTarget(zip(), {
+      mimeType,
+      filename,
+    });
+    expect(target?.kind).toBe(kind);
+  });
+
+  // No in-browser renderer for these, so they keep the download button only.
+  it.each([
+    [PPTX, "deck.pptx"],
+    ["application/msword", "old.doc"],
+    ["application/vnd.ms-excel", "old.xls"],
+    ["application/zip", "archive.zip"],
+  ])("leaves %s (%s) download-only", async (mimeType, filename) => {
+    expect(isPreviewableAttachment({ mimeType, filename })).toBe(false);
+    expect(
+      await getAttachmentPreviewTarget(zip(), { mimeType, filename }),
+    ).toBeUndefined();
+  });
+
+  it("trusts the bytes over an Office name", async () => {
+    const pdf = new Blob([new TextEncoder().encode("%PDF-1.7\n")]);
+    const target = await getAttachmentPreviewTarget(pdf, {
+      mimeType: DOCX,
+      filename: "report.docx",
+    });
+    expect(target?.kind).toBe("file");
+    expect(target && "file" in target && target.file.type).toBe(
+      "application/pdf",
+    );
+
+    const html = new Blob(["<html><script>alert(1)</script></html>"]);
+    expect(
+      await getAttachmentPreviewTarget(html, {
+        mimeType: XLSX,
+        filename: "budget.xlsx",
+      }),
+    ).toBeUndefined();
+  });
+
+  // Unpacked on the page, so a bomb must be refused before parsing.
+  it("refuses a package that would inflate far past its size", async () => {
+    const bomb = zipSync({
+      "word/document.xml": new Uint8Array(2 * 1024 * 1024),
+    });
+    expect(
+      await getAttachmentPreviewTarget(new Blob([bomb]), {
+        mimeType: DOCX,
+        filename: "bomb.docx",
+      }),
+    ).toEqual({ kind: "tooLarge" });
+  });
+
+  it("refuses a file over the Office preview cap without unpacking it", async () => {
+    const big = new Blob([
+      new Uint8Array([80, 75, 3, 4]),
+      new Uint8Array(OFFICE_PREVIEW_MAX_BYTES),
+    ]);
+    expect(
+      await getAttachmentPreviewTarget(big, {
+        mimeType: XLSX,
+        filename: "huge.xlsx",
+      }),
+    ).toEqual({ kind: "tooLarge" });
+  });
+
+  it("has no preview for a file that only starts like a zip", async () => {
+    expect(
+      await getAttachmentPreviewTarget(
+        new Blob([new Uint8Array([80, 75, 3, 4, 1, 2, 3])]),
+        { mimeType: DOCX, filename: "broken.docx" },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("hands the renderer the repacked parts, not the original zip", async () => {
+    const original = zip();
+    const target = await getAttachmentPreviewTarget(original, {
+      mimeType: DOCX,
+      filename: "notes.docx",
+    });
+    if (!target || !("file" in target)) throw new Error("no preview");
+    const repacked = unzipSync(new Uint8Array(await target.file.arrayBuffer()));
+    expect(repacked).toEqual(
+      unzipSync(new Uint8Array(await original.arrayBuffer())),
+    );
+    expect(target.file).not.toBe(original);
+  });
+});

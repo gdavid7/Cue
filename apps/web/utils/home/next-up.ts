@@ -8,7 +8,10 @@ import { findIntegration } from "@/utils/mcp/integrations";
 import { connectionExecutor } from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import { onePerIntegration } from "@/utils/mcp/user-connections";
-import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
+import {
+  onePerExternalAccount,
+  ownedBySameUser,
+} from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
 import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
@@ -94,16 +97,15 @@ export async function getNextUp({
 }: {
   emailAccountId: string;
   /** Every address the user has connected. */
-  ownAddresses: string[];
+  ownAddresses: string[] | Promise<string[]>;
   timeZone: string;
   logger: Logger;
   now: Date;
 }) {
   const today = startOfDay(new TZDate(now, timeZone));
-  const tomorrow = addDays(today, 1);
   const dayAfter = addDays(today, 2);
 
-  const [calendar, deadlines, calendarAccounts] = await Promise.all([
+  const [calendar, deadlines, calendarAccounts, addresses] = await Promise.all([
     upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
     getDeadlines({
       emailAccountId,
@@ -114,8 +116,9 @@ export async function getNextUp({
     }),
     prisma.calendarConnection.findMany({
       where: calendarConnectionsWhere(emailAccountId),
-      select: { email: true },
+      select: { id: true, provider: true, email: true, isConnected: true },
     }),
+    ownAddresses,
   ]);
   const suggestion = deadlines.connected
     ? null
@@ -124,7 +127,7 @@ export async function getNextUp({
   // Events come from all of the person's calendars, so a decline by any of
   // their connected addresses or the calendars' own addresses counts.
   const self = new Set(
-    [...ownAddresses, ...calendarAccounts.map((account) => account.email)].map(
+    [...addresses, ...calendarAccounts.map((account) => account.email)].map(
       (email) => email.toLowerCase(),
     ),
   );
@@ -136,26 +139,30 @@ export async function getNextUp({
         (a) => a.declined && self.has(a.email.toLowerCase()),
       ),
   );
-  // Late in the day, what's left tonight matters less than how tomorrow starts.
-  const evening = new TZDate(now, timeZone).getHours() >= EVENING_HOUR;
-  const next = evening
-    ? events.find((e) => e.startTime >= tomorrow && e.startTime < dayAfter)
-    : events.find((e) => e.startTime < tomorrow);
+  // With two calendar accounts, each meeting says whose calendar it is on. A
+  // disconnected one, or one connected from two mailboxes, is no second source.
+  const labelCalendars =
+    onePerExternalAccount(
+      calendarAccounts.filter((account) => account.isConnected),
+    ).length > 1;
+  const next = pickNextEvent(events, { now, today, timeZone });
 
   return {
     calendar: {
       connected: calendar.connected,
       next: next
         ? {
-            title: next.title,
-            at: next.startTime.toISOString(),
-            url: next.eventUrl,
-            tomorrow: evening,
+            title: next.event.title,
+            at: next.event.startTime.toISOString(),
+            url: next.event.eventUrl,
+            tomorrow: next.tomorrow,
           }
         : null,
     },
     nextUp: sortByDue([
-      ...events.slice(0, EVENTS_SHOWN).map(eventItem),
+      ...events
+        .slice(0, EVENTS_SHOWN)
+        .map((event) => eventItem(event, labelCalendars)),
       ...deadlines.items,
     ]).slice(0, NEXT_UP_SHOWN),
     suggestion,
@@ -547,7 +554,7 @@ async function clickUpDeadlines(
   });
 }
 
-function eventItem(event: CalendarEvent): NextUpItem {
+function eventItem(event: CalendarEvent, labelCalendar: boolean): NextUpItem {
   return {
     id: `event:${event.id}`,
     kind: "event",
@@ -555,6 +562,9 @@ function eventItem(event: CalendarEvent): NextUpItem {
     at: event.startTime.toISOString(),
     endAt: event.endTime.toISOString(),
     source: "Calendar",
+    ...(labelCalendar && event.calendarEmail
+      ? { detail: event.calendarEmail }
+      : {}),
     url: event.eventUrl,
   };
 }
@@ -646,3 +656,29 @@ const clickUpTasksSchema = z.object({
     }),
   ),
 });
+
+/**
+ * The one meeting Today names as next, from events still to come. Late in
+ * the day, what's left tonight matters less than how tomorrow starts; and
+ * once today's meetings are over, tomorrow's first one is still worth knowing
+ * on a quiet afternoon.
+ */
+function pickNextEvent<T extends Pick<CalendarEvent, "startTime">>(
+  events: T[],
+  { now, today, timeZone }: { now: Date; today: Date; timeZone: string },
+): { event: T; tomorrow: boolean } | null {
+  const tomorrow = addDays(today, 1);
+  const dayAfter = addDays(today, 2);
+  const upcoming = [...events].sort(
+    (a, b) => a.startTime.getTime() - b.startTime.getTime(),
+  );
+  const tomorrowFirst = upcoming.find(
+    (event) => event.startTime >= tomorrow && event.startTime < dayAfter,
+  );
+  const evening = new TZDate(now, timeZone).getHours() >= EVENING_HOUR;
+  const laterToday = evening
+    ? undefined
+    : upcoming.find((event) => event.startTime < tomorrow);
+  if (laterToday) return { event: laterToday, tomorrow: false };
+  return tomorrowFirst ? { event: tomorrowFirst, tomorrow: true } : null;
+}

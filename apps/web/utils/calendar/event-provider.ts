@@ -100,6 +100,7 @@ export function createCalendarEventProvider({
   connection: {
     accessToken: string | null;
     calendarIds?: string[];
+    email?: string;
     expiresAt: Date | null;
     id: string;
     provider: string;
@@ -110,6 +111,7 @@ export function createCalendarEventProvider({
 }) {
   const providerParams = {
     accessToken: connection.accessToken,
+    calendarEmail: connection.email,
     calendarIds: connection.calendarIds,
     connectionId: connection.id,
     refreshToken: connection.refreshToken,

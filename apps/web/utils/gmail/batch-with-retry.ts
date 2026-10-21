@@ -8,6 +8,7 @@ import {
   MAX_GMAIL_BLOCKING_RETRY_DELAY_MS,
 } from "@/utils/gmail/retry";
 import { sleep } from "@/utils/sleep";
+import { timeRequestDependency } from "@/utils/request-metrics";
 import type { Logger } from "@/utils/logger";
 import {
   currentGmailQuotaContext,
@@ -255,7 +256,7 @@ async function getBatchChunkWithRetry<TRaw, TParsed>({
       firstReason: firstError?.errors?.[0]?.reason,
     });
     sleepBudget.remainingMs -= delayMs;
-    await sleep(delayMs);
+    await timeRequestDependency("wait", () => sleep(delayMs));
     const retryChunks = chunk(
       remainingIds,
       Math.max(
@@ -320,9 +321,11 @@ function retryLimitReached<TParsed>({
   retryError?: BatchError["error"];
   logger: Logger;
 }): BatchWithRetryResult<TParsed> {
-  logger.warn("Too many Gmail batch retries", {
+  logger.warn("Gmail retry budget exhausted", {
     batchSize: ids.length,
-    retryCount,
+    attemptCount: retryCount,
+    lastStatus: retryError?.code,
+    lastReason: retryError?.errors?.[0]?.reason,
   });
   return { items: [], unloadedIds: ids, unloadedError: retryError };
 }
