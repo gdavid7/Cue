@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { jwt } from "better-auth/plugins";
 import {
@@ -23,6 +23,25 @@ describe("revokedSessionGuardPlugin", () => {
       await auth.api.getSession({ headers: new Headers({ cookie }) }),
     ).not.toBeNull();
     expect((await post(auth, path, cookie, body)).status).toBe(401);
+  });
+
+  it("answers 503 for an account change when the session store fails", async () => {
+    const { auth, cookie } = await setup();
+    const context = await auth.$context;
+    vi.spyOn(context.internalAdapter, "findSession").mockRejectedValue(
+      new Error("database unavailable"),
+    );
+
+    const response = await post(auth, "/update-user", cookie, {
+      name: "Renamed",
+    });
+
+    expect(response.status).toBe(503);
+    expect(
+      response.headers
+        .getSetCookie()
+        .some((setCookie) => setCookie.includes("Max-Age=0")),
+    ).toBe(false);
   });
 
   it("still lets a live session change the account", async () => {
@@ -78,6 +97,50 @@ describe("revokedSessionGuardPlugin", () => {
             ),
         ).toBe(true);
       }
+    });
+
+    // Each spelling still carries the session to Better Auth's own cookie
+    // reading, or to none of it; either way no code is issued.
+    it.each([
+      [
+        "padded names",
+        (pairs: string[]) => pairs.map((pair) => pair.replace("=", " =")),
+      ],
+      ["repeated names", (pairs: string[]) => [...pairs, ...pairs]],
+      [
+        "a mixed-case copy",
+        (pairs: string[]) => [
+          ...pairs.map((pair) => pair.replace("better-auth", "Better-Auth")),
+          ...pairs,
+        ],
+      ],
+    ])("sends a revoked session written with %s to sign in", async (_spelling, respell) => {
+      const signedIn = await setup();
+      await signedIn.revoke();
+      const cookie = respell(signedIn.cookie.split("; ")).join("; ");
+
+      const location = await authorize(signedIn, cookie);
+
+      expect(location.pathname).toBe("/mcp/login");
+      expect(location.searchParams.get("code")).toBeNull();
+    });
+
+    it("answers 503 and keeps the session when the session store fails", async () => {
+      const signedIn = await setup();
+      const context = await signedIn.auth.$context;
+      vi.spyOn(context.internalAdapter, "findSession").mockRejectedValue(
+        new Error("database unavailable"),
+      );
+
+      const response = await authorizeResponse(signedIn, signedIn.cookie);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("location")).toBeNull();
+      expect(
+        response.headers
+          .getSetCookie()
+          .some((setCookie) => setCookie.includes("Max-Age=0")),
+      ).toBe(false);
     });
 
     it("sends a request without a session to sign in", async () => {
