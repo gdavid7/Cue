@@ -19,6 +19,9 @@ import { timeRequestDependency } from "@/utils/request-metrics";
 const logger = createScopedLogger("gmail/batch");
 
 const BATCH_LIMIT = 100;
+// A batch carries up to 100 reads, so it gets longer than the single-call 10s
+// used elsewhere, but a hung connection must not stall a sync page forever.
+export const GMAIL_BATCH_FETCH_TIMEOUT_MS = 30_000;
 
 // Uses Gmail batch API to get multiple responses in one request
 // https://developers.google.com/gmail/api/guides/batch
@@ -79,6 +82,7 @@ async function sendBatch(
             "User-Agent": "Cue (gzip)",
           },
           body: batchRequestBody,
+          signal: AbortSignal.timeout(GMAIL_BATCH_FETCH_TIMEOUT_MS),
         });
         return {
           textRes: await res.text(),

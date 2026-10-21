@@ -321,9 +321,11 @@ function retryLimitReached<TParsed>({
   retryError?: BatchError["error"];
   logger: Logger;
 }): BatchWithRetryResult<TParsed> {
-  logger.warn("Too many Gmail batch retries", {
+  logger.warn("Gmail retry budget exhausted", {
     batchSize: ids.length,
-    retryCount,
+    attemptCount: retryCount,
+    lastStatus: retryError?.code,
+    lastReason: retryError?.errors?.[0]?.reason,
   });
   return { items: [], unloadedIds: ids, unloadedError: retryError };
 }
