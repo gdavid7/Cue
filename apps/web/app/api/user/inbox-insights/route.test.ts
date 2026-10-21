@@ -28,10 +28,26 @@ vi.mock("@/utils/middleware", async () => {
     typeof import("@/__tests__/helpers")
   >("@/__tests__/helpers");
 
-  return createWithEmailProviderTestMiddleware(
+  const { withEmailProvider } = createWithEmailProviderTestMiddleware(
     { getMessage: mocks.getMessage },
     { handleSafeErrors: true },
   );
+
+  // The real middleware logs "Request completed" from the request's logger
+  // once the handler returns, however it ended.
+  return {
+    withEmailProvider: (
+      scope: string,
+      handler: (request: any, ...context: any[]) => Promise<Response>,
+    ) =>
+      withEmailProvider(scope, async (request, ...context) => {
+        try {
+          return await handler(request, ...context);
+        } finally {
+          (request as any).logger.info("Request completed");
+        }
+      }),
+  };
 });
 
 import { runWithAuditContext } from "@/utils/audit/context";
@@ -102,6 +118,41 @@ describe("GET /api/user/inbox-insights", () => {
     ]);
   });
 
+  it("puts the chunk's size and lane on the request's completion line, with no mail data", async () => {
+    mocks.rateLimitCount.mockResolvedValue(1);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await get("&known=m1", "t1:m1,t2:m2,t3:m3");
+
+      const line = logSpy.mock.calls
+        .map((args) => String(args[0]))
+        .find((entry) => entry.includes("Request completed"));
+      expect(line).toContain('"itemCount": 3');
+      expect(line).toContain('"newCount": 2');
+      expect(line).toContain('"priority": "background"');
+      expect(line).not.toMatch(/alice|@example\.com/);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("marks the open conversation's request interactive", async () => {
+    mocks.rateLimitCount.mockResolvedValue(1);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await get("&open=1");
+
+      const line = logSpy.mock.calls
+        .map((args) => String(args[0]))
+        .find((entry) => entry.includes("Request completed"));
+      expect(line).toContain('"itemCount": 1');
+      expect(line).toContain('"newCount": 1');
+      expect(line).toContain('"priority": "interactive"');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   // RD-3: the browser keeps what it was given and names those messages.
   it("answers a page the browser already holds without charging the rate limit", async () => {
     const response = await get("&known=m1");
@@ -113,10 +164,10 @@ describe("GET /api/user/inbox-insights", () => {
   });
 });
 
-function get(query = "") {
+function get(query = "", items = "t1:m1") {
   return GET(
     new NextRequest(
-      `http://localhost:3000/api/user/inbox-insights?items=t1:m1${query}`,
+      `http://localhost:3000/api/user/inbox-insights?items=${items}${query}`,
     ),
     { params: Promise.resolve({}) },
   );

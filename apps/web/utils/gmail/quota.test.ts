@@ -22,6 +22,7 @@ import {
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
+import { isFastRequestSampled } from "@/utils/request-sampling";
 import { sleep } from "@/utils/sleep";
 
 vi.mock("@/utils/gmail/quota-store", async () => {
@@ -1281,6 +1282,72 @@ describe("Gmail quota gate", () => {
 
     expect(await withinDeadline).toBeInstanceOf(GmailCallDeferredError);
     await expect(withoutDeadline).resolves.toBe("ok");
+  });
+
+  describe("deferral log line", () => {
+    // Late in a 30s request the bucket cannot pay, so the call is deferred.
+    const deferLate = async (
+      emailAccountId: string,
+      caller: string,
+      priority: "interactive" | "background",
+      requestId: string,
+    ) => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const admit = (cost: number) =>
+        runWithGmailQuota({ caller, priority }, () =>
+          meterGmailCall({ emailAccountId, cost }, async () => "ok"),
+        );
+      const outcome = runWithAuditContext(
+        { actorType: "anonymous", requestId, source: caller },
+        () =>
+          runWithRequestDeadline(30, async () => {
+            await sleep(19_500);
+            await admit(800);
+            return admit(600);
+          }),
+      ).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await outcome).toBeInstanceOf(GmailCallDeferredError);
+      return logSpy.mock.calls
+        .map((args) => String(args[0]))
+        .filter((line) => line.includes("Gmail call deferred"));
+    };
+
+    it("ships every deferral of a route a person is waiting on, with numbers and ids only", async () => {
+      const requestId = Array.from(
+        { length: 200 },
+        (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      ).find((id) => !isFastRequestSampled(id, 0.08)) as string;
+
+      const lines = await deferLate(
+        "account-defer-log-interactive",
+        "user/thread-context",
+        "interactive",
+        requestId,
+      );
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('"route": "user/thread-context"');
+      expect(lines[0]).toContain('"priority": "interactive"');
+      expect(lines[0]).toMatch(/"waitMs": \d+/);
+      expect(lines[0]).not.toMatch(/@|subject|"from"|"to"/);
+    });
+
+    it("keeps a background route's deferral at trace unless its request is sampled", async () => {
+      const requestId = Array.from(
+        { length: 200 },
+        (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      ).find((id) => !isFastRequestSampled(id, 0.08)) as string;
+
+      const lines = await deferLate(
+        "account-defer-log-background",
+        "automation-jobs/execute",
+        "background",
+        requestId,
+      );
+
+      expect(lines).toHaveLength(0);
+    });
   });
 
   it("lets go of a turn that never ends once its cap runs out", async () => {
