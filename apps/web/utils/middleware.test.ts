@@ -27,6 +27,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
 
 const uuidOverride = vi.hoisted(() => ({
@@ -565,6 +566,20 @@ describe("Middleware", () => {
 
       expect(response.status).toBe(429);
       expect(response.headers.get("Retry-After")).toBe("30");
+    });
+
+    it("answers a Gmail call deferred by the quota budget with 503 and Retry-After, not an error", async () => {
+      const response = await withError(
+        "user/inbox-insights",
+        vi
+          .fn()
+          .mockRejectedValue(new GmailCallDeferredError(12_300, "background")),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("13");
+      expect(mockCaptureException).not.toHaveBeenCalled();
+      expect(await response.json()).toMatchObject({ isKnownError: true });
     });
 
     it("tells the client when to retry a rate limit on a route with no email account", async () => {
