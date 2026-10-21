@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createHostRuntime, createMailEngine } from "./engine";
+import {
+  createHostRuntime,
+  createMailEngine,
+  SEARCH_CANCEL_GRACE_MS,
+} from "./engine";
 import type { ClaimedWork, MailStore } from "./ports/mail-store";
 import type { MailboxSource } from "./ports/mailbox-source";
 import type { ConversationQuery, MailboxView, MailPredicate } from "./queries";
@@ -280,6 +284,114 @@ describe("typed searches in the engine", () => {
     view.close();
     await harness.engine.close();
   });
+
+  it("says when the provider began a search, not when it was queued", async () => {
+    let now = 1_000_000;
+    const answer = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const harness = searchHarness({
+      search: () => answer.promise,
+      nowMs: () => now,
+    });
+    const view = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await settle();
+    expect(view.getSnapshot().data?.providerSearch).toEqual([
+      { accountId: "a", state: "searching", answered: false },
+    ]);
+
+    now += 5000;
+    const running = harness.engine.runUntil(Date.now() + 2000);
+    await until(() => harness.searches.length === 1);
+    await settle();
+    expect(view.getSnapshot().data?.providerSearch).toEqual([
+      {
+        accountId: "a",
+        state: "searching",
+        answered: false,
+        startedAtMs: 1_005_000,
+      },
+    ]);
+
+    answer.resolve(exact(["m1"]));
+    await running;
+    view.close();
+    await harness.engine.close();
+  });
+
+  it("stops a search no view wants any more, and fetches nothing it found", async () => {
+    const answer = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const signals: AbortSignal[] = [];
+    const harness = searchHarness({
+      search: (_accountId, signal) => {
+        signals.push(signal);
+        return answer.promise;
+      },
+    });
+    const view = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    const running = harness.engine.runUntil(Date.now() + 5000);
+    await until(() => signals.length === 1);
+
+    view.close();
+    await wait(SEARCH_CANCEL_GRACE_MS + 50);
+    expect(signals[0].aborted).toBe(true);
+    // The provider answers anyway: none of it is fetched.
+    answer.resolve(exact(["m1", "m2"]));
+    await running;
+    expect(harness.hydrations).toEqual([]);
+
+    // A view that wants it again asks afresh.
+    const reopened = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await until(
+      () => harness.searches.length === 2,
+      () => harness.run(),
+    );
+    reopened.close();
+    await harness.engine.close();
+  });
+
+  it("drops another account's queued search once nobody wants it", async () => {
+    const answer = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const harness = searchHarness({ search: () => answer.promise });
+    const view = harness.engine.observeMailbox(
+      searchQuery("larger:5M", { accountIds: ["a", "b"] }),
+    );
+    const running = harness.engine.runUntil(Date.now() + 5000);
+    await until(() => harness.searches.length === 1);
+
+    view.close();
+    await wait(SEARCH_CANCEL_GRACE_MS + 50);
+    await running;
+    await harness.run();
+
+    expect(harness.searchedBy).toEqual([["a", "larger:5M"]]);
+    expect(harness.hydrations).toEqual([]);
+    await harness.engine.close();
+  });
+
+  it("keeps a search running for a view that picks it back up at once", async () => {
+    const answer = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const signals: AbortSignal[] = [];
+    const harness = searchHarness({
+      search: (_accountId, signal) => {
+        signals.push(signal);
+        return answer.promise;
+      },
+    });
+    const first = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    const running = harness.engine.runUntil(Date.now() + 5000);
+    await until(() => signals.length === 1);
+
+    first.close();
+    const second = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await wait(SEARCH_CANCEL_GRACE_MS + 50);
+    expect(signals[0].aborted).toBe(false);
+    answer.resolve(exact(["m1"]));
+    await running;
+
+    expect(harness.searches).toHaveLength(1);
+    expect(harness.hydrations).toContain("enqueue");
+    second.close();
+    await harness.engine.close();
+  });
 });
 
 const FALSE: MailPredicate = { kind: "any", predicates: [] };
@@ -329,9 +441,15 @@ function exact(
 }
 
 function searchHarness(input: {
-  search: (accountId: string) => Awaited<ReturnType<MailboxSource["search"]>>;
+  search: (
+    accountId: string,
+    signal: AbortSignal,
+  ) =>
+    | ReturnType<MailboxSource["search"]>
+    | Awaited<ReturnType<MailboxSource["search"]>>;
   nowMs?: () => number;
 }) {
+  const hydrations: string[] = [];
   const searchedBy: Array<[string, string]> = [];
   const jobs: ClaimedWork[] = [];
   const reads: MailPredicate[] = [];
@@ -361,12 +479,14 @@ function searchHarness(input: {
     async completeJob() {},
     async deferJob() {},
     async applyHydration() {
+      hydrations.push("apply");
       return {
         status: "committed",
         revision: { databaseEpoch: "test", sequence: 1 },
       };
     },
     async enqueueHydration() {
+      hydrations.push("enqueue");
       return { databaseEpoch: "test", sequence: 1 };
     },
     async indexContactBacklog() {
@@ -391,15 +511,17 @@ function searchHarness(input: {
     async search({
       predicate,
       session,
+      signal,
     }: {
       predicate: MailPredicate;
       session: { accountId: string };
+      signal: AbortSignal;
     }) {
       if (predicate.kind === "search") {
         searches.push(predicate.query);
         searchedBy.push([session.accountId, predicate.query]);
       }
-      return input.search(session.accountId);
+      return input.search(session.accountId, signal);
     },
   } as unknown as MailboxSource;
   const engine = createMailEngine({
@@ -417,6 +539,7 @@ function searchHarness(input: {
   });
   return {
     engine,
+    hydrations,
     searches,
     searchedBy,
     lastRead: () => reads.at(-1),
@@ -439,4 +562,28 @@ function emptyView(): MailboxView {
     nextPage: null,
     coverage: [],
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function settle() {
+  return wait(10);
+}
+
+async function until(
+  condition: () => boolean,
+  step: () => Promise<unknown> = settle,
+) {
+  for (let attempt = 0; attempt < 100 && !condition(); attempt++) await step();
+  expect(condition()).toBe(true);
 }

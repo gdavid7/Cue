@@ -219,6 +219,12 @@ export const mailboxViewSchema = z.object({
         ]),
         /** Whether the provider has answered any of the search yet. */
         answered: z.boolean(),
+        /**
+         * While searching: when the provider began reading the search, so a
+         * view can time it from there rather than from when it was queued.
+         * Left out while the search waits for its turn.
+         */
+        startedAtMs: z.number().int().optional(),
       }),
     )
     .max(50)
