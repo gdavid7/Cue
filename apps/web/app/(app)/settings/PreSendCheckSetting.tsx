@@ -22,7 +22,7 @@ export function PreSendCheckSetting() {
           <ItemTitle>Check before sending</ItemTitle>
           <ItemDescription>
             Pause a send to point out a missing attachment or subject, a large
-            reply-all or someone new on a thread.
+            reply-all or someone new on a reply.
           </ItemDescription>
         </ItemContent>
         <ItemActions>

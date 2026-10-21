@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
+import { prepareEmailDraft } from "@inboxzero/email-editor/core";
 import { describe, expect, it } from "vitest";
+import { forwardEmailHtml } from "@/utils/gmail/forward";
+import type { ParsedMessage } from "@/utils/types";
 import {
-  ATTACHMENT_PHRASES,
   getComposeBodyText,
   getPreSendWarnings,
   LARGE_REPLY_RECIPIENT_COUNT,
@@ -14,7 +16,7 @@ const OWN = "me@example.com";
 
 const reply: PreSendContext = {
   kind: "reply",
-  threadAddresses: ["Alex <alex@example.com>", "sam@example.com", OWN],
+  repliedToAddresses: ["Alex <alex@example.com>", "sam@example.com", OWN],
   ownEmails: [OWN],
 };
 
@@ -39,7 +41,7 @@ describe("getPreSendWarnings", () => {
     expect(
       ids(draft({ to: "kim@example.com", subject: "Hello" }), {
         kind: "new",
-        threadAddresses: [],
+        repliedToAddresses: [],
         ownEmails: [OWN],
       }),
     ).toEqual([]);
@@ -50,7 +52,7 @@ describe("getPreSendWarnings", () => {
       Array.from({ length: count }, (_, i) => `p${i}@example.com`).join(",");
     const known = (count: number) => ({
       ...reply,
-      threadAddresses: many(count).split(","),
+      repliedToAddresses: many(count).split(","),
     });
 
     it("warns when a reply goes to many people", () => {
@@ -78,7 +80,7 @@ describe("getPreSendWarnings", () => {
       expect(
         ids(draft({ to: many(20), subject: "Party" }), {
           kind: "new",
-          threadAddresses: [],
+          repliedToAddresses: [],
           ownEmails: [OWN],
         }),
       ).toEqual([]);
@@ -94,7 +96,7 @@ describe("getPreSendWarnings", () => {
       expect(warnings).toEqual([
         {
           id: "new-recipients",
-          message: "jo@example.com isn't on this thread yet.",
+          message: "jo@example.com wasn't on the message you're replying to.",
           fix: "recipients",
         },
       ]);
@@ -106,7 +108,7 @@ describe("getPreSendWarnings", () => {
         reply,
       );
       expect(warning.message).toBe(
-        "jo@example.com and 2 others aren't on this thread yet.",
+        "jo@example.com and 2 others weren't on the message you're replying to.",
       );
     });
 
@@ -129,7 +131,7 @@ describe("getPreSendWarnings", () => {
   describe("subject", () => {
     const newMessage: PreSendContext = {
       kind: "new",
-      threadAddresses: [],
+      repliedToAddresses: [],
       ownEmails: [OWN],
     };
 
@@ -178,19 +180,13 @@ describe("getPreSendWarnings", () => {
           subject: "",
           bodyText: "Q3 &amp; Q4 enclosed",
         }),
-        { kind: "new", threadAddresses: [], ownEmails: [OWN] },
+        { kind: "new", repliedToAddresses: [], ownEmails: [OWN] },
       ),
     ).toEqual(["missing-attachment", "no-subject", "escaped-markup"]);
   });
 });
 
 describe("mentionsAttachment", () => {
-  it.each(ATTACHMENT_PHRASES)("recognises %s", (phrase) => {
-    expect(
-      mentionsAttachment(`Hi, ${phrase.toUpperCase()} you'll find it.`),
-    ).toBe(true);
-  });
-
   it.each([
     "Siehe Anbei: der Bericht",
     "Veuillez trouver ci-joint le devis",
@@ -217,6 +213,39 @@ describe("getComposeBodyText", () => {
   it("keeps what the user wrote and drops the quoted or forwarded message", () => {
     const html = `<p>Looks good to me</p><div class="gmail_quote">See the attached file</div><blockquote>Report attached</blockquote>`;
     expect(getComposeBodyText(html)).toBe("Looks good to me");
+  });
+
+  it("keeps paragraphs and line breaks apart, so words don't run together", () => {
+    const paragraphs = getComposeBodyText(
+      "<p>Hi Bob</p><p>Attached is the report</p>",
+    );
+    expect(paragraphs).toMatch(/^Hi Bob\s+Attached is the report\s*$/);
+    expect(mentionsAttachment(paragraphs)).toBe(true);
+
+    const lines = getComposeBodyText("Hi Bob<br>Attached is the report");
+    expect(lines).toMatch(/^Hi Bob\s+Attached is the report\s*$/);
+    expect(mentionsAttachment(lines)).toBe(true);
+
+    expect(
+      getComposeBodyText("<div>One</div><ul><li>Two</li><li>Three</li></ul>"),
+    ).toMatch(/^One\s+Two\s+Three\s*$/);
+  });
+
+  it("leaves out a forwarded message once the composer has split it off", () => {
+    const html = forwardEmailHtml({
+      content: "",
+      message: {
+        headers: {
+          from: "Alex <alex@example.com>",
+          to: "me@example.com",
+          subject: "Report",
+          date: "2026-10-01T10:00:00Z",
+        },
+        textHtml: "<p>The report is attached.</p>",
+      } as ParsedMessage,
+    });
+    const { editableHtml } = prepareEmailDraft({ html });
+    expect(mentionsAttachment(getComposeBodyText(editableHtml))).toBe(false);
   });
 
   it("decodes markup but shows an escaped entity as the user sees it", () => {

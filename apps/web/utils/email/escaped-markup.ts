@@ -1,6 +1,6 @@
-// What a message's text must never show: HTML entities or tags that leaked
-// into it (DR-6 showed "I&#x27;m"). Returns the kinds found, never the text,
-// because the health report is public.
+// HTML entities or tags that leaked into a message's text show up literally
+// to the reader ("I&#x27;m"). Returns the kinds found, never the text, so
+// callers can report them without exposing the message.
 const LEAKS = [
   { name: "&#", pattern: /&#/ },
   { name: "&amp;", pattern: /&amp;/i },

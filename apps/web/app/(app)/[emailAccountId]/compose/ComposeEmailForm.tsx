@@ -1375,12 +1375,12 @@ function ComposeEmailFormContent({
           },
           {
             kind: getPreSendKind(draftMode, replyingToEmail),
-            threadAddresses: [
-              replyingToEmail?.participants,
-              replyingToEmail?.to,
-              replyingToEmail?.cc,
-              replyingToEmail?.bcc,
-            ].flatMap((list) => (list ? [list] : [])),
+            // Not the reply's own recipients: Cue may have suggested someone
+            // new there. A reopened draft only knows who it was going to.
+            repliedToAddresses: (replyingToEmail?.participants
+              ? [replyingToEmail.participants]
+              : [replyingToEmail?.to, replyingToEmail?.cc, replyingToEmail?.bcc]
+            ).flatMap((list) => (list ? [list] : [])),
             ownEmails,
           },
         );

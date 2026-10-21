@@ -42,8 +42,12 @@ export function PreSendConfirmation({
     const onKeyDown = (event: KeyboardEvent) => {
       const container = containerRef.current;
       if (!container || !(event.target instanceof Node)) return;
-      if (event.isComposing) return;
-      if (event.key === "Escape" && container.form?.contains(event.target)) {
+      if (event.isComposing || event.defaultPrevented) return;
+      if (
+        event.key === "Escape" &&
+        container.form?.contains(event.target) &&
+        !isInOpenList(event.target)
+      ) {
         event.preventDefault();
         event.stopPropagation();
         onDismiss();
@@ -116,3 +120,12 @@ const FIX_LABELS: Record<PreSendWarningFix, string> = {
   recipients: "Edit recipients",
   body: "Edit message",
 };
+
+// An open autocomplete or menu takes Escape first, to close itself.
+function isInOpenList(target: Node) {
+  const element = target instanceof Element ? target : target.parentElement;
+  return Boolean(
+    element?.matches('[aria-expanded="true"]') ||
+      element?.closest('[role="listbox"], [role="menu"]'),
+  );
+}

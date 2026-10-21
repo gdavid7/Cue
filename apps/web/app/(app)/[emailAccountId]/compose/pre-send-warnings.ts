@@ -16,8 +16,8 @@ export type PreSendDraft = {
 
 export type PreSendContext = {
   kind: "new" | "reply" | "forward";
-  /** Everyone already on the thread, and whoever the reply started out to. */
-  threadAddresses: string[];
+  /** Everyone on the message being replied to. */
+  repliedToAddresses: string[];
   ownEmails: string[];
 };
 
@@ -72,7 +72,7 @@ export function getPreSendWarnings(
         fix: "recipients",
       });
     }
-    const known = new Set(uniqueAddresses(context.threadAddresses));
+    const known = new Set(uniqueAddresses(context.repliedToAddresses));
     const added = recipients.filter((address) => !known.has(address));
     if (added.length) {
       warnings.push({
@@ -156,8 +156,15 @@ export function getComposeBodyText(html: string) {
     "blockquote, .gmail_quote",
   ))
     quoted.remove();
-  return document.body.textContent ?? "";
+  // textContent runs blocks together ("Hi BobAttached"), which hides words.
+  for (const lineBreak of document.body.querySelectorAll("br"))
+    lineBreak.replaceWith("\n");
+  for (const block of document.body.querySelectorAll(TEXT_BLOCKS))
+    block.append("\n");
+  return (document.body.textContent ?? "").trim();
 }
+
+const TEXT_BLOCKS = "p, div, li, h1, h2, h3, h4, h5, h6, tr";
 
 function uniqueAddresses(lists: (string | undefined)[]) {
   return [
@@ -173,9 +180,9 @@ function uniqueAddresses(lists: (string | undefined)[]) {
 
 function describeNewRecipients(added: string[]) {
   const [first, ...rest] = added;
-  if (!rest.length) return `${first} isn't on this thread yet.`;
+  if (!rest.length) return `${first} wasn't on the message you're replying to.`;
   const others = rest.length === 1 ? "1 other" : `${rest.length} others`;
-  return `${first} and ${others} aren't on this thread yet.`;
+  return `${first} and ${others} weren't on the message you're replying to.`;
 }
 
 function escapeRegExp(value: string) {

@@ -24,6 +24,13 @@ function renderConfirmation() {
   render(
     <form>
       <textarea aria-label="Body" />
+      <input
+        aria-controls="suggestions"
+        aria-expanded="true"
+        aria-label="To"
+        role="combobox"
+      />
+      <div id="suggestions" role="listbox" />
       <PreSendConfirmation warnings={WARNINGS} {...handlers} />
     </form>,
   );
@@ -59,6 +66,26 @@ describe("PreSendConfirmation", () => {
     fireEvent.keyDown(screen.getByLabelText("Body"), { key: "Escape" });
     expect(onDismiss).toHaveBeenCalledTimes(2);
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape to an open list of suggestions in the composer", () => {
+    const { onDismiss } = renderConfirmation();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "To" }), {
+      key: "Escape",
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("leaves an Escape something else already handled", () => {
+    const { onDismiss } = renderConfirmation();
+    const handled = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    handled.preventDefault();
+    screen.getByLabelText("Body").dispatchEvent(handled);
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("offers the fix for the first warning, which Enter on it runs rather than sending", () => {
