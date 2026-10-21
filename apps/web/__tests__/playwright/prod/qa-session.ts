@@ -3,6 +3,7 @@ import {
   type QaMailboxCredentials,
   waitForSignInCode,
 } from "@/scripts/qa/qa-mailbox";
+import { rememberAppOrigin } from "@/utils/playwright/app-origin";
 
 // Signing in as the QA account and keeping its writes to itself, shared by
 // the hourly smoke robot and the journeys robot.
@@ -88,6 +89,7 @@ export async function signInWithEmailCode(
     );
   }
   metrics.signInMs = Date.now() - submittedAt;
+  rememberAppOrigin(page);
 }
 
 /**

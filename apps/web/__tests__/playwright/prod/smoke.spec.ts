@@ -14,6 +14,7 @@ import {
   trashMessagesWithSubject,
   waitForMessageFrom,
 } from "@/scripts/qa/qa-mailbox";
+import { appUrl } from "@/utils/playwright/app-origin";
 import { findEscapedMarkup } from "@/utils/email/escaped-markup";
 import {
   findMailAccount,
@@ -102,7 +103,9 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   }
 
   await step("gmail connection", async (metrics) => {
-    const response = await page.request.get("/api/user/email-accounts");
+    const response = await page.request.get(
+      appUrl(page, "/api/user/email-accounts"),
+    );
     expect(response.ok(), "email accounts load").toBe(true);
     const { emailAccounts }: GetEmailAccountsResponse = await response.json();
     const index = emailAccounts.findIndex(
@@ -124,7 +127,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
     "inbox shows real mail",
     async (metrics) => {
       const started = Date.now();
-      await page.goto(`/mail/u/${qaAccount().index}/inbox`, {
+      await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`), {
         waitUntil: "commit",
       });
       const conversations = page.getByRole("listbox", {
@@ -156,7 +159,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   await step(
     "thread shows reply actions",
     async () => {
-      await page.goto(`/mail/u/${qaAccount().index}/inbox`);
+      await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`));
       // A seeded announcement sent to a class list, so Reply all applies.
       const row = page
         .getByRole("listbox", { name: "Conversations" })
@@ -192,7 +195,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         text: "Automated Cue QA probe. Safe to ignore.",
       });
       const sentAt = Date.now();
-      await page.goto(`/mail/u/${qaAccount().index}/inbox`);
+      await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`));
       const conversations = page.getByRole("listbox", {
         name: "Conversations",
       });
@@ -236,7 +239,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
           // An opened thread replaces the list, so reloading it would never
           // bring the row back; go back to the Sent list instead.
           if (!(await sentRow.isVisible())) {
-            await page.goto(`/mail/u/${qaAccount().index}/sent`);
+            await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/sent`));
           }
           await sentRow.click({ timeout: 10_000 });
           await expect
@@ -323,7 +326,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
 
     await outlookStep("inbox shows mail", async (metrics) => {
       const started = Date.now();
-      await page.goto(`/mail/u/${outlookAccount().index}/inbox`, {
+      await page.goto(appUrl(page, `/mail/u/${outlookAccount().index}/inbox`), {
         waitUntil: "commit",
       });
       const conversations = page.getByRole("listbox", {
@@ -351,7 +354,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         });
         const sentAt = Date.now();
         const inboxPath = `/mail/u/${outlookAccount().index}/inbox`;
-        await page.goto(inboxPath);
+        await page.goto(appUrl(page, inboxPath));
         const probe = page
           .getByRole("listbox", { name: "Conversations" })
           .getByRole("option")
@@ -412,14 +415,14 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   }
 
   await step("Settings opens", async () => {
-    await page.goto("/settings");
+    await page.goto(appUrl(page, "/settings"));
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
   });
 
   await step("Integrations is available", async () => {
-    await page.goto(`/${qaAccount().id}/integrations`);
+    await page.goto(appUrl(page, `/${qaAccount().id}/integrations`));
     await expect(
       page.getByRole("heading", { name: "Integrations", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
@@ -430,7 +433,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   });
 
   await step("Rules opens", async () => {
-    await page.goto(`/${qaAccount().id}/automation`);
+    await page.goto(appUrl(page, `/${qaAccount().id}/automation`));
     await expect(
       page.getByRole("heading", { name: "Rules", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
@@ -438,12 +441,12 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   });
 
   await step("old mail URL redirects", async () => {
-    await page.goto(`/${qaAccount().id}/mail`);
+    await page.goto(appUrl(page, `/${qaAccount().id}/mail`));
     await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox/, { timeout: 60_000 });
   });
 
   await step("sign out in one click", async (metrics) => {
-    await page.goto("/settings");
+    await page.goto(appUrl(page, "/settings"));
     const signOut = page.getByRole("button", { name: "Sign out", exact: true });
     await expect(signOut).toBeVisible({ timeout: 60_000 });
     const started = Date.now();
@@ -480,7 +483,7 @@ async function checkSuggestionText(
         messageId: `<cue-qa-suggestion-${tag}@cue-qa.invalid>`,
       },
     ]);
-    await page.goto(`/mail/u/${accountIndex}/inbox`);
+    await page.goto(appUrl(page, `/mail/u/${accountIndex}/inbox`));
     const probe = page
       .getByRole("listbox", { name: "Conversations" })
       .getByRole("option")
@@ -553,7 +556,7 @@ async function checkToday(
   metrics: Record<string, number | boolean>,
 ) {
   const started = Date.now();
-  await page.goto(`/${accountId}/home`);
+  await page.goto(appUrl(page, `/${accountId}/home`));
   const lane = page.getByRole("heading", {
     level: 2,
     name: /Needs reply|Waiting on|Next up|All clear|Also in your inbox|Drafts ready for you|Cue is working on/,
@@ -575,7 +578,7 @@ async function askChat(
   question: string,
   metrics: Record<string, number | boolean>,
 ) {
-  await page.goto(`/${accountId}/assistant`);
+  await page.goto(appUrl(page, `/${accountId}/assistant`));
   const input = page.getByTestId("chat-input");
   await expect(input).toBeVisible({ timeout: 60_000 });
   const answers = page.locator(".is-assistant");
