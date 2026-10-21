@@ -310,13 +310,25 @@ google:
         - INBOX
         - UNREAD
       internal_date: "1734900000000"
+    - id: msg_playwright_html_links
+      thread_id: thr_playwright_plain_links
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from: Dana Example <dana@example.com>
+      to: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Plain Text Links Message
+      body_text: "Confirm your booking: https://click.example.com/ls/click?upn=u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9&utm_source=newsletter before Friday."
+      body_html: "<p>Confirm your booking: https://click.example.com/ls/click?upn=u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9u001.aB3-_x9&amp;utm_source=newsletter before Friday.</p>"
+      label_ids:
+        - INBOX
+        - UNREAD
+      internal_date: "1734889000000"
     - id: msg_playwright_plain_links
       thread_id: thr_playwright_plain_links
       user_email: __PLAYWRIGHT_TEST_EMAIL__
       from: Dana Example <dana@example.com>
       to: __PLAYWRIGHT_TEST_EMAIL__
       subject: Plain Text Links Message
-      body_text: "Visit service.new/account\n\nhttps://staging.example.com/verify?token=value"
+      body_text: "Visit service.new/account\n\nhttps://staging.example.com/verify?token=value\n\nReset your password:\n<https://links.example.com/reset/Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-L\nm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2Zq8-Lm4_T\nr2Zq8-Lm4_Tr2Zq8-Lm4_Tr2>"
       label_ids:
         - INBOX
         - UNREAD

@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { linkifyPlainText } from "./linkify";
 import { sanitizeMailHtml } from "./sanitize-html";
 import {
   adaptMailDocumentForDarkMode,
@@ -92,6 +93,11 @@ export function MailMessageBody({
     messageId,
   ]);
 
+  const plainSegments = useMemo(
+    () => (html ? null : linkifyPlainText(text ?? "")),
+    [html, text],
+  );
+
   if (document) {
     return (
       <div className="relative min-w-0 overflow-x-hidden">
@@ -105,7 +111,7 @@ export function MailMessageBody({
     );
   }
 
-  return <MailPlainTextBody segments={[{ type: "text", text: text ?? "" }]} />;
+  return <MailPlainTextBody segments={plainSegments ?? []} />;
 }
 
 export function MailPlainTextBody({
