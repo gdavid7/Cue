@@ -11,6 +11,7 @@ import {
   normalizeSWRFetchErrorData,
 } from "./swr-error";
 import { redirectToSafeUrl } from "@/utils/redirect";
+import { isSigningOut, withSigningOutSignal } from "@/utils/signing-out";
 import {
   isSessionExpiredErrorBody,
   notifySessionExpired,
@@ -34,15 +35,30 @@ export const swrFetcher = async (
     viewedEmailAccountId?: string | null;
   },
 ) => {
+  if (isSigningOut()) return leaving();
+
   const headers = new Headers(init?.headers);
 
   if (emailAccountId) {
     headers.set(EMAIL_ACCOUNT_HEADER, emailAccountId);
   }
 
-  const newInit = { ...init, headers };
+  const newInit = {
+    ...init,
+    headers,
+    signal: withSigningOutSignal(init?.signal),
+  };
 
-  const res = await fetchWithSessionRetry(url, newInit);
+  let res: Response;
+  try {
+    res = await fetchWithSessionRetry(url, newInit);
+  } catch (error) {
+    if (isSigningOut()) return leaving();
+    throw error;
+  }
+
+  // The session may have ended under a request already on its way.
+  if (!res.ok && isSigningOut()) return leaving();
 
   if (!res.ok) {
     // Try to parse JSON, but handle cases where response isn't JSON (e.g. HMR 404s)
@@ -129,6 +145,11 @@ export const swrFetcher = async (
 
   return res.json();
 };
+
+/** Never settles: the page is leaving, so there is nothing to report. */
+function leaving(): Promise<never> {
+  return new Promise(() => {});
+}
 
 function offerReconnect(emailAccountId: string, reconnectUrl: string) {
   if (reconnectOffered.has(emailAccountId)) return;

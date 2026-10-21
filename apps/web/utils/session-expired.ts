@@ -1,4 +1,5 @@
 import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
+import { isSigningOut } from "@/utils/signing-out";
 import { buildLoginRedirectUrl, redirectToSafeUrl } from "@/utils/redirect";
 
 // Server actions answer a missing session with this text, which is how the
@@ -49,7 +50,12 @@ export function armSessionExpiredRedirect() {
  * a redirect never takes the page out from under someone typing.
  */
 export function notifySessionExpired() {
-  if (typeof window === "undefined" || armedBy === 0 || state !== "active")
+  if (
+    typeof window === "undefined" ||
+    armedBy === 0 ||
+    state !== "active" ||
+    isSigningOut()
+  )
     return;
   if (holds.size === 0) {
     redirectToLogin();

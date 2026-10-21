@@ -11,6 +11,7 @@ import {
 import { SWRConfig, mutate, useSWRConfig } from "swr";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { swrFetcher } from "./swr-fetcher";
+import { isSigningOut } from "@/utils/signing-out";
 import {
   accountIdFromSnapshotKey,
   clearPersistedSwrCacheForAccount,
@@ -90,6 +91,7 @@ export const SWRProvider = (props: { children: React.ReactNode }) => {
           provider: () => provider,
           onError: (error: unknown) => console.log("SWR error:", error),
           onErrorRetry: onSWRErrorRetry,
+          isPaused: isSigningOut,
           ...getDevOnlySWRConfig(),
         }}
       >

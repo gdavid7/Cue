@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { createMailHttpRequest } from "./http";
+import { resetSigningOut, startSigningOut } from "@/utils/signing-out";
 
 describe("createMailHttpRequest", () => {
   afterEach(() => {
+    resetSigningOut();
     vi.unstubAllGlobals();
   });
 
@@ -80,5 +82,29 @@ describe("createMailHttpRequest", () => {
     expect(result.status).toBe(401);
     expect(Boolean(result.sessionExpired)).toBe(sessionExpired);
     expect(onSessionExpired).toHaveBeenCalledTimes(sessionExpired ? 1 : 0);
+  });
+
+  it("does not treat a 401 during sign-out as an expired session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 }),
+      ),
+    );
+    const onSessionExpired = vi.fn();
+    startSigningOut();
+
+    const result = await createMailHttpRequest(
+      "acc-1",
+      onSessionExpired,
+    )({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/changes",
+      body: {},
+      signal: new AbortController().signal,
+    });
+
+    expect(onSessionExpired).not.toHaveBeenCalled();
+    expect(Boolean(result.sessionExpired)).toBe(false);
   });
 });
