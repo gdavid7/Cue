@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createWorkerTextEmbedder,
-  type EmbeddingWorkerRequest,
-} from "@/utils/mail-engine/embedding-worker-client";
+import { createWorkerTextEmbedder } from "@/utils/mail-engine/embedding-worker-client";
+import type { EmbeddingWorkerRequest } from "@/utils/mail-engine/embedding-worker-protocol";
 
 describe("createWorkerTextEmbedder", () => {
   it("starts the model's worker on the first request and stops it once idle", async () => {

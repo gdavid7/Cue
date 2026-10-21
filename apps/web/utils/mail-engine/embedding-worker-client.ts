@@ -1,16 +1,8 @@
 import type { TextEmbedder } from "@/utils/mail-search/semantic-embedding";
-
-/**
- * The model couldn't be kept on this device, as when storage is full: it
- * would download again on every pass, so semantic search stops for the
- * session.
- */
-export const MODEL_NOT_CACHED = "model_not_cached";
-
-export type EmbeddingWorkerRequest = { id: number; texts: string[] };
-export type EmbeddingWorkerResponse =
-  | { id: number; vectors: Float32Array[] }
-  | { id: number; error: string };
+import type {
+  EmbeddingWorkerRequest,
+  EmbeddingWorkerResponse,
+} from "@/utils/mail-engine/embedding-worker-protocol";
 
 // The model holds about a hundred megabytes while loaded; it goes once the
 // index and search have left it idle this long.

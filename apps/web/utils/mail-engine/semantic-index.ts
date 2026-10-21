@@ -6,7 +6,7 @@ import type {
   EmbeddingBacklogCursor,
   MailStore,
 } from "@inboxzero/mail-core/ports/mail-store";
-import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-client";
+import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-protocol";
 import {
   messageEmbeddingText,
   quantizeVector,

@@ -3,7 +3,7 @@ import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-client";
+import { MODEL_NOT_CACHED } from "@/utils/mail-engine/embedding-worker-protocol";
 import {
   createSemanticIndex,
   SEMANTIC_INDEX_CAP,

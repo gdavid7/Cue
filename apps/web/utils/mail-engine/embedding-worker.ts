@@ -11,7 +11,7 @@ import {
   type EmbeddingWorkerRequest,
   type EmbeddingWorkerResponse,
   MODEL_NOT_CACHED,
-} from "@/utils/mail-engine/embedding-worker-client";
+} from "@/utils/mail-engine/embedding-worker-protocol";
 
 // Runs the embedding model for the mail engine's worker, on a thread of its
 // own so inference never holds up sync or commands. The runtime's wasm is
