@@ -113,7 +113,9 @@ test("Today across a Gmail and an Outlook account names each one's mail, drafts 
     const rows = await client.query(
       `SELECT c.id, c.provider, c."isConnected", c."expiresAt", c."accessToken",
          (SELECT json_agg(json_build_object('calendarId', k."calendarId", 'enabled', k."isEnabled")) FROM "Calendar" k WHERE k."connectionId" = c.id) AS calendars
-       FROM "CalendarConnection" c WHERE c."emailAccountId" = $1`,
+         , c.email, c."emailAccountId", (c."refreshToken" IS NOT NULL) AS "hasRefresh"
+       FROM "CalendarConnection" c WHERE c."emailAccountId" IN
+         (SELECT id FROM "EmailAccount" WHERE "userId" = (SELECT "userId" FROM "EmailAccount" WHERE id = $1))`,
       [outlook.id],
     );
     return rows.rows;
@@ -124,7 +126,9 @@ test("Today across a Gmail and an Outlook account names each one's mail, drafts 
     const start = new Date().toISOString();
     const end = new Date(Date.now() + 2 * 86_400_000).toISOString();
     const res = await page.request.get(
-      `${base}/v1.0/me/calendar/calendarView?startDateTime=${start}&endDateTime=${end}`,
+      row.provider === "microsoft"
+        ? `${base}/v1.0/me/calendars/primary/calendarView?startDateTime=${start}&endDateTime=${end}&$top=20&$orderby=start/dateTime`
+        : `${base}/v1.0/me`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
     console.log("MA5DIAG", JSON.stringify(rest), base, res.status(), (await res.text()).slice(0, 400));
