@@ -277,12 +277,30 @@ model EmailAccount {
   classificationFeedback ClassificationFeedback[]
   mailSplits             MailSplit[]
   webPushDeliveries      WebPushDelivery[]
+  mailBulkJobListings    MailBulkJobListing[]
 
   @@index([userId])
   @@index([lastSummaryEmailAt])
   @@index([lastInboxHealthEmailAt])
   @@index([watchEmailsSubscriptionId])
   @@index([watchEmailsSubscriptionHistory(ops: JsonbPathOps)], type: Gin)
+}
+
+// What a bulk mail job is still listing: the view it acts on and the page it reads
+// next. Kept here rather than in the job's queue payload or Redis state, because the
+// view can hold the user's search text and an Outlook page link repeats it. Removed
+// once the listing ends.
+model MailBulkJobListing {
+  jobId     String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  scope     Json
+  pageToken String?
+
+  emailAccountId String
+  emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@index([emailAccountId, createdAt])
 }
 
 // A saved filter shown as a tab above the mail list. `values` holds one or more label
