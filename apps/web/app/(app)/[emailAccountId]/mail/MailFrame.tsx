@@ -28,7 +28,7 @@ import { useMailHref } from "@/hooks/useMailHref";
 import { getTodayPath, useAllAccountsScope } from "@/hooks/useTodayHref";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
-import { parseMailPath } from "@/utils/mail-url";
+import { type MailUrlView, parseMailPath } from "@/utils/mail-url";
 import { prefixPath } from "@/utils/path";
 import { redirectToSafeUrl } from "@/utils/redirect";
 
@@ -75,8 +75,10 @@ export function MailFrame({ children }: { children: ReactNode }) {
     () => false,
   );
   const isLargeScreen = useIsLargeScreen();
-  const mailLocation = parseMailPath(pathname, searchParams);
-  const isToday = !mailLocation;
+  // Only Today sits outside `/mail/`; an address there that fails to parse
+  // is still the mail screen, which redirects it.
+  const isToday = !pathname.startsWith("/mail/");
+  const mailLocation = isToday ? null : parseMailPath(pathname, searchParams);
   // A switch that landed on Today has no first mail row to time.
   useEffect(() => {
     if (isToday) clearRumAccountSwitch();
@@ -85,7 +87,7 @@ export function MailFrame({ children }: { children: ReactNode }) {
   // Today across accounts keeps the sidebar and switcher All inboxes shows.
   const isAllAccounts = isToday
     ? allAccountsScope
-    : Boolean(mailLocation.allInboxes);
+    : Boolean(mailLocation?.allInboxes);
   const [screen, setScreen] = useState<MailFrameState | null>(null);
   const handlers = useRef<MailFrameHandlers | null>(null);
   const context = useMemo(() => ({ setState: setScreen, handlers }), []);
@@ -116,7 +118,6 @@ export function MailFrame({ children }: { children: ReactNode }) {
     [],
   );
   const mailScreen = isToday ? null : screen;
-  const mailView = mailLocation?.view;
 
   return (
     <MailFrameContext.Provider value={context}>
@@ -139,18 +140,11 @@ export function MailFrame({ children }: { children: ReactNode }) {
         }
       >
         <MailShellSidebar
-          activeType={
-            isToday
-              ? "today"
-              : mailScreen
-                ? mailScreen.activeType
-                : // Until the mail screen resolves its view's labels.
-                  mailView?.kind === "type"
-                  ? mailView.type
-                  : mailView?.kind === "label" || mailView?.kind === "folder"
-                    ? null
-                    : "inbox"
-          }
+          activeType={getActiveType({
+            isToday,
+            mailScreen,
+            view: mailLocation?.view,
+          })}
           activeLabelId={mailScreen?.activeLabelId ?? null}
           activeFolderId={mailScreen?.activeFolderId ?? null}
           isAllAccounts={isAllAccounts}
@@ -199,6 +193,32 @@ export function useMailScreenFrame({
       frame.handlers.current = null;
     };
   }, [frame]);
+}
+
+/**
+ * The sidebar row to highlight. Until the mail screen has resolved its view's
+ * labels, the address alone names it, and a label or folder waits.
+ */
+function getActiveType({
+  isToday,
+  mailScreen,
+  view,
+}: {
+  isToday: boolean;
+  mailScreen: MailFrameState | null;
+  view: MailUrlView | undefined;
+}) {
+  if (isToday) return "today";
+  if (mailScreen) return mailScreen.activeType;
+  switch (view?.kind) {
+    case "type":
+      return view.type;
+    case "label":
+    case "folder":
+      return null;
+    default:
+      return "inbox";
+  }
 }
 
 function subscribeNever() {

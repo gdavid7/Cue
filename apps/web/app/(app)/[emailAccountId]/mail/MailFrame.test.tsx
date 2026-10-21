@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MailFrame, useMailScreenFrame } from "./MailFrame";
@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
     isAllAccounts?: boolean;
     onSelectAllAccounts?: () => void;
   },
-  mobileNavs: 0,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -24,15 +23,21 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(mocks.search),
 }));
 vi.mock("@inboxzero/mail-ui/MailProductFrame", () => ({
-  MailProductFrame: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
+  MailProductFrame: ({
+    children,
+    accountSwitcher,
+  }: {
+    children: ReactNode;
+    accountSwitcher?: ReactNode;
+  }) => (
+    <div>
+      {children}
+      {accountSwitcher}
+    </div>
   ),
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/MailMobileNav", () => ({
-  MailMobileNav: () => {
-    mocks.mobileNavs++;
-    return null;
-  },
+  MailMobileNav: () => <nav aria-label="Frame phone bar" />,
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher", () => ({
   MailAccountSwitcher: () => null,
@@ -72,7 +77,6 @@ describe("MailFrame on Today", () => {
     vi.clearAllMocks();
     mocks.pathname = "/account-a/home";
     mocks.search = "";
-    mocks.mobileNavs = 0;
   });
   afterEach(cleanup);
 
@@ -98,7 +102,6 @@ describe("MailFrame around the mail screen", () => {
     vi.clearAllMocks();
     mocks.pathname = "/mail/u/0/label/receipts";
     mocks.search = "";
-    mocks.mobileNavs = 0;
   });
   afterEach(cleanup);
 
@@ -115,15 +118,32 @@ describe("MailFrame around the mail screen", () => {
     mocks.sidebar.onSelectAllAccounts?.();
     expect(selectAll).toHaveBeenCalled();
     expect(mocks.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("navigation", { name: "Frame phone bar" }));
 
     // An open conversation's phone bar replaces the frame's own.
-    mocks.mobileNavs = 0;
     rerender(
       <MailFrame>
         <MailScreenStub selectAll={selectAll} ownsPhoneBar />
       </MailFrame>,
     );
-    expect(mocks.mobileNavs).toBe(0);
+    expect(
+      screen.queryByRole("navigation", { name: "Frame phone bar" }),
+    ).toBeNull();
+
+    // And the frame's comes back once the conversation closes.
+    rerender(
+      <MailFrame>
+        <MailScreenStub selectAll={selectAll} ownsPhoneBar={false} />
+      </MailFrame>,
+    );
+    expect(screen.getByRole("navigation", { name: "Frame phone bar" }));
+  });
+
+  it("treats an unreadable mail address as mail, not Today", () => {
+    mocks.pathname = "/mail/u/not-a-number";
+    render(<MailFrame>{null}</MailFrame>);
+
+    expect(mocks.sidebar.activeType).toBe("inbox");
   });
 
   it("falls back to its own actions once the mail screen is gone", () => {
