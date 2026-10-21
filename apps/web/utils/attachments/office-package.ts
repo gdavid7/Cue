@@ -8,8 +8,8 @@ const RATIO_FLOOR_BYTES = 1024 * 1024;
 // Deflate expands at most ~1032x, so one push can overshoot a limit by about
 // 1 MB at most before it's caught.
 const PUSH_BYTES = 1024;
-// Hands the main thread back this often, so closing the preview isn't stuck
-// behind a large package.
+// Hands the thread back this often, so an abort isn't stuck behind a large
+// package.
 const YIELD_EVERY_BYTES = 4 * 1024 * 1024;
 
 export type OfficePackageResult =
@@ -121,8 +121,8 @@ export async function inflateBounded(
 type Pacer = (bytes: number) => Promise<void>;
 
 /**
- * Counts work in bytes and, every YIELD_EVERY_BYTES, gives the main thread
- * back and stops if the preview was closed.
+ * Counts work in bytes and, every YIELD_EVERY_BYTES, gives the thread back
+ * and stops if the preview was closed.
  */
 function createPacer(signal?: AbortSignal): Pacer {
   let sinceYield = 0;
