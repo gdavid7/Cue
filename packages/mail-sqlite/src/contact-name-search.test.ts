@@ -226,7 +226,7 @@ describe("searching for a person by name", () => {
     ]);
     await driver.write(async (tx) => {
       await tx.exec("DROP TABLE contact_name_tokens");
-      await tx.exec("DELETE FROM schema_migrations WHERE id = 13");
+      await tx.exec("DELETE FROM schema_migrations WHERE id = 14");
       await migrateMailbox(tx, "ignored");
     });
     expect(await conversations(store, text("ruiz"))).toEqual([]);
