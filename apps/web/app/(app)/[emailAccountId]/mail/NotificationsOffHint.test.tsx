@@ -69,6 +69,33 @@ describe("NotificationsOffHint", () => {
     expect(screen.queryByText(HINT)).toBeNull();
   });
 
+  it("stays away when the offer is made during this visit", () => {
+    window.localStorage.removeItem("cue:web-notifications:prompted");
+    const view = render(<NotificationsOffHint ready />);
+    window.localStorage.setItem("cue:web-notifications:prompted", "1");
+    window.dispatchEvent(new Event("cue:web-notifications:change"));
+    view.rerender(<NotificationsOffHint ready />);
+    expect(screen.queryByText(HINT)).toBeNull();
+    expect(
+      window.localStorage.getItem("cue:web-notifications:off-hint-shown"),
+    ).toBeNull();
+  });
+
+  it("disables Turn on while the permission request is pending", () => {
+    Object.defineProperty(window, "Notification", {
+      value: {
+        permission: "default",
+        requestPermission: () => new Promise(() => undefined),
+      },
+      configurable: true,
+      writable: true,
+    });
+    render(<NotificationsOffHint ready />);
+    const button = screen.getByRole("button", { name: "Turn on" });
+    fireEvent.click(button);
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("stays away when notifications are on", () => {
     setPermission("granted");
     render(<NotificationsOffHint ready />);
@@ -91,7 +118,9 @@ describe("NotificationsOffHint", () => {
 
   it("saves the dismissal", () => {
     render(<NotificationsOffHint ready />);
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Dismiss notifications reminder" }),
+    );
     expect(state.dismiss).toHaveBeenCalledWith({
       hintId: NOTIFICATIONS_OFF_HINT_ID,
     });

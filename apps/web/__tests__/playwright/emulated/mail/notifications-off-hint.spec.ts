@@ -15,8 +15,9 @@ test.beforeEach(async () => {
   await clearHintDismissal();
 });
 
+// Setup closes the reminder for every other spec.
 test.afterAll(async () => {
-  await clearHintDismissal();
+  await dismissHintForGood();
 });
 
 test("offers to turn notifications on for someone who passed on the offer", async ({
@@ -62,7 +63,9 @@ test("closing the hint silences it for good", async ({ page }) => {
 
   const hint = page.getByRole("status").filter({ hasText: HINT_TEXT });
   await expect(hint).toBeVisible({ timeout: 60_000 });
-  await hint.getByRole("button", { name: "Dismiss" }).click();
+  await hint
+    .getByRole("button", { name: "Dismiss notifications reminder" })
+    .click();
   await expect(hint).toHaveCount(0);
   await expect.poll(isHintDismissed, { timeout: 30_000 }).toBe(true);
 
@@ -104,15 +107,17 @@ async function stubNotifications(
     if (stub.asked)
       window.localStorage.setItem("cue:web-notifications:prompted", "1");
     let permission = stub.permission;
-    const StubNotification = {
-      get permission() {
+    class StubNotification {
+      onclick: (() => void) | null = null;
+      close() {}
+      static get permission() {
         return permission;
-      },
-      requestPermission() {
+      }
+      static requestPermission() {
         permission = "granted";
         return Promise.resolve(permission);
-      },
-    };
+      }
+    }
     Object.defineProperty(window, "Notification", {
       value: StubNotification,
       configurable: true,
@@ -137,6 +142,17 @@ async function clearHintDismissal() {
       `UPDATE "User"
        SET "dismissedHints" = array_remove("dismissedHints", $2)
        WHERE email = $1`,
+      [PLAYWRIGHT_TEST_EMAIL, HINT_ID],
+    ),
+  );
+}
+
+async function dismissHintForGood() {
+  await withClient((client) =>
+    client.query(
+      `UPDATE "User"
+       SET "dismissedHints" = array_append("dismissedHints", $2)
+       WHERE email = $1 AND NOT ($2 = ANY("dismissedHints"))`,
       [PLAYWRIGHT_TEST_EMAIL, HINT_ID],
     ),
   );

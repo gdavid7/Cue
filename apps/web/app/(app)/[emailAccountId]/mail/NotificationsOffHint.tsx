@@ -43,11 +43,15 @@ export function NotificationsOffHint({ ready }: { ready: boolean }) {
     readEffectiveMode,
     () => "important" as const,
   );
-  const declinedOffer = useSyncExternalStore(
-    subscribeToPreference,
-    () => readStoredMode() === "off" || hasBeenAskedToEnable(),
-    () => false,
+  // Fixed at mount: an offer made during this visit, or a permission prompt
+  // still pending, must not be followed straight away by this reminder.
+  const [offBeforeVisit] = useState(
+    () =>
+      getWebNotificationPermission() === "denied" ||
+      readStoredMode() === "off" ||
+      hasBeenAskedToEnable(),
   );
+  const [requesting, setRequesting] = useState(false);
   const isDesktopApp = useSyncExternalStore(
     subscribeToPreference,
     isDesktopShell,
@@ -57,6 +61,7 @@ export function NotificationsOffHint({ ready }: { ready: boolean }) {
   const [lastShownAtMs] = useState(readOffHintShownAtMs);
   const [now] = useState(Date.now);
 
+  // Granted in the browser but "Off" in Settings also counts as not notifying.
   const notifying = permission === "granted" && mode !== "off";
   const eligible =
     ready &&
@@ -64,7 +69,7 @@ export function NotificationsOffHint({ ready }: { ready: boolean }) {
     !isDesktopApp &&
     permission !== "unsupported" &&
     !notifying &&
-    (permission === "denied" || declinedOffer) &&
+    offBeforeVisit &&
     Boolean(
       user?.dismissedHints.includes(getTodayIntroHintId(emailAccountId)),
     ) &&
@@ -108,8 +113,12 @@ export function NotificationsOffHint({ ready }: { ready: boolean }) {
         <Button
           size="sm"
           variant="outline"
+          disabled={requesting}
           onClick={() => {
-            chooseWebNotificationMode("important").catch(() => undefined);
+            setRequesting(true);
+            chooseWebNotificationMode("important")
+              .catch(() => undefined)
+              .finally(() => setRequesting(false));
           }}
         >
           Turn on
@@ -118,7 +127,7 @@ export function NotificationsOffHint({ ready }: { ready: boolean }) {
       <Button
         size="iconXs"
         variant="ghost"
-        aria-label="Dismiss"
+        aria-label="Dismiss notifications reminder"
         onClick={dismiss}
       >
         <XIcon className="size-4" aria-hidden />
