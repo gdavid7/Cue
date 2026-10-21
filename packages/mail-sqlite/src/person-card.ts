@@ -6,7 +6,7 @@ import {
   type PersonCardQuery,
   type ReplyLag,
 } from "@inboxzero/mail-core/queries";
-import { isAutomatedAddress } from "./contact-suggestions";
+import { isAutomatedAddress, parseAddress } from "./contact-suggestions";
 import type { SqlTransaction, SqlValue } from "./driver";
 import { readCoverage } from "./store-read-utils";
 
@@ -24,16 +24,23 @@ const FILE_MESSAGE_LIMIT = 40;
 const OTHER_ADDRESS_LIMIT = 3;
 // Providers stamp a message's arrival per mailbox, so the same message in two
 // accounts can differ by a little.
-const COPY_WINDOW_MS = 5 * 60_000;
+const COPY_WINDOW_MS = 60_000;
+// One reply to a stranger using a friend's name copies that name back, so an
+// alias needs the name on mail you sent it in more than one conversation.
+const ALIAS_MIN_CONVERSATIONS = 2;
 
 type PersonMessage = {
   accountId: string;
   messageId: string;
   conversationId: string;
+  /** Its account and conversation, as one key. */
+  conversation: string;
   subject: string;
   receivedAtMs: number;
   from: "you" | "them" | "other";
   hasAttachments: boolean;
+  sender: string;
+  recipients: [to: SqlValue, cc: SqlValue];
 };
 
 /**
@@ -52,7 +59,7 @@ export async function readPersonCard(
   for (const accountId of accountIds) {
     const rows = await tx.query(
       `SELECT e.message_id, e.conversation_id, e.subject, e.received_at_ms,
-              e.in_sent, e.has_attachments, i.sender
+              e.in_sent, e.has_attachments, e.to_json, e.cc_json, i.sender
        FROM (
          SELECT message_id, sender FROM contact_interactions
          WHERE account_id = ? AND email = ?
@@ -69,6 +76,7 @@ export async function readPersonCard(
         accountId,
         messageId: String(row.message_id),
         conversationId: String(row.conversation_id),
+        conversation: conversationKey(accountId, String(row.conversation_id)),
         subject: String(row.subject),
         receivedAtMs: Number(row.received_at_ms),
         from:
@@ -78,13 +86,15 @@ export async function readPersonCard(
               ? "you"
               : "other",
         hasAttachments: Number(row.has_attachments) === 1,
+        sender,
+        recipients: [row.to_json, row.cc_json],
       });
     }
   }
 
   const conversations = new Map<string, PersonCardConversation>();
   for (const message of messages) {
-    const key = conversationKey(message.accountId, message.conversationId);
+    const key = message.conversation;
     const existing = conversations.get(key);
     if (existing && existing.latestMessageAtMs >= message.receivedAtMs)
       continue;
@@ -95,23 +105,16 @@ export async function readPersonCard(
       latestMessageAtMs: message.receivedAtMs,
     });
   }
-  const sorted = [...conversations.values()].sort(
-    (a, b) => b.latestMessageAtMs - a.latestMessageAtMs,
-  );
-  const originals = findCrossAccountCopies(sorted);
-  const newestFirst = sorted.filter(
-    (conversation) =>
-      !originals.has(
-        conversationKey(conversation.accountId, conversation.conversationId),
-      ),
-  );
   // One message to two of your accounts shows once and counts once.
-  const distinct = messages.filter(
-    (message) =>
-      !originals.has(
-        conversationKey(message.accountId, message.conversationId),
-      ),
+  const { hidden, distinct, threadOf } = findCrossAccountCopies(
+    messages,
+    conversations,
+    accountIds,
   );
+  const newestFirst = [...conversations.entries()]
+    .filter(([key]) => !hidden.has(key))
+    .map(([, conversation]) => conversation)
+    .sort(byNewest);
 
   const awaitingYou: PersonCardConversation[] = [];
   const awaitingThem: PersonCardConversation[] = [];
@@ -132,7 +135,7 @@ export async function readPersonCard(
           tracking.accountId,
           String(row.conversation_id),
         );
-        const conversation = originals.get(key) ?? conversations.get(key);
+        const conversation = hidden.get(key) ?? conversations.get(key);
         if (conversation && !list.includes(conversation))
           list.push(conversation);
       }
@@ -155,10 +158,7 @@ export async function readPersonCard(
           ? []
           : [
               {
-                conversation: conversationKey(
-                  message.accountId,
-                  message.conversationId,
-                ),
+                conversation: threadOf(message),
                 atMs: message.receivedAtMs,
                 from: message.from,
               },
@@ -236,8 +236,12 @@ async function readName(
 /**
  * Other addresses you have sent mail to under exactly this full name, newest
  * first. Only your own sent mail counts: anyone can put a name on mail they
- * send you. A lone first name is shared by too many people to say it is the
- * same one.
+ * send you, and a reply copies that name back, so the name must be on mail
+ * you sent in more than one conversation, both to the address the card is
+ * for and to each other one. Otherwise one reply to someone borrowing a
+ * friend's name would have their card vouch for the friend. Conversations
+ * are counted within one account, so a copy in another isn't a second one.
+ * A lone first name is shared by too many people to say it is the same one.
  */
 async function readOtherAddresses(
   tx: SqlTransaction,
@@ -247,19 +251,43 @@ async function readOtherAddresses(
   own: Set<string>,
 ): Promise<string[]> {
   if (name.trim().split(/\s+/u).length < 2) return [];
+  const [self] = await tx.query(
+    `SELECT MAX(conversations) AS conversations FROM (
+       SELECT COUNT(DISTINCT m.conversation_id) AS conversations
+       FROM contact_interactions i
+       CROSS JOIN messages m
+         ON m.account_id = i.account_id AND m.message_id = i.message_id
+       WHERE i.account_id IN (${placeholders(accountIds)})
+         AND i.email = ? AND i.name = ? AND i.sent = 1
+       GROUP BY i.account_id
+     )`,
+    [...accountIds, email, name],
+  );
+  if (Number(self?.conversations ?? 0) < ALIAS_MIN_CONVERSATIONS) return [];
+  // CROSS JOIN keeps the plan on the name's tokens; left to itself SQLite
+  // walks every contact in the account.
   const rows = await tx.query(
-    `SELECT t.email, MAX(s.last_at) AS last_at FROM contact_tokens t
-     JOIN contact_stats s
-       ON s.account_id = t.account_id AND s.email = t.email
-       AND s.name = ? AND s.sent = 1
-     WHERE t.account_id IN (${placeholders(accountIds)})
-       AND t.token = ? AND t.email != ?
-     GROUP BY t.email ORDER BY last_at DESC, t.email LIMIT ?`,
+    `SELECT email, MAX(last_at) AS last_at FROM (
+       SELECT t.email, MAX(i.last_at) AS last_at,
+              COUNT(DISTINCT m.conversation_id) AS conversations
+       FROM contact_tokens t
+       CROSS JOIN contact_interactions i
+         ON i.account_id = t.account_id AND i.email = t.email
+         AND i.name = ? AND i.sent = 1
+       CROSS JOIN messages m
+         ON m.account_id = i.account_id AND m.message_id = i.message_id
+       WHERE t.account_id IN (${placeholders(accountIds)})
+         AND t.token = ? AND t.email != ?
+       GROUP BY t.email, t.account_id
+     )
+     GROUP BY email HAVING MAX(conversations) >= ?
+     ORDER BY last_at DESC, email LIMIT ?`,
     [
       name,
       ...accountIds,
       name.toLowerCase(),
       email,
+      ALIAS_MIN_CONVERSATIONS,
       OTHER_ADDRESS_LIMIT + own.size,
     ],
   );
@@ -355,33 +383,174 @@ function parseAttachments(value: SqlValue | undefined) {
 }
 
 /**
- * Conversations another account already holds, as when a message went to two
- * of your accounts, mapped to the copy that stays. The store keeps no
- * Message-ID header, so a copy is one with the same subject whose newest
- * message landed within a few minutes, in a different account.
+ * Messages that reached more than one of your accounts. The store keeps no
+ * Message-ID header, so two messages in different accounts are copies when
+ * they have the same sender, subject and recipients and arrived within a
+ * minute. Each copy is counted once; a conversation is hidden only when
+ * another one shown holds a copy of every message in it, and conversations
+ * sharing a copy are one thread for reply times.
  */
-function findCrossAccountCopies(newestFirst: PersonCardConversation[]) {
-  const copies = new Map<string, PersonCardConversation>();
-  const keptBySubject = new Map<string, PersonCardConversation[]>();
-  for (const conversation of newestFirst) {
-    const kept = keptBySubject.get(conversation.subject) ?? [];
-    const original = kept.find(
-      (other) =>
-        other.accountId !== conversation.accountId &&
-        Math.abs(other.latestMessageAtMs - conversation.latestMessageAtMs) <=
-          COPY_WINDOW_MS,
+function findCrossAccountCopies(
+  messages: PersonMessage[],
+  conversations: Map<string, PersonCardConversation>,
+  accountIds: string[],
+) {
+  if (new Set(messages.map((message) => message.accountId)).size < 2)
+    return {
+      hidden: new Map<string, PersonCardConversation>(),
+      distinct: messages,
+      threadOf: (message: PersonMessage) => message.conversation,
+    };
+  const groupOf = new Map<PersonMessage, PersonMessage[]>();
+  // Per fingerprint, its groups in arrival order. Messages come in arrival
+  // order too, so a group that started over a minute ago takes no more
+  // copies (head moves past it), and each account's next group to join only
+  // moves forward (next), which keeps a long run of look-alike messages linear.
+  const queues = new Map<
+    string,
+    { groups: PersonMessage[][]; head: number; next: Map<string, number> }
+  >();
+  const byArrival = [...messages].sort(
+    (a, b) =>
+      a.receivedAtMs - b.receivedAtMs ||
+      accountIds.indexOf(a.accountId) - accountIds.indexOf(b.accountId),
+  );
+  // Look-alike messages repeat the same headers, so each is parsed once.
+  const fingerprints = new Map<string, string>();
+  for (const message of byArrival) {
+    const raw = [
+      message.sender,
+      message.subject,
+      ...message.recipients.map(String),
+    ].join("\u0000");
+    let fingerprint = fingerprints.get(raw);
+    if (fingerprint === undefined) {
+      // What two copies of one message share.
+      fingerprint = [
+        message.sender,
+        message.subject.trim().replace(/\s+/gu, " ").toLowerCase(),
+        ...recipients(...message.recipients),
+      ].join("\u0000");
+      fingerprints.set(raw, fingerprint);
+    }
+    let queue = queues.get(fingerprint);
+    if (!queue) {
+      queue = { groups: [], head: 0, next: new Map() };
+      queues.set(fingerprint, queue);
+    }
+    const { groups } = queue;
+    while (
+      queue.head < groups.length &&
+      message.receivedAtMs - groups[queue.head][0].receivedAtMs > COPY_WINDOW_MS
+    )
+      queue.head++;
+    let index = Math.max(queue.next.get(message.accountId) ?? 0, queue.head);
+    while (
+      index < groups.length &&
+      groups[index].some((member) => member.accountId === message.accountId)
+    )
+      index++;
+    if (index === groups.length) groups.push([]);
+    const group = groups[index];
+    group.push(message);
+    queue.next.set(message.accountId, index + 1);
+    groupOf.set(message, group);
+  }
+
+  const messagesByConversation = new Map<string, PersonMessage[]>();
+  for (const message of messages) {
+    const key = message.conversation;
+    const list = messagesByConversation.get(key);
+    if (list) list.push(message);
+    else messagesByConversation.set(key, [message]);
+  }
+  // The fuller conversation stays, so a later reply in one account keeps it.
+  const ranked = [...messagesByConversation.keys()].sort((a, b) => {
+    const left = conversations.get(a) as PersonCardConversation;
+    const right = conversations.get(b) as PersonCardConversation;
+    return (
+      (messagesByConversation.get(b)?.length ?? 0) -
+        (messagesByConversation.get(a)?.length ?? 0) ||
+      right.latestMessageAtMs - left.latestMessageAtMs ||
+      accountIds.indexOf(left.accountId) -
+        accountIds.indexOf(right.accountId) ||
+      (a < b ? -1 : 1)
     );
-    if (original) {
-      copies.set(
-        conversationKey(conversation.accountId, conversation.conversationId),
-        original,
+  });
+  const hidden = new Map<string, PersonCardConversation>();
+  const shown = new Set<string>();
+  for (const key of ranked) {
+    const own = messagesByConversation.get(key) ?? [];
+    const keeper = (groupOf.get(own[0]) ?? [])
+      .map((copy) => copy.conversation)
+      .find(
+        (other) =>
+          shown.has(other) &&
+          own.every((message) =>
+            groupOf.get(message)?.some((copy) => copy.conversation === other),
+          ),
       );
-    } else {
-      kept.push(conversation);
-      keptBySubject.set(conversation.subject, kept);
+    if (keeper)
+      hidden.set(key, conversations.get(keeper) as PersonCardConversation);
+    else shown.add(key);
+  }
+
+  const rank = new Map(ranked.map((key, index) => [key, index]));
+  // A copy in a conversation that stays wins over one in a hidden conversation.
+  const rankOf = (message: PersonMessage) => {
+    const key = message.conversation;
+    return (hidden.has(key) ? ranked.length : 0) + (rank.get(key) ?? 0);
+  };
+  const distinct = messages.filter((message) => {
+    const group = groupOf.get(message) ?? [message];
+    const kept = group.reduce((best, copy) =>
+      rankOf(copy) < rankOf(best) ? copy : best,
+    );
+    return kept === message;
+  });
+
+  const thread = new Map<string, string>();
+  const root = (key: string) => {
+    let top = key;
+    for (let parent = thread.get(top); parent && parent !== top; ) {
+      top = parent;
+      parent = thread.get(top);
+    }
+    for (let node = key; node !== top; ) {
+      const parent = thread.get(node) as string;
+      thread.set(node, top);
+      node = parent;
+    }
+    return top;
+  };
+  for (const group of new Set(groupOf.values()))
+    for (const copy of group.slice(1))
+      thread.set(root(copy.conversation), root(group[0].conversation));
+
+  return {
+    hidden,
+    distinct,
+    threadOf: (message: PersonMessage) => root(message.conversation),
+  };
+}
+
+function recipients(...lists: SqlValue[]) {
+  const emails = new Set<string>();
+  for (const list of lists) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(list ?? "[]"));
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    for (const address of parsed) {
+      const contact =
+        typeof address === "string" ? parseAddress(address) : null;
+      if (contact) emails.add(contact.email);
     }
   }
-  return copies;
+  return [...emails].sort();
 }
 
 function byNewest(a: PersonCardConversation, b: PersonCardConversation) {

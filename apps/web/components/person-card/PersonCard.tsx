@@ -45,6 +45,7 @@ import { getAttachmentUrl } from "@/utils/attachments/download";
 import { formatShortDate } from "@/utils/date";
 import { getInitials, isSameEmailAddress } from "@/utils/email";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import { isUnsupportedMethodError } from "@/utils/mail-engine/worker-protocol";
 import { getRuleLabel } from "@/utils/rule/consts";
 
 const SENDER_ATTRIBUTE = "data-person-card-sender";
@@ -321,7 +322,7 @@ function PersonCardBody({
           className="min-w-0 flex-1"
           onClick={() => {
             onClose();
-            composeTo(email);
+            composeTo(email, getComposeAccountId(scope, data));
           }}
           size="sm"
           variant="outline"
@@ -344,7 +345,7 @@ function PersonCardBody({
           </Button>
         ) : null}
       </div>
-      {readCard && !isUnsupported(error) ? (
+      {readCard && !isUnsupportedMethodError(error) ? (
         <LoadingContent
           error={error}
           errorComponent={
@@ -564,11 +565,19 @@ function PersonCardSkeleton() {
   );
 }
 
-// A tab that relays to another tab's engine can reach one too old to answer.
-function isUnsupported(error: unknown) {
-  return (
-    error instanceof Error && error.message.startsWith("unsupported method")
-  );
+/**
+ * The account a new message to them starts from: the open message's, else
+ * the one holding your newest conversation with them. Only an account the
+ * card reads from, so never one All inboxes leaves out.
+ */
+export function getComposeAccountId(
+  scope: Pick<PersonCardScopeValue, "accountIds" | "openConversation">,
+  data: Pick<PersonCardData, "conversations"> | undefined,
+) {
+  return [
+    scope.openConversation?.accountId,
+    data?.conversations[0]?.accountId,
+  ].find((accountId) => accountId && scope.accountIds.includes(accountId));
 }
 
 function formatLag(ms: number) {

@@ -1,10 +1,17 @@
 import { expect, type Page } from "@playwright/test";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
+  createSecondEmailAccount,
+  deleteSecondEmailAccount,
+} from "./account-test-helpers";
+import {
+  conversationWithSubject,
   openMail,
   openThreadIdFromUrl,
   readLatestMailMutation,
+  readProviderAccessToken,
 } from "./mail-test-helpers";
 
 const THREAD_ID = "thr_playwright_reader_html";
@@ -107,6 +114,89 @@ test("shows the card as a sheet on a phone", async ({ page }, testInfo) => {
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
 });
+
+test("in All inboxes, writes to them from the account the message came to", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    isMicrosoftPlaywright(),
+    "Seeds the message through the Gmail emulator.",
+  );
+  test.setTimeout(180_000);
+  const { emailAccountId } = await openMail(page);
+  const secondAccount = await createSecondEmailAccount(emailAccountId);
+  const subject = `Person card compose account ${testInfo.retry}-${Date.now()}`;
+
+  try {
+    await insertMessage(page, {
+      from: "Dana Example <dana@example.com>",
+      to: secondAccount.email,
+      subject,
+    });
+
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    const conversations = page.getByRole("listbox", { name: "Conversations" });
+    await expect(conversations).toBeVisible({ timeout: 60_000 });
+    const secondAccountRow = conversationWithSubject(
+      page,
+      conversations,
+      subject,
+    ).filter({
+      has: page.getByRole("img", { name: `Inbox: ${secondAccount.email}` }),
+    });
+    await expect(secondAccountRow).toBeVisible({ timeout: 60_000 });
+    await secondAccountRow.click();
+    await expect(page.getByRole("heading", { name: subject })).toBeVisible();
+
+    await page
+      .locator("li[data-thread-message-id]")
+      .getByRole("button", { name: "Dana Example", exact: true })
+      .click();
+    const card = page.getByTestId("person-card");
+    await card.getByRole("button", { name: "New message" }).click();
+
+    // The account in the address is the primary one; the message came to the
+    // second.
+    const dialog = page.getByRole("dialog", { name: "New Message" });
+    await expect(dialog.getByRole("combobox", { name: "From" })).toContainText(
+      secondAccount.email,
+      { timeout: 60_000 },
+    );
+    await expect(dialog).toContainText(/dana/i);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "person-card-compose-from",
+    );
+    await dialog.getByRole("button", { name: "Close compose" }).click();
+  } finally {
+    await deleteSecondEmailAccount(secondAccount.accountId);
+  }
+});
+
+async function insertMessage(
+  page: Page,
+  input: { from: string; to: string; subject: string },
+) {
+  const baseUrl = process.env.GOOGLE_BASE_URL;
+  if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  const inserted = await page.request.post(
+    `${baseUrl}/gmail/v1/users/me/messages`,
+    {
+      headers: {
+        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        "content-type": "application/json",
+      },
+      data: {
+        ...input,
+        body_text: "Could you send me the notes?",
+        labelIds: ["INBOX", "UNREAD"],
+        internalDate: String(Date.now()),
+      },
+    },
+  );
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+}
 
 async function openThread(page: Page, emailAccountId: string) {
   await page.goto(`/${emailAccountId}/mail?thread-id=${THREAD_ID}`, {

@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { expect, it } from "vitest";
+import type { SqliteDriver, SqlTransaction, SqlValue } from "./driver";
 import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 
@@ -9,9 +10,12 @@ const CONTACTS = 4000;
 // written to for years, the slowest card this mailbox can ask for.
 const HEAVY_EVERY = 10;
 const BUDGET_MS = 100;
+// Reads twice the rows of the heavy card, so it gets room for busy CI while
+// still failing the quadratic matching it guards against (~390 ms median).
+const COPY_BUDGET_MS = 250;
 
 it("renders a person card in under 100 ms on a 50k-message mailbox", async () => {
-  const driver = createNodeSqliteDriver();
+  const { driver, queries } = recordingDriver();
   const store = await createSqliteMailStore(driver);
   try {
     await store.ensureAccount({
@@ -84,6 +88,7 @@ it("renders a person card in under 100 ms on a 50k-message mailbox", async () =>
         },
       ],
     };
+    queries.length = 0;
     const timings = { heavy: [] as number[], light: [] as number[] };
     for (let round = 0; round < 15; round++) {
       let start = performance.now();
@@ -112,6 +117,30 @@ it("renders a person card in under 100 ms on a 50k-message mailbox", async () =>
     expect(heavy.median).toBeLessThan(BUDGET_MS);
     expect(light.median).toBeLessThan(BUDGET_MS);
 
+    // Aliases come from the name's tokens and each match's own rows, never a
+    // walk over every contact.
+    const aliasQueries = queries.filter(({ sql }) =>
+      sql.includes("contact_tokens"),
+    );
+    expect(aliasQueries.length).toBeGreaterThan(0);
+    for (const { sql, bindings } of aliasQueries.slice(0, 1)) {
+      const steps = await driver.read((tx) =>
+        tx.query(`EXPLAIN QUERY PLAN ${sql}`, bindings),
+      );
+      const details = steps.map((row) => String(row.detail));
+      expect(
+        details.filter((detail) =>
+          /^(SCAN|SEARCH) (?!\(subquery)/.test(detail),
+        ),
+      ).toEqual([
+        expect.stringMatching(/^SEARCH t USING .*INDEX/),
+        expect.stringMatching(
+          /^SEARCH i USING INDEX contact_interaction_group/,
+        ),
+        expect.stringMatching(/^SEARCH m USING .*INDEX/),
+      ]);
+    }
+
     // The person's messages come from an index, never a scan of the mailbox.
     const plan = await driver.read((tx) =>
       tx.query(
@@ -128,6 +157,88 @@ it("renders a person card in under 100 ms on a 50k-message mailbox", async () =>
     await store.close();
   }
 }, 180_000);
+
+it("matches copies in two accounts in under 250 ms when many messages look alike", async () => {
+  const driver = createNodeSqliteDriver();
+  const store = await createSqliteMailStore(driver);
+  try {
+    // An automated-looking run: one sender, one subject, one recipient, a
+    // message every 10 ms, in both accounts.
+    const COPIES = 2100;
+    for (const accountId of ["a", "b"])
+      await store.ensureAccount({
+        accountId,
+        provider: "google",
+        generation: "g",
+      });
+    await driver.write(async (tx) => {
+      for (const [account, offset] of [
+        ["a", 0],
+        ["b", 5],
+      ] as const) {
+        for (let i = 0; i < COPIES; i++)
+          await tx.execute(
+            `INSERT INTO messages(account_id,message_id,conversation_id,provider,subject,preview,from_address,to_json,cc_json,received_at_ms,read,starred,label_ids_json,category_ids_json,roles_json,in_inbox,in_sent,in_draft,in_trash,in_spam,has_attachments)
+            VALUES (?, ?, ?, 'google', 'Status', '', 'Bo Silva <bo@example.com>', '["me@example.com"]', '[]', ?, 1, 0, '[]', '[]', '["inbox"]', 1, 0, 0, 0, 0, 0)`,
+            [
+              account,
+              `${account}-${i}`,
+              `${account}-${Math.floor(i / 5)}`,
+              1_700_000_000_000 + i * 10 + offset,
+            ],
+          );
+      }
+      await tx.exec(`
+        INSERT INTO effective_messages(account_id,message_id,conversation_id,subject,preview,from_address,to_json,cc_json,received_at_ms,read,starred,label_ids_json,category_ids_json,roles_json,in_inbox,in_sent,in_draft,in_trash,in_spam,has_attachments,pending_operation_ids_json)
+        SELECT account_id,message_id,conversation_id,subject,preview,from_address,to_json,cc_json,received_at_ms,read,starred,label_ids_json,category_ids_json,roles_json,in_inbox,in_sent,in_draft,in_trash,in_spam,has_attachments,'[]'
+        FROM messages
+      `);
+    });
+    while ((await store.indexContactBacklog()).remaining) {
+      /* bounded worker batches */
+    }
+
+    const timings: number[] = [];
+    for (let round = 0; round < 15; round++) {
+      const start = performance.now();
+      const card = await store.readPersonCard({
+        accountIds: ["a", "b"],
+        email: "bo@example.com",
+        ownAddresses: ["me@example.com"],
+        replyTracking: [],
+      });
+      timings.push(performance.now() - start);
+      // Each conversation is in both accounts, so it shows from one only.
+      expect(new Set(card.conversations.map((c) => c.accountId)).size).toBe(1);
+    }
+    const { median, max } = summarize(timings);
+    process.stdout.write(
+      `PERSON_CARD_COPY_BENCH accounts=2 lookalike_messages=${COPIES} median_ms=${median.toFixed(2)} max_ms=${max.toFixed(2)}\n`,
+    );
+    expect(median).toBeLessThan(COPY_BUDGET_MS);
+  } finally {
+    await store.close();
+  }
+}, 180_000);
+
+function recordingDriver() {
+  const inner = createNodeSqliteDriver();
+  const queries: Array<{ sql: string; bindings: readonly SqlValue[] }> = [];
+  const record = (tx: SqlTransaction): SqlTransaction => ({
+    exec: (sql) => tx.exec(sql),
+    execute: (sql, bindings) => tx.execute(sql, bindings),
+    query: (sql, bindings = []) => {
+      queries.push({ sql, bindings });
+      return tx.query(sql, bindings);
+    },
+  });
+  const driver: SqliteDriver = {
+    close: () => inner.close(),
+    read: (work) => inner.read((tx) => work(record(tx))),
+    write: (work) => inner.write((tx) => work(record(tx))),
+  };
+  return { driver, queries };
+}
 
 function summarize(values: number[]) {
   const sorted = [...values].sort((a, b) => a - b);

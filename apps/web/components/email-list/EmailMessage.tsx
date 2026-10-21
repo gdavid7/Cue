@@ -799,14 +799,17 @@ function MessageHeader({
       onClick={
         onToggle
           ? (event) => {
+              const selection = window.getSelection();
               if (
                 !(event.target instanceof Element) ||
                 event.target.closest("button, a, [role='menu']") ||
                 // A click in the person card, portaled out of the row,
                 // still bubbles here through React.
                 !event.currentTarget.contains(event.target) ||
-                // Ending a text selection isn't a request to toggle.
-                window.getSelection()?.isCollapsed === false
+                // Ending a text selection in the header isn't a request to
+                // toggle; one left elsewhere on the page doesn't count.
+                (selection?.isCollapsed === false &&
+                  event.currentTarget.contains(selection.anchorNode))
               )
                 return;
               onToggle();

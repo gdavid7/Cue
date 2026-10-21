@@ -237,7 +237,7 @@ export async function readContactSuggestions(
   }));
 }
 
-function parseAddress(address: string) {
+export function parseAddress(address: string) {
   const match = address.trim().match(/^(.*?)<([^<>]+)>\s*$/u);
   const email = (match?.[2] ?? address).trim().toLowerCase();
   if (!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/u.test(email)) return null;

@@ -198,16 +198,19 @@ describe("readPersonCard", () => {
 
   it("names other addresses you have sent to under exactly the same full name", async () => {
     const { store } = await setup();
-    const sent = (id: string, to: string, at = T0) =>
-      mail({ id, from: ME, to: [to], at, roles: ["sent"] });
+    // Each alias is written to in two conversations.
+    const sent = (id: string, to: string, at = T0) => [
+      mail({ id, from: ME, to: [to], at, roles: ["sent"] }),
+      mail({ id: `${id}b`, from: ME, to: [to], at, roles: ["sent"] }),
+    ];
     await write(store, [
-      sent("1", ANA),
-      sent("2", "Ana Lima <ana@work.example>", T0 + HOUR),
-      sent("3", "Ana Lima <ana@home.example>", T0 + 2 * HOUR),
-      sent("4", "ana lima <lowercase@example.com>"),
-      sent("5", "Ana Lima Costa <costa@example.com>"),
-      sent("6", "Bo <bo@example.com>"),
-      sent("7", "Bo <bo@other.example>"),
+      ...sent("1", ANA),
+      ...sent("2", "Ana Lima <ana@work.example>", T0 + HOUR),
+      ...sent("3", "Ana Lima <ana@home.example>", T0 + 2 * HOUR),
+      ...sent("4", "ana lima <lowercase@example.com>"),
+      ...sent("5", "Ana Lima Costa <costa@example.com>"),
+      ...sent("6", "Bo <bo@example.com>"),
+      ...sent("7", "Bo <bo@other.example>"),
       // Anyone can claim her name on mail they send you.
       mail({ id: "8", from: "Ana Lima <ana.payroll@evil.example>" }),
     ]);
@@ -220,6 +223,114 @@ describe("readPersonCard", () => {
     expect(
       (await read(store, { email: "bo@example.com" })).otherAddresses,
     ).toEqual([]);
+  });
+
+  it("needs her name on your mail to an address in two conversations to call it hers", async () => {
+    const { store } = await setup();
+    const SPOOF = "Ana Lima <ana.payroll@evil.example>";
+    await write(store, [
+      mail({
+        id: "1",
+        conversation: "c1",
+        from: ME,
+        to: [ANA],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "2",
+        conversation: "c2",
+        from: ME,
+        to: [ANA],
+        roles: ["sent"],
+      }),
+      // Replying to a stranger copies the name they chose back to them.
+      mail({ id: "3", conversation: "spoof", from: SPOOF, at: T0 + HOUR }),
+      mail({
+        id: "4",
+        conversation: "spoof",
+        from: ME,
+        to: [SPOOF],
+        at: T0 + 2 * HOUR,
+        roles: ["sent"],
+      }),
+      mail({
+        id: "5",
+        conversation: "spoof",
+        from: ME,
+        to: [SPOOF],
+        at: T0 + 3 * HOUR,
+        roles: ["sent"],
+      }),
+    ]);
+    expect((await read(store)).otherAddresses).toEqual([]);
+    // Nor does the stranger's own card vouch for the address they borrowed
+    // the name from.
+    expect(
+      (await read(store, { email: "ana.payroll@evil.example" })).otherAddresses,
+    ).toEqual([]);
+
+    await write(store, [
+      mail({
+        id: "6",
+        conversation: "w1",
+        from: ME,
+        to: ["Ana Lima <ana@work.example>"],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "7",
+        conversation: "w2",
+        from: ME,
+        to: ["Ana Lima <ana@work.example>"],
+        roles: ["sent"],
+      }),
+    ]);
+    expect((await read(store)).otherAddresses).toEqual(["ana@work.example"]);
+  });
+
+  it("counts a sent message that is in two of your accounts as one conversation", async () => {
+    const { store } = await setup(["a", "b"]);
+    const WORK = "Ana Lima <ana@work.example>";
+    await write(store, [
+      mail({
+        id: "1",
+        conversation: "c1",
+        from: ME,
+        to: [ANA],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "2",
+        conversation: "c2",
+        from: ME,
+        to: [ANA],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "3",
+        conversation: "w",
+        from: ME,
+        to: [WORK],
+        roles: ["sent"],
+      }),
+    ]);
+    await write(
+      store,
+      [
+        mail({
+          id: "3",
+          conversation: "w",
+          from: ME,
+          to: [WORK],
+          roles: ["sent"],
+        }),
+      ],
+      "b",
+    );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.otherAddresses).toEqual([]);
   });
 
   it("takes their name only from mail you sent them", async () => {
@@ -263,6 +374,148 @@ describe("readPersonCard", () => {
     const card = await read(store, { accountIds: ["a", "b"] });
 
     expect(card.conversations).toHaveLength(1);
+  });
+
+  it("keeps one copy of a message to two accounts when only one account has the reply", async () => {
+    const { store } = await setup(["a", "b"]);
+    // Ana writes to both accounts; you answer from whichever account she
+    // wrote to, two hours later, so one conversation has more in it.
+    for (const [n, replyFrom] of [
+      [1, "a"],
+      [2, "b"],
+      [3, "a"],
+    ] as const) {
+      const at = T0 + n * 100 * HOUR;
+      for (const account of ["a", "b"]) {
+        const changes = [
+          mail({
+            id: `${account}-${n}`,
+            conversation: `${account}-t${n}`,
+            from: ANA,
+            to: [ME, "me@b.example"],
+            at: at + (account === "b" ? 20_000 : 0),
+            subject: "Plan",
+            labels: account === "a" && n === 2 ? ["L_TO_REPLY"] : [],
+          }),
+        ];
+        if (account === replyFrom)
+          changes.push(
+            mail({
+              id: `${account}-${n}-re`,
+              conversation: `${account}-t${n}`,
+              from: ME,
+              to: [ANA],
+              at: at + 2 * HOUR,
+              subject: "Re: Plan",
+              roles: ["sent"],
+            }),
+          );
+        await write(store, changes, account);
+      }
+    }
+
+    const card = await read(store, {
+      accountIds: ["a", "b"],
+      replyTracking: [
+        {
+          accountId: "a",
+          toReplyLabelId: "L_TO_REPLY",
+          awaitingReplyLabelId: null,
+        },
+      ],
+    });
+
+    expect(card.conversations.map((c) => c.conversationId)).toEqual([
+      "a-t3",
+      "b-t2",
+      "a-t1",
+    ]);
+    expect(card.replyLag.yours).toEqual({ medianMs: 2 * HOUR, exchanges: 3 });
+    // Asked in the copy that's hidden, shown on the one that stays.
+    expect(card.awaitingYou.map((c) => c.conversationId)).toEqual(["b-t2"]);
+  });
+
+  it("shows separate conversations that only share a subject", async () => {
+    const { store } = await setup(["a", "b"]);
+    await write(
+      store,
+      [mail({ id: "a1", from: ANA, at: T0, subject: "Weekly" })],
+      "a",
+    );
+    await write(
+      store,
+      [
+        // A new message a few minutes later, not a copy of the first.
+        mail({ id: "b1", from: ANA, at: T0 + 3 * 60_000, subject: "Weekly" }),
+        // Same moment, but to different people.
+        mail({
+          id: "b2",
+          from: ANA,
+          to: [ME, "bo@example.com"],
+          at: T0,
+          subject: "Weekly",
+        }),
+      ],
+      "b",
+    );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.conversations.map((c) => c.conversationId).sort()).toEqual([
+      "a1",
+      "b1",
+      "b2",
+    ]);
+  });
+
+  it("counts a shared message once when each account's conversation has its own replies", async () => {
+    const { store } = await setup(["a", "b"]);
+    for (const n of [1, 2, 3]) {
+      const at = T0 + n * 100 * HOUR;
+      await write(
+        store,
+        [
+          mail({ id: `a-${n}`, conversation: `a-t${n}`, from: ANA, at }),
+          mail({
+            id: `a-${n}-re`,
+            conversation: `a-t${n}`,
+            from: ME,
+            to: [ANA],
+            at: at + HOUR,
+            roles: ["sent"],
+          }),
+        ],
+        "a",
+      );
+      await write(
+        store,
+        [
+          mail({
+            id: `b-${n}`,
+            conversation: `b-t${n}`,
+            from: ANA,
+            at,
+          }),
+          // Her answer reached only this account.
+          mail({
+            id: `b-${n}-more`,
+            conversation: `b-t${n}`,
+            from: ANA,
+            to: ["me@b.example"],
+            at: at + 3 * HOUR,
+          }),
+        ],
+        "b",
+      );
+    }
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.conversations).toHaveLength(6);
+    expect(card.replyLag).toEqual({
+      theirs: { medianMs: 2 * HOUR, exchanges: 3 },
+      yours: { medianMs: HOUR, exchanges: 3 },
+    });
   });
 
   it("says older mail is still syncing until coverage and the contact index are complete", async () => {

@@ -2,6 +2,7 @@ import type { MailEngine } from "@inboxzero/mail-core/engine";
 import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
 import {
   observeByKind,
+  unsupportedMethodMessage,
   workerStartFence,
   type BrowserEngineStart,
   type WorkerRequest,
@@ -106,7 +107,7 @@ export function createMailWorkerHost(hooks: {
         respond({
           id: message.id,
           type: "error",
-          message: `unsupported method ${message.method}`,
+          message: unsupportedMethodMessage(message.method),
         });
         return;
       }
