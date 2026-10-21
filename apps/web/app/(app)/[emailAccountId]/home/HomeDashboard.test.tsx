@@ -128,6 +128,7 @@ vi.mock("@/utils/actions/thread-assist", () => ({
   markNeedsReplyAction: mocks.markNeedsReply,
 }));
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
+vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
 describe("HomeDashboard row actions", () => {
   beforeEach(() => {
@@ -442,6 +443,42 @@ describe("HomeDashboard states", () => {
       "All clear.Nothing needs a reply. Nothing new today.",
     );
     expect(screen.queryByText(/^Next:|^Due |Waiting on|Connect/)).toBeNull();
+  });
+
+  it("quiet day: All clear still says how tomorrow starts and which replies Cue drafted", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      waiting: [thread("w1", "Intro to Sam")],
+      agentTasks: [
+        {
+          id: "draft-1",
+          kind: "draft",
+          threadId: "d1",
+          title: "Suggested reply: Lunch on Friday?",
+          detail: "Ready for your review",
+          at: "2026-10-13T09:00:00.000Z",
+        },
+      ],
+      calendar: { connected: true, next: nextEvent(true) },
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toMatch(/^All clear\./);
+    expect(screen.getByText(/^Tomorrow starts with/)).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: /^Drafts ready for you/ }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: /Suggested reply: Lunch on Friday\?/ })
+        .getAttribute("href"),
+    ).toBe("/mail/u/0/inbox/d1?from=today");
+    expect(
+      screen.getByRole("button", { name: "Waiting on 1 person" }),
+    ).toBeTruthy();
+    // Nothing is in a lane, so no empty lane says so.
+    expect(lanes()).toEqual([]);
   });
 
   it("new: says Cue is still reading, not that all is clear", () => {

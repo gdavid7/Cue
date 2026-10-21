@@ -100,7 +100,6 @@ export async function getNextUp({
   now: Date;
 }) {
   const today = startOfDay(new TZDate(now, timeZone));
-  const tomorrow = addDays(today, 1);
   const dayAfter = addDays(today, 2);
 
   const [calendar, deadlines, calendarAccounts] = await Promise.all([
@@ -136,21 +135,17 @@ export async function getNextUp({
         (a) => a.declined && self.has(a.email.toLowerCase()),
       ),
   );
-  // Late in the day, what's left tonight matters less than how tomorrow starts.
-  const evening = new TZDate(now, timeZone).getHours() >= EVENING_HOUR;
-  const next = evening
-    ? events.find((e) => e.startTime >= tomorrow && e.startTime < dayAfter)
-    : events.find((e) => e.startTime < tomorrow);
+  const next = pickNextEvent(events, { now, today, timeZone });
 
   return {
     calendar: {
       connected: calendar.connected,
       next: next
         ? {
-            title: next.title,
-            at: next.startTime.toISOString(),
-            url: next.eventUrl,
-            tomorrow: evening,
+            title: next.event.title,
+            at: next.event.startTime.toISOString(),
+            url: next.event.eventUrl,
+            tomorrow: next.tomorrow,
           }
         : null,
     },
@@ -646,3 +641,29 @@ const clickUpTasksSchema = z.object({
     }),
   ),
 });
+
+/**
+ * The one meeting Today names as next, from events still to come. Late in
+ * the day, what's left tonight matters less than how tomorrow starts; and
+ * once today's meetings are over, tomorrow's first one is still worth knowing
+ * on a quiet afternoon.
+ */
+function pickNextEvent<T extends Pick<CalendarEvent, "startTime">>(
+  events: T[],
+  { now, today, timeZone }: { now: Date; today: Date; timeZone: string },
+): { event: T; tomorrow: boolean } | null {
+  const tomorrow = addDays(today, 1);
+  const dayAfter = addDays(today, 2);
+  const upcoming = [...events].sort(
+    (a, b) => a.startTime.getTime() - b.startTime.getTime(),
+  );
+  const tomorrowFirst = upcoming.find(
+    (event) => event.startTime >= tomorrow && event.startTime < dayAfter,
+  );
+  const evening = new TZDate(now, timeZone).getHours() >= EVENING_HOUR;
+  const laterToday = evening
+    ? undefined
+    : upcoming.find((event) => event.startTime < tomorrow);
+  if (laterToday) return { event: laterToday, tomorrow: false };
+  return tomorrowFirst ? { event: tomorrowFirst, tomorrow: true } : null;
+}

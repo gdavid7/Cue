@@ -32,7 +32,15 @@
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
     "utils/home/get-home.ts",
-    "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx"
+    "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx",
+    "app/(app)/[emailAccountId]/home/TodayWeather.tsx"
+  ],
+  "today-quiet.spec.ts": [
+    "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
+    "app/(app)/[emailAccountId]/home/AllClear.tsx",
+    "utils/weather/open-meteo.ts",
+    "utils/actions/today-weather.ts",
+    "utils/home/next-up.ts"
   ],
   "today-all-accounts.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
