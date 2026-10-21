@@ -632,6 +632,67 @@ describe("useInboxInsights and the rows on screen", () => {
     vi.useRealTimers();
   });
 
+  it("places rows by their row on screen when a row has nothing to ask about", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    // Thread 3 is a draft only: it is a row on screen but asks about nothing.
+    const rows = newestFirst(31)
+      .map((row, index) => ({ ...row, index }))
+      .filter((row) => row.index !== 3);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 0, end: 4 }));
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.filter((row) => row.index < 8)));
+    vi.useRealTimers();
+  });
+
+  it("forgets the rows on screen when the list is replaced", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const inbox = newestFirst(40);
+    const archive = newestFirst(40).map((row) => ({
+      ...row,
+      key: `archive:${row.threadId}`,
+      threadId: `a${row.threadId}`,
+      messageId: `a${row.messageId}`,
+    }));
+    const { result, rerender } = renderHook(
+      ({ items }) => useInboxInsights(items),
+      { wrapper: wrapperFor(fetcher), initialProps: { items: inbox } },
+    );
+    act(() => result.current.setVisibleRows({ start: 20, end: 24 }));
+    rerender({ items: archive });
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(archive.slice(0, 25)));
+    vi.useRealTimers();
+  });
+
+  it("asks nothing more when the same rows are reordered", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetcher } = answeringFetcher();
+    const rows = newestFirst(30);
+    const { rerender } = renderHook(({ items }) => useInboxInsights(items), {
+      wrapper: wrapperFor(fetcher),
+      initialProps: { items: rows },
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    rerender({ items: [...rows].reverse() });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    rerender({ items: rows });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   function answeringFetcher() {
     const fetcher = vi.fn(async ([url]: [string, string]) =>
       fromServer(
@@ -650,7 +711,9 @@ describe("useInboxInsights and the rows on screen", () => {
     const items = new URL(url ?? "", "https://cue.test").searchParams.get(
       "items",
     );
-    return (items ?? "").split(",").map((pair) => pair.split(":")[0]);
+    return (items ?? "")
+      .split(",")
+      .map((pair) => decodeURIComponent(pair.split(":")[0]));
   }
 
   // Gmail's thread ids grow with time and the list shows the newest first.

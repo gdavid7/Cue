@@ -4,6 +4,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useRef,
   useSyncExternalStore,
 } from "react";
 import { useSWRConfig } from "swr";
@@ -60,6 +61,11 @@ type InboxInsightItem = {
   threadId: string;
   messageId: string;
   /**
+   * The item's row in the list on screen, as `setVisibleRows` counts rows,
+   * when some rows have no item; otherwise its place among the items.
+   */
+  index?: number;
+  /**
    * The conversation on screen: asked for at once, at interactive Gmail
    * priority, rather than with the rows once mail has settled.
    */
@@ -79,6 +85,7 @@ type Wanted = {
 };
 /** Rows `start` (inclusive) to `end` (exclusive) of a reader's list are on screen. */
 export type VisibleRows = { start: number; end: number };
+type ListVersion = { version: number; keys: string[] };
 type Queue = {
   emailAccountId: string;
   lane: Lane;
@@ -100,7 +107,12 @@ type Queue = {
 const queues = new Map<string, Queue>();
 // What each reader has on screen. Read when a request is built, so a scroll
 // reorders what is asked next without re-rendering the list.
-const visibleByReader = new Map<string, VisibleRows>();
+// A range is kept with the list it was measured on, and only applies while
+// that list hasn't been replaced (a mailbox switch, a reorder).
+const visibleByReader = new Map<
+  string,
+  { rows: VisibleRows; list: ListVersion; measuredOn: number }
+>();
 const attempts = new Map<string, number>();
 const meta = new Map<
   string,
@@ -133,6 +145,11 @@ export function useInboxInsights(
   const { fetcher } = useSWRConfig();
   const readerId = useId();
   const requests = useMemo(() => getInboxInsightRequests(items), [items]);
+  // Rows added below keep the range; any other change replaces the list.
+  const list = useRef<ListVersion>({ version: 0, keys: [] });
+  const keys = items.map((item) => item.key);
+  if (!startsWith(keys, list.current.keys)) list.current.version += 1;
+  list.current.keys = keys;
   const wantedKey = enabled
     ? requests
         .map(
@@ -169,7 +186,11 @@ export function useInboxInsights(
   );
   const setVisibleRows = useCallback(
     (rows: VisibleRows) => {
-      visibleByReader.set(readerId, rows);
+      visibleByReader.set(readerId, {
+        rows,
+        list: list.current,
+        measuredOn: list.current.version,
+      });
     },
     [readerId],
   );
@@ -239,7 +260,7 @@ export function threadInsightItem({
  */
 export function getInboxInsightRequests(items: InboxInsightItem[]) {
   const byAccount = groupBy(
-    items.map((item, index) => ({ ...item, index })),
+    items.map((item, index) => ({ ...item, index: item.index ?? index })),
     (item) => `${item.open ? "open" : "rows"}\u0000${item.emailAccountId}`,
   );
   return Object.keys(byAccount)
@@ -554,7 +575,11 @@ function byScreenPriority(readers: Queue["readers"]) {
     Wanted & { rank: number; onScreen: boolean }
   >();
   for (const [readerId, items] of readers) {
-    const visible = visibleByReader.get(readerId);
+    const measured = visibleByReader.get(readerId);
+    const visible =
+      measured && measured.measuredOn === measured.list.version
+        ? measured.rows
+        : undefined;
     for (const item of items) {
       const placed = placeOnScreen(item.index, visible);
       const existing = ranked.get(item.pair);
@@ -590,6 +615,10 @@ function firstRequestSize(pendingCount: number, onScreenCount: number) {
     MAX_NEW_PER_REQUEST,
     Math.max(onScreenCount, smallestWithoutExtraRequest),
   );
+}
+
+function startsWith(keys: string[], prefix: string[]) {
+  return prefix.every((key, index) => keys[index] === key);
 }
 
 function chunk<T>(items: T[], size: number): T[][] {

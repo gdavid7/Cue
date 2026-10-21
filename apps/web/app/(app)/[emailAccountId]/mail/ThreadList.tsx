@@ -112,7 +112,7 @@ export const ThreadList = memo(function ThreadList({
     useSentMessageOpensForThreads(sentThreadIds);
   const insightItems = useMemo(
     () =>
-      threads.flatMap((thread) => {
+      threads.flatMap((thread, index) => {
         const messageId =
           thread.latestMessageId ??
           thread.messages.findLast(
@@ -128,6 +128,7 @@ export const ThreadList = memo(function ThreadList({
                 ),
                 threadId: thread.id,
                 messageId,
+                index,
               },
             ]
           : [];
