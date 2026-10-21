@@ -25,9 +25,12 @@ const OTHER_ADDRESS_LIMIT = 3;
 // Providers stamp a message's arrival per mailbox, so the same message in two
 // accounts can differ by a little.
 const COPY_WINDOW_MS = 60_000;
-// One reply to a stranger using a friend's name copies that name back, so an
-// alias needs the name on mail you sent it in more than one conversation.
-const ALIAS_MIN_CONVERSATIONS = 2;
+// Anyone can start a conversation with you under a friend's name, and a
+// reply copies that name back. So a name only counts once mail you sent
+// under it reaches beyond one exchange they set up: at least two
+// conversations, the first and last a week or more apart, in one account.
+const NAME_MIN_CONVERSATIONS = 2;
+const NAME_MIN_SPAN_MS = 7 * 24 * 3_600_000;
 
 type PersonMessage = {
   accountId: string;
@@ -212,9 +215,11 @@ function summarize(lags: number[]): ReplyLag | null {
 }
 
 /**
- * The name you address them by in mail you sent. Names on mail you received
- * are whatever the sender chose, so the card leaves those to the header of
- * the message being read.
+ * The name you address them by in mail you sent, when that mail is enough
+ * to vouch for it (see NAME_MIN_CONVERSATIONS). Names on mail you received
+ * are whatever the sender chose, so the card leaves those, and names you
+ * have only used in a short exchange, to the header of the message being
+ * read.
  */
 async function readName(
   tx: SqlTransaction,
@@ -222,26 +227,33 @@ async function readName(
   email: string,
 ): Promise<string | null> {
   if (!accountIds.length) return null;
+  // Same bar as readOtherAddresses: NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS.
+  // Only names that pass compete, so a short exchange under a new name
+  // neither replaces nor blanks one you have used for longer.
   const [row] = await tx.query(
-    `SELECT name FROM contact_stats
-     WHERE account_id IN (${placeholders(accountIds)}) AND email = ?
-       AND sent = 1 AND name != ''
-     GROUP BY name ORDER BY SUM(count) DESC, MAX(last_at) DESC, name LIMIT 1`,
-    [...accountIds, email],
+    `SELECT i.name, COUNT(*) AS times, MAX(i.last_at) AS latest
+     FROM contact_interactions i
+     CROSS JOIN messages m
+       ON m.account_id = i.account_id AND m.message_id = i.message_id
+     WHERE i.account_id IN (${placeholders(accountIds)})
+       AND i.email = ? AND i.sent = 1 AND i.name != ''
+       AND lower(trim(i.name)) != ?
+     GROUP BY i.account_id, i.name
+     HAVING COUNT(DISTINCT m.conversation_id) >= ?
+       AND MAX(i.last_at) - MIN(i.last_at) >= ?
+     ORDER BY times DESC, latest DESC, i.name LIMIT 1`,
+    [...accountIds, email, email, NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS],
   );
-  const name = row ? String(row.name) : "";
-  return name && normalizeEmail(name) !== email ? name : null;
+  return row ? String(row.name) : null;
 }
 
 /**
  * Other addresses you have sent mail to under exactly this full name, newest
- * first. Only your own sent mail counts: anyone can put a name on mail they
- * send you, and a reply copies that name back, so the name must be on mail
- * you sent in more than one conversation, both to the address the card is
- * for and to each other one. Otherwise one reply to someone borrowing a
- * friend's name would have their card vouch for the friend. Conversations
- * are counted within one account, so a copy in another isn't a second one.
- * A lone first name is shared by too many people to say it is the same one.
+ * first. The name comes from readName, so your mail to the card's address
+ * already vouches for it, and each other address needs the same from your
+ * mail to it; otherwise someone who borrowed a friend's name for a short
+ * exchange would have their card vouch for the friend. A lone first name is
+ * shared by too many people to say it is the same one.
  */
 async function readOtherAddresses(
   tx: SqlTransaction,
@@ -251,24 +263,13 @@ async function readOtherAddresses(
   own: Set<string>,
 ): Promise<string[]> {
   if (name.trim().split(/\s+/u).length < 2) return [];
-  const [self] = await tx.query(
-    `SELECT MAX(conversations) AS conversations FROM (
-       SELECT COUNT(DISTINCT m.conversation_id) AS conversations
-       FROM contact_interactions i
-       CROSS JOIN messages m
-         ON m.account_id = i.account_id AND m.message_id = i.message_id
-       WHERE i.account_id IN (${placeholders(accountIds)})
-         AND i.email = ? AND i.name = ? AND i.sent = 1
-       GROUP BY i.account_id
-     )`,
-    [...accountIds, email, name],
-  );
-  if (Number(self?.conversations ?? 0) < ALIAS_MIN_CONVERSATIONS) return [];
-  // CROSS JOIN keeps the plan on the name's tokens; left to itself SQLite
-  // walks every contact in the account.
+  // Same bar as readName: NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS. CROSS
+  // JOIN keeps the plan on the name's tokens; left to itself SQLite walks
+  // every contact in the account.
   const rows = await tx.query(
     `SELECT email, MAX(last_at) AS last_at FROM (
        SELECT t.email, MAX(i.last_at) AS last_at,
+              MAX(i.last_at) - MIN(i.last_at) AS span,
               COUNT(DISTINCT m.conversation_id) AS conversations
        FROM contact_tokens t
        CROSS JOIN contact_interactions i
@@ -280,14 +281,15 @@ async function readOtherAddresses(
          AND t.token = ? AND t.email != ?
        GROUP BY t.email, t.account_id
      )
-     GROUP BY email HAVING MAX(conversations) >= ?
+     GROUP BY email HAVING MAX(conversations >= ? AND span >= ?)
      ORDER BY last_at DESC, email LIMIT ?`,
     [
       name,
       ...accountIds,
       name.toLowerCase(),
       email,
-      ALIAS_MIN_CONVERSATIONS,
+      NAME_MIN_CONVERSATIONS,
+      NAME_MIN_SPAN_MS,
       OTHER_ADDRESS_LIMIT + own.size,
     ],
   );
