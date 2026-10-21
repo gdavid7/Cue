@@ -90,9 +90,16 @@ test("switching between Today and the inbox answers at once", async ({
           testInfo,
           `${destination}-after-switch`,
         );
-      const homeLoads = await logSwitch(page, destination, before, requests);
+      const cost = await logSwitch(page, destination, before, requests);
+      // What the switch rebuilt and asked the server, beside its times.
+      recorder.add(`to-${destination}-requests-${phase}`, cost.requests);
+      recorder.add(
+        `to-${destination}-remounted-sidebar-${phase}`,
+        Number(cost.remountedSidebar),
+      );
+      recorder.add(`to-${destination}-workers-${phase}`, cost.workersCreated);
       // One open of Today is one Gmail read at most, however it was reached.
-      expect.soft(homeLoads).toBeLessThanOrEqual(1);
+      expect.soft(cost.homeLoads).toBeLessThanOrEqual(1);
     };
 
     for (let run = 0; run <= perfRuns; run++) {
@@ -277,7 +284,6 @@ async function readSwitch(page: Page): Promise<SwitchTimes> {
 /**
  * Logs what the switch cost besides time: whether the sidebar and list were
  * rebuilt, whether the mail engine restarted, and what it asked the server.
- * Returns how many times it loaded Today's lanes.
  */
 async function logSwitch(
   page: Page,
@@ -307,9 +313,14 @@ async function logSwitch(
       .filter((line) => /^(rsc|document|fetch)/.test(line)),
   };
   console.log(`SWITCH to-${destination} ${JSON.stringify(detail)}`);
-  return requests.filter(
-    (request) => new URL(request.url()).pathname === "/api/user/home",
-  ).length;
+  return {
+    remountedSidebar: detail.remountedSidebar,
+    workersCreated: detail.workersCreated,
+    requests: detail.requests.length,
+    homeLoads: requests.filter(
+      (request) => new URL(request.url()).pathname === "/api/user/home",
+    ).length,
+  };
 }
 
 type Snapshot = {
