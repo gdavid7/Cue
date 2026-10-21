@@ -143,21 +143,23 @@ export function FilesView({
     },
     { keepPreviousData: true, revalidateFirstPage: false },
   );
+
   const senders = useSWR(
     readSenders ? ["mail-file-senders", JSON.stringify(accountIds)] : null,
     () => readSenders?.(accountIds) ?? [],
   );
-
-  // The list is read once; new mail reaching the inbox moves its unread
-  // count, which is already watched cheaply, so that refreshes it.
+  // Both are read once; new mail reaching the inbox moves its unread count,
+  // which is already watched cheaply, so that refreshes them.
   const inboxUnread = useInboxUnreadCount(accountIds);
   const { mutate } = pages;
+  const { mutate: mutateSenders } = senders;
   const refreshedAtUnread = useRef(inboxUnread);
   useEffect(() => {
     if (refreshedAtUnread.current === inboxUnread) return;
     refreshedAtUnread.current = inboxUnread;
     mutate().catch(() => undefined);
-  }, [inboxUnread, mutate]);
+    mutateSenders().catch(() => undefined);
+  }, [inboxUnread, mutate, mutateSenders]);
 
   const files = useMemo(
     () => pages.data?.flatMap((page) => page.files) ?? [],
@@ -229,6 +231,9 @@ export function FilesView({
           </div>
           <SenderFilter
             onChange={setSender}
+            onOpen={() => {
+              mutateSenders().catch(() => undefined);
+            }}
             selected={sender}
             senders={senders.data ?? []}
           />
@@ -440,10 +445,13 @@ function SenderFilter({
   senders,
   selected,
   onChange,
+  onOpen,
 }: {
   senders: FileSender[];
   selected: FileSender | null;
   onChange: (sender: FileSender | null) => void;
+  /** Senders can change while the list is open, so they reload on opening. */
+  onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   if (selected)
@@ -460,7 +468,13 @@ function SenderFilter({
       </Button>
     );
   return (
-    <Popover onOpenChange={setOpen} open={open}>
+    <Popover
+      onOpenChange={(next) => {
+        if (next) onOpen();
+        setOpen(next);
+      }}
+      open={open}
+    >
       <PopoverTrigger asChild>
         <Button
           aria-expanded={open}

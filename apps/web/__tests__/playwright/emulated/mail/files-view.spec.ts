@@ -67,7 +67,11 @@ test("lists a message's files from the sidebar and filters them by type, name an
   await expect(page).toHaveURL(/\/mail\/u\/\d+\/files(\?|$)/);
   await expect(row(files, pdf)).toBeVisible();
   await expect(row(files, sheet)).toBeVisible();
-  await expect(row(files, pdf)).toContainText(SENDER.name);
+  // The Outlook emulator sends created mail from the account itself.
+  const senderName = isMicrosoftPlaywright()
+    ? await senderOf(row(files, pdf))
+    : SENDER.name;
+  await expect(row(files, pdf)).toContainText(senderName);
   await expect(row(files, pdf)).toContainText(subject);
   // A signature logo is part of the message, not one of its files.
   await expect(row(files, logo)).toHaveCount(0);
@@ -85,16 +89,19 @@ test("lists a message's files from the sidebar and filters them by type, name an
   await search.fill("");
 
   await page.getByRole("combobox", { name: "Filter by sender" }).click();
-  await page.getByPlaceholder("Search senders").fill("morgan");
-  await page.getByRole("option", { name: new RegExp(SENDER.name) }).click();
+  await page.getByPlaceholder("Search senders").fill(senderName);
+  await page
+    .getByRole("option", { name: new RegExp(escapeRegExp(senderName)) })
+    .first()
+    .click();
   await expect(row(files, pdf)).toBeVisible();
   await expect(
-    files.getByRole("listitem").filter({ hasNotText: SENDER.name }),
+    files.getByRole("listitem").filter({ hasNotText: senderName }),
   ).toHaveCount(0);
   await capturePlaywrightCheckpoint(page, testInfo, "files-view-filtered");
 
   await page
-    .getByRole("button", { name: `From ${SENDER.name}. Clear sender filter` })
+    .getByRole("button", { name: `From ${senderName}. Clear sender filter` })
     .click();
   await expect(
     page.getByRole("combobox", { name: "Filter by sender" }),
@@ -207,6 +214,22 @@ async function openFiles(page: Page) {
     timeout: 60_000,
   });
   return files;
+}
+
+/** The sender shown in a file's row, between its size and its subject. */
+async function senderOf(fileRow: Locator) {
+  const meta = await fileRow
+    .getByRole("button", { name: /^Preview / })
+    .locator("span.truncate")
+    .last()
+    .textContent();
+  const sender = meta?.split(" · ")[1]?.trim();
+  if (!sender) throw new Error("The row shows no sender");
+  return sender;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function row(files: Locator, filename: string) {
