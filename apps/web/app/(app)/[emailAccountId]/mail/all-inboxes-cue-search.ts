@@ -1,9 +1,9 @@
 import type { MailboxView, MailPredicate } from "@inboxzero/mail-core/queries";
 import {
   type CueWidening,
+  getNextWidening,
   getWideningLadder,
-  getWideningStep,
-  shouldAskProviderLastResort,
+  type getWideningStep,
   type WideningStep,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import {
@@ -34,6 +34,11 @@ export const CUE_PROVIDER_SEARCH_QUEUE = 2;
  * the next account. Its local mail still counts.
  */
 export const CUE_ACCOUNT_SEARCH_TIMEOUT_MS = 8000;
+/**
+ * The least time left in an account's box for its last resort to be worth
+ * sending: less, and it would be cancelled before its provider answers.
+ */
+export const MIN_LAST_RESORT_MS = 1500;
 // The engine runs searches one at a time, so a queued one may wait about a
 // box behind another; past two, its start is taken as lost.
 const QUEUED_TIMEOUT_FACTOR = 2;
@@ -232,24 +237,17 @@ export function getNextAccountWidenings({
 }): Record<string, AccountWidening> | null {
   const changes: Record<string, AccountWidening> = {};
   for (const [accountId, ladder] of Object.entries(ladders)) {
-    const current = widenings[accountId];
-    const ladderState = {
-      step: current?.step ?? null,
-      primary: primary[accountId] ?? NOT_SETTLED,
-      widened: widened[accountId] ?? NOT_SETTLED,
-      ladderLength: ladder.length,
-      expired,
-    };
-    const step = getWideningStep(ladderState);
-    if (step === null) continue;
-    if (step !== ladderState.step)
-      changes[accountId] = { step, onProvider: false };
-    else if (
-      !current?.onProvider &&
-      providerAllowedIds.has(accountId) &&
-      shouldAskProviderLastResort(ladderState)
-    )
-      changes[accountId] = { step, onProvider: true };
+    const next = getNextWidening(
+      {
+        primary: primary[accountId] ?? NOT_SETTLED,
+        widened: widened[accountId] ?? NOT_SETTLED,
+        ladderLength: ladder.length,
+        expired,
+      },
+      widenings[accountId] ?? null,
+      { mayAskProvider: providerAllowedIds.has(accountId) },
+    );
+    if (next) changes[accountId] = next;
   }
   return Object.keys(changes).length ? changes : null;
 }
@@ -264,6 +262,54 @@ export function getAccountsWidenedSearches(
     const tier = widening ? ladder[widening.step] : undefined;
     return (tier?.searches ?? []).map((search) => ({ accountId, search }));
   });
+}
+
+/**
+ * The predicate for every widening account's current tier. Tiers read the
+ * local mail alone; an account in `lastResortIds` also sends the first of
+ * its tier's searches to its provider, and only that one, so its last
+ * resort is a single provider search that answers or times out as one.
+ */
+export function getAccountsWidenedPredicate({
+  searches,
+  accounts,
+  lastResortIds,
+  now,
+  timeZone,
+}: {
+  searches: AccountCueSearch[];
+  accounts: CueSearchAccount[];
+  lastResortIds: ReadonlySet<string>;
+  now: Date;
+  timeZone: string;
+}): MailPredicate | undefined {
+  const onProvider = new Set<string>();
+  const toProvider: AccountCueSearch[] = [];
+  const local: AccountCueSearch[] = [];
+  for (const search of searches) {
+    if (
+      lastResortIds.has(search.accountId) &&
+      !onProvider.has(search.accountId)
+    ) {
+      onProvider.add(search.accountId);
+      toProvider.push(search);
+    } else local.push(search);
+  }
+  const shared = { accounts, unreadOnly: false, now, timeZone };
+  const predicates = [
+    getAccountsCuePredicate({
+      ...shared,
+      searches: toProvider,
+      providerAccountIds: lastResortIds,
+    }),
+    getAccountsCuePredicate({
+      ...shared,
+      searches: local,
+      providerAccountIds: new Set(),
+    }),
+  ].filter((predicate) => predicate !== undefined);
+  if (predicates.length < 2) return predicates[0];
+  return { kind: "any", predicates };
 }
 
 /**

@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   widerRows: {} as Record<string, Row[]>,
   /** Accounts whose last resort the provider has answered. */
   widerAnswered: new Set<string>(),
+  /** The first searches' window holds more than one page. */
+  hasMore: false,
   /** When the engine began each account's last resort. */
   widerStartedAt: {} as Record<string, number>,
   /** Accounts whose provider has answered. */
@@ -96,6 +98,7 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
       ),
       hasRemoteResponse: true,
       isLoading: false,
+      hasMore: !widened && state.hasMore,
       providerSearchAccounts: providerIds.map((accountId) => ({
         accountId,
         state: answered.has(accountId) ? "complete" : "searching",
@@ -157,6 +160,7 @@ beforeEach(() => {
   state.widerRows = {};
   state.widerAnswered = new Set();
   state.widerStartedAt = {};
+  state.hasMore = false;
   state.intent = {
     searches: ["from:sarah lease"],
     editableSearches: ["from:sarah lease"],
@@ -432,6 +436,28 @@ describe("useAllInboxesCueSearch widening", () => {
     expect(result.current.stage).toBe("done");
   });
 
+  it("doesn't widen an account a busier one may have pushed off a full page", () => {
+    state.rows = {
+      work: [
+        { id: "w1", subject: "Lease from Sarah" },
+        { id: "w2", subject: "Lease from Sarah" },
+      ],
+    };
+    state.answered = new Set(["work", "home"]);
+    state.hasMore = true;
+    const { result, rerender } = render([WORK, HOME]);
+    rerender();
+
+    expect(widenedWindows()).toEqual([]);
+    expect(result.current.widening).toBeNull();
+
+    // Once the page holds everything, "home" really found nothing.
+    state.hasMore = false;
+    rerender();
+    rerender();
+    expect(widenedWindows().at(-1)?.accountIds).toEqual(["home"]);
+  });
+
   it("doesn't widen while an account's search is still running", () => {
     state.answered = new Set(["work"]);
     state.rows = {
@@ -477,9 +503,14 @@ describe("useAllInboxesCueSearch widening", () => {
     expect(
       providerSearchAccounts(widenedWindows().at(-1)?.predicate),
     ).not.toContain("work");
-    // Its turn passes to the next account in line.
-    expect(providerSearchAccounts(widenedWindows().at(-1)?.predicate)).toEqual([
-      "home",
+    // "home" was still waiting when the budget ran out, so it's never sent:
+    // what it found would land after the rows were read.
+    expect(providerSearchAccounts(widenedWindows().at(-1)?.predicate)).toEqual(
+      [],
+    );
+    // Only "side"'s first search is still out, and only it shows as pending.
+    expect(result.current.stillSearching.map((account) => account.id)).toEqual([
+      "side",
     ]);
   });
 

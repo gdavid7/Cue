@@ -11,6 +11,7 @@ import {
   type CueSearchAccount,
   getAccountCueSearches,
   getAccountsCuePredicate,
+  getAccountsWidenedPredicate,
   getAccountsWidenedSearches,
   getAccountWideningLadders,
   getCueRankingSearch,
@@ -19,6 +20,7 @@ import {
   getProviderSearchStarts,
   holdRowOrder,
   lastResortSearchId,
+  MIN_LAST_RESORT_MS,
   scheduleAccountSearches,
   summarizeAccountWidenings,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes-cue-search";
@@ -27,6 +29,7 @@ import {
   type CueSearchIntent,
   getCueSearchStage,
   getSearchAnswerRequest,
+  WIDEN_BELOW_RESULTS,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import {
   rankCueFoundThreads,
@@ -246,23 +249,24 @@ export function useAllInboxesCueSearch({
     () => (widenedIdsKey ? widenedIdsKey.split("\n") : NO_IDS),
     [widenedIdsKey],
   );
-  // An account's last resort waits its turn in the same queue as every
-  // account's first search.
-  const scheduledIds = useMemo(
-    () => [
-      ...searchedIds,
-      ...widenedIds
-        .filter((id) => widenings[id]?.onProvider)
-        .map(lastResortSearchId),
-    ],
-    [searchedIds, widenedIds, widenings],
-  );
-
   // Which accounts' providers search now: it looks again whenever one
   // answers or begins, and when a running one's time box runs out.
   const [clockMs, setClockMs] = useState(() => Date.now());
   const started = current?.started;
   const queuedAtMs = current?.queued ?? NO_STARTS;
+  // An account's last resort waits its turn in the same queue as every
+  // account's first search; one still waiting when the budget runs out is
+  // dropped, since what it found would land after the rows were read.
+  const scheduledIds = useMemo(
+    () => [
+      ...searchedIds,
+      ...widenedIds
+        .filter((id) => widenings[id]?.onProvider)
+        .map(lastResortSearchId)
+        .filter((id) => !expired || queuedAtMs[id] !== undefined),
+    ],
+    [searchedIds, widenedIds, widenings, expired, queuedAtMs],
+  );
   const finishedAt = current?.finished ?? NO_STARTS;
   const finishedIds = useMemo(
     () => new Set(Object.keys(finishedAt)),
@@ -279,10 +283,10 @@ export function useAllInboxesCueSearch({
       Object.fromEntries(
         searchedIds.map((id) => [
           lastResortSearchId(id),
-          spentOnProvider(started?.[id], finishedAt[id]),
+          spentOnProvider(started?.[id] ?? queuedAtMs[id], finishedAt[id]),
         ]),
       ),
-    [searchedIds, started, finishedAt],
+    [searchedIds, started, queuedAtMs, finishedAt],
   );
   const { phases, toQueue, toTimeOut, nextDeadlineMs } = useMemo(
     () =>
@@ -356,12 +360,10 @@ export function useAllInboxesCueSearch({
   const widenedPredicate = useMemo(
     () =>
       widenedSearches.length
-        ? getAccountsCuePredicate({
+        ? getAccountsWidenedPredicate({
             searches: widenedSearches,
             accounts: searchAccounts,
-            providerAccountIds: widenedProviderIds,
-            // Unread narrows a search, which widening drops.
-            unreadOnly: false,
+            lastResortIds: widenedProviderIds,
             now,
             timeZone,
           })
@@ -430,39 +432,50 @@ export function useAllInboxesCueSearch({
     Boolean(predicate) &&
     state.hasRemoteResponse &&
     !state.isLoading;
+  // Tiers whose searches came to nothing to run have nothing to wait on.
   const widerSettled =
-    Boolean(widenedPredicate) && wider.hasRemoteResponse && !wider.isLoading;
+    !widenedPredicate || (wider.hasRemoteResponse && !wider.isLoading);
   const isDone = (id: string) =>
     phases[id] === "finished" || phases[id] === "timedOut";
   const primaryCounts = countByAccount(windowThreads);
   const widerCounts = countByAccount(widerNew);
+  // A window holds one page shared by every account, so a busy account can
+  // push another's mail past it. An account with too little in a full
+  // window hasn't answered yet: it may have more just past the page.
   const ladderPrimary = Object.fromEntries(
-    searchedIds.map((id) => [
-      id,
-      {
-        settled: windowSettled && isDone(id),
-        count: primaryCounts.get(id) ?? 0,
-      },
-    ]),
+    searchedIds.map((id) => {
+      const count = primaryCounts.get(id) ?? 0;
+      const cutOff = state.hasMore && count < WIDEN_BELOW_RESULTS;
+      return [id, { settled: windowSettled && isDone(id) && !cutOff, count }];
+    }),
   );
   const ladderWidened = Object.fromEntries(
-    widenedIds.map((id) => [
-      id,
-      {
-        settled:
-          widerSettled &&
-          (!widenings[id]?.onProvider || isDone(lastResortSearchId(id))),
-        count: widerCounts.get(id) ?? 0,
-      },
-    ]),
+    widenedIds.map((id) => {
+      const count = widerCounts.get(id) ?? 0;
+      const cutOff = Boolean(widenedPredicate && wider.hasMore) && !count;
+      return [
+        id,
+        {
+          settled:
+            widerSettled &&
+            !cutOff &&
+            (!widenings[id]?.onProvider ||
+              isDone(lastResortSearchId(id)) ||
+              // Dropped unsent once the budget ran out.
+              phases[lastResortSearchId(id)] === undefined),
+          count,
+        },
+      ];
+    }),
   );
   // Only an account whose own provider answered within its box, with time
-  // left in it, may send its last resort there.
+  // enough left in it, may send its last resort there.
   const providerAllowedIds = new Set(
     searchedIds.filter(
       (id) =>
         phases[id] === "finished" &&
-        spentMs[lastResortSearchId(id)] < CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
+        spentMs[lastResortSearchId(id)] <=
+          CUE_ACCOUNT_SEARCH_TIMEOUT_MS - MIN_LAST_RESORT_MS,
     ),
   );
   const nextWidenings = getNextAccountWidenings({

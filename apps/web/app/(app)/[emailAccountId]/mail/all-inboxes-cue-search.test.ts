@@ -5,6 +5,7 @@ import {
   CUE_PROVIDER_SEARCH_QUEUE,
   getAccountCueSearches,
   getAccountsCuePredicate,
+  getAccountsWidenedPredicate,
   getAccountsWidenedSearches,
   getAccountWideningLadders,
   getCueRankingSearch,
@@ -459,6 +460,24 @@ describe("account widening", () => {
         providerAllowedIds: new Set(["gmail"]),
       }),
     ).toBeNull();
+  });
+
+  it("sends one search of a last resort to the provider, the rest local", () => {
+    const predicate = getAccountsWidenedPredicate({
+      searches: [
+        { accountId: "gmail", search: "from:sarah lease" },
+        { accountId: "gmail", search: "from:sarah contract" },
+        { accountId: "outlook", search: "from:sarah" },
+      ],
+      accounts: [GMAIL, OUTLOOK],
+      lastResortIds: new Set(["gmail"]),
+      ...CONTEXT,
+    });
+
+    // One provider search answers or times out as one; Outlook isn't on
+    // its last resort, so it reads its local mail alone.
+    expect(providerSearchAccounts(predicate)).toEqual([["gmail"]]);
+    expect(JSON.stringify(predicate)).toContain("contract");
   });
 
   it("says which tier Cue widened to across accounts", () => {
