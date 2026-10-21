@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isWebPushResyncDue,
+  syncWebPushQuietUntil,
   syncWebPushSubscription,
 } from "@/utils/web-push/subscription";
 import type { WebNotificationMode } from "@/utils/web-notifications/preference";
@@ -9,6 +10,7 @@ import type { WebNotificationMode } from "@/utils/web-notifications/preference";
 vi.mock("@/utils/actions/web-push", () => ({
   saveWebPushSubscriptionAction: vi.fn(),
   deleteWebPushSubscriptionAction: vi.fn(),
+  setWebPushQuietUntilAction: vi.fn(),
 }));
 
 // "BAEC" decodes to the bytes 4, 1, 2.
@@ -39,6 +41,7 @@ function setup(existing: ReturnType<typeof pushSubscription> | null) {
     getRegistration: vi.fn(async () => ({ pushManager })),
     save: vi.fn(async () => ({ data: undefined })),
     remove: vi.fn(async () => ({ data: undefined })),
+    setQuietUntil: vi.fn(async () => ({ data: undefined })),
   };
   return { deps, pushManager, created };
 }
@@ -126,10 +129,67 @@ describe("syncWebPushSubscription", () => {
   });
 });
 
+describe("syncWebPushQuietUntil", () => {
+  it("tells the server until when this browser's subscription is paused", async () => {
+    const existing = pushSubscription();
+    const { deps, pushManager } = setup(existing);
+    const quietUntil = Date.now() + 60_000;
+
+    await expect(syncQuiet(quietUntil, deps)).resolves.toBe(true);
+    await expect(syncQuiet(null, deps)).resolves.toBe(true);
+
+    expect(deps.setQuietUntil.mock.calls).toEqual([
+      [{ endpoint: existing.endpoint, quietUntil }],
+      [{ endpoint: existing.endpoint, quietUntil: null }],
+    ]);
+    expect(existing.unsubscribe).not.toHaveBeenCalled();
+    expect(pushManager.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("has nothing to pause when this browser has no subscription", async () => {
+    const { deps } = setup(null);
+
+    await expect(syncQuiet(Date.now() + 60_000, deps)).resolves.toBe(true);
+
+    expect(deps.setQuietUntil).not.toHaveBeenCalled();
+  });
+
+  it("carries a pause set before the subscription to the server when it is saved", async () => {
+    const quietUntil = Date.now() + 60_000;
+    window.localStorage.setItem(
+      "cue:web-notifications:quiet-until",
+      String(quietUntil),
+    );
+    const { deps } = setup(null);
+
+    await expect(sync("all", deps)).resolves.toBe(true);
+
+    expect(deps.setQuietUntil).toHaveBeenCalledWith({
+      endpoint: "https://fcm.googleapis.com/fcm/send/new",
+      quietUntil,
+    });
+  });
+
+  it("sends no pause with a save while not paused", async () => {
+    const { deps } = setup(null);
+
+    await sync("all", deps);
+
+    expect(deps.setQuietUntil).not.toHaveBeenCalled();
+  });
+});
+
 // The fakes cover only the parts of PushManager and the actions the sync uses.
 function sync(mode: WebNotificationMode, deps: unknown) {
   return syncWebPushSubscription(
     mode,
     deps as Parameters<typeof syncWebPushSubscription>[1],
+  );
+}
+
+function syncQuiet(quietUntilMs: number | null, deps: unknown) {
+  return syncWebPushQuietUntil(
+    quietUntilMs,
+    deps as Parameters<typeof syncWebPushQuietUntil>[1],
   );
 }

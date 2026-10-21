@@ -232,7 +232,6 @@ describe("WebNewMailNotifications", () => {
       });
 
     render(<WebNewMailNotifications />);
-    expect(mocks.syncWebPush).toHaveBeenLastCalledWith("off");
 
     await arrive("during-pause");
     expect(shown).toEqual([]);
@@ -240,14 +239,13 @@ describe("WebNewMailNotifications", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
-    expect(mocks.syncWebPush).toHaveBeenLastCalledWith("all");
 
     await arrive("after-pause");
     expect(shown).toEqual(["Dana"]);
     vi.useRealTimers();
   });
 
-  it("keeps trying to turn push back on when resuming after a pause fails", async () => {
+  it("keeps push on through a pause, since the server holds back pushes until it ends", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     stubPermission("granted");
     window.localStorage.setItem("cue:web-notifications:mode", "all");
@@ -257,19 +255,13 @@ describe("WebNewMailNotifications", () => {
     );
 
     render(<WebNewMailNotifications />);
-    expect(mocks.syncWebPush).toHaveBeenLastCalledWith("off");
-
-    mocks.syncWebPush.mockResolvedValueOnce(false);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
-    expect(mocks.syncWebPush).toHaveBeenCalledTimes(2);
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(mocks.syncWebPush).toHaveBeenCalledTimes(3);
-    expect(mocks.syncWebPush).toHaveBeenLastCalledWith("all");
+    expect(mocks.syncWebPush).toHaveBeenCalledTimes(1);
+    expect(mocks.syncWebPush).toHaveBeenCalledWith("all");
+    expect(mocks.syncWebPush).not.toHaveBeenCalledWith("off");
     vi.useRealTimers();
   });
 });

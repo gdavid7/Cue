@@ -2,14 +2,17 @@ import {
   announcePreferenceChange,
   hasBeenAskedToEnable,
   markAskedToEnable,
+  pauseNotificationsUntil,
   readEffectiveMode,
   readQuietUntilMs,
+  resumeNotifications,
   writeStoredMode,
   type WebNotificationMode,
 } from "@/utils/web-notifications/preference";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import {
   isWebPushAvailable,
+  syncWebPushQuietUntil,
   syncWebPushSubscription,
 } from "@/utils/web-push/subscription";
 
@@ -45,15 +48,21 @@ export async function chooseWebNotificationMode(
 ): Promise<WebNotificationPermission> {
   writeStoredMode(mode);
   const permission = await requestPermissionFor(mode);
-  // Push carries the same choice to the server for when no tab is open. A
-  // pause keeps push off; the open tabs turn it back on when the pause ends.
-  if (
-    isWebPushAvailable() &&
-    (mode === "off" ||
-      (permission === "granted" && readQuietUntilMs() === null))
-  )
+  // Push carries the same choice to the server for when no tab is open.
+  if (isWebPushAvailable() && (mode === "off" || permission === "granted"))
     syncWebPushSubscription(mode).catch(() => undefined);
   return permission;
+}
+
+/** Open tabs hold back their own alerts; the server holds back push. */
+export function pauseWebNotifications(untilMs: number) {
+  pauseNotificationsUntil(untilMs);
+  syncPushPause();
+}
+
+export function resumeWebNotifications() {
+  resumeNotifications();
+  syncPushPause();
 }
 
 /** One quiet offer, after the first sync, to people who haven't been asked. */
@@ -89,4 +98,9 @@ async function requestPermissionFor(
   } finally {
     announcePreferenceChange();
   }
+}
+
+function syncPushPause() {
+  if (isWebPushAvailable())
+    syncWebPushQuietUntil(readQuietUntilMs()).catch(() => undefined);
 }

@@ -2210,6 +2210,8 @@ model WebPushSubscription {
   lastSuccessAt DateTime?
   // Consecutive failed sends that weren't the push service saying it's gone.
   failureCount  Int         @default(0)
+  // A pause set on this browser: nothing is pushed to it before this time.
+  quietUntil    DateTime?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

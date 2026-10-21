@@ -2,10 +2,14 @@ import { env } from "@/env";
 import {
   deleteWebPushSubscriptionAction,
   saveWebPushSubscriptionAction,
+  setWebPushQuietUntilAction,
 } from "@/utils/actions/web-push";
 import type { SaveWebPushSubscriptionBody } from "@/utils/actions/web-push.validation";
 import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
-import type { WebNotificationMode } from "@/utils/web-notifications/preference";
+import {
+  readQuietUntilMs,
+  type WebNotificationMode,
+} from "@/utils/web-notifications/preference";
 
 const REGISTRATION_WAIT_MS = 10_000;
 // Browsers can drop or rotate a subscription without telling the page, and the
@@ -26,6 +30,10 @@ type WebPushDeps = {
     input: SaveWebPushSubscriptionBody,
   ) => Promise<ActionResult | undefined>;
   remove: (input: { endpoint: string }) => Promise<ActionResult | undefined>;
+  setQuietUntil: (input: {
+    endpoint: string;
+    quietUntil: number | null;
+  }) => Promise<ActionResult | undefined>;
 };
 
 /**
@@ -88,9 +96,38 @@ export async function syncWebPushSubscription(
     keys: { p256dh: keys.p256dh, auth: keys.auth },
     mode,
   });
-  if (result?.serverError || result?.validationErrors) return false;
+  if (failed(result)) return false;
+  // A pause set before this subscription existed, or before the browser
+  // replaced it, still holds pushes back.
+  const quietUntil = readQuietUntilMs();
+  if (
+    quietUntil !== null &&
+    failed(await deps.setQuietUntil({ endpoint, quietUntil }))
+  )
+    return false;
   writeSyncedAt(Date.now());
   return true;
+}
+
+/**
+ * Pausing keeps the subscription: browsers require every push to show a
+ * notification, so the server holds pushes back until the pause ends instead,
+ * and they resume then with no Cue tab open.
+ */
+export async function syncWebPushQuietUntil(
+  quietUntilMs: number | null,
+  deps: WebPushDeps = browserDeps(),
+): Promise<boolean> {
+  const registration = await deps.getRegistration();
+  const subscription = await registration?.pushManager.getSubscription();
+  // Without one there is nothing to hold back; a later save carries the pause.
+  if (!subscription) return true;
+  return !failed(
+    await deps.setQuietUntil({
+      endpoint: subscription.endpoint,
+      quietUntil: quietUntilMs,
+    }),
+  );
 }
 
 export function isWebPushResyncDue(now = Date.now()) {
@@ -115,7 +152,12 @@ function browserDeps(): WebPushDeps {
       ]),
     save: saveWebPushSubscriptionAction,
     remove: deleteWebPushSubscriptionAction,
+    setQuietUntil: setWebPushQuietUntilAction,
   };
+}
+
+function failed(result: ActionResult | undefined) {
+  return Boolean(result?.serverError || result?.validationErrors);
 }
 
 function writeSyncedAt(value: number | null) {

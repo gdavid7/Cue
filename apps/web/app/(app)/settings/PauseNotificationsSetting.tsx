@@ -21,10 +21,10 @@ import {
 } from "@/components/ui/popover";
 import { format } from "date-fns";
 import {
-  MAX_QUIET_MS,
-  pauseNotificationsUntil,
-  resumeNotifications,
-} from "@/utils/web-notifications/preference";
+  pauseWebNotifications,
+  resumeWebNotifications,
+} from "@/utils/web-notifications/permission";
+import { MAX_QUIET_MS } from "@/utils/web-notifications/preference";
 import { isWebPushAvailable } from "@/utils/web-push/subscription";
 import {
   formatQuietUntil,
@@ -46,12 +46,12 @@ export function PauseNotificationsSetting({
           </ItemTitle>
           <ItemDescription>
             {isWebPushAvailable()
-              ? "Alerts resume then in any open Cue tab, or the next time you open Cue."
+              ? "Alerts resume on their own then, even with Cue closed."
               : "Notifications on this device resume on their own then."}
           </ItemDescription>
         </ItemContent>
         <ItemActions>
-          <Button size="sm" variant="outline" onClick={resumeNotifications}>
+          <Button size="sm" variant="outline" onClick={resumeWebNotifications}>
             Resume
           </Button>
         </ItemActions>
@@ -91,7 +91,7 @@ function PausePicker() {
   };
   const choose = (until: Date) => {
     onOpenChange(false);
-    pauseNotificationsUntil(until.getTime());
+    pauseWebNotifications(until.getTime());
   };
 
   return (

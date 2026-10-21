@@ -29,6 +29,12 @@ export const deleteWebPushSubscriptionBody = z.object({
   endpoint: z.string().min(1).max(2048),
 });
 
+export const setWebPushQuietUntilBody = z.object({
+  endpoint: z.string().min(1).max(2048),
+  // Epoch milliseconds; null clears the pause.
+  quietUntil: z.number().int().positive().nullable(),
+});
+
 function isBrowserPushServiceEndpoint(value: string) {
   let url: URL;
   try {

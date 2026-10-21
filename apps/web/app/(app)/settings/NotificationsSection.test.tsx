@@ -20,6 +20,7 @@ vi.mock("@/components/Toast", () => ({ toastError: vi.fn() }));
 vi.mock("@/utils/web-push/subscription", () => ({
   isWebPushAvailable: () => push.available,
   syncWebPushSubscription: vi.fn(async () => true),
+  syncWebPushQuietUntil: vi.fn(async () => true),
 }));
 // Radix's select needs a real pointer; a native one exercises the same handler.
 vi.mock("@/components/ui/select", () => ({
@@ -135,6 +136,22 @@ describe("NotificationsSection", () => {
     expect(readQuietUntilMs()).toBeNull();
     expect(screen.queryByRole("img", { name: "Paused" })).toBeNull();
     expect(screen.getByRole("button", { name: "Pause…" })).toBeTruthy();
+  });
+
+  it("says alerts resume with Cue closed when push can deliver them", async () => {
+    push.available = true;
+    stubNotification("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "important");
+    render(<NotificationsSection />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause…" }));
+    fireEvent.click(await screen.findByRole("button", { name: /For 1 hour/ }));
+
+    expect(
+      screen.getByText(
+        "Alerts resume on their own then, even with Cue closed.",
+      ),
+    ).toBeTruthy();
   });
 
   it("offers no pause while notifications are off", () => {
