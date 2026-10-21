@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import { migrateContactSuggestions } from "./contact-suggestions";
 import type { SqlTransaction } from "./driver";
 import {
@@ -284,7 +285,8 @@ export async function migrateMailbox(
     );
   }
   await tx.execute(
-    "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (1, '0001-mailbox')",
+    "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (?, ?)",
+    [LOCAL_MIGRATIONS.mailbox.id, LOCAL_MIGRATIONS.mailbox.name],
   );
   try {
     await tx.exec("ALTER TABLE accounts ADD COLUMN assistant_cursor TEXT");
@@ -444,7 +446,8 @@ export async function migrateMailbox(
 // those rows lets the reader hydrate the body again.
 export async function migrateEmptyMeetingInvitationBodies(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 9",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.emptyMeetingInvitationBodies.id],
   );
   if (applied.length) return;
   await tx.exec(`
@@ -454,7 +457,8 @@ export async function migrateEmptyMeetingInvitationBodies(tx: SqlTransaction) {
       AND text IS NULL
       AND COALESCE(attachments_json, '[]') = '[]'
   `);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (9, '0009-empty-meeting-invitation-bodies')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.emptyMeetingInvitationBodies.id,
+    LOCAL_MIGRATIONS.emptyMeetingInvitationBodies.name,
+  ]);
 }

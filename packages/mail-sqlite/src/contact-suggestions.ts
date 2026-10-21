@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type {
   ContactSuggestion,
   ContactSuggestionQuery,
@@ -33,7 +34,7 @@ export async function migrateContactSuggestions(tx: SqlTransaction) {
       id INTEGER PRIMARY KEY CHECK(id = 1), after_rowid INTEGER NOT NULL, complete INTEGER NOT NULL
     );
     INSERT OR IGNORE INTO contact_backfill_state VALUES (1, 0, 0);
-    INSERT OR IGNORE INTO schema_migrations VALUES (10, '0010-contact-suggestions');
+    INSERT OR IGNORE INTO schema_migrations VALUES (${LOCAL_MIGRATIONS.contactSuggestions.id}, '${LOCAL_MIGRATIONS.contactSuggestions.name}');
   `);
 }
 

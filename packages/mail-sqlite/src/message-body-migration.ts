@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type { SqlTransaction, SqliteDriver } from "./driver";
 import {
   encodeMessageBody,
@@ -6,7 +7,6 @@ import {
 } from "./message-body-codec";
 
 export const BATCH_ROWS = 500;
-const MIGRATION_ID = 8;
 
 // Bodies used to be stored as TEXT, and messages with HTML also kept their
 // text part. Runs when the store opens, in the engine's worker or utility
@@ -18,7 +18,9 @@ export async function migrateCompressedMessageBodies(
   codec: MessageBodyCodec,
 ) {
   const applied = await driver.read((tx) =>
-    tx.query("SELECT 1 FROM schema_migrations WHERE id = ?", [MIGRATION_ID]),
+    tx.query("SELECT 1 FROM schema_migrations WHERE id = ?", [
+      LOCAL_MIGRATIONS.compressedMessageBodies.id,
+    ]),
   );
   if (applied.length) return;
   let after: [string, string] = ["", ""];
@@ -31,8 +33,11 @@ export async function migrateCompressedMessageBodies(
   }
   await driver.write((tx) =>
     tx.execute(
-      "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (?, '0008-compressed-message-bodies')",
-      [MIGRATION_ID],
+      "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (?, ?)",
+      [
+        LOCAL_MIGRATIONS.compressedMessageBodies.id,
+        LOCAL_MIGRATIONS.compressedMessageBodies.name,
+      ],
     ),
   );
 }

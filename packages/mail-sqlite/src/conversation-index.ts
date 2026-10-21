@@ -1,8 +1,10 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type { SqlTransaction } from "./driver";
 
 export async function migrateConversationIndex(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 2",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.roleConversationIndex.id],
   );
   if (applied.length) return;
 
@@ -25,21 +27,24 @@ export async function migrateConversationIndex(tx: SqlTransaction) {
   `);
 
   await installConversationTriggers(tx);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (2, '0002-role-conversation-index')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.roleConversationIndex.id,
+    LOCAL_MIGRATIONS.roleConversationIndex.name,
+  ]);
 }
 
 // Existing mailboxes kept inbox role on messages that had already left the
 // inbox, so the dock badge counted archived unread conversations.
 export async function migrateInboxUnreadExcludesArchive(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 5",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.inboxUnreadExcludesArchive.id],
   );
   if (applied.length) return;
 
   const indexed = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 2",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.roleConversationIndex.id],
   );
   if (indexed.length) {
     await dropConversationTriggers(tx);
@@ -51,25 +56,28 @@ export async function migrateInboxUnreadExcludesArchive(tx: SqlTransaction) {
     `);
     await installConversationTriggers(tx);
   }
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (5, '0005-inbox-unread-excludes-archive')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.inboxUnreadExcludesArchive.id,
+    LOCAL_MIGRATIONS.inboxUnreadExcludesArchive.name,
+  ]);
 }
 
 // Earlier triggers rebuilt a conversation from all its messages on every
 // write, so syncing an n-message conversation cost O(n^2).
 export async function migrateIncrementalConversationIndex(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 11",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.incrementalConversationIndex.id],
   );
   if (applied.length) return;
 
   // migrateMailbox always installs the index (migration 2) before this runs.
   await dropConversationTriggers(tx);
   await installConversationTriggers(tx);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (11, '0011-incremental-conversation-index')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.incrementalConversationIndex.id,
+    LOCAL_MIGRATIONS.incrementalConversationIndex.name,
+  ]);
 }
 
 async function dropConversationTriggers(tx: SqlTransaction) {
@@ -198,7 +206,8 @@ const DELETE_OLD_MEMBERSHIPS = `DELETE FROM effective_message_memberships
 
 export async function migrateMembershipIndex(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 3",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.messageMembershipIndex.id],
   );
   if (applied.length) return;
 
@@ -240,9 +249,10 @@ export async function migrateMembershipIndex(tx: SqlTransaction) {
       ${insertMemberships("NEW")}
     END;
   `);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (3, '0003-message-membership-index')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.messageMembershipIndex.id,
+    LOCAL_MIGRATIONS.messageMembershipIndex.name,
+  ]);
 }
 
 // Backfill reads every stored message; triggers read the changed row.
