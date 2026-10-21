@@ -1,4 +1,7 @@
-import { messageAttachmentDescriptorSchema } from "@inboxzero/mail-core/messages";
+import {
+  messageAttachmentDescriptorSchema,
+  normalizeInternetMessageId,
+} from "@inboxzero/mail-core/messages";
 import {
   PERSON_CARD_CONVERSATION_LIMIT,
   type PersonCard,
@@ -96,10 +99,11 @@ export async function readPersonCard(
         hasAttachments: Number(row.has_attachments) === 1,
         sender,
         recipients: [row.to_json, row.cc_json],
-        internetMessageId:
+        internetMessageId: normalizeInternetMessageId(
           row.internet_message_id == null
             ? null
-            : String(row.internet_message_id).trim().toLowerCase() || null,
+            : String(row.internet_message_id),
+        ),
       });
     }
   }
@@ -478,6 +482,8 @@ function findCrossAccountCopies(
     )
       join++;
     if (join === groups.length) groups.push([]);
+    // Past index, groups[index] only clashed on Message-ID, so this account's
+    // next message must still be able to join it.
     queue.next.set(message.accountId, join === index ? index + 1 : index);
     return groups[join];
   };

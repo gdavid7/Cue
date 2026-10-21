@@ -67,3 +67,18 @@ export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
 
 export const messageMetadataPatchSchema = messageMetadataSchema.partial();
 export type MessageMetadataPatch = z.infer<typeof messageMetadataPatchSchema>;
+
+/**
+ * A Message-ID as two mailboxes' copies of one message compare: some
+ * providers give it without its angle brackets, and some change its case.
+ */
+export function normalizeInternetMessageId(
+  value: string | null | undefined,
+): string | null {
+  const id = value
+    ?.trim()
+    .replace(/^<(.*)>$/, "$1")
+    .trim()
+    .toLowerCase();
+  return id || null;
+}

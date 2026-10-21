@@ -514,7 +514,7 @@ describe("readPersonCard", () => {
           to: [ME, "me@b.example"],
           at: T0 + 10 * 60_000,
           subject: "[External] Plan",
-          messageId: "<PLAN@mail>",
+          messageId: " PLAN@mail ",
         }),
       ],
       "b",

@@ -51,7 +51,6 @@ describe("Message-ID headers", () => {
     ]);
     // The mailbox as a build before Message-IDs left it.
     await before.driver.write(async (tx) => {
-      await tx.exec("DROP INDEX messages_internet_message_id");
       await tx.exec("ALTER TABLE messages DROP COLUMN internet_message_id");
       await tx.exec("DELETE FROM schema_migrations WHERE id = 16");
     });
@@ -61,9 +60,6 @@ describe("Message-ID headers", () => {
     const after = await open(createNodeSqliteDriver(path));
 
     expect(await migrationRecorded(after.driver)).toBe(true);
-    expect(await indexNames(after.driver)).toContain(
-      "messages_internet_message_id",
-    );
     // Nothing is refetched: stored mail stays and waits for its next read.
     expect(
       (await inbox(after.store)).map((c) => [
@@ -142,15 +138,6 @@ async function migrationRecorded(driver: SqliteDriver) {
     tx.query("SELECT 1 FROM schema_migrations WHERE id = 16"),
   );
   return rows.length > 0;
-}
-
-async function indexNames(driver: SqliteDriver) {
-  const rows = await driver.read((tx) =>
-    tx.query(
-      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'messages'",
-    ),
-  );
-  return rows.map((row) => String(row.name));
 }
 
 function patch(

@@ -12,10 +12,7 @@ export async function migrateInternetMessageIds(tx: SqlTransaction) {
   const columns = await tx.query("PRAGMA table_info(messages)");
   if (!columns.some((column) => column.name === "internet_message_id"))
     await tx.exec("ALTER TABLE messages ADD COLUMN internet_message_id TEXT");
-  await tx.exec(`
-    CREATE INDEX IF NOT EXISTS messages_internet_message_id
-      ON messages(internet_message_id)
-      WHERE internet_message_id IS NOT NULL;
-    INSERT INTO schema_migrations(id, name) VALUES (16, '0016-internet-message-ids');
-  `);
+  await tx.execute(
+    "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (16, '0016-internet-message-ids')",
+  );
 }
