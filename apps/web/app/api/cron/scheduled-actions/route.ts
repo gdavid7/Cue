@@ -11,6 +11,7 @@ import {
   executeScheduledAction,
 } from "@/utils/scheduled-actions/executor";
 import { markQStashActionAsExecuting } from "@/utils/scheduled-actions/scheduler";
+import { recoverStaleScheduledActions } from "@/utils/scheduled-actions/recovery";
 import { env } from "@/env";
 import type { Logger } from "@/utils/logger";
 import { processDueSnoozedThreads } from "@/utils/snooze/process-due";
@@ -181,23 +182,47 @@ function runScheduledWork(logger: Logger) {
 }
 
 async function processScheduledMail(logger: Logger) {
+  // QStash delivers each action once, so a run it started that was killed is
+  // only ever finished from here.
+  const recoverInterrupted = recoverStaleScheduledActions(logger).catch(
+    (error) => {
+      logger.error("Recovering interrupted scheduled actions failed", {
+        error,
+      });
+      return { error: true };
+    },
+  );
+
   if (!env.QSTASH_TOKEN) {
-    const [scheduledActions, snoozedThreads, scheduledEmails] =
-      await Promise.all([
-        processScheduledActions(logger),
-        processDueSnoozedThreads(logger),
-        processDueScheduledEmails(logger),
-      ]);
-    return { scheduledActions, snoozedThreads, scheduledEmails };
+    const [
+      scheduledActions,
+      interruptedScheduledActions,
+      snoozedThreads,
+      scheduledEmails,
+    ] = await Promise.all([
+      processScheduledActions(logger),
+      recoverInterrupted,
+      processDueSnoozedThreads(logger),
+      processDueScheduledEmails(logger),
+    ]);
+    return {
+      scheduledActions,
+      interruptedScheduledActions,
+      snoozedThreads,
+      scheduledEmails,
+    };
   }
 
-  const [snoozedThreads, scheduledEmails] = await Promise.all([
-    processDueSnoozedThreads(logger),
-    processDueScheduledEmails(logger),
-  ]);
+  const [interruptedScheduledActions, snoozedThreads, scheduledEmails] =
+    await Promise.all([
+      recoverInterrupted,
+      processDueSnoozedThreads(logger),
+      processDueScheduledEmails(logger),
+    ]);
   return {
     scheduledEmails,
     scheduledActions: { skipped: true, reason: "qstash-configured" },
+    interruptedScheduledActions,
     snoozedThreads,
   };
 }

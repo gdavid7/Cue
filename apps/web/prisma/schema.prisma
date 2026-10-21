@@ -945,8 +945,14 @@ model ScheduledAction {
   staticAttachments   Json? // AttachmentSourceInput[] — explicit files to attach for email actions
   selectedAttachments Json? // SelectedAttachment[] — AI-selected files for this specific execution
 
-  executedAt       DateTime?
-  executedActionId String?   @unique
+  // When the current run claimed the action; a run killed mid-action leaves it
+  // EXECUTING, and the cron reclaims it once this is older than the lease.
+  executionStartedAt DateTime?
+  // Runs that claimed the action, which caps reclaims of a run that keeps dying.
+  executionAttempts  Int       @default(0)
+  executedAt         DateTime?
+  // Linked before the provider call, so a reclaimed send can tell whether it went out.
+  executedActionId   String?   @unique
 
   executedRule   ExecutedRule    @relation(fields: [executedRuleId], references: [id], onDelete: Cascade)
   executedAction ExecutedAction? @relation(fields: [executedActionId], references: [id], onDelete: Cascade)
@@ -954,6 +960,7 @@ model ScheduledAction {
 
   @@index([executedRuleId])
   @@index([status, scheduledFor])
+  @@index([status, executionStartedAt])
   @@index([emailAccountId, messageId])
 }
 

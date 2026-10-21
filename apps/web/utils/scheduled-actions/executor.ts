@@ -176,24 +176,10 @@ async function executeDelayedAction({
   scheduledAction: ScheduledAction;
   log: Logger;
 }) {
-  const executedAction = await prisma.executedAction.create({
-    data: {
-      type: actionItem.type,
-      label: actionItem.label,
-      subject: actionItem.subject,
-      content: actionItem.content,
-      to: actionItem.to,
-      cc: actionItem.cc,
-      bcc: actionItem.bcc,
-      url: actionItem.url,
-      staticAttachments: actionItem.staticAttachments ?? undefined,
-      selectedAttachments: actionItem.selectedAttachments ?? undefined,
-      executedRuleId: scheduledAction.executedRuleId,
-      ...(isSendingActionType(actionItem.type)
-        ? { executionStartedAt: new Date() }
-        : {}),
-    },
-  });
+  const executedAction = await getOrCreateExecutedAction(
+    actionItem,
+    scheduledAction,
+  );
 
   const executedRule = await prisma.executedRule.findUnique({
     where: { id: scheduledAction.executedRuleId },
@@ -386,4 +372,39 @@ export async function checkAndCompleteExecutedRule(
       });
     }
   }
+}
+
+// A reclaimed retry reuses the interrupted run's record. A first run links its
+// record in the same write that creates it, before the provider call, so a run
+// killed mid-send leaves a record the cron can reconcile instead of resending.
+async function getOrCreateExecutedAction(
+  actionItem: ActionItem,
+  scheduledAction: ScheduledAction,
+) {
+  if (scheduledAction.executedActionId) {
+    const existing = await prisma.executedAction.findUnique({
+      where: { id: scheduledAction.executedActionId },
+    });
+    if (existing) return existing;
+  }
+
+  return prisma.executedAction.create({
+    data: {
+      type: actionItem.type,
+      label: actionItem.label,
+      subject: actionItem.subject,
+      content: actionItem.content,
+      to: actionItem.to,
+      cc: actionItem.cc,
+      bcc: actionItem.bcc,
+      url: actionItem.url,
+      staticAttachments: actionItem.staticAttachments ?? undefined,
+      selectedAttachments: actionItem.selectedAttachments ?? undefined,
+      executedRuleId: scheduledAction.executedRuleId,
+      scheduledAction: { connect: { id: scheduledAction.id } },
+      ...(isSendingActionType(actionItem.type)
+        ? { executionStartedAt: new Date() }
+        : {}),
+    },
+  });
 }

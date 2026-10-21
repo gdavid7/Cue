@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   processDueScheduledEmails: vi.fn(),
   recordFirstHourHealth: vi.fn(),
   markQStashActionAsExecuting: vi.fn(),
+  recoverStaleScheduledActions: vi.fn(),
 }));
 
 vi.mock("@/env", () => ({
@@ -24,6 +25,9 @@ vi.mock("@/utils/scheduled-actions/executor", () => ({
 }));
 vi.mock("@/utils/scheduled-actions/scheduler", () => ({
   markQStashActionAsExecuting: mocks.markQStashActionAsExecuting,
+}));
+vi.mock("@/utils/scheduled-actions/recovery", () => ({
+  recoverStaleScheduledActions: mocks.recoverStaleScheduledActions,
 }));
 vi.mock("@/utils/snooze/process-due", () => ({
   processDueSnoozedThreads: mocks.processDueSnoozedThreads,
@@ -50,6 +54,14 @@ describe("scheduled actions cron route", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.findScheduledActions.mockResolvedValue([]);
+    mocks.recoverStaleScheduledActions.mockResolvedValue({
+      retried: 1,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      left: 0,
+      total: 1,
+    });
     mocks.processDueSnoozedThreads.mockResolvedValue({
       processed: 0,
       failed: 0,
@@ -83,6 +95,7 @@ describe("scheduled actions cron route", () => {
     expect(finished[0][1]).toMatchObject({
       durationMs: expect.any(Number),
       scheduledActions: { processed: 0, failed: 0, total: 0 },
+      interruptedScheduledActions: { retried: 1, total: 1 },
       firstHourHealth: { candidates: 3, sent: 2, failed: 0 },
     });
   });

@@ -344,6 +344,8 @@ export async function markQStashActionAsExecuting(scheduledActionId: string) {
       },
       data: {
         status: ScheduledActionStatus.EXECUTING,
+        executionStartedAt: new Date(),
+        executionAttempts: { increment: 1 },
       },
     });
 
