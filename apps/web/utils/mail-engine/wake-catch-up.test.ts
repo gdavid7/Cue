@@ -33,7 +33,14 @@ describe("followWakeCatchUp", () => {
   function follow({ stale = true }: { stale?: boolean } = {}) {
     const isStale = vi.fn(() => stale);
     const onWake = vi.fn(async () => undefined);
-    stops.push(followWakeCatchUp({ isStale, onWake }));
+    stops.push(
+      followWakeCatchUp({
+        accountId: "acc-1",
+        isStale,
+        onWake,
+        locks: undefined,
+      }),
+    );
     return { isStale, onWake };
   }
 
@@ -100,7 +107,14 @@ describe("followWakeCatchUp", () => {
     const onWake = vi.fn(
       () => new Promise<void>((resolve) => (finish = resolve)),
     );
-    stops.push(followWakeCatchUp({ isStale: () => true, onWake }));
+    stops.push(
+      followWakeCatchUp({
+        accountId: "acc-1",
+        isStale: () => true,
+        onWake,
+        locks: undefined,
+      }),
+    );
 
     for (let wake = 0; wake < 2; wake++) {
       setVisibility("hidden");
@@ -117,6 +131,67 @@ describe("followWakeCatchUp", () => {
     setVisibility("visible");
     await vi.advanceTimersByTimeAsync(2000);
     expect(onWake).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts a catch-up in flight when stopped", async () => {
+    let signal: AbortSignal | undefined;
+    const stop = followWakeCatchUp({
+      accountId: "acc-1",
+      isStale: () => true,
+      onWake: (wakeSignal) => {
+        signal = wakeSignal;
+        return new Promise(() => undefined);
+      },
+      locks: undefined,
+    });
+    await wake();
+    expect(signal?.aborted).toBe(false);
+
+    stop();
+
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("leaves the read to another tab of this browser already doing it", async () => {
+    const onWake = vi.fn(async () => undefined);
+    const held = new Set<string>();
+    const locks = {
+      request: vi.fn(
+        async (
+          name: string,
+          _options: LockOptions,
+          callback: (lock: Lock | null) => unknown,
+        ) => {
+          if (held.has(name)) return callback(null);
+          held.add(name);
+          try {
+            return await callback({ name, mode: "exclusive" });
+          } finally {
+            held.delete(name);
+          }
+        },
+      ),
+    } as unknown as Pick<LockManager, "request">;
+    stops.push(
+      followWakeCatchUp({
+        accountId: "acc-1",
+        isStale: () => true,
+        onWake,
+        locks,
+      }),
+    );
+    held.add("cue:wake-catch-up:acc-1");
+    await wake();
+    expect(onWake).not.toHaveBeenCalled();
+
+    held.clear();
+    await wake();
+    expect(onWake).toHaveBeenCalledTimes(1);
+    expect(locks.request).toHaveBeenCalledWith(
+      "cue:wake-catch-up:acc-1",
+      expect.objectContaining({ ifAvailable: true }),
+      expect.any(Function),
+    );
   });
 
   it("treats a page restored from the back/forward cache as a wake", async () => {
@@ -144,6 +219,13 @@ describe("followWakeCatchUp", () => {
     expect(onWake).not.toHaveBeenCalled();
   });
 });
+
+async function wake() {
+  setVisibility("hidden");
+  await vi.advanceTimersByTimeAsync(20 * MINUTE);
+  setVisibility("visible");
+  await vi.advanceTimersByTimeAsync(2000);
+}
 
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, "visibilityState", {

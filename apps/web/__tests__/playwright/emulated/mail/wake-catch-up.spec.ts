@@ -29,9 +29,15 @@ test("an inbox shown again after a long absence catches up without a reload", as
   await waitForMetadataCoverage(page);
 
   const catchUps: number[] = [];
-  page.on("response", (response) => {
-    if (new URL(response.url()).pathname === CATCH_UP_PATH)
-      catchUps.push(response.status());
+  const handedOver: string[] = [];
+  page.on("response", async (response) => {
+    if (new URL(response.url()).pathname !== CATCH_UP_PATH) return;
+    catchUps.push(response.status());
+    const body = (await response.json().catch(() => null)) as {
+      changes?: { key?: { messageId?: string } }[];
+    } | null;
+    for (const change of body?.changes ?? [])
+      if (change.key?.messageId) handedOver.push(change.key.messageId);
   });
   const loads: string[] = [];
   page.on("framenavigated", (frame) => {
@@ -58,14 +64,17 @@ test("an inbox shown again after a long absence catches up without a reload", as
       await page.waitForTimeout(3000);
       expect(catchUps).toEqual([]);
     } else {
+      // The row would show from the engine's own catch-up too; what proves
+      // the wake read is that it ran once and carried the new message.
       await expect.poll(() => catchUps).toEqual([200]);
+      await expect.poll(() => handedOver).toContain(insertedMessageId);
     }
 
     // Coming and going again shortly after is not another wake.
     await setVisibility(page, "hidden");
     await setVisibility(page, "visible");
     await page.waitForTimeout(3000);
-    expect(catchUps.length).toBeLessThanOrEqual(1);
+    expect(catchUps).toEqual(isMicrosoftPlaywright() ? [] : [200]);
 
     await capturePlaywrightCheckpoint(page, testInfo, "wake-catch-up-arrived");
   } finally {

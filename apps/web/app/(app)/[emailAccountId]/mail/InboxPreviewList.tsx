@@ -236,7 +236,9 @@ export function useCatchUpOnWake({
 }) {
   const { emailAccountId, provider } = useAccount();
   const client = useOptionalMailClient();
-  // Read when the wake settles, so a catch-up that finished since counts.
+  // A ref, not a dependency: the listener must outlive each sync's new time,
+  // or every finished sync would restart it and forget the absence. Read when
+  // the wake settles, so a catch-up that finished since counts.
   const lastSynced = useRef(lastSyncedAtMs);
   useEffect(() => {
     lastSynced.current = lastSyncedAtMs;
@@ -250,17 +252,19 @@ export function useCatchUpOnWake({
     )
       return;
     return followWakeCatchUp({
+      accountId: emailAccountId,
       isStale: () =>
         lastSynced.current != null && isLocalMailboxStale(lastSynced.current),
-      onWake: async () => {
+      onWake: async (signal) => {
         const response = await fetchWithAccount({
           url: "/api/user/inbox-catch-up",
           emailAccountId,
+          init: { signal },
         });
-        if (!response.ok) return;
+        if (!response.ok || signal.aborted) return;
         const body: GetInboxCatchUpResponse = await response.json();
         const changes = previewChangesSchema.safeParse(body.changes);
-        if (!changes.success || !changes.data.length) return;
+        if (!changes.success || !changes.data.length || signal.aborted) return;
         await client.ingestMessages?.({
           accountId: emailAccountId,
           changes: changes.data,
