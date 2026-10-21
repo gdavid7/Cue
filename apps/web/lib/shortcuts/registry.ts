@@ -462,6 +462,14 @@ const SHORTCUT_DEFINITIONS = [
     label: "Undo last action",
   },
   {
+    // Free in Gmail too (its `I` is shift+i, mark as read).
+    id: "showPersonCard",
+    keys: ["i"],
+    scope: "mail",
+    group: "View",
+    label: "Sender's contact card",
+  },
+  {
     id: "translate",
     keys: ["shift+t"],
     scope: "mail",

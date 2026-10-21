@@ -239,10 +239,20 @@ describe("readPersonCard", () => {
     });
   });
 
+  it("flags a no-reply sender, whose mail the contact index leaves out", async () => {
+    const { store } = await setup();
+    await write(store, [
+      mail({ id: "1", from: "Shop <no-reply@shop.example>" }),
+    ]);
+    const card = await read(store, { email: "no-reply@shop.example" });
+    expect(card).toMatchObject({ automated: true, conversations: [] });
+  });
+
   it("returns an empty card for someone the store has never seen", async () => {
     const { store } = await setup();
     const card = await read(store, { email: "nobody@example.com" });
     expect(card).toMatchObject({
+      automated: false,
       name: null,
       conversations: [],
       files: [],

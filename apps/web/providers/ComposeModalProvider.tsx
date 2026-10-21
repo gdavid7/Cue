@@ -55,12 +55,18 @@ export type PoppedOutReply = {
 
 type Context = {
   onOpen: () => void;
+  /**
+   * Opens a new message to `to`. A composer that is already open stays as it
+   * is; a saved new-message draft gets `to` added to its recipients.
+   */
+  composeTo: (to: string) => void;
   popOutReply: (reply: PoppedOutReply) => void;
   poppedOutDraftSessionId?: string;
 };
 
 const ComposeModalContext = createContext<Context>({
   onOpen: async () => {},
+  composeTo: () => {},
   popOutReply: () => {},
 });
 
@@ -82,6 +88,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [composerKey, setComposerKey] = useState(0);
   const [poppedOutReply, setPoppedOutReply] = useState<PoppedOutReply>();
+  const [initialTo, setInitialTo] = useState<string>();
   const isAllAccountsMailView = Boolean(
     parseMailPath(pathname, searchParams)?.allInboxes,
   );
@@ -127,10 +134,21 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     returnOpenReply();
     setIsExpanded(false);
     setPoppedOutReply(undefined);
+    setInitialTo(undefined);
     // A composer that is already open stays as it is, and reports no ready.
     if (!isOpen || poppedOutReply) beginRumAction("compose_open");
     openModal();
   }, [openModal, returnOpenReply, rememberOpener, isOpen, poppedOutReply]);
+  const composeTo = useCallback(
+    (to: string) => {
+      const opening = !isOpen || Boolean(poppedOutReply);
+      openCompose();
+      if (!opening) return;
+      setInitialTo(to);
+      setComposerKey((key) => key + 1);
+    },
+    [openCompose, isOpen, poppedOutReply],
+  );
   const popOutReply = useCallback(
     (nextReply: PoppedOutReply) => {
       rememberOpener();
@@ -190,10 +208,11 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
   const contextValue = useMemo(
     () => ({
       onOpen: openCompose,
+      composeTo,
       popOutReply,
       poppedOutDraftSessionId: isOpen ? reply?.draftSessionId : undefined,
     }),
-    [openCompose, popOutReply, isOpen, reply?.draftSessionId],
+    [openCompose, composeTo, popOutReply, isOpen, reply?.draftSessionId],
   );
 
   return (
@@ -333,6 +352,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
                   key={composerKey}
                   draftSessionId="compose:new-message"
                   fromAccounts={fromAccounts}
+                  initialTo={initialTo}
                   layout="window"
                   onClose={closeCompose}
                   onDiscard={() => {

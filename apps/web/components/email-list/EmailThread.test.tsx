@@ -817,19 +817,23 @@ describe("EmailThread reading a conversation", () => {
     const first = document.querySelector(
       '[data-thread-message-id="first"]',
     ) as HTMLElement;
-    const toggle = first.querySelector("[data-message-toggle]") as HTMLElement;
-    expect(toggle.tagName).toBe("BUTTON");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const toggle = () =>
+      first.querySelector("[data-message-toggle]") as HTMLElement;
+    expect(toggle().tagName).toBe("BUTTON");
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
     // No button sits inside another control.
     expect(first.querySelector('[role="button"]')).toBeNull();
 
-    fireEvent.click(toggle);
+    fireEvent.click(toggle());
 
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(
-      within(first).getByRole("button", { name: "Collapse message" }),
-    );
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    // Open, the sender's name is free to open their card; Collapse toggles.
+    const collapse = within(first).getByRole("button", {
+      name: "Collapse message",
+    });
+    expect(collapse).toBe(toggle());
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(collapse);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
   // Heading navigation steps from message to message, collapsed or not.

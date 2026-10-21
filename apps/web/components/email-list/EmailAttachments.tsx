@@ -190,7 +190,7 @@ export function EmailAttachments({ message }: { message: ThreadMessage }) {
   );
 }
 
-function AttachmentPreviewDialogContent({
+export function AttachmentPreviewDialogContent({
   filename,
   size,
   url,

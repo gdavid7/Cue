@@ -113,6 +113,7 @@ const featureGroups = [
       "mail/reader-visuals.spec.ts",
       "mail/thread-states.spec.ts",
       "mail/reader-transition.spec.ts",
+      "mail/person-card.spec.ts",
     ],
   },
   {

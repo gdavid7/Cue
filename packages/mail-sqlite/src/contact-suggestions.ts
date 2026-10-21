@@ -247,7 +247,7 @@ function parseAddress(address: string) {
   };
 }
 
-function isAutomatedAddress(email: string) {
+export function isAutomatedAddress(email: string) {
   const local = email.split("@")[0];
   return (
     /^(?:notifications|mailer-daemon|postmaster|bounce)(?:[+._-]|$)/i.test(

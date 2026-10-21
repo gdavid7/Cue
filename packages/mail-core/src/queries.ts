@@ -384,6 +384,11 @@ export type ReplyLag = { medianMs: number; exchanges: number };
 
 export type PersonCard = {
   email: string;
+  /**
+   * A no-reply or other machine address. The store keeps no correspondence
+   * history for those, so every list below is empty.
+   */
+  automated: boolean;
   /** The name they are most often shown with, if any. */
   name: string | null;
   /** Other addresses seen with exactly the same full name. */

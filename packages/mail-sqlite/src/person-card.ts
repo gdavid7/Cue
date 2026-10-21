@@ -6,6 +6,7 @@ import {
   type PersonCardQuery,
   type ReplyLag,
 } from "@inboxzero/mail-core/queries";
+import { isAutomatedAddress } from "./contact-suggestions";
 import type { SqlTransaction, SqlValue } from "./driver";
 import { readCoverage } from "./store-read-utils";
 
@@ -121,6 +122,7 @@ export async function readPersonCard(
   const name = await readName(tx, accountIds, email);
   return {
     email,
+    automated: isAutomatedAddress(email),
     name,
     otherAddresses: name
       ? await readOtherAddresses(tx, accountIds, email, name, own)

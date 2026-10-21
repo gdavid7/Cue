@@ -103,6 +103,7 @@ import type { ThreadMessage } from "@/components/email-list/types";
 import { useMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-mail-threads";
 import { useCombinedMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-combined-mail-threads";
 import { getAllInboxesAccounts } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { openSenderPersonCard } from "@/components/person-card/PersonCard";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
@@ -697,6 +698,28 @@ export function MailShell() {
     providerSearch,
   });
   const { labelsByAccount } = combinedThreadState;
+  const personCardAccounts = useMemo(
+    () =>
+      isAllAccounts
+        ? combinedAccounts.map((account) => ({
+            id: account.id,
+            labels: labelsByAccount[account.id] ?? NO_LABELS,
+          }))
+        : undefined,
+    [combinedAccounts, isAllAccounts, labelsByAccount],
+  );
+  // A search from the reader shows its results, which a full-width reader
+  // would cover.
+  const searchFromReader = useCallback(
+    (query: string) => {
+      if (layout === "list") {
+        forgetOpenedFrom();
+        setOpenThread(null);
+      }
+      setSearch(query);
+    },
+    [layout, setOpenThread, setSearch],
+  );
   const splitCountAccountIds = useMemo(
     () =>
       isAllAccounts
@@ -1944,6 +1967,10 @@ export function MailShell() {
         ? () => setIsMenuOpen((open) => !open)
         : undefined,
       openTeamComments,
+      showPersonCard:
+        openThreadId && readerSelectionSettled && !isMailOverlayOpen
+          ? openSenderPersonCard
+          : undefined,
       openExternal:
         isReaderTarget && openExternalUrl
           ? () => window.open(openExternalUrl, "_blank", "noopener,noreferrer")
@@ -2627,6 +2654,8 @@ export function MailShell() {
                 }
                 onReady={setVisibleReaderThreadKey}
                 onClose={closeReader}
+                personCardAccounts={personCardAccounts}
+                onSearch={searchFromReader}
                 showFixWithChat
                 onAskCue={onAskCueAboutThread}
                 lastMessage={openMessages.at(-1) ?? null}

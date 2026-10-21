@@ -106,7 +106,12 @@ import {
   recordReplySuggestionStageAction,
   recordSuggestedReplyDraftAction,
 } from "@/utils/actions/thread-assist";
-import { formatRecipientNames, splitRecipientList } from "@/utils/email";
+import {
+  extractEmailAddresses,
+  formatRecipientNames,
+  isSameEmailAddress,
+  splitRecipientList,
+} from "@/utils/email";
 import type {
   ReplySuggestionOrigin,
   StoredReplyDraft,
@@ -224,6 +229,8 @@ type ComposeEmailFormProps = {
   draftMode?: ReplyDraftMode;
   draftSessionId?: string;
   replyingToEmail?: ReplyingToEmail;
+  /** A new message's first recipient; added to a saved draft's own. */
+  initialTo?: string;
   refetch?: () => void;
   onSuccess?: (messageId: string, threadId: string) => void;
   onMarkDone?: () => void;
@@ -395,6 +402,7 @@ function ComposeEmailFormContent({
   onMovedDraftApplied,
   draftLoadError,
   replyingToEmail,
+  initialTo,
   fromAccounts,
   accountProvider,
   accountSignatureHtml,
@@ -608,10 +616,10 @@ function ComposeEmailFormContent({
     setValue,
   } = useForm<ComposeFormValues>({
     defaultValues: movedDraft?.values ??
-      storedDraft?.content?.values ?? {
+      withRecipient(storedDraft?.content?.values, initialTo) ?? {
         replyToEmail: getReplyToEmailPayload(replyingToEmail),
         subject: replyingToEmail?.subject,
-        to: replyingToEmail?.to,
+        to: replyingToEmail?.to ?? initialTo,
         cc: replyingToEmail?.cc,
         bcc: replyingToEmail?.bcc,
       },
@@ -2533,6 +2541,17 @@ const RECIPIENT_LABELS: Record<ComposeRecipientField, string> = {
   cc: "Cc",
   bcc: "Bcc",
 };
+
+function withRecipient(
+  values: ComposeFormValues | undefined,
+  to: string | undefined,
+): ComposeFormValues | undefined {
+  if (!values || !to) return values;
+  const existing = extractEmailAddresses(values.to ?? "");
+  if (existing.some((address) => isSameEmailAddress(address, to)))
+    return values;
+  return { ...values, to: values.to ? `${values.to}, ${to}` : to };
+}
 
 function createComposeAttachmentMetadata(
   file: File,
