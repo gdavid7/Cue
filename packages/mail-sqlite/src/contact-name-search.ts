@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import type { SqlTransaction, SqlValue } from "./driver";
 import type { SearchSupport } from "./queries";
@@ -29,13 +30,14 @@ export async function migrateContactNameTokens(tx: SqlTransaction) {
     );
   `);
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 14",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.contactNameTokens.id],
   );
   if (applied.length) return;
   // Contacts indexed before names were are read in by indexContactNameBacklog.
   await tx.exec(`
     INSERT OR REPLACE INTO contact_name_backfill_state VALUES (1, 0, 0);
-    INSERT INTO schema_migrations(id, name) VALUES (14, '0014-contact-name-tokens');
+    INSERT INTO schema_migrations(id, name) VALUES (${LOCAL_MIGRATIONS.contactNameTokens.id}, '${LOCAL_MIGRATIONS.contactNameTokens.name}');
   `);
 }
 

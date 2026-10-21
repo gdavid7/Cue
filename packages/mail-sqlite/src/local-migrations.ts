@@ -21,4 +21,8 @@ export const LOCAL_MIGRATIONS = {
     name: "0011-incremental-conversation-index",
   },
   messageEmbeddings: { id: 12, name: "0012-message-embeddings" },
+  stemmedMessageSearch: { id: 13, name: "0013-stemmed-message-search" },
+  contactNameTokens: { id: 14, name: "0014-contact-name-tokens" },
+  filesOrderIndex: { id: 15, name: "0015-files-order-index" },
+  internetMessageIds: { id: 16, name: "0016-internet-message-ids" },
 } as const;

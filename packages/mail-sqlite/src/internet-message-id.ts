@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type { SqlTransaction } from "./driver";
 
 /**
@@ -6,13 +7,18 @@ import type { SqlTransaction } from "./driver";
  */
 export async function migrateInternetMessageIds(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 16",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.internetMessageIds.id],
   );
   if (applied.length) return;
   const columns = await tx.query("PRAGMA table_info(messages)");
   if (!columns.some((column) => column.name === "internet_message_id"))
     await tx.exec("ALTER TABLE messages ADD COLUMN internet_message_id TEXT");
   await tx.execute(
-    "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (16, '0016-internet-message-ids')",
+    "INSERT OR IGNORE INTO schema_migrations(id, name) VALUES (?, ?)",
+    [
+      LOCAL_MIGRATIONS.internetMessageIds.id,
+      LOCAL_MIGRATIONS.internetMessageIds.name,
+    ],
   );
 }

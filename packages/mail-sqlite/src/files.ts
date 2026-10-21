@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import { messageAttachmentDescriptorSchema } from "@inboxzero/mail-core/messages";
 import type {
   FileEntry,
@@ -15,7 +16,6 @@ import {
   searchMatchQuery,
 } from "./search-text";
 
-const MIGRATION_ID = 15;
 // The sender filter offers the people who sent the most files; past this many
 // the rest are left out, which keeps the typeahead's list small to send and
 // search on every keystroke.
@@ -41,7 +41,7 @@ const FILE_MESSAGES =
 export async function migrateFilesIndex(tx: SqlTransaction) {
   const applied = await tx.query(
     "SELECT 1 FROM schema_migrations WHERE id = ?",
-    [MIGRATION_ID],
+    [LOCAL_MIGRATIONS.filesOrderIndex.id],
   );
   if (applied.length) return;
   await tx.exec(`
@@ -49,10 +49,10 @@ export async function migrateFilesIndex(tx: SqlTransaction) {
       ON effective_messages(received_at_ms DESC, account_id, message_id)
       WHERE ${FILE_MESSAGES.replaceAll("e.", "")};
   `);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (?, '0015-files-order-index')",
-    [MIGRATION_ID],
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.filesOrderIndex.id,
+    LOCAL_MIGRATIONS.filesOrderIndex.name,
+  ]);
 }
 
 /**
