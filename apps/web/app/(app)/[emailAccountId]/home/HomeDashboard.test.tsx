@@ -1036,6 +1036,35 @@ describe("HomeDashboard across accounts", () => {
     ).toBeTruthy();
   });
 
+  it("before the server's inbox loads, leaves out a local copy of mail already in Needs reply", () => {
+    mocks.homes = {
+      account: { ...homeData([]), pending: ["alsoInInbox"] },
+      "account-b": {
+        ...homeData([
+          { ...thread("b1", "Contract"), rfcMessageId: "<same@mail>" },
+        ]),
+        pending: ["alsoInInbox"],
+      },
+    };
+    mocks.localInbox = [
+      {
+        ...localConversation("a-copy", "Contract"),
+        latestInternetMessageId: "<same@mail>",
+      },
+      localConversation("local-2", "Invoice for October"),
+    ];
+
+    try {
+      renderToday();
+
+      expect(screen.getAllByText("Contract")).toHaveLength(1);
+      const inbox = lane("Also in your inbox");
+      expect(within(inbox).getByText("Invoice for October")).toBeTruthy();
+    } finally {
+      mocks.localInbox = null;
+    }
+  });
+
   it("shows Today loading while the account list loads, not an empty page", () => {
     mocks.emailAccounts = undefined;
 

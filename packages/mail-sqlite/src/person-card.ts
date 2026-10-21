@@ -1,4 +1,7 @@
-import { messageAttachmentDescriptorSchema } from "@inboxzero/mail-core/messages";
+import {
+  messageAttachmentDescriptorSchema,
+  normalizeInternetMessageId,
+} from "@inboxzero/mail-core/messages";
 import {
   PERSON_CARD_CONVERSATION_LIMIT,
   type PersonCard,
@@ -44,6 +47,8 @@ type PersonMessage = {
   hasAttachments: boolean;
   sender: string;
   recipients: [to: SqlValue, cc: SqlValue];
+  /** Its Message-ID header, folded, once the store has read it. */
+  internetMessageId: string | null;
 };
 
 /**
@@ -62,7 +67,8 @@ export async function readPersonCard(
   for (const accountId of accountIds) {
     const rows = await tx.query(
       `SELECT e.message_id, e.conversation_id, e.subject, e.received_at_ms,
-              e.in_sent, e.has_attachments, e.to_json, e.cc_json, i.sender
+              e.in_sent, e.has_attachments, e.to_json, e.cc_json, i.sender,
+              m.internet_message_id
        FROM (
          SELECT message_id, sender FROM contact_interactions
          WHERE account_id = ? AND email = ?
@@ -70,6 +76,8 @@ export async function readPersonCard(
        ) AS i
        JOIN effective_messages e
          ON e.account_id = ? AND e.message_id = i.message_id
+       LEFT JOIN messages m
+         ON m.account_id = e.account_id AND m.message_id = e.message_id
        WHERE e.in_trash = 0 AND e.in_spam = 0 AND e.in_draft = 0`,
       [accountId, email, MESSAGE_LIMIT, accountId],
     );
@@ -91,6 +99,11 @@ export async function readPersonCard(
         hasAttachments: Number(row.has_attachments) === 1,
         sender,
         recipients: [row.to_json, row.cc_json],
+        internetMessageId: normalizeInternetMessageId(
+          row.internet_message_id == null
+            ? null
+            : String(row.internet_message_id),
+        ),
       });
     }
   }
@@ -385,12 +398,14 @@ function parseAttachments(value: SqlValue | undefined) {
 }
 
 /**
- * Messages that reached more than one of your accounts. The store keeps no
- * Message-ID header, so two messages in different accounts are copies when
- * they have the same sender, subject and recipients and arrived within a
- * minute. Each copy is counted once; a conversation is hidden only when
- * another one shown holds a copy of every message in it, and conversations
- * sharing a copy are one thread for reply times.
+ * Messages that reached more than one of your accounts. Two messages in
+ * different accounts are copies when they carry the same Message-ID header.
+ * Mail stored before the store kept that header is matched instead by the
+ * same sender, subject and recipients arriving within a minute, though never
+ * against a message with a different Message-ID. Each copy is counted once;
+ * a conversation is hidden only when another one shown holds a copy of every
+ * message in it, and conversations sharing a copy are one thread for reply
+ * times.
  */
 function findCrossAccountCopies(
   messages: PersonMessage[],
@@ -404,6 +419,10 @@ function findCrossAccountCopies(
       threadOf: (message: PersonMessage) => message.conversation,
     };
   const groupOf = new Map<PersonMessage, PersonMessage[]>();
+  const groupIds = new Map<PersonMessage[], string>();
+  const groupsById = new Map<string, PersonMessage[]>();
+  const hasAccount = (group: PersonMessage[], accountId: string) =>
+    group.some((member) => member.accountId === accountId);
   // Per fingerprint, its groups in arrival order. Messages come in arrival
   // order too, so a group that started over a minute ago takes no more
   // copies (head moves past it), and each account's next group to join only
@@ -419,7 +438,8 @@ function findCrossAccountCopies(
   );
   // Look-alike messages repeat the same headers, so each is parsed once.
   const fingerprints = new Map<string, string>();
-  for (const message of byArrival) {
+  // The group of look-alike messages this one joins, or a new one.
+  const lookAlikeGroup = (message: PersonMessage) => {
     const raw = [
       message.sender,
       message.subject,
@@ -449,14 +469,45 @@ function findCrossAccountCopies(
     let index = Math.max(queue.next.get(message.accountId) ?? 0, queue.head);
     while (
       index < groups.length &&
-      groups[index].some((member) => member.accountId === message.accountId)
+      hasAccount(groups[index], message.accountId)
     )
       index++;
-    if (index === groups.length) groups.push([]);
-    const group = groups[index];
+    // A group whose Message-ID differs isn't this message, but a later
+    // message from this account may still join it, so next stays before it.
+    let join = index;
+    while (
+      join < groups.length &&
+      (hasAccount(groups[join], message.accountId) ||
+        conflicts(groups[join], message))
+    )
+      join++;
+    if (join === groups.length) groups.push([]);
+    // Past index, groups[index] only clashed on Message-ID, so this account's
+    // next message must still be able to join it.
+    queue.next.set(message.accountId, join === index ? index + 1 : index);
+    return groups[join];
+  };
+  const conflicts = (group: PersonMessage[], message: PersonMessage) => {
+    const groupId = groupIds.get(group);
+    return Boolean(
+      groupId &&
+        message.internetMessageId &&
+        groupId !== message.internetMessageId,
+    );
+  };
+  for (const message of byArrival) {
+    const id = message.internetMessageId;
+    const byId = id ? groupsById.get(id) : undefined;
+    const group =
+      byId && !hasAccount(byId, message.accountId)
+        ? byId
+        : lookAlikeGroup(message);
     group.push(message);
-    queue.next.set(message.accountId, index + 1);
     groupOf.set(message, group);
+    if (id && !groupIds.has(group)) {
+      groupIds.set(group, id);
+      if (!groupsById.has(id)) groupsById.set(id, group);
+    }
   }
 
   const messagesByConversation = new Map<string, PersonMessage[]>();

@@ -190,6 +190,8 @@ export const conversationSummarySchema = z.object({
   pendingOperationIds: z.array(z.string()),
   /** The newest message that isn't a draft or in the trash. */
   latestMessageId: z.string().optional(),
+  /** That message's Message-ID header, once the store has read it. */
+  latestInternetMessageId: z.string().optional(),
   hasAttachments: z.boolean().optional(),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;

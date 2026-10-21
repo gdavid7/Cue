@@ -14,7 +14,11 @@ import {
   splitRecipientList,
 } from "@/utils/email";
 import { getFirstSyncAccountIds } from "@/utils/mail-engine/coverage";
-import type { TodayAccount, TodayThread } from "@/utils/home/merge-home";
+import {
+  type TodayAccount,
+  type TodayThread,
+  todayConversationKey,
+} from "@/utils/home/merge-home";
 import { HANDLED_WINDOW_DAYS } from "@/utils/home/today-constants";
 
 // Today shows five, but those the server puts under Needs reply and mail Cue
@@ -86,7 +90,7 @@ export function localInboxRows(
   if (getFirstSyncAccountIds(accountIds, view.coverage).length) return null;
   const byId = new Map(accounts.map((account) => [account.id, account]));
   const handledSince = now - HANDLED_WINDOW_DAYS * 86_400_000;
-  return view.conversations.flatMap((conversation) => {
+  const rows = view.conversations.flatMap((conversation) => {
     // Only the accounts asked for, so another mailbox's rows never show.
     const account = byId.get(conversation.key.accountId);
     if (!account) return [];
@@ -100,6 +104,27 @@ export function localInboxRows(
     const row = toTodayThread(conversation, account.email);
     if (!row) return [];
     return [named ? { ...row, account } : row];
+  });
+  return named ? showCopiesOnce(rows) : rows;
+}
+
+/**
+ * A message in two of the user's mailboxes shows once, newest copy first, and
+ * says where else it is, as Today's merge of the server's rows does.
+ */
+function showCopiesOnce(rows: TodayThread[]) {
+  const shown = new Map<string, TodayThread>();
+  return rows.filter((row) => {
+    const key = todayConversationKey(row);
+    const first = shown.get(key);
+    if (!first) {
+      shown.set(key, row);
+      return true;
+    }
+    if (!row.account || first.account?.id === row.account.id) return true;
+    if (!first.alsoIn?.some(({ id }) => id === row.account?.id))
+      first.alsoIn = [...(first.alsoIn ?? []), row.account];
+    return false;
   });
 }
 
@@ -134,6 +159,9 @@ function toTodayThread(
     priority: conversation.unread ? "medium" : "low",
     unread: conversation.unread,
     messageId: conversation.latestMessageId,
+    ...(conversation.latestInternetMessageId
+      ? { rfcMessageId: conversation.latestInternetMessageId }
+      : {}),
     starred: conversation.starred,
     inInbox: true,
   };

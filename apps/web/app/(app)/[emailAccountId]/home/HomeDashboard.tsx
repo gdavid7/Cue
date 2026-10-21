@@ -51,11 +51,12 @@ import { getActionErrorMessage } from "@/utils/error";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import type { HomeLane, HomeThread } from "@/utils/home/get-home";
-import type {
-  TodayAccount,
-  TodayAgentTask,
-  TodayData,
-  TodayThread,
+import {
+  type TodayAccount,
+  type TodayAgentTask,
+  type TodayData,
+  type TodayThread,
+  todayConversationKey,
 } from "@/utils/home/merge-home";
 import { AllClear, CueChecked } from "./AllClear";
 import {
@@ -167,9 +168,15 @@ export function HomeDashboard() {
   });
   const alsoInInbox = useMemo(() => {
     if (!localInbox) return data?.alsoInInbox ?? [];
-    // Each conversation shows once on Today, as in the server's answer.
+    // Each conversation shows once on Today, as in the server's answer, and
+    // so does a message that reached two mailboxes.
     const needsYou = new Set(data?.needsYou.map(rowKey));
-    return localInbox.filter((thread) => !needsYou.has(rowKey(thread)));
+    const needsYouMessages = new Set(data?.needsYou.map(todayConversationKey));
+    return localInbox.filter(
+      (thread) =>
+        !needsYou.has(rowKey(thread)) &&
+        !needsYouMessages.has(todayConversationKey(thread)),
+    );
   }, [data, localInbox]);
   const visibleAlsoInInbox = useMemo(
     () =>
