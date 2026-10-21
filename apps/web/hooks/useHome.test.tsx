@@ -372,6 +372,7 @@ function todayData(subject: string) {
     ],
     waiting: [],
     alsoInInbox: [],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],

@@ -65,6 +65,8 @@ export const HANDLED_LABELS = [
   "Receipt",
   "Notification",
 ];
+/** Today's Reading lane bundles unread mail Cue filed under this label. */
+const READING_LABEL = "Newsletter";
 const HIDDEN_TAGS = new Set([
   "inbox",
   "unread",
@@ -157,8 +159,36 @@ export async function getHomeData({
       return FAILED;
     });
 
+  const since = now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000;
+  const labelsLoad = gmail("labels", () => emailProvider.getLabels());
+  // Unread newsletters still in the inbox, which the rest of the inbox
+  // leaves out as filed mail, so they're bundled in one calm row instead.
+  const readingLoad = labelsLoad.then(
+    (labels): Promise<LaneResult<EmailThread[]>> => {
+      // As with the rest of the inbox, filed mail can't be told apart
+      // without the labels.
+      if (!labels.ok) return Promise.resolve(PENDING);
+      const readingId = findLabel(labels.value, READING_LABEL)?.id;
+      if (!readingId) return Promise.resolve({ ok: true, value: [] });
+      return gmail("reading", () =>
+        emailProvider
+          .getThreadsWithQuery({
+            query: {
+              labelIds: [readingId, "INBOX"],
+              isUnread: true,
+              after: new Date(since),
+            },
+            maxResults: LIST_LIMIT,
+            messageFormat: "metadata",
+          })
+          .then((r) => r.threads),
+      );
+    },
+  );
+
   const [
     labelsResult,
+    readingResult,
     needsYouResult,
     waitingResult,
     inboxResult,
@@ -168,7 +198,8 @@ export async function getHomeData({
     nextUp,
     replySettings,
   ] = await Promise.all([
-    gmail("labels", () => emailProvider.getLabels()),
+    labelsLoad,
+    readingLoad,
     // Reply tracking lives in Cue's database, so these lanes don't depend
     // on Cue labelling anything in the mailbox. An archived conversation is
     // off the user's plate even before they reply.
@@ -222,6 +253,7 @@ export async function getHomeData({
     ["needsYou", needsYouResult],
     ["waiting", waitingResult],
     ["alsoInInbox", inbox],
+    ["reading", readingResult],
   ] as const;
   const pending = laneResults
     .filter(([, result]) => !result.ok && result.pending)
@@ -237,15 +269,15 @@ export async function getHomeData({
   const awaitingId = labelId(getRuleLabel(SystemType.AWAITING_REPLY));
   const handledLabelIds = HANDLED_LABELS.map(labelId).filter(isString);
   const handledIds = new Set(handledLabelIds);
-  const since = now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000;
+  const readingId = labelId(READING_LABEL);
   // Each thread shows once on Today. Recently filed mail is Cue's to handle,
   // so it isn't repeated under the rest of the inbox either.
   const shownIds = new Set(needsYou.map((t) => t.id));
-  const isRecentlyFiled = (thread: EmailThread) =>
+  const isRecentlyFiled = (thread: EmailThread, ids: ReadonlySet<string>) =>
     thread.messages.some(
       (m) =>
         getMessageTimestamp(m) >= since &&
-        m.labelIds?.some((id) => handledIds.has(id)),
+        m.labelIds?.some((id) => ids.has(id)),
     );
 
   const toRow = (thread: EmailThread) =>
@@ -264,9 +296,17 @@ export async function getHomeData({
         b.at.localeCompare(a.at),
     );
   const inboxRows = lane(inbox)
-    .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t))
+    .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t, handledIds))
     .map(toRow)
     .filter(isDefined);
+  // Exactly the newsletters the rest of the inbox leaves out as filed.
+  const readingIds = new Set(readingId ? [readingId] : []);
+  const reading = lane(readingResult);
+  const readingRows = reading
+    .filter((t) => !shownIds.has(t.id) && isRecentlyFiled(t, readingIds))
+    .map(toRow)
+    .filter(isDefined)
+    .filter((row) => row.unread && row.inInbox);
   // Only mail someone else sent can have a reply waiting; waiting-on
   // conversations are the user's own move.
   const drafted = await getReadySuggestionMessageIds({
@@ -285,6 +325,8 @@ export async function getHomeData({
     needsYou: needsYouRows.map(withDrafted),
     waiting: waiting.map(toRow).filter(isDefined),
     alsoInInbox: inboxRows.map(withDrafted),
+    /** Unread newsletters in the inbox, which Today bundles in one row. */
+    reading: readingRows,
     /**
      * The account's labels for mail Cue files without asking, so the
      * browser's own inbox can leave recently filed mail out as this does.
@@ -307,6 +349,7 @@ export async function getHomeData({
       // Lists are capped, so a full one means "at least this many".
       needsYouCapped: needsYou.length >= LIST_LIMIT,
       waitingCapped: waiting.length >= LIST_LIMIT,
+      readingCapped: reading.length >= LIST_LIMIT,
     },
   };
 }
@@ -620,7 +663,7 @@ function humanize(value: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-export type HomeLane = "needsYou" | "waiting" | "alsoInInbox";
+export type HomeLane = "needsYou" | "waiting" | "alsoInInbox" | "reading";
 type Pending = { ok: false; pending: boolean };
 type LaneResult<T> = { ok: true; value: T } | Pending;
 const PENDING: Pending = { ok: false, pending: true };

@@ -6,6 +6,7 @@ import { test } from "../playwright-test";
 import {
   openMail,
   readLatestMailMutation,
+  readProviderAccessToken,
   waitForMetadataCoverage,
   withClient,
 } from "./mail-test-helpers";
@@ -59,6 +60,73 @@ test("archives a conversation from Today and restores it with undo", async ({
   await page.keyboard.press("z");
   await expect(option).toBeVisible();
   await expectEngineMutation(page, emailAccountId, "unarchive");
+});
+
+test("bundles unread newsletters into one Reading row that opens in place and marks them all read", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const newsletter = await seedNewsletter(
+    page,
+    `Field Notes weekly ${Date.now()}`,
+  );
+  try {
+    const { emailAccountId } = await openToday(page);
+    const reading = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: /^Reading/ }) });
+    const bundle = reading.getByRole("button", { name: /^From .*Field Notes/ });
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    await expect(bundle).toHaveAttribute("aria-expanded", "false");
+    // One row for the bundle, not one per newsletter, and none elsewhere.
+    await expect(todayRow(page, newsletter.threadId)).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-reading-bundled");
+
+    await bundle.click();
+    await expect(bundle).toHaveAttribute("aria-expanded", "true");
+    const list = page.getByRole("listbox", { name: "Reading" });
+    await expect(
+      list.locator(`[data-today-thread="${newsletter.threadId}"]`),
+    ).toBeVisible();
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await reading.scrollIntoViewIfNeeded();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-reading-open-${theme}-${size.width}`,
+        );
+      }
+    }
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    // Through the mail engine, as a row's own Mark as read goes.
+    await reading.getByRole("button", { name: "Mark all read" }).click();
+    await expect(reading).toHaveCount(0);
+    await expect
+      .poll(
+        () =>
+          readLatestMailMutation(page, {
+            emailAccountId,
+            kind: "set_read_state",
+            threadId: newsletter.threadId,
+          }),
+        { timeout: 60_000 },
+      )
+      .toMatchObject({ status: "succeeded" });
+  } finally {
+    await newsletter.remove();
+  }
 });
 
 test("a first visit shows the inbox from local mail while Today loads", async ({
@@ -390,6 +458,103 @@ async function seedNeedsReply(emailAccountId: string, threadIds: string[]) {
       );
     }
   });
+}
+
+/**
+ * An unread newsletter in the inbox, filed under the Newsletter label (an
+ * Outlook category) as Cue's rule would, and what takes it out again.
+ */
+async function seedNewsletter(page: Page, subject: string) {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    const category = await page.request.post(
+      `${base}/outlook/masterCategories`,
+      { headers, data: { displayName: "Newsletter" } },
+    );
+    // Already there from an earlier run is as good.
+    expect(category.ok() || category.status() === 409).toBe(true);
+    const draft = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Three essays on slow travel." },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+    });
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const patched = await page.request.patch(`${base}/messages/${draftId}`, {
+      headers,
+      data: {
+        from: {
+          emailAddress: {
+            address: "hello@fieldnotes.example",
+            name: "Field Notes",
+          },
+        },
+        categories: ["Newsletter"],
+        isRead: false,
+      },
+    });
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(`${base}/messages/${draftId}/move`, {
+      headers,
+      data: { destinationId: "inbox" },
+    });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return {
+      threadId: message.conversationId,
+      remove: () =>
+        page.request.post(`${base}/messages/${message.id}/permanentDelete`, {
+          headers,
+        }),
+    };
+  }
+
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const labels = await page.request.get(`${base}/labels`, { headers });
+  expect(labels.ok(), await labels.text()).toBe(true);
+  const existing = (
+    (await labels.json()) as { labels: { id: string; name: string }[] }
+  ).labels.find((label) => label.name === "Newsletter");
+  let labelId = existing?.id;
+  if (!labelId) {
+    const created = await page.request.post(`${base}/labels`, {
+      headers,
+      data: { name: "Newsletter" },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    labelId = ((await created.json()) as { id: string }).id;
+  }
+  const inserted = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      from: "Field Notes <hello@fieldnotes.example>",
+      to: email,
+      subject,
+      body_text: "Three essays on slow travel.",
+      labelIds: ["INBOX", "UNREAD", labelId],
+      internalDate: String(Date.now()),
+    },
+  });
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string; threadId: string };
+  return {
+    threadId: message.threadId,
+    remove: () =>
+      page.request.delete(`${base}/messages/${message.id}`, { headers }),
+  };
 }
 
 async function expectEngineMutation(

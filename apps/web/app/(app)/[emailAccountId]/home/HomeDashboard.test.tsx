@@ -1047,6 +1047,170 @@ describe("HomeDashboard across accounts", () => {
   });
 });
 
+describe("HomeDashboard Reading", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
+    mocks.undoLatestToast.mockResolvedValue(false);
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = {
+      ...homeData([thread("first", "Quarterly numbers")]),
+      reading: [
+        newsletter("n1", "Field Notes", "Slow travel"),
+        newsletter("n2", "Morning Brew", "Markets"),
+        newsletter("n3", "Field Notes", "Trains"),
+      ],
+    };
+  });
+
+  afterEach(cleanup);
+
+  it("bundles newsletters into one row naming who they're from, which opens in place", () => {
+    renderToday();
+
+    const toggle = screen.getByRole("button", {
+      name: "From Field Notes and Morning Brew",
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Slow travel")).toBeNull();
+    expect(lanes()).not.toContain("Reading");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(within(lane("Reading")).getAllByRole("option")).toHaveLength(3);
+    // The newsletters stay out of the other lanes.
+    expect(within(lane("Needs reply")).getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("marks the whole bundle read through the mail engine", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    });
+
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: ["n1", "n2", "n3"].map((conversationId) => ({
+          accountId: "account",
+          conversationId,
+        })),
+        change: { kind: "set_read", read: true },
+      }),
+    );
+    expect(screen.queryByRole("heading", { name: /Reading/ })).toBeNull();
+  });
+
+  it("archives the whole bundle, and undo brings it back", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive all" }));
+    });
+
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: ["n1", "n2", "n3"].map((conversationId) => ({
+          accountId: "account",
+          conversationId,
+        })),
+        change: { kind: "archive" },
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: /^From Field Notes/ }),
+    ).toBeNull();
+
+    const [{ message, onUndo }] = mocks.toastUndo.mock.calls[0];
+    expect(message).toBe("Archived 3 conversations");
+    await act(async () => onUndo());
+
+    expect(
+      screen.getByRole("button", { name: "From Field Notes and Morning Brew" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps the bundle when the engine refuses the change", async () => {
+    mocks.client.submitConversations.mockResolvedValue({
+      status: "rejected",
+      code: "queue_full",
+    });
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive all" }));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "From Field Notes and Morning Brew" }),
+    ).toBeTruthy();
+  });
+});
+
+describe("HomeDashboard Reading across accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.undoLatestToast.mockResolvedValue(false);
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = undefined;
+    mocks.searchParams = new URLSearchParams("accounts=all");
+    mocks.emailAccounts = [
+      emailAccount("account", "a@example.com"),
+      emailAccount("account-b", "b@example.com"),
+    ];
+    mocks.homes = {
+      account: {
+        ...homeData([]),
+        reading: [newsletter("a-n", "Field Notes", "Slow travel")],
+      },
+      "account-b": {
+        ...homeData([]),
+        reading: [newsletter("b-n", "Morning Brew", "Markets")],
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.searchParams = new URLSearchParams();
+    mocks.emailAccounts = [];
+    mocks.homes = {};
+  });
+
+  it("bundles every account's newsletters and archives each in its own account", async () => {
+    renderToday();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "From Field Notes and Morning Brew" }),
+    );
+    expect(within(lane("Reading")).getAllByRole("option")).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive all" }));
+    });
+
+    for (const [accountId, conversationId] of [
+      ["account", "a-n"],
+      ["account-b", "b-n"],
+    ]) {
+      expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId,
+          conversations: [{ accountId, conversationId }],
+          change: { kind: "archive" },
+        }),
+      );
+    }
+  });
+});
+
 describe("HomeDashboard greeting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1214,6 +1378,14 @@ function thread(threadId: string, subject: string): HomeThread {
   };
 }
 
+function newsletter(
+  threadId: string,
+  fromName: string,
+  subject: string,
+): HomeThread {
+  return { ...thread(threadId, subject), fromName, tag: "Newsletter" };
+}
+
 function localConversation(
   conversationId: string,
   subject: string,
@@ -1265,6 +1437,7 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
     needsYou,
     waiting: [],
     alsoInInbox: [],
+    reading: [],
     handledLabelIds: [],
     pending: [],
     failed: [],
@@ -1281,6 +1454,7 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
       waiting: 0,
       needsYouCapped: false,
       waitingCapped: false,
+      readingCapped: false,
     },
   };
 }

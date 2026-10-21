@@ -24,7 +24,7 @@ const PREVIEW_LENGTH = 140;
 const ENTRY_KEY = "home";
 // Bumped whenever Today's answer changes shape: a copy saved by an earlier
 // deploy is ignored rather than read as this one.
-const SAVED_VERSION = 1;
+const SAVED_VERSION = 2;
 // What an earlier day's copy says of Cue: no notice and no AI actions, as it
 // is never shown until the fresh answer says what Cue can do now.
 const UNKNOWN_CUE: GetHomeResponse["cue"] = {
@@ -130,6 +130,7 @@ export function removeFromCachedToday(
     needsYou: keep(saved.data.needsYou),
     waiting: keep(saved.data.waiting),
     alsoInInbox: keep(saved.data.alsoInInbox),
+    reading: keep(saved.data.reading),
   };
   data.stats = {
     ...data.stats,
@@ -157,6 +158,7 @@ function toStored({
     needsYou: shorten(data.needsYou),
     waiting: shorten(data.waiting),
     alsoInInbox: shorten(data.alsoInInbox.slice(0, ALSO_IN_INBOX_LIMIT)),
+    reading: shorten(data.reading),
   };
 }
 
@@ -187,6 +189,7 @@ function isSaved(saved: Saved | undefined): saved is Saved {
       Array.isArray(data.needsYou) &&
       Array.isArray(data.waiting) &&
       Array.isArray(data.alsoInInbox) &&
+      Array.isArray(data.reading) &&
       Array.isArray(data.pending) &&
       Array.isArray(data.failed) &&
       Array.isArray(data.agentTasks) &&

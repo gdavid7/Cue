@@ -52,6 +52,22 @@ export function formatWhen(item: NextUpItem, now: Date) {
   return `Due ${day}`;
 }
 
+/**
+ * Who a bundle of mail is from, newest first, each once: "Field Notes,
+ * Morning Brew and Stratechery", or "Field Notes, Morning Brew, Stratechery
+ * and 2 more" past `shown` senders.
+ */
+export function formatSenders(names: string[], shown = 3) {
+  const senders = [
+    ...new Set(names.map((name) => name.trim()).filter(Boolean)),
+  ];
+  if (senders.length <= shown) {
+    if (senders.length < 2) return senders[0] ?? "";
+    return `${senders.slice(0, -1).join(", ")} and ${senders.at(-1)}`;
+  }
+  return `${senders.slice(0, shown).join(", ")} and ${senders.length - shown} more`;
+}
+
 function daysFrom(now: Date, iso: string) {
   return Math.round(
     (startOfLocalDay(new Date(iso)).getTime() -

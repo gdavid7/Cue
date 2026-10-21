@@ -14,7 +14,7 @@ import {
 
 // The browser merges, so this file stays free of server imports.
 
-const LANES: HomeLane[] = ["needsYou", "waiting", "alsoInInbox"];
+const LANES: HomeLane[] = ["needsYou", "waiting", "alsoInInbox", "reading"];
 
 export type TodayAccount = { id: string; email: string };
 
@@ -33,6 +33,7 @@ export type TodayData = Omit<
   | "needsYou"
   | "waiting"
   | "alsoInInbox"
+  | "reading"
   | "agentTasks"
   | "cue"
   | "today"
@@ -42,6 +43,7 @@ export type TodayData = Omit<
   needsYou: TodayThread[];
   waiting: TodayThread[];
   alsoInInbox: TodayThread[];
+  reading: TodayThread[];
   agentTasks: TodayAgentTask[];
   /** Across accounts, the mailbox each notice is about. */
   cue: GetHomeResponse["cue"] & {
@@ -103,7 +105,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
   }
   if (!loaded.length) return { data: null, failedAccountIds };
 
-  const tagged = (lane: "needsYou" | "waiting" | "alsoInInbox") =>
+  const tagged = (lane: HomeLane) =>
     loaded.flatMap(({ account, data }) =>
       data[lane].map((thread): TodayThread => ({ ...thread, account })),
     );
@@ -148,6 +150,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
   );
   const waiting = lane(tagged("waiting").sort(byDate));
   const alsoInInbox = lane(tagged("alsoInInbox").sort(byDate));
+  const readingLane = lane(tagged("reading").sort(byDate));
 
   const replyTrackingOff = loaded.find(({ data }) => !data.cue.replyTracking);
   const reading = loaded.find(({ data }) => !data.cue.hasReadMail);
@@ -162,6 +165,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
     needsYou: needsYou.rows,
     waiting: waiting.rows,
     alsoInInbox: alsoInInbox.rows,
+    reading: readingLane.rows,
   };
 
   return {
@@ -214,6 +218,9 @@ export function mergeHomeData(accounts: AccountHome[]): {
           needsYou.more || loaded.some(({ data }) => data.stats.needsYouCapped),
         waitingCapped:
           waiting.more || loaded.some(({ data }) => data.stats.waitingCapped),
+        readingCapped:
+          readingLane.more ||
+          loaded.some(({ data }) => data.stats.readingCapped),
       },
     },
     failedAccountIds,

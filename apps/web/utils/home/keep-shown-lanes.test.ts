@@ -71,6 +71,7 @@ function home(subject: string): TodayHomeData {
     needsYou: [row("needs")],
     waiting: [row("waiting-1"), row("waiting-2")],
     alsoInInbox: [row("inbox")],
+    reading: [],
     pending: [],
     failed: [],
     stats: {
@@ -80,6 +81,7 @@ function home(subject: string): TodayHomeData {
       waiting: 2,
       needsYouCapped: false,
       waitingCapped: true,
+      readingCapped: false,
     },
   } as unknown as GetHomeResponse;
 }
