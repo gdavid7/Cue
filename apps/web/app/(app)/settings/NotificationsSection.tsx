@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { MoonIcon } from "lucide-react";
 import {
   Item,
   ItemActions,
@@ -30,6 +31,8 @@ import {
   WEB_NOTIFICATION_MODES,
 } from "@/utils/web-notifications/preference";
 import { isWebPushAvailable } from "@/utils/web-push/subscription";
+import { useNotificationsQuiet } from "@/hooks/useNotificationsQuiet";
+import { PauseNotificationsSetting } from "@/app/(app)/settings/PauseNotificationsSetting";
 
 const MODE_LABELS: Record<WebNotificationMode, string> = {
   off: "Off",
@@ -49,6 +52,7 @@ export function NotificationsSection() {
     readEffectiveMode,
     () => "off" as const,
   );
+  const quiet = useNotificationsQuiet();
   // The desktop app shows its own notifications.
   if (permission === "unsupported" || getInboxZeroDesktopApp()) return null;
 
@@ -59,7 +63,16 @@ export function NotificationsSection() {
       <ItemSeparator />
       <Item size="sm">
         <ItemContent>
-          <ItemTitle>Desktop notifications</ItemTitle>
+          <ItemTitle>
+            Desktop notifications
+            {quiet.quietUntilMs !== null && (
+              <MoonIcon
+                className="size-3.5 text-muted-foreground"
+                aria-label="Paused"
+                role="img"
+              />
+            )}
+          </ItemTitle>
           <ItemDescription>{describeNotifications(permission)}</ItemDescription>
         </ItemContent>
         <ItemActions>
@@ -98,6 +111,9 @@ export function NotificationsSection() {
           </Select>
         </ItemActions>
       </Item>
+      {quiet.canPause && (
+        <PauseNotificationsSetting quietUntilMs={quiet.quietUntilMs} />
+      )}
     </>
   );
 }

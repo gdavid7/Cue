@@ -11,6 +11,11 @@ export const DEFAULT_WEB_NOTIFICATION_MODE: WebNotificationMode = "important";
 const MODE_KEY = "cue:web-notifications:mode";
 const PROMPTED_KEY = "cue:web-notifications:prompted";
 const HINT_SHOWN_KEY = "cue:web-notifications:off-hint-shown";
+const QUIET_UNTIL_KEY = "cue:web-notifications:quiet-until";
+/** A pause longer than this is more likely a typo than a plan. */
+export const MAX_QUIET_MS = 30 * 24 * 60 * 60 * 1000;
+// setTimeout overflows past about 24.8 days; a longer pause re-arms.
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const CHANGE_EVENT = "cue:web-notifications:change";
 
 // Permission is per browser, so the choice lives next to it rather than in the
@@ -76,11 +81,72 @@ export function writeOffHintShownAtMs(ms: number) {
   }
 }
 
+/**
+ * A pause is separate from the mode, so pausing never reads as notifications
+ * being off. It lives with the mode because it is per browser too, and an
+ * expired pause reads as none, so nothing has to clear it on time.
+ */
+export function readQuietUntilMs(now = Date.now()): number | null {
+  try {
+    const value = Number(window.localStorage.getItem(QUIET_UNTIL_KEY));
+    return Number.isFinite(value) && value > now ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A time already past is ignored; one beyond the limit is cut to it. */
+export function pauseNotificationsUntil(untilMs: number, now = Date.now()) {
+  if (!(untilMs > now)) return;
+  try {
+    window.localStorage.setItem(
+      QUIET_UNTIL_KEY,
+      String(Math.min(untilMs, now + MAX_QUIET_MS)),
+    );
+  } catch {
+    // Without storage there is nowhere to keep a pause; notifications go on.
+  }
+  announcePreferenceChange();
+}
+
+export function resumeNotifications() {
+  try {
+    window.localStorage.removeItem(QUIET_UNTIL_KEY);
+  } catch {
+    // Nothing stored means nothing to resume.
+  }
+  announcePreferenceChange();
+}
+
+/**
+ * Other tabs' changes arrive as storage events, and a pause's end arrives as a
+ * timer, so every reader sees notifications resume without a reload.
+ */
 export function subscribeToPreference(onChange: () => void) {
-  window.addEventListener(CHANGE_EVENT, onChange);
-  window.addEventListener("storage", onChange);
+  let quietTimer: ReturnType<typeof setTimeout> | undefined;
+  const armQuietTimer = () => {
+    clearTimeout(quietTimer);
+    quietTimer = undefined;
+    const untilMs = readQuietUntilMs();
+    if (untilMs === null) return;
+    quietTimer = setTimeout(
+      () => {
+        armQuietTimer();
+        onChange();
+      },
+      Math.min(untilMs - Date.now(), MAX_TIMER_MS),
+    );
+  };
+  const handleChange = () => {
+    armQuietTimer();
+    onChange();
+  };
+  armQuietTimer();
+  window.addEventListener(CHANGE_EVENT, handleChange);
+  window.addEventListener("storage", handleChange);
   return () => {
-    window.removeEventListener(CHANGE_EVENT, onChange);
-    window.removeEventListener("storage", onChange);
+    clearTimeout(quietTimer);
+    window.removeEventListener(CHANGE_EVENT, handleChange);
+    window.removeEventListener("storage", handleChange);
   };
 }

@@ -57,6 +57,17 @@ describe("NotificationsOffHint", () => {
     expect(screen.queryByRole("button", { name: "Turn on" })).toBeNull();
   });
 
+  it("does not call a pause off: a paused browser still has notifications on", () => {
+    setPermission("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "important");
+    window.localStorage.setItem(
+      "cue:web-notifications:quiet-until",
+      String(Date.now() + 60 * 60 * 1000),
+    );
+    render(<NotificationsOffHint ready />);
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+
   it("waits for the Today pointer to be dismissed", () => {
     state.dismissedHints = [];
     render(<NotificationsOffHint ready />);

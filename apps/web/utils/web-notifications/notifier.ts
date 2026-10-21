@@ -11,6 +11,11 @@ const MAX_INDIVIDUAL_NOTIFICATIONS = 3;
 export function createNewMailNotifier(deps: {
   startedAtMs: number;
   getMode: () => WebNotificationMode;
+  /**
+   * The reader paused notifications on this browser. Read on every check, so
+   * a pause set in another tab applies to whichever tab holds the lock.
+   */
+  isQuiet: () => boolean;
   /** Whether this tab is the one allowed to notify when several are open. */
   isLeader: () => boolean;
   /** The reader is already looking at Cue, so a notification adds nothing. */
@@ -35,6 +40,7 @@ export function createNewMailNotifier(deps: {
     return (
       !disposed &&
       deps.getMode() !== "off" &&
+      !deps.isQuiet() &&
       deps.isLeader() &&
       !deps.isForeground()
     );
