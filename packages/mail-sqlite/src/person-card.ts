@@ -234,8 +234,11 @@ async function readName(
  * Other addresses you have sent mail to under exactly this full name, newest
  * first. Only your own sent mail counts: anyone can put a name on mail they
  * send you, and a reply copies that name back, so the name must be on mail
- * you sent the address in more than one conversation. A lone first name is
- * shared by too many people to say it is the same one.
+ * you sent in more than one conversation, both to the address the card is
+ * for and to each other one. Otherwise one reply to someone borrowing a
+ * friend's name would have their card vouch for the friend. Conversations
+ * are counted within one account, so a copy in another isn't a second one.
+ * A lone first name is shared by too many people to say it is the same one.
  */
 async function readOtherAddresses(
   tx: SqlTransaction,
@@ -245,20 +248,37 @@ async function readOtherAddresses(
   own: Set<string>,
 ): Promise<string[]> {
   if (name.trim().split(/\s+/u).length < 2) return [];
+  const [self] = await tx.query(
+    `SELECT MAX(conversations) AS conversations FROM (
+       SELECT COUNT(DISTINCT m.conversation_id) AS conversations
+       FROM contact_interactions i
+       CROSS JOIN messages m
+         ON m.account_id = i.account_id AND m.message_id = i.message_id
+       WHERE i.account_id IN (${placeholders(accountIds)})
+         AND i.email = ? AND i.name = ? AND i.sent = 1
+       GROUP BY i.account_id
+     )`,
+    [...accountIds, email, name],
+  );
+  if (Number(self?.conversations ?? 0) < ALIAS_MIN_CONVERSATIONS) return [];
   // CROSS JOIN keeps the plan on the name's tokens; left to itself SQLite
   // walks every contact in the account.
   const rows = await tx.query(
-    `SELECT t.email, MAX(i.last_at) AS last_at FROM contact_tokens t
-     CROSS JOIN contact_interactions i
-       ON i.account_id = t.account_id AND i.email = t.email
-       AND i.name = ? AND i.sent = 1
-     CROSS JOIN messages m
-       ON m.account_id = i.account_id AND m.message_id = i.message_id
-     WHERE t.account_id IN (${placeholders(accountIds)})
-       AND t.token = ? AND t.email != ?
-     GROUP BY t.email
-     HAVING COUNT(DISTINCT m.account_id || char(0) || m.conversation_id) >= ?
-     ORDER BY last_at DESC, t.email LIMIT ?`,
+    `SELECT email, MAX(last_at) AS last_at FROM (
+       SELECT t.email, MAX(i.last_at) AS last_at,
+              COUNT(DISTINCT m.conversation_id) AS conversations
+       FROM contact_tokens t
+       CROSS JOIN contact_interactions i
+         ON i.account_id = t.account_id AND i.email = t.email
+         AND i.name = ? AND i.sent = 1
+       CROSS JOIN messages m
+         ON m.account_id = i.account_id AND m.message_id = i.message_id
+       WHERE t.account_id IN (${placeholders(accountIds)})
+         AND t.token = ? AND t.email != ?
+       GROUP BY t.email, t.account_id
+     )
+     GROUP BY email HAVING MAX(conversations) >= ?
+     ORDER BY last_at DESC, email LIMIT ?`,
     [
       name,
       ...accountIds,
@@ -379,34 +399,58 @@ function findCrossAccountCopies(
       threadOf: messageConversation,
     };
   const groupOf = new Map<PersonMessage, PersonMessage[]>();
-  const openGroups = new Map<string, PersonMessage[][]>();
+  // Per fingerprint, its groups in arrival order. Messages come in arrival
+  // order too, so a group that started over a minute ago takes no more
+  // copies (head moves past it), and each account's next group to join only
+  // moves forward (next), which keeps a long run of look-alike messages linear.
+  const queues = new Map<
+    string,
+    { groups: PersonMessage[][]; head: number; next: Map<string, number> }
+  >();
   const byArrival = [...messages].sort(
     (a, b) =>
       a.receivedAtMs - b.receivedAtMs ||
       accountIds.indexOf(a.accountId) - accountIds.indexOf(b.accountId),
   );
+  // Look-alike messages repeat the same headers, so each is parsed once.
+  const fingerprints = new Map<string, string>();
   for (const message of byArrival) {
-    // What two copies of one message share.
-    const fingerprint = [
+    const raw = [
       message.sender,
-      message.subject.trim().replace(/\s+/gu, " ").toLowerCase(),
-      ...recipients(...message.recipients),
+      message.subject,
+      ...message.recipients.map(String),
     ].join("\u0000");
-    // Messages come in arrival order, so groups that started over a minute
-    // ago can take no more copies.
-    const open = (openGroups.get(fingerprint) ?? []).filter(
-      (members) =>
-        message.receivedAtMs - members[0].receivedAtMs <= COPY_WINDOW_MS,
-    );
-    let group = open.find((members) =>
-      members.every((member) => member.accountId !== message.accountId),
-    );
-    if (group) group.push(message);
-    else {
-      group = [message];
-      open.push(group);
+    let fingerprint = fingerprints.get(raw);
+    if (fingerprint === undefined) {
+      // What two copies of one message share.
+      fingerprint = [
+        message.sender,
+        message.subject.trim().replace(/\s+/gu, " ").toLowerCase(),
+        ...recipients(...message.recipients),
+      ].join("\u0000");
+      fingerprints.set(raw, fingerprint);
     }
-    openGroups.set(fingerprint, open);
+    let queue = queues.get(fingerprint);
+    if (!queue) {
+      queue = { groups: [], head: 0, next: new Map() };
+      queues.set(fingerprint, queue);
+    }
+    const { groups } = queue;
+    while (
+      queue.head < groups.length &&
+      message.receivedAtMs - groups[queue.head][0].receivedAtMs > COPY_WINDOW_MS
+    )
+      queue.head++;
+    let index = Math.max(queue.next.get(message.accountId) ?? 0, queue.head);
+    while (
+      index < groups.length &&
+      groups[index].some((member) => member.accountId === message.accountId)
+    )
+      index++;
+    if (index === groups.length) groups.push([]);
+    const group = groups[index];
+    group.push(message);
+    queue.next.set(message.accountId, index + 1);
     groupOf.set(message, group);
   }
 
@@ -465,11 +509,17 @@ function findCrossAccountCopies(
   });
 
   const thread = new Map<string, string>();
-  const root = (key: string): string => {
-    const parent = thread.get(key) ?? key;
-    if (parent === key) return key;
-    const top = root(parent);
-    thread.set(key, top);
+  const root = (key: string) => {
+    let top = key;
+    for (let parent = thread.get(top); parent && parent !== top; ) {
+      top = parent;
+      parent = thread.get(top);
+    }
+    for (let node = key; node !== top; ) {
+      const parent = thread.get(node) as string;
+      thread.set(node, top);
+      node = parent;
+    }
     return top;
   };
   for (const group of new Set(groupOf.values()))

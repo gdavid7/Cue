@@ -263,6 +263,11 @@ describe("readPersonCard", () => {
       }),
     ]);
     expect((await read(store)).otherAddresses).toEqual([]);
+    // Nor does the stranger's own card vouch for the address they borrowed
+    // the name from.
+    expect(
+      (await read(store, { email: "ana.payroll@evil.example" })).otherAddresses,
+    ).toEqual([]);
 
     await write(store, [
       mail({
@@ -281,6 +286,51 @@ describe("readPersonCard", () => {
       }),
     ]);
     expect((await read(store)).otherAddresses).toEqual(["ana@work.example"]);
+  });
+
+  it("counts a sent message that is in two of your accounts as one conversation", async () => {
+    const { store } = await setup(["a", "b"]);
+    const WORK = "Ana Lima <ana@work.example>";
+    await write(store, [
+      mail({
+        id: "1",
+        conversation: "c1",
+        from: ME,
+        to: [ANA],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "2",
+        conversation: "c2",
+        from: ME,
+        to: [ANA],
+        roles: ["sent"],
+      }),
+      mail({
+        id: "3",
+        conversation: "w",
+        from: ME,
+        to: [WORK],
+        roles: ["sent"],
+      }),
+    ]);
+    await write(
+      store,
+      [
+        mail({
+          id: "3",
+          conversation: "w",
+          from: ME,
+          to: [WORK],
+          roles: ["sent"],
+        }),
+      ],
+      "b",
+    );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.otherAddresses).toEqual([]);
   });
 
   it("takes their name only from mail you sent them", async () => {
