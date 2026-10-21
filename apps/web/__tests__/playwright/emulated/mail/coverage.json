@@ -378,5 +378,14 @@
     "utils/web-notifications/preference.ts",
     "utils/web-notifications/permission.ts",
     "utils/actions/hints.ts"
+  ],
+  "semantic-search.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/use-cue-search.ts",
+    "app/(app)/[emailAccountId]/mail/cue-search-ranking.ts",
+    "utils/mail-engine/semantic-index.ts",
+    "utils/mail-engine/embedding-worker.ts",
+    "utils/mail-engine/embedding-worker-client.ts",
+    "utils/mail-search/semantic-embedding.ts",
+    "utils/mail-search/text-embedder.ts"
   ]
 }
