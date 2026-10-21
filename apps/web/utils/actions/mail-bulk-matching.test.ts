@@ -76,10 +76,12 @@ describe("mail bulk matching actions", () => {
       action: "archive",
       status: "listing",
     });
+    expect(prisma.mailBulkJobListing.create).toHaveBeenCalledWith({
+      data: { jobId, emailAccountId: "account-1", scope: { type: "inbox" } },
+    });
     expect(mockEnqueue).toHaveBeenCalledWith({
       jobId,
       emailAccountId: "account-1",
-      scope: { type: "inbox" },
       deferrals: 0,
     });
   });
@@ -112,9 +114,10 @@ describe("mail bulk matching actions", () => {
     });
 
     expect(result?.serverError).toBeUndefined();
-    expect(mockEnqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: { type: "trash" } }),
-    );
+    expect(prisma.mailBulkJobListing.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ scope: { type: "trash" } }),
+    });
+    expect(mockEnqueue).toHaveBeenCalled();
   });
 
   it("undoes an archive by stopping it and restoring what it moved", async () => {

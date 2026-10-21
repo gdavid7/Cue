@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmailProvider } from "@/utils/email/types";
-import type { MatchingFilter } from "@/utils/actions/mail-bulk-matching.validation";
+import type {
+  MatchingFilter,
+  MatchingScope,
+} from "@/utils/actions/mail-bulk-matching.validation";
 import {
   GmailCallDeferredError,
   currentGmailQuotaContext,
@@ -13,6 +16,7 @@ import {
   type MailBulkTarget,
   type mailBulkJobStore,
 } from "@/utils/redis/mail-bulk-job";
+import type { mailBulkJobListings } from "@/utils/mail-bulk/job-listing";
 import {
   MAIL_BULK_JOB_PATH,
   runMailBulkJobStep,
@@ -21,6 +25,7 @@ import { publishToQstash, publishToQstashAt } from "@/utils/upstash";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/redis", () => ({ redis: {} }));
+vi.mock("@/utils/prisma");
 vi.mock("@/utils/upstash", () => ({
   publishToQstash: vi.fn().mockResolvedValue(undefined),
   publishToQstashAt: vi.fn().mockResolvedValue(true),
@@ -51,13 +56,13 @@ describe("runMailBulkJobStep", () => {
       body: {
         jobId: JOB_ID,
         emailAccountId: ACCOUNT_ID,
-        scope: {},
         deferrals: 0,
       },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings: createListings(),
     });
 
     expect(result).toBe("done");
@@ -124,19 +129,20 @@ describe("runMailBulkJobStep", () => {
     const provider = createProvider({
       pages: [[message("m1", "t1")], [message("m2", "t2")]],
     });
+    const listings = createListings();
     let clock = 0;
 
     const result = await runMailBulkJobStep({
       body: {
         jobId: JOB_ID,
         emailAccountId: ACCOUNT_ID,
-        scope: {},
         deferrals: 0,
       },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings,
       budgetMs: 10,
       now: () => {
         clock += 11;
@@ -147,9 +153,12 @@ describe("runMailBulkJobStep", () => {
     expect(result).toBe("continued");
     expect(publishToQstash).toHaveBeenCalledWith(
       MAIL_BULK_JOB_PATH,
-      expect.objectContaining({ jobId: JOB_ID, pageToken: "page-1" }),
+      expect.objectContaining({ jobId: JOB_ID }),
       expect.objectContaining({ key: `mail-bulk-${ACCOUNT_ID}` }),
     );
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toMatchObject({
+      pageToken: "page-1",
+    });
     expect(provider.archiveMessages).not.toHaveBeenCalled();
   });
 
@@ -163,16 +172,20 @@ describe("runMailBulkJobStep", () => {
         nextPageToken: "page-1",
       })
       .mockRejectedValueOnce(new GmailCallDeferredError(5000, "background"));
+    const listings = createListings();
 
-    const result = await runStep({ store, provider });
+    const result = await runStep({ store, provider, listings });
 
     expect(result).toBe("deferred");
     expect(publishToQstashAt).toHaveBeenCalledWith(
       expect.objectContaining({
         path: MAIL_BULK_JOB_PATH,
-        body: expect.objectContaining({ pageToken: "page-1", deferrals: 1 }),
+        body: expect.objectContaining({ jobId: JOB_ID, deferrals: 1 }),
       }),
     );
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toMatchObject({
+      pageToken: "page-1",
+    });
     await expect(store.get(JOB_ID)).resolves.toMatchObject({
       status: "listing",
       total: 1,
@@ -222,13 +235,13 @@ describe("runMailBulkJobStep", () => {
       body: {
         jobId: JOB_ID,
         emailAccountId: ACCOUNT_ID,
-        scope: {},
         deferrals: 0,
       },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings: createListings(),
       maxTargets: 2,
     });
 
@@ -519,15 +532,164 @@ describe("runMailBulkJobStep", () => {
     const provider = createProvider({ pages: [[message("m1", "t1")]] });
 
     const result = await runMailBulkJobStep({
-      body: { jobId: JOB_ID, emailAccountId: "other", scope: {}, deferrals: 0 },
+      body: { jobId: JOB_ID, emailAccountId: "other", deferrals: 0 },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings: createListings(),
     });
 
     expect(result).toBe("missing");
     expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+  });
+
+  it("queues only the job's ids and counters, never the view or a page link", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings({
+      scope: { q: "from:alice@example.com" },
+    });
+    // An Outlook page link repeats the search it pages through.
+    const pageLink = (index: number) =>
+      `https://graph.microsoft.com/v1.0/me/messages?$search="from:alice@example.com"&$skiptoken=${index}`;
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")], []],
+      pageLink,
+    });
+    vi.mocked(provider.listMatchingMessages)
+      .mockResolvedValueOnce({
+        messages: [message("m1", "t1")],
+        nextPageToken: pageLink(1),
+      })
+      .mockRejectedValueOnce(new GmailCallDeferredError(5000, "background"));
+
+    // A deferral while listing schedules a resume.
+    await expect(runStep({ store, provider, listings })).resolves.toBe(
+      "deferred",
+    );
+    // Running out of time while listing hands the rest on.
+    let clock = 0;
+    await expect(
+      runStep({
+        store,
+        provider,
+        listings,
+        budgetMs: 10,
+        now: () => {
+          clock += 11;
+          return clock;
+        },
+      }),
+    ).resolves.toBe("continued");
+
+    const payloads = [
+      ...vi.mocked(publishToQstash).mock.calls.map(([, body]) => body),
+      ...vi.mocked(publishToQstashAt).mock.calls.map(([{ body }]) => body),
+    ];
+    expect(payloads).toHaveLength(2);
+    for (const payload of payloads) {
+      expect(Object.keys(payload as object).sort()).toEqual([
+        "deferrals",
+        "emailAccountId",
+        "jobId",
+      ]);
+      expect(JSON.stringify(payload)).not.toContain("@");
+    }
+  });
+
+  it("reads the view and the next page back from the job's listing", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings({
+      scope: { q: "from:alice@example.com" },
+      pageToken: "page-1",
+    });
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")]],
+    });
+
+    await expect(runStep({ store, provider, listings })).resolves.toBe("done");
+
+    expect(provider.listMatchingMessages).toHaveBeenCalledTimes(1);
+    expect(provider.listMatchingMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { q: "from:alice@example.com" },
+        pageToken: "page-1",
+      }),
+    );
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m2"]);
+    // The listing is gone once it has ended.
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toBeNull();
+  });
+
+  it("never lists with another account's view", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings();
+    await listings.remove(JOB_ID, ACCOUNT_ID);
+    await listings.create({
+      jobId: JOB_ID,
+      emailAccountId: "other",
+      scope: { q: "secret" },
+    });
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+
+    await expect(runStep({ store, provider, listings })).resolves.toBe(
+      "failed",
+    );
+    expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+  });
+
+  // TODO(RD-3o): drop with the legacy payload, one deploy after this ships.
+  it("finishes a delivery queued with the view in its payload without queueing the view again", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings();
+    await listings.remove(JOB_ID, ACCOUNT_ID);
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")], []],
+    });
+    let clock = 0;
+
+    const result = await runMailBulkJobStep({
+      body: {
+        jobId: JOB_ID,
+        emailAccountId: ACCOUNT_ID,
+        scope: { q: "from:alice@example.com" },
+        pageToken: "page-1",
+        deferrals: 0,
+      },
+      provider,
+      ownerEmail: "owner@example.com",
+      logger,
+      store,
+      listings,
+      durable: true,
+      budgetMs: 10,
+      now: () => {
+        clock += 11;
+        return clock;
+      },
+    });
+
+    expect(result).toBe("continued");
+    expect(provider.listMatchingMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { q: "from:alice@example.com" },
+        pageToken: "page-1",
+      }),
+    );
+    const [, payload] = vi.mocked(publishToQstash).mock.calls[0];
+    expect(payload).toEqual({
+      jobId: JOB_ID,
+      emailAccountId: ACCOUNT_ID,
+      deferrals: 0,
+    });
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toEqual({
+      scope: { q: "from:alice@example.com" },
+      pageToken: "page-2",
+    });
   });
 });
 
@@ -543,13 +705,13 @@ function runStep({
     body: {
       jobId: JOB_ID,
       emailAccountId: ACCOUNT_ID,
-      scope: {},
       deferrals: 0,
     },
     provider,
     ownerEmail: "owner@example.com",
     logger,
     store,
+    listings: createListings(),
     durable: true,
     ...options,
   });
@@ -581,16 +743,18 @@ function newJob(overrides: Partial<MailBulkJobState>): MailBulkJobState {
 
 function createProvider({
   pages,
+  pageLink = (index) => `page-${index}`,
 }: {
   pages: { id: string; threadId: string }[][];
+  pageLink?: (index: number) => string;
 }) {
   const listMatchingMessages = vi.fn(
     async ({ pageToken }: { only: MatchingFilter; pageToken?: string }) => {
-      const index = pageToken ? Number(pageToken.split("-")[1]) : 0;
+      const index = pageToken ? Number(pageToken.split(/[-=]/).at(-1)) : 0;
       return {
         messages: pages[index] ?? [],
         nextPageToken:
-          index + 1 < pages.length ? `page-${index + 1}` : undefined,
+          index + 1 < pages.length ? pageLink(index + 1) : undefined,
       };
     },
   );
@@ -646,6 +810,37 @@ function createStore(): typeof mailBulkJobStore {
     },
     async readTargets(jobId, start, count) {
       return (targets.get(jobId) ?? []).slice(start, start + count);
+    },
+  };
+}
+
+/** Listings keyed by job and account, as the Postgres table is read. */
+function createListings(
+  initial: { scope: MatchingScope; pageToken?: string } | null = { scope: {} },
+): typeof mailBulkJobListings {
+  const rows = new Map<
+    string,
+    { emailAccountId: string; scope: MatchingScope; pageToken?: string }
+  >();
+  if (initial) rows.set(JOB_ID, { emailAccountId: ACCOUNT_ID, ...initial });
+  const owned = (jobId: string, emailAccountId: string) => {
+    const row = rows.get(jobId);
+    return row?.emailAccountId === emailAccountId ? row : undefined;
+  };
+  return {
+    async create({ jobId, emailAccountId, scope, pageToken }) {
+      rows.set(jobId, { emailAccountId, scope, pageToken });
+    },
+    async get(jobId, emailAccountId) {
+      const row = owned(jobId, emailAccountId);
+      return row ? { scope: row.scope, pageToken: row.pageToken } : null;
+    },
+    async setPageToken(jobId, emailAccountId, pageToken) {
+      const row = owned(jobId, emailAccountId);
+      if (row) row.pageToken = pageToken;
+    },
+    async remove(jobId, emailAccountId) {
+      if (owned(jobId, emailAccountId)) rows.delete(jobId);
     },
   };
 }
