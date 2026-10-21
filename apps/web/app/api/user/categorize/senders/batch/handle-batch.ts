@@ -1,5 +1,9 @@
+import type { z } from "zod";
 import { NextResponse } from "next/server";
-import { aiCategorizeSendersSchema } from "@/utils/categorize/senders/batch-validation";
+import {
+  aiCategorizeSendersSchema,
+  type Sender,
+} from "@/utils/categorize/senders/batch-validation";
 import {
   categorizeWithAi,
   getCategories,
@@ -12,6 +16,7 @@ import { saveCategorizationProgress } from "@/utils/redis/categorization-progres
 import { SafeError } from "@/utils/error";
 import type { RequestWithLogger } from "@/utils/middleware";
 import { createEmailProvider } from "@/utils/email/provider";
+import { extractEmailAddress } from "@/utils/email";
 
 export async function handleBatchRequest(
   request: RequestWithLogger,
@@ -35,9 +40,12 @@ export async function handleBatchRequest(
 async function handleBatchInternal(request: RequestWithLogger) {
   const json = await request.json();
   const body = aiCategorizeSendersSchema.parse(json);
-  const { emailAccountId, senders } = body;
+  const { emailAccountId } = body;
+  const queuedCount =
+    body.senderMessageIds?.length ?? body.senders?.length ?? 0;
+  const senders = await resolveSenders(body);
 
-  request.logger.info("Handle batch request", { senders: senders.length });
+  request.logger.info("Handle batch request", { senders: queuedCount });
 
   const userResult = await validateUserAndAiAccess({ emailAccountId });
   const { emailAccount } = userResult;
@@ -137,7 +145,7 @@ async function handleBatchInternal(request: RequestWithLogger) {
 
   await saveCategorizationProgress({
     emailAccountId,
-    incrementCompleted: senders.length,
+    incrementCompleted: queuedCount,
   });
 
   return NextResponse.json({ ok: true });
@@ -147,3 +155,24 @@ async function handleBatchInternal(request: RequestWithLogger) {
 //   !r.category ||
 //   r.category === UNKNOWN_CATEGORY ||
 //   r.category === REQUEST_MORE_INFORMATION_CATEGORY;
+
+async function resolveSenders({
+  emailAccountId,
+  senderMessageIds,
+  senders,
+}: z.infer<typeof aiCategorizeSendersSchema>): Promise<Sender[]> {
+  if (!senderMessageIds) return senders ?? [];
+
+  const messages = await prisma.emailMessage.findMany({
+    where: { id: { in: senderMessageIds }, emailAccountId },
+    select: { from: true, fromName: true },
+  });
+
+  const senderByEmail = new Map<string, Sender>();
+  for (const message of messages) {
+    const email = extractEmailAddress(message.from).toLowerCase();
+    if (!email || senderByEmail.has(email)) continue;
+    senderByEmail.set(email, { email, name: message.fromName });
+  }
+  return Array.from(senderByEmail.values());
+}

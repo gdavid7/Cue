@@ -123,4 +123,47 @@ describe("handleBatchRequest", () => {
       incrementCompleted: 3,
     });
   });
+
+  it("reads the senders of an id-only job from the account's stored messages", async () => {
+    prisma.emailMessage.findMany.mockResolvedValue([
+      { from: "A <A@example.com>", fromName: "A" },
+      { from: "b@example.com", fromName: null },
+      { from: "c@example.com", fromName: "C" },
+    ] as never);
+
+    const response = await handleBatchRequest(
+      createRequest({
+        emailAccountId: "account-1",
+        senderMessageIds: ["m1", "m2", "m3", "m-deleted"],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(prisma.emailMessage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: { in: ["m1", "m2", "m3", "m-deleted"] },
+          emailAccountId: "account-1",
+        },
+      }),
+    );
+    expect(mockCategorizeWithAi).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sendersWithEmails: new Map([
+          ["a@example.com", []],
+          ["b@example.com", []],
+          ["c@example.com", []],
+        ]),
+      }),
+    );
+    expect(mockUpdateSenderCategory).toHaveBeenCalledWith(
+      expect.objectContaining({ sender: "a@example.com", senderName: "A" }),
+    );
+    // Progress counts what was queued, so a message deleted since still
+    // completes its share.
+    expect(mockSaveCategorizationProgress).toHaveBeenCalledWith({
+      emailAccountId: "account-1",
+      incrementCompleted: 4,
+    });
+  });
 });
