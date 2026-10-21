@@ -8,12 +8,10 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { getGmailClientWithRefresh } from "@/utils/gmail/client";
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { createScopedLogger } from "@/utils/logger";
-import { getEmailAccount } from "@/utils/redis/account-validation";
 import { GET, maxDuration } from "./route";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/utils/redis/account-validation");
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
 vi.mock("@/utils/error.server");
 vi.mock("@/utils/auth/save-tokens", () => ({ saveTokens: vi.fn() }));
@@ -50,9 +48,9 @@ describe("GET /api/labels under a Gmail rate limit", () => {
       user: { id: "user-1", email: "user@example.com" },
       session: {},
     } as Awaited<ReturnType<typeof auth>>);
-    vi.mocked(getEmailAccount).mockResolvedValue("user@example.com");
     prisma.emailAccount.findUnique.mockResolvedValue({
-      id: EMAIL_ACCOUNT_ID,
+      userId: "user-1",
+      email: "user@example.com",
       account: { provider: "google" },
     } as never);
   });

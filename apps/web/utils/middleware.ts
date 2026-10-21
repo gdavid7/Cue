@@ -21,7 +21,7 @@ import { logErrorToPosthog } from "@/utils/error.server";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import { auth } from "@/utils/auth";
-import { getEmailAccount } from "@/utils/redis/account-validation";
+import { startEmailAccountOwnershipCheck } from "@/utils/redis/account-validation";
 import { getCallerEmailAccount } from "@/utils/organizations/access";
 import {
   getProviderRateLimitRetryAfterSeconds,
@@ -140,6 +140,18 @@ function withMiddleware<T extends NextRequest>(
     let requestForError = reqWithLogger as NextRequest;
     const startedAt = Date.now();
     const requestMetrics = createRequestMetrics();
+    // What the request paid before its handler ran: session and account
+    // checks, and creating the provider. A request the middleware answered
+    // itself spent all of it there, including an account read started
+    // alongside the session and then discarded (a 401 or a refused account).
+    let preHandler:
+      | { preHandlerMs: number; preHandlerDbCalls: number }
+      | undefined;
+    const getPreHandlerFields = () =>
+      preHandler ?? {
+        preHandlerMs: Date.now() - startedAt,
+        preHandlerDbCalls: requestMetrics.db.calls,
+      };
 
     return runWithRequestMetrics(requestMetrics, () =>
       runWithAuditContext(
@@ -171,6 +183,10 @@ function withMiddleware<T extends NextRequest>(
                   enhancedReq = middlewareResult;
                 }
                 requestForError = enhancedReq;
+                preHandler = {
+                  preHandlerMs: Date.now() - startedAt,
+                  preHandlerDbCalls: requestMetrics.db.calls,
+                };
 
                 // Execute the handler with the (potentially) enhanced request
                 const response = await handler(enhancedReq as T, context);
@@ -383,6 +399,7 @@ function withMiddleware<T extends NextRequest>(
             status: response.status,
             durationMs: Date.now() - startedAt,
             ...getRequestMetricsFields(requestMetrics),
+            ...getPreHandlerFields(),
           });
           return response;
         },
@@ -394,6 +411,7 @@ function withMiddleware<T extends NextRequest>(
             status: isRedirectError(error) ? getRedirectStatus(error) : 500,
             durationMs: Date.now() - startedAt,
             ...getRequestMetricsFields(requestMetrics),
+            ...getPreHandlerFields(),
           });
           throw error;
         },
@@ -402,19 +420,15 @@ function withMiddleware<T extends NextRequest>(
   };
 }
 
-async function authMiddleware(
+function authMiddleware(req: NextRequest) {
+  return authenticate(req, getAuthLogContext(req));
+}
+
+async function authenticate(
   req: NextRequest,
+  authLogContext: AuthLogContext,
 ): Promise<RequestWithAuth | Response> {
   const baseLogger = getLogger(req);
-  const authLogContext = {
-    path: new URL(req.url).pathname,
-    method: req.method,
-    hasCookie: req.headers.has("cookie"),
-    cookieNames: parseCookieNames(req.headers.get("cookie")),
-    hasAuthorization: req.headers.has("authorization"),
-    expoOrigin: req.headers.get("expo-origin") ?? null,
-    userAgent: req.headers.get("user-agent") ?? null,
-  };
 
   let session: Awaited<ReturnType<typeof auth>>;
   try {
@@ -483,6 +497,29 @@ export function getUnauthorizedReason({
   return "session_cookie_unresolved";
 }
 
+type AuthLogContext = ReturnType<typeof getAuthLogContext>;
+
+function getAuthLogContext(req: NextRequest) {
+  return {
+    path: new URL(req.url).pathname,
+    method: req.method,
+    hasCookie: req.headers.has("cookie"),
+    cookieNames: parseCookieNames(req.headers.get("cookie")),
+    hasAuthorization: req.headers.has("authorization"),
+    expoOrigin: req.headers.get("expo-origin") ?? null,
+    userAgent: req.headers.get("user-agent") ?? null,
+  };
+}
+
+// False only when the request offers nothing a session could come from, so
+// its 401 is certain before the session lookup answers.
+function mayCarrySession({ cookieNames, hasAuthorization }: AuthLogContext) {
+  return (
+    hasAuthorization ||
+    cookieNames.some((name) => name.includes("session_token"))
+  );
+}
+
 function parseCookieNames(cookieHeader: string | null): string[] {
   if (!cookieHeader) return [];
   return cookieHeader
@@ -495,14 +532,35 @@ async function emailAccountMiddleware(
   req: NextRequest,
   options?: MiddlewareOptions,
 ): Promise<RequestWithEmailAccount | Response> {
-  const authReq = await authMiddleware(req);
+  const result = await resolveEmailAccount(req, options);
+  return result instanceof Response ? result : result.request;
+}
+
+// The account is read alongside the session rather than after it; it is
+// still only accepted for the user the session names.
+async function resolveEmailAccount(
+  req: NextRequest,
+  options?: MiddlewareOptions,
+): Promise<
+  { request: RequestWithEmailAccount; provider: string | null } | Response
+> {
+  const emailAccountId = req.headers.get(EMAIL_ACCOUNT_HEADER);
+  const authLogContext = getAuthLogContext(req);
+  // A request that cannot have a session is not worth an account read; should
+  // the session lookup still find one, the account is read after it instead.
+  let checkOwnership =
+    emailAccountId && mayCarrySession(authLogContext)
+      ? startEmailAccountOwnershipCheck(emailAccountId)
+      : null;
+
+  const authReq = await authenticate(req, authLogContext);
   if (authReq instanceof Response) return authReq;
 
   const userId = authReq.auth.userId;
+  if (emailAccountId)
+    checkOwnership ??= startEmailAccountOwnershipCheck(emailAccountId);
 
-  const emailAccountId = req.headers.get(EMAIL_ACCOUNT_HEADER);
-
-  if (!emailAccountId) {
+  if (!emailAccountId || !checkOwnership) {
     return NextResponse.json(
       { error: EMAIL_ACCOUNT_ID_REQUIRED_ERROR, isKnownError: true },
       { status: 403 },
@@ -514,11 +572,12 @@ async function emailAccountMiddleware(
 
   try {
     // If account ID is provided, validate and get the email account ID
-    const email = await runTimedMiddlewareStep({
+    const ownedEmailAccount = await runTimedMiddlewareStep({
       logger: middlewareLogger,
       step: "validate-email-account",
-      operation: () => getEmailAccount({ userId, emailAccountId }),
+      operation: () => checkOwnership(userId),
     });
+    const email = ownedEmailAccount?.email ?? null;
 
     const emailAccountLogger = middlewareLogger.with({ email });
 
@@ -598,7 +657,7 @@ async function emailAccountMiddleware(
           isOrgAdmin: true,
           email: targetEmailAccount.email,
         });
-        return emailAccountReq;
+        return { request: emailAccountReq, provider: null };
       }
     }
 
@@ -622,7 +681,10 @@ async function emailAccountMiddleware(
     emailAccountReq.auth = { userId, emailAccountId, email };
     emailAccountReq.logger = emailAccountLogger;
 
-    return emailAccountReq;
+    return {
+      request: emailAccountReq,
+      provider: ownedEmailAccount?.provider ?? null,
+    };
   } finally {
     logSlowMiddlewareTotal({
       logger: middlewareLogger,
@@ -635,34 +697,16 @@ async function emailAccountMiddleware(
 async function emailProviderMiddleware(
   req: NextRequest,
 ): Promise<RequestWithEmailProvider | Response> {
-  // First run email account middleware
-  const emailAccountReq = await emailAccountMiddleware(req);
-  if (emailAccountReq instanceof Response) return emailAccountReq;
+  const resolved = await resolveEmailAccount(req);
+  if (resolved instanceof Response) return resolved;
 
+  const emailAccountReq = resolved.request;
   const { userId, emailAccountId } = emailAccountReq.auth;
   const middlewareStartTime = Date.now();
 
   try {
-    const emailAccount = await runTimedMiddlewareStep({
-      logger: emailAccountReq.logger,
-      step: "load-email-account-provider",
-      operation: () =>
-        prisma.emailAccount.findUnique({
-          where: {
-            id: emailAccountId,
-            userId, // ensure it belongs to the user
-          },
-          include: {
-            account: {
-              select: {
-                provider: true,
-              },
-            },
-          },
-        }),
-    });
-
-    if (!emailAccount) {
+    const accountProvider = resolved.provider;
+    if (!accountProvider) {
       return NextResponse.json(
         { error: "Email account not found", isKnownError: true },
         { status: 404 },
@@ -674,8 +718,8 @@ async function emailProviderMiddleware(
       step: "create-email-provider",
       operation: () =>
         createEmailProvider({
-          emailAccountId: emailAccount.id,
-          provider: emailAccount.account.provider,
+          emailAccountId,
+          provider: accountProvider,
           logger: emailAccountReq.logger,
         }),
     });
@@ -938,6 +982,8 @@ function logRequestCompleted(
     method: string;
     status: number;
     durationMs: number;
+    preHandlerMs: number;
+    preHandlerDbCalls: number;
   } & ReturnType<typeof getRequestMetricsFields>,
 ) {
   const sampleRate = getFastRequestSampleRate(scope);

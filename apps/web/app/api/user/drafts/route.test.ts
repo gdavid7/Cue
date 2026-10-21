@@ -6,13 +6,9 @@ import { GET, POST } from "./route";
 
 const createEmailProvider = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => vi.fn());
-const getEmailAccountMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider }));
 vi.mock("@/utils/auth", () => ({ auth: authMock }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: getEmailAccountMock,
-}));
 vi.mock("@/utils/prisma");
 
 const emailAccountId = "account-1";
@@ -27,7 +23,6 @@ describe("/api/user/drafts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    getEmailAccountMock.mockResolvedValue("developer@example.com");
     provider.createDraft.mockResolvedValue({ id: "draft-1" });
     provider.updateDraft.mockResolvedValue(undefined);
     provider.getDraft.mockResolvedValue({
@@ -80,7 +75,7 @@ describe("/api/user/drafts", () => {
   });
 
   it("rejects draft reads from another user's account", async () => {
-    getEmailAccountMock.mockResolvedValue(null);
+    mockAccountOfAnotherUser();
     expect((await readDraft("message-1")).status).toBe(403);
     expect(provider.getDraftReferenceForMessage).not.toHaveBeenCalled();
   });
@@ -117,7 +112,7 @@ describe("/api/user/drafts", () => {
   });
 
   it("rejects an email account the user does not own", async () => {
-    getEmailAccountMock.mockResolvedValue(null);
+    mockAccountOfAnotherUser();
 
     const response = await createDraft(draftBody());
 
@@ -175,7 +170,8 @@ describe("/api/user/drafts", () => {
 
 function mockProvider(providerName: string) {
   prisma.emailAccount.findUnique.mockResolvedValue({
-    id: emailAccountId,
+    userId: "user-1",
+    email: "developer@example.com",
     account: { provider: providerName },
   } as never);
 }
@@ -218,4 +214,12 @@ function readDraft(messageId?: string) {
     ),
     { params: Promise.resolve({}) },
   );
+}
+
+function mockAccountOfAnotherUser() {
+  prisma.emailAccount.findUnique.mockResolvedValue({
+    userId: "someone-else",
+    email: "developer@example.com",
+    account: { provider: "google" },
+  } as never);
 }

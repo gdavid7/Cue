@@ -12,14 +12,10 @@ import { POST } from "./route";
 
 const createEmailProvider = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => vi.fn());
-const getEmailAccountMock = vi.hoisted(() => vi.fn());
 const redisStore = vi.hoisted(() => new Map<string, unknown>());
 
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider }));
 vi.mock("@/utils/auth", () => ({ auth: authMock }));
-vi.mock("@/utils/redis/account-validation", () => ({
-  getEmailAccount: getEmailAccountMock,
-}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
   redis: {
@@ -42,9 +38,9 @@ describe("POST /api/user/drafts/[draftId]/attachments/uploads", () => {
     vi.clearAllMocks();
     redisStore.clear();
     authMock.mockResolvedValue({ user: { id: "user-1" } });
-    getEmailAccountMock.mockResolvedValue("developer@example.com");
     prisma.emailAccount.findUnique.mockResolvedValue({
-      id: "account-1",
+      userId: "user-1",
+      email: "developer@example.com",
       account: { provider: "google" },
     } as never);
     createEmailProvider.mockResolvedValue(provider);
@@ -136,7 +132,7 @@ describe("POST /api/user/drafts/[draftId]/attachments/uploads", () => {
   it("does not open an upload for an account the user does not own", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue(null);
     const response = await start("draft-1", metadata(LARGE_SIZE), "account-2");
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(403);
     expect(createEmailProvider).not.toHaveBeenCalled();
     expect(provider.startDraftAttachmentUpload).not.toHaveBeenCalled();
   });

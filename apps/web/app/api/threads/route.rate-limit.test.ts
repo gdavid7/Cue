@@ -5,14 +5,12 @@ import { auth } from "@/utils/auth";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { createEmailProvider } from "@/utils/email/provider";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
-import { getEmailAccount } from "@/utils/redis/account-validation";
 import { GET as getBasicThreads } from "./basic/route";
 import { GET as getThreadsBatch } from "./batch/route";
 import { GET as getThreads } from "./route";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/utils/redis/account-validation");
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
 vi.mock("@/utils/error.server");
 vi.mock("@/utils/redis/email-provider-rate-limit", () => ({
@@ -42,9 +40,9 @@ describe("threads routes under Gmail's quota", () => {
       user: { id: "user-1", email: "user@example.com" },
       session: {},
     } as Awaited<ReturnType<typeof auth>>);
-    vi.mocked(getEmailAccount).mockResolvedValue("user@example.com");
     prisma.emailAccount.findUnique.mockResolvedValue({
-      id: EMAIL_ACCOUNT_ID,
+      userId: "user-1",
+      email: "user@example.com",
       account: { provider: "google" },
     } as never);
   });
