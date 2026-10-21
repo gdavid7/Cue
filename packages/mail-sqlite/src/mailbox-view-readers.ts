@@ -8,6 +8,7 @@ import type {
   MailPredicate,
   WellKnownMailbox,
 } from "@inboxzero/mail-core/queries";
+import { withContactNames } from "./contact-name-search";
 import type { SqlTransaction, SqlValue } from "./driver";
 import {
   compilePredicate,
@@ -53,9 +54,15 @@ async function readMailboxPages(
   tx: SqlTransaction,
   query: ConversationQuery,
   pages: number,
-  search: SearchSupport,
+  storeSearch: SearchSupport,
 ): Promise<{ revision: LocalRevision; view: MailboxView }> {
   const revision = await readRevision(tx);
+  const search = await withContactNames(
+    tx,
+    storeSearch,
+    query.predicate,
+    query.accountIds,
+  );
   const { conversations, nextPage } = await readConversationPages(
     tx,
     query,
