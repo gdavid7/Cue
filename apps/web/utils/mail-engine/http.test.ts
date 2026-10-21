@@ -5,6 +5,7 @@ import { resetSigningOut, startSigningOut } from "@/utils/signing-out";
 
 describe("createMailHttpRequest", () => {
   afterEach(() => {
+    resetSigningOut();
     vi.unstubAllGlobals();
   });
 
@@ -102,7 +103,6 @@ describe("createMailHttpRequest", () => {
       body: {},
       signal: new AbortController().signal,
     });
-    resetSigningOut();
 
     expect(onSessionExpired).not.toHaveBeenCalled();
     expect(Boolean(result.sessionExpired)).toBe(false);

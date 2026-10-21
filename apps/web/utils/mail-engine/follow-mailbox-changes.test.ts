@@ -25,6 +25,7 @@ describe("followMailboxChanges", () => {
   });
 
   afterEach(() => {
+    resetSigningOut();
     for (const stop of stops) stop();
     vi.useRealTimers();
     if (visibilityDescriptor) {
@@ -57,7 +58,6 @@ describe("followMailboxChanges", () => {
 
     expect(sources[0].closed).toBe(true);
     expect(sources).toHaveLength(1);
-    resetSigningOut();
   });
 
   it("syncs when the server signals a mailbox change", () => {

@@ -11,6 +11,7 @@ import {
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { SerwistProvider, useSerwist } from "@serwist/next/react";
 import { toast } from "sonner";
+import { guardRestoredPage } from "@/utils/restored-page";
 import { isSigningOut } from "@/utils/signing-out";
 import { SWRConfig } from "swr";
 import { swrFetcher } from "./swr-fetcher";
@@ -41,6 +42,7 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
       disable={process.env.NODE_ENV !== "production"}
     >
       <ManageServiceWorker />
+      <RestoredPageGuard />
       <SignalDesktopReady />
       <ThemeProvider>
         <SWRConfig value={{ fetcher: swrFetcher, isPaused: isSigningOut }}>
@@ -49,6 +51,11 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
       </ThemeProvider>
     </SerwistProvider>
   );
+}
+
+function RestoredPageGuard() {
+  useEffect(() => guardRestoredPage(), []);
+  return null;
 }
 
 // SerwistProvider's own register drops the promise, so the failures that come

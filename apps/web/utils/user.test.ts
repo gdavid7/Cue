@@ -1,3 +1,7 @@
+/**
+ * @vitest-environment jsdom
+ */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -166,31 +170,44 @@ describe("logOut", () => {
 
     expect(mocks.redirect).toHaveBeenCalledWith("/login");
   });
-
-  it("cancels the account list request instead of letting the ended session refuse it", async () => {
-    let signal: AbortSignal | undefined;
-    mocks.swrFetcher.mockImplementation(
-      (_url: string, init: RequestInit) =>
-        new Promise((_resolve, reject) => {
-          signal = init.signal ?? undefined;
-          signal?.addEventListener("abort", () =>
-            reject(new DOMException("Aborted", "AbortError")),
-          );
-        }),
-    );
+  it("still leaves when a cleanup step throws, and lets a second click try again", async () => {
+    mocks.clearBrowserCaches.mockImplementationOnce(() => {
+      throw new Error("storage blocked");
+    });
     const logOut = await loadLogOut();
-    const { fetchEmailAccounts } = await import("@/utils/fetch-email-accounts");
-    const settled = vi.fn();
-    fetchEmailAccounts().then(settled, settled);
+    const { isSigningOut } = await import("./signing-out");
+
+    await expect(logOut()).rejects.toThrow("storage blocked");
+
+    expect(mocks.redirect).toHaveBeenCalledWith("/login");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(isSigningOut()).toBe(false);
+    await logOut();
+    expect(mocks.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes the page when leaving is cancelled", async () => {
+    const logOut = await loadLogOut();
+    const { isSigningOut } = await import("./signing-out");
 
     await logOut();
-    fetchEmailAccounts().then(settled, settled);
-    await vi.advanceTimersByTimeAsync(0);
+    expect(isSigningOut()).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(signal?.aborted).toBe(true);
-    // Nothing reports an error, and no new request goes out on the way out.
-    expect(settled).not.toHaveBeenCalled();
-    expect(mocks.swrFetcher).toHaveBeenCalledTimes(1);
+    expect(isSigningOut()).toBe(false);
+    await logOut();
+    expect(mocks.signOut).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays quiet when the page really leaves", async () => {
+    const logOut = await loadLogOut();
+    const { isSigningOut } = await import("./signing-out");
+
+    await logOut();
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(isSigningOut()).toBe(true);
   });
 });
 
