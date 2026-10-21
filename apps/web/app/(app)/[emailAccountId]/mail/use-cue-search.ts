@@ -15,11 +15,10 @@ import {
   type CueSearchIntent,
   type CueWidening,
   getCueSearchStage,
+  getNextWidening,
   getSearchAnswerRequest,
   getWideningLadder,
-  getWideningStep,
   keepFrozenRows,
-  shouldAskProviderLastResort,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import {
   type CueRankingContext,
@@ -222,26 +221,20 @@ export function useCueSearch({
     widening: Boolean(widening),
     widened: wider.window,
   });
-  const ladderState = {
-    step,
-    primary: primary.window,
-    widened: { settled: wider.window.settled, count: widerNew.length },
-    ladderLength: ladder.length,
-    expired,
-  };
-  const nextStep =
+  const next =
     stage === "done" || stage === "widening"
-      ? getWideningStep(ladderState)
-      : step;
-  if (query && nextStep !== null && nextStep !== step)
-    setWidenedTo({ query, step: nextStep, onProvider: false });
-  else if (
-    query &&
-    nextStep !== null &&
-    !onProvider &&
-    shouldAskProviderLastResort(ladderState)
-  )
-    setWidenedTo({ query, step: nextStep, onProvider: true });
+      ? getNextWidening(
+          {
+            primary: primary.window,
+            widened: { settled: wider.window.settled, count: widerNew.length },
+            ladderLength: ladder.length,
+            expired,
+          },
+          step === null ? null : { step, onProvider },
+          { mayAskProvider: true },
+        )
+      : null;
+  if (query && next) setWidenedTo({ query, ...next });
 
   const liveThreads = useMemo(
     () =>

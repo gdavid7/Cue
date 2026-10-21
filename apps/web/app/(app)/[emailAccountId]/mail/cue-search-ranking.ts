@@ -152,7 +152,8 @@ function scoreThreads<T extends ListThread>(
   const facets = readFacets(context);
   const lowPriorityIds = new Set(LOW_PRIORITY_LABEL_IDS);
   for (const label of context.labels) {
-    if (isLowPriorityLabelName(label.name)) lowPriorityIds.add(label.id);
+    if (isLowPriorityLabelName(label.name))
+      lowPriorityIds.add(labelKey(label.accountId, label.id));
   }
   const asksForLowPriority = facets.conditions.some((condition) =>
     mentionsLabel(condition, lowPriorityIds),
@@ -201,6 +202,8 @@ type ThreadFields = {
   labelIds: Set<string>;
   hasAttachments: boolean | undefined;
   latestMs: number;
+  /** A row of a view across accounts, whose label ids are its account's. */
+  accountId: string | undefined;
 };
 
 function scoreThread(
@@ -260,7 +263,11 @@ function scoreThread(
     SEMANTIC_WEIGHT *
     Math.max(0, (similarity - SEMANTIC_FLOOR) / (1 - SEMANTIC_FLOOR));
 
-  const lowPriority = [...fields.labelIds].some((id) => lowPriorityIds.has(id));
+  const lowPriority = [...fields.labelIds].some(
+    (id) =>
+      lowPriorityIds.has(id) ||
+      lowPriorityIds.has(labelKey(fields.accountId, id)),
+  );
   const demoted = lowPriority && !asksForLowPriority && !fromSender;
   if (demoted) score += LOW_PRIORITY;
 
@@ -353,6 +360,7 @@ function threadFields(thread: ListThread): ThreadFields {
     labelIds,
     hasAttachments: thread.hasAttachments,
     latestMs,
+    accountId: "account" in thread ? thread.account.id : undefined,
   };
 }
 
@@ -406,7 +414,10 @@ function mentionsLabel(predicate: MailPredicate, ids: Set<string>): boolean {
     case "any":
       return predicate.predicates.some((child) => mentionsLabel(child, ids));
     case "membership":
-      return ids.has(predicate.id);
+      return (
+        ids.has(predicate.id) ||
+        ids.has(labelKey(predicate.accountId, predicate.id))
+      );
     case "role":
       return predicate.role === "spam";
     case "mailbox":
@@ -414,6 +425,12 @@ function mentionsLabel(predicate: MailPredicate, ids: Set<string>): boolean {
     default:
       return false;
   }
+}
+
+// Label ids are each account's own (Gmail's Label_1 exists in every account),
+// so a view across accounts keys them by account.
+function labelKey(accountId: string | undefined, id: string) {
+  return accountId ? `${accountId}:${id}` : id;
 }
 
 function isLowPriorityLabelName(name: string) {

@@ -148,6 +148,29 @@ export function shouldAskProviderLastResort({
   );
 }
 
+/**
+ * Where widening goes next from `widening`, or null to stay: up a step by
+ * `getWideningStep`, or, at the top with nothing found, the same step sent
+ * to the provider too, when `mayAskProvider`.
+ */
+export function getNextWidening(
+  ladder: Omit<Parameters<typeof getWideningStep>[0], "step">,
+  widening: { step: number; onProvider: boolean } | null,
+  { mayAskProvider }: { mayAskProvider: boolean },
+): { step: number; onProvider: boolean } | null {
+  const state = { ...ladder, step: widening?.step ?? null };
+  const step = getWideningStep(state);
+  if (step === null) return null;
+  if (step !== state.step) return { step, onProvider: false };
+  if (
+    !widening?.onProvider &&
+    mayAskProvider &&
+    shouldAskProviderLastResort(state)
+  )
+    return { step, onProvider: true };
+  return null;
+}
+
 export type SearchAnswerRequest = { query: string; searches?: string[] };
 
 /**

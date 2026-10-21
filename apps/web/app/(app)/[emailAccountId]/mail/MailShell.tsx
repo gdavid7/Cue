@@ -51,6 +51,7 @@ import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { CueFoundSection } from "@/app/(app)/[emailAccountId]/mail/CueFoundSection";
 import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import { useAllInboxesCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-all-inboxes-cue-search";
 import {
   CUE_FOUND_VISIBLE_ROWS,
   withoutPlainDuplicates,
@@ -821,11 +822,19 @@ export function MailShell() {
     isAllAccounts,
     searchQuery,
   ]);
-  const cueSearch = useCueSearch({
+  const accountCueSearch = useCueSearch({
     emailAccountId,
     query: searchParam,
     enabled: hasAiAccess && !isAllAccounts,
   });
+  const allInboxesCueSearch = useAllInboxesCueSearch({
+    emailAccountId,
+    accounts: combinedAccounts,
+    labelsByAccount,
+    query: searchParam,
+    enabled: hasAiAccess && isAllAccounts,
+  });
+  const cueSearch = isAllAccounts ? allInboxesCueSearch : accountCueSearch;
   // Like the answer card, it stays while the search is edited, so picking
   // one of its searches to edit doesn't pull it out from under the pointer.
   const showCueFound = cueSearch.stage !== "off";
@@ -2586,7 +2595,17 @@ export function MailShell() {
                   threads={cueRows}
                   totalCount={cueFoundThreads.length}
                   userEmail={userEmail}
-                  userLabels={userLabels}
+                  userLabels={isAllAccounts ? NO_LABELS : userLabels}
+                  labelsByAccount={labelsByAccount}
+                  accountColorIndexById={accountColorIndexById}
+                  stillSearching={
+                    isAllAccounts
+                      ? allInboxesCueSearch.stillSearching
+                      : undefined
+                  }
+                  timedOut={
+                    isAllAccounts ? allInboxesCueSearch.timedOut : undefined
+                  }
                   widening={cueSearch.widening}
                 />
               ) : null}

@@ -34,6 +34,11 @@ export type SearchIntent = {
   isQuestion: boolean;
   /** The account's time zone, which dates in the searches are read in. */
   timeZone: string;
+  /**
+   * The model's reading itself, so a search across accounts builds each
+   * account's search in its own syntax from one model call.
+   */
+  parts: SearchIntentParts;
 };
 
 /**
@@ -219,6 +224,7 @@ export function toSearchIntent(
     explanation: parts.explanation.trim(),
     isQuestion: parts.isQuestion,
     timeZone: context.timeZone,
+    parts,
   };
 }
 

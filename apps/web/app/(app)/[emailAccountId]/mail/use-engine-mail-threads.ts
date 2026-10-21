@@ -32,6 +32,7 @@ const EMPTY_THREADS: ListThread[] = [];
 const NO_CONVERSATIONS: ConversationSummary[] = [];
 const NO_ACCOUNT_IDS: string[] = [];
 const NO_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
+const NO_PROVIDER_SEARCHES: NonNullable<MailboxView["providerSearch"]> = [];
 
 export function useEngineMailThreads({
   emailAccountId,
@@ -166,6 +167,9 @@ export function useEngineMailThreads({
         (account) => account.state === "searching" && !account.answered,
       ),
     ),
+    /** How far each account's provider got with the view's typed searches. */
+    providerSearchAccounts:
+      mailbox.data?.providerSearch ?? NO_PROVIDER_SEARCHES,
     isLoading: engineStarting || (enabled && mailbox.status === "loading"),
     error: mailboxQueryError(mailbox.error),
     hasMore: mailbox.canLoadMore,
