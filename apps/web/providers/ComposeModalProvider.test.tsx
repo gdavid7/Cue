@@ -75,10 +75,10 @@ vi.mock(
   async () => {
     const { useAccount } = await import("./EmailAccountProvider");
     return {
-      ComposeEmailFormLazy: () => {
+      ComposeEmailFormLazy: ({ initialTo }: { initialTo?: string }) => {
         const { emailAccountId, userEmail } = useAccount();
         return (
-          <div data-testid="composer">
+          <div data-initial-to={initialTo ?? ""} data-testid="composer">
             {emailAccountId} {userEmail}
           </div>
         );
@@ -219,6 +219,23 @@ describe("ComposeModalProvider focus", () => {
     expect(opener.closest("[inert]")).toBeNull();
   });
 
+  it("starts a new message to someone, and the next one blank", async () => {
+    renderProvider();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Write to Ana" }),
+    );
+    expect(
+      (await screen.findByTestId("composer")).getAttribute("data-initial-to"),
+    ).toBe("ana@example.com");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close compose" }));
+    fireEvent.click(screen.getByRole("button", { name: "Compose" }));
+
+    expect(
+      (await screen.findByTestId("composer")).getAttribute("data-initial-to"),
+    ).toBe("");
+  });
+
   it("returns focus to what opened compose when it closes", async () => {
     renderProvider();
     const opener = await screen.findByRole("button", { name: "Compose" });
@@ -321,6 +338,7 @@ function renderProvider({
             <ComposeButton />
           )}
           <PopOutButton />
+          <ComposeToButton />
         </ComposeModalProvider>
       </EmailAccountProvider>
     </SWRConfig>,
@@ -344,6 +362,15 @@ function ComposeButton(props: ComponentProps<"button">) {
       type="button"
     >
       Compose
+    </button>
+  );
+}
+
+function ComposeToButton() {
+  const { composeTo } = useComposeModal();
+  return (
+    <button onClick={() => composeTo("ana@example.com")} type="button">
+      Write to Ana
     </button>
   );
 }

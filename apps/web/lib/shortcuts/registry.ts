@@ -462,6 +462,14 @@ const SHORTCUT_DEFINITIONS = [
     label: "Undo last action",
   },
   {
+    // Free in Gmail too (its `I` is shift+i, mark as read).
+    id: "showPersonCard",
+    keys: ["i"],
+    scope: "mail",
+    group: "View",
+    label: "Sender's contact card",
+  },
+  {
     id: "translate",
     keys: ["shift+t"],
     scope: "mail",
@@ -765,6 +773,13 @@ export function assertNoShortcutConflicts(
  * while focus rests on the container itself rather than a field inside it.
  */
 export const TYPING_SURFACE_ATTRIBUTE = "data-typing-surface";
+
+/**
+ * Marks a surface over the mail, such as a popover, whose keys are its own:
+ * no mail-scope shortcut runs from inside it, so `e` there never archives
+ * the conversation behind it.
+ */
+export const MAIL_SHORTCUTS_OFF_ATTRIBUTE = "data-mail-shortcuts-off";
 
 /** Bindings stay inert while the user is typing, unless they're a ⌘ combo. */
 export function isTypingTarget(target: EventTarget | null): boolean {

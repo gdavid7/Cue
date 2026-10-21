@@ -5,6 +5,7 @@ import {
   readContactSuggestions,
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
+import { readPersonCard } from "./person-card";
 import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
@@ -175,6 +176,9 @@ export async function createSqliteMailStore(
         );
         return withIndexedCoverage({ view: page }, { fts5 }).view;
       });
+    },
+    readPersonCard(query) {
+      return driver.read((tx) => readPersonCard(tx, query));
     },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);

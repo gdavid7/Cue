@@ -34,6 +34,8 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  PersonCard,
+  PersonCardQuery,
   QuerySnapshot,
 } from "../queries";
 import type {
@@ -443,6 +445,7 @@ export interface MailStore {
     revision: LocalRevision;
     operation: OperationState | null;
   }>;
+  readPersonCard(query: PersonCardQuery): Promise<PersonCard>;
   /**
    * The store's current revision. Taken just before a provider read is sent
    * and passed back as that read's `requestedAt`, it orders the read against

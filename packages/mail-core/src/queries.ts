@@ -4,7 +4,11 @@ import {
   conversationKeySchema,
   localRevisionSchema,
 } from "./identities";
-import { inboxSectionSchema, mailboxRoleSchema } from "./messages";
+import {
+  inboxSectionSchema,
+  mailboxRoleSchema,
+  type MessageAttachmentDescriptor,
+} from "./messages";
 
 export const MAX_MESSAGE_PREDICATE_IDS = 10_000;
 
@@ -346,3 +350,71 @@ export type MessageSearchPage = {
   nextPage: string | null;
   coverage: Coverage[];
 };
+
+/**
+ * What the reader's person card shows about one correspondent, read from the
+ * local store alone: it never asks the provider.
+ */
+export type PersonCardQuery = {
+  /** The open thread's account, or every account All inboxes includes. */
+  accountIds: string[];
+  email: string;
+  /** The user's own addresses, so their messages count as theirs. */
+  ownAddresses: string[];
+  /**
+   * Per account, the labels Cue's reply tracking puts on conversations it
+   * waits on you or them for; null where an account has no such label.
+   */
+  replyTracking: Array<{
+    accountId: string;
+    toReplyLabelId: string | null;
+    awaitingReplyLabelId: string | null;
+  }>;
+};
+
+export type PersonCardConversation = {
+  accountId: string;
+  conversationId: string;
+  subject: string;
+  latestMessageAtMs: number;
+};
+
+/** The median time one side took to answer the other, over `exchanges` replies. */
+export type ReplyLag = { medianMs: number; exchanges: number };
+
+export type PersonCard = {
+  email: string;
+  /**
+   * A no-reply or other machine address. The store keeps no correspondence
+   * history for those, so every list below is empty.
+   */
+  automated: boolean;
+  /** The name they are most often shown with, if any. */
+  name: string | null;
+  /** Other addresses seen with exactly the same full name. */
+  otherAddresses: string[];
+  /** Newest first, at most `PERSON_CARD_CONVERSATION_LIMIT`. */
+  conversations: PersonCardConversation[];
+  /** Files on their messages whose details are stored here, newest first. */
+  files: Array<{
+    accountId: string;
+    conversationId: string;
+    messageId: string;
+    receivedAtMs: number;
+    attachment: MessageAttachmentDescriptor;
+  }>;
+  /** Null for a side with too few replies to say. */
+  replyLag: { theirs: ReplyLag | null; yours: ReplyLag | null };
+  /** Conversations Cue's reply tracking says wait on your reply. */
+  awaitingYou: PersonCardConversation[];
+  /** Conversations Cue's reply tracking says wait on theirs. */
+  awaitingThem: PersonCardConversation[];
+  /**
+   * `syncing` while older mail is still arriving; `sinceMs` when the store
+   * only ever holds mail from that time on.
+   */
+  history: { syncing: boolean; sinceMs: number | null };
+};
+
+/** One more than the card lists, so it can leave out the open conversation. */
+export const PERSON_CARD_CONVERSATION_LIMIT = 6;

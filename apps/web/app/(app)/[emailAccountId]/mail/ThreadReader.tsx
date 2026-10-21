@@ -3,6 +3,7 @@
 import {
   Suspense,
   useCallback,
+  useMemo,
   useState,
   type ComponentProps,
   type ReactNode,
@@ -45,6 +46,11 @@ import {
 } from "@/utils/email";
 import { GmailLabel } from "@/utils/gmail/label";
 import { PublisherDiscussion } from "@/components/team-comments/PublisherDiscussion";
+import {
+  getReplyTrackingLabels,
+  PersonCardScope,
+} from "@/components/person-card/PersonCard";
+import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
 import type { OutgoingThreadMessage } from "@/utils/mail-engine/conversation-thread";
 
 const SenderContextPanel = dynamic(
@@ -121,6 +127,13 @@ export type ThreadReaderProps = {
   /** The ⋯ dropdown, i.e. `ThreadActionsMenu`, composed by the shell. */
   menu?: ReactNode;
   renderMessageMenu?: (message: ThreadMessage) => ReactNode;
+  /**
+   * In All inboxes, the accounts it includes and their labels: a person card
+   * there covers mail with that person in each of them.
+   */
+  personCardAccounts?: { id: string; labels: EmailLabels }[];
+  /** Runs a mail search, as a person card's "Mail from them" does. */
+  onSearch?: (query: string) => void;
 };
 
 export function ThreadReader({
@@ -153,6 +166,8 @@ export function ThreadReader({
   onAskCue,
   menu,
   renderMessageMenu,
+  personCardAccounts,
+  onSearch,
 }: ThreadReaderProps) {
   const receivedMessages = messages.filter(
     (message) => !message.labelIds?.includes(GmailLabel.DRAFT),
@@ -194,6 +209,44 @@ export function ThreadReader({
             : null,
       };
     });
+  const ownAddresses = useOwnEmailAddresses();
+  const personCardScope = useMemo(
+    () => ({
+      accountIds: personCardAccounts?.map((account) => account.id) ?? [
+        emailAccountId,
+      ],
+      ownAddresses,
+      replyTracking: personCardAccounts?.map((account) =>
+        getReplyTrackingLabels(account.id, account.labels),
+      ) ?? [getReplyTrackingLabels(emailAccountId, userLabels)],
+      openConversation: threadId
+        ? { accountId: emailAccountId, conversationId: threadId }
+        : null,
+      onOpenConversation: (accountId: string, conversationId: string) =>
+        updateLocation((current) => {
+          const threadAccountIndex = accountIds.indexOf(accountId);
+          return {
+            ...current,
+            threadId: conversationId,
+            threadAccountIndex:
+              current.allInboxes && threadAccountIndex >= 0
+                ? threadAccountIndex
+                : null,
+          };
+        }),
+      onSearch,
+    }),
+    [
+      personCardAccounts,
+      emailAccountId,
+      ownAddresses,
+      userLabels,
+      threadId,
+      updateLocation,
+      accountIds,
+      onSearch,
+    ],
+  );
   // Waits for keyboard navigation to settle before fetching.
   const canAssist = Boolean(
     detailSelectionSettled && emailAccountId && threadId,
@@ -323,148 +376,153 @@ export function ThreadReader({
   );
 
   return (
-    <MailReaderSurface
-      containerRef={readerRef}
-      detailSelectionSettled={detailSelectionSettled}
-      layout={layout}
-      // Once messages show, the thread's own earlier-messages row loads more.
-      localAvailability={messages.length > 0 ? undefined : localAvailability}
-      renderLoadMoreButton={({ disabled, loading, onClick }) => (
-        <Button
-          className="mb-4"
-          disabled={disabled}
-          onClick={onClick}
-          variant="outline"
-        >
-          {loading ? "Loading earlier messages…" : "Show earlier messages"}
-        </Button>
-      )}
-      sidePanel={
-        senderContext ? (
-          <SenderContextPanel
-            messageId={senderContext.messageId}
-            onClose={() => setSenderContext(null)}
-            senderEmail={senderContext.senderEmail}
-            senderName={senderContext.senderName}
-            variant={isNarrow ? "sheet" : "inline"}
-          />
-        ) : null
-      }
-    >
-      {toolbar}
-      {messages.length > 0 ? (
-        <ReplyAssistContext.Provider value={assist}>
-          {/* MailShell preloads the thread view, so this rarely shows. Only
+    <PersonCardScope value={personCardScope}>
+      <MailReaderSurface
+        containerRef={readerRef}
+        detailSelectionSettled={detailSelectionSettled}
+        layout={layout}
+        // Once messages show, the thread's own earlier-messages row loads more.
+        localAvailability={messages.length > 0 ? undefined : localAvailability}
+        renderLoadMoreButton={({ disabled, loading, onClick }) => (
+          <Button
+            className="mb-4"
+            disabled={disabled}
+            onClick={onClick}
+            variant="outline"
+          >
+            {loading ? "Loading earlier messages…" : "Show earlier messages"}
+          </Button>
+        )}
+        sidePanel={
+          senderContext ? (
+            <SenderContextPanel
+              messageId={senderContext.messageId}
+              onClose={() => setSenderContext(null)}
+              senderEmail={senderContext.senderEmail}
+              senderName={senderContext.senderName}
+              variant={isNarrow ? "sheet" : "inline"}
+            />
+          ) : null
+        }
+      >
+        {toolbar}
+        {messages.length > 0 ? (
+          <ReplyAssistContext.Provider value={assist}>
+            {/* MailShell preloads the thread view, so this rarely shows. Only
               the messages wait for it; the marker keeps BufferedThreadReader
               on the previous thread. */}
-          <Suspense
-            fallback={
-              <div
-                className="flex flex-1 items-center justify-center py-16"
-                data-thread-view-loading
-                role="status"
-              >
-                <LoadingEmail />
-              </div>
-            }
-          >
-            <EmailThreadLazy
-              messageHeadingLevel={subjectHeadingLevel === 2 ? 3 : 2}
-              onMessageExpansionChange={setMessageExpansion}
-              renderMessageMenu={renderMessageMenu}
-              enableMessageNavigation={enableMessageNavigation}
-              autoOpenReplyForMessageId={
-                autoOpenReplyForMessageId ??
-                requestedReplyFor ??
-                assist?.messageId
+            <Suspense
+              fallback={
+                <div
+                  className="flex flex-1 items-center justify-center py-16"
+                  data-thread-view-loading
+                  role="status"
+                >
+                  <LoadingEmail />
+                </div>
               }
-              ownReplyForMessageId={autoOpenReplyForMessageId}
-              focusAutoOpenedReply={Boolean(
-                autoOpenReplyForMessageId ?? requestedReplyFor,
-              )}
-              afterLatestMessage={
-                canAssist && newestIsIncoming && emailAccountId && threadId ? (
-                  <div className="mt-4 -mx-2">
-                    <ThreadContextList
-                      emailAccountId={emailAccountId}
-                      heading="Related"
-                      // Inside the newest message, under its heading.
-                      headingLevel={subjectHeadingLevel === 2 ? 4 : 3}
-                      limit={2}
-                      onOpenThread={openThread}
-                      threadId={threadId}
-                    />
-                  </div>
-                ) : null
-              }
-              replyStatus={
-                replyStatus || reply.offer ? (
-                  // Where Cue's progress and answer appear once asked: the
-                  // button gives way to them in place, at the button's height,
-                  // so nothing below moves.
-                  <div className="flex min-h-9 items-center">
-                    {replyStatus ?? (
-                      <Button
-                        onClick={requestDraftReply}
-                        size="sm"
-                        type="button"
-                        variant="ghost"
-                        className="-ml-2 text-muted-foreground"
-                      >
-                        <SparklesIcon aria-hidden className="mr-2 size-4" />
-                        Draft a reply
-                      </Button>
-                    )}
-                  </div>
-                ) : null
-              }
-              earlierMessages={
-                localAvailability?.hasMore
-                  ? {
-                      loading: localAvailability.loadingMore,
-                      onLoad: localAvailability.loadMore,
-                    }
-                  : undefined
-              }
-              autoOpenReplyAll={autoOpenReplyAll}
-              autoOpenForwardForMessageId={autoOpenForwardForMessageId}
-              key={threadId}
-              messages={messages}
-              missingBodyIds={localAvailability?.missingBodyIds}
-              outgoing={localAvailability?.outgoing}
-              sendOperationIds={localAvailability?.sendOperationIds}
-              onMarkDone={onArchive}
-              onOpenSenderContext={(message) => {
-                const senderEmail = extractEmailAddress(message.headers.from);
-                setSenderContext({
-                  messageId: message.id,
-                  senderEmail,
-                  senderName:
-                    extractNameFromEmail(message.headers.from) || senderEmail,
-                });
-              }}
-              refetch={refetch}
-              onSendSuccess={onSendSuccess}
-              onThreadDiscarded={
-                // A partially loaded conversation can look draft-only, so only
-                // leave once every message is here to say it is.
-                localAvailability?.hasMore || localAvailability?.filling
-                  ? undefined
-                  : onBackToInbox
-              }
-              showReplyButton
-            />
-          </Suspense>
-        </ReplyAssistContext.Provider>
-      ) : null}
-      {emailAccountId && threadId && messages.length > 0 && (
-        <PublisherDiscussion
-          key={`${emailAccountId}:${threadId}`}
-          emailAccountId={emailAccountId}
-          threadId={threadId}
-        />
-      )}
-    </MailReaderSurface>
+            >
+              <EmailThreadLazy
+                messageHeadingLevel={subjectHeadingLevel === 2 ? 3 : 2}
+                onMessageExpansionChange={setMessageExpansion}
+                renderMessageMenu={renderMessageMenu}
+                enableMessageNavigation={enableMessageNavigation}
+                autoOpenReplyForMessageId={
+                  autoOpenReplyForMessageId ??
+                  requestedReplyFor ??
+                  assist?.messageId
+                }
+                ownReplyForMessageId={autoOpenReplyForMessageId}
+                focusAutoOpenedReply={Boolean(
+                  autoOpenReplyForMessageId ?? requestedReplyFor,
+                )}
+                afterLatestMessage={
+                  canAssist &&
+                  newestIsIncoming &&
+                  emailAccountId &&
+                  threadId ? (
+                    <div className="mt-4 -mx-2">
+                      <ThreadContextList
+                        emailAccountId={emailAccountId}
+                        heading="Related"
+                        // Inside the newest message, under its heading.
+                        headingLevel={subjectHeadingLevel === 2 ? 4 : 3}
+                        limit={2}
+                        onOpenThread={openThread}
+                        threadId={threadId}
+                      />
+                    </div>
+                  ) : null
+                }
+                replyStatus={
+                  replyStatus || reply.offer ? (
+                    // Where Cue's progress and answer appear once asked: the
+                    // button gives way to them in place, at the button's height,
+                    // so nothing below moves.
+                    <div className="flex min-h-9 items-center">
+                      {replyStatus ?? (
+                        <Button
+                          onClick={requestDraftReply}
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          className="-ml-2 text-muted-foreground"
+                        >
+                          <SparklesIcon aria-hidden className="mr-2 size-4" />
+                          Draft a reply
+                        </Button>
+                      )}
+                    </div>
+                  ) : null
+                }
+                earlierMessages={
+                  localAvailability?.hasMore
+                    ? {
+                        loading: localAvailability.loadingMore,
+                        onLoad: localAvailability.loadMore,
+                      }
+                    : undefined
+                }
+                autoOpenReplyAll={autoOpenReplyAll}
+                autoOpenForwardForMessageId={autoOpenForwardForMessageId}
+                key={threadId}
+                messages={messages}
+                missingBodyIds={localAvailability?.missingBodyIds}
+                outgoing={localAvailability?.outgoing}
+                sendOperationIds={localAvailability?.sendOperationIds}
+                onMarkDone={onArchive}
+                onOpenSenderContext={(message) => {
+                  const senderEmail = extractEmailAddress(message.headers.from);
+                  setSenderContext({
+                    messageId: message.id,
+                    senderEmail,
+                    senderName:
+                      extractNameFromEmail(message.headers.from) || senderEmail,
+                  });
+                }}
+                refetch={refetch}
+                onSendSuccess={onSendSuccess}
+                onThreadDiscarded={
+                  // A partially loaded conversation can look draft-only, so only
+                  // leave once every message is here to say it is.
+                  localAvailability?.hasMore || localAvailability?.filling
+                    ? undefined
+                    : onBackToInbox
+                }
+                showReplyButton
+              />
+            </Suspense>
+          </ReplyAssistContext.Provider>
+        ) : null}
+        {emailAccountId && threadId && messages.length > 0 && (
+          <PublisherDiscussion
+            key={`${emailAccountId}:${threadId}`}
+            emailAccountId={emailAccountId}
+            threadId={threadId}
+          />
+        )}
+      </MailReaderSurface>
+    </PersonCardScope>
   );
 }
 

@@ -209,6 +209,12 @@
     "utils/mail-engine/wasm-sqlite.ts",
     "utils/mail-engine/active-client.ts"
   ],
+  "person-card.spec.ts": [
+    "components/person-card/PersonCard.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "components/email-list/EmailDetails.tsx",
+    "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"
+  ],
   "plain-text-links.spec.ts": ["components/email-list/EmailMessage.tsx"],
   "reader-transition.spec.ts": [
     "app/(app)/[emailAccountId]/mail/BufferedThreadReader.tsx",

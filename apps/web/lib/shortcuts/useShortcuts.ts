@@ -14,6 +14,7 @@ import { SequenceTrackerContext } from "@/lib/shortcuts/ShortcutsProvider";
 import {
   createSequencePrefixTracker,
   isTypingTarget,
+  MAIL_SHORTCUTS_OFF_ATTRIBUTE,
   SEQUENCE_SPLIT_KEY,
   type ShortcutEntry,
   type ShortcutHandlers,
@@ -313,6 +314,12 @@ function resolveTarget(
 ): ShortcutTarget | undefined {
   if (!bucket.allowWhileTyping && isTypingTarget(event.target)) return;
   if (isActivationKey(event) && activatesOnEnter(event.target)) return;
+  if (
+    bucket.scope === "mail" &&
+    event.target instanceof Element &&
+    event.target.closest(`[${MAIL_SHORTCUTS_OFF_ATTRIBUTE}]`)
+  )
+    return;
   const target = bucket.targets.get(hotkeysEvent.hotkey);
   if (
     target?.type === "entry" &&
