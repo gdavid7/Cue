@@ -151,7 +151,7 @@ describe("scheduleAccountSearches", () => {
   ) =>
     scheduleAccountSearches({
       accountIds: ids,
-      queuedIds: none,
+      queuedAtMs: {},
       finishedIds: none,
       timedOutIds: none,
       startedAtMs: {},
@@ -168,7 +168,7 @@ describe("scheduleAccountSearches", () => {
 
   it("gives an answered account's turn to the next one", () => {
     const { phases, toQueue } = schedule({
-      queuedIds: new Set(["a", "b"]),
+      queuedAtMs: { a: 0, b: 0 },
       finishedIds: new Set(["a"]),
       queueSize: 2,
     });
@@ -179,7 +179,7 @@ describe("scheduleAccountSearches", () => {
 
   it("never counts the wait in the engine's queue against an account", () => {
     const { phases, toTimeOut, nextDeadlineMs } = schedule({
-      queuedIds: new Set(["a", "b"]),
+      queuedAtMs: { a: 0, b: 0 },
       // a began long ago; b is still waiting behind it.
       startedAtMs: { a: 1000 },
       nowMs: 1000 + CUE_ACCOUNT_SEARCH_TIMEOUT_MS - 1,
@@ -193,7 +193,7 @@ describe("scheduleAccountSearches", () => {
 
   it("times out an account from when the engine began it, and moves on", () => {
     const { phases, toQueue, toTimeOut } = schedule({
-      queuedIds: new Set(["a", "b"]),
+      queuedAtMs: { a: 0, b: 0 },
       startedAtMs: { a: 0 },
       nowMs: CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
       queueSize: 2,
@@ -204,10 +204,28 @@ describe("scheduleAccountSearches", () => {
     expect(toQueue).toEqual(["c"]);
   });
 
+  it("times out an account whose start never arrives, two boxes after queueing it", () => {
+    const early = schedule({
+      queuedAtMs: { a: 0 },
+      nowMs: 2 * CUE_ACCOUNT_SEARCH_TIMEOUT_MS - 1,
+      queueSize: 1,
+    });
+    expect(early.phases.a).toBe("searching");
+    expect(early.nextDeadlineMs).toBe(2 * CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
+
+    const late = schedule({
+      queuedAtMs: { a: 0 },
+      nowMs: 2 * CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
+      queueSize: 1,
+    });
+    expect(late.toTimeOut).toEqual(["a"]);
+    expect(late.toQueue).toEqual(["b"]);
+  });
+
   it("keeps a timed-out account out of the queue", () => {
     const { phases, toQueue, nextDeadlineMs } = schedule({
       accountIds: ["a", "b"],
-      queuedIds: new Set(["a", "b"]),
+      queuedAtMs: { a: 0, b: 0 },
       finishedIds: new Set(["b"]),
       timedOutIds: new Set(["a"]),
     });
@@ -229,8 +247,10 @@ describe("getProviderSearchStarts", () => {
           startedAtMs: 5,
         },
         { accountId: "b", state: "searching", answered: false },
+        // Held back by quota, still timed from its start.
+        { accountId: "c", state: "busy", answered: false, startedAtMs: 7 },
       ]),
-    ).toEqual({ a: 5 });
+    ).toEqual({ a: 5, c: 7 });
   });
 });
 

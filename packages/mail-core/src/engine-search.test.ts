@@ -155,8 +155,16 @@ describe("typed searches in the engine", () => {
     const view = harness.engine.observeMailbox(searchQuery("larger:5M"));
     await harness.run();
 
+    // Still on its way while busy, so it says when it began.
     expect(view.getSnapshot().data?.providerSearch).toEqual([
-      { accountId: "a", state, answered: false },
+      state === "busy"
+        ? {
+            accountId: "a",
+            state,
+            answered: false,
+            startedAtMs: expect.any(Number),
+          }
+        : { accountId: "a", state, answered: false },
     ]);
     view.close();
     await harness.engine.close();
@@ -392,6 +400,104 @@ describe("typed searches in the engine", () => {
     second.close();
     await harness.engine.close();
   });
+
+  it("keeps one grace period per search, restarted by each release", async () => {
+    const answer = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const signals: AbortSignal[] = [];
+    const harness = searchHarness({
+      search: (_accountId, signal) => {
+        signals.push(signal);
+        return answer.promise;
+      },
+    });
+    const first = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    const running = harness.engine.runUntil(Date.now() + 5000);
+    await until(() => signals.length === 1);
+
+    first.close();
+    await wait(SEARCH_CANCEL_GRACE_MS * 0.6);
+    const second = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    second.close();
+    // Past the first release's grace, within the second's.
+    await wait(SEARCH_CANCEL_GRACE_MS * 0.6);
+    expect(signals[0].aborted).toBe(false);
+
+    await wait(SEARCH_CANCEL_GRACE_MS * 0.6);
+    expect(signals[0].aborted).toBe(true);
+    answer.resolve(exact(["m1"]));
+    await running;
+    await harness.engine.close();
+  });
+
+  it("asks again for a search a view wants back while its cancelled page is still in the store", async () => {
+    let calls = 0;
+    const answer = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const harness = searchHarness({
+      search: () => {
+        calls += 1;
+        return calls === 1 ? answer.promise : exact(["m1"]);
+      },
+    });
+    const first = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    let release!: () => void;
+    harness.control.completeGate = new Promise((done) => {
+      release = done;
+    });
+    const running = harness.engine.runUntil(Date.now() + 5000);
+    await until(() => calls === 1);
+
+    // Cancelled after the grace; its job stays in the store a moment longer.
+    first.close();
+    await wait(SEARCH_CANCEL_GRACE_MS + 50);
+    const second = harness.engine.observeMailbox(searchQuery("larger:5M"));
+    await settle();
+    harness.control.completeGate = null;
+    release();
+    await running;
+    await harness.run();
+
+    expect(calls).toBe(2);
+    expect(second.getSnapshot().data?.providerSearch).toEqual([
+      { accountId: "a", state: "complete", answered: true },
+    ]);
+    second.close();
+    await harness.engine.close();
+  });
+
+  it("resumes loading more from where a cancelled page left off", async () => {
+    const pageTwo = deferred<Awaited<ReturnType<MailboxSource["search"]>>>();
+    const harness = searchHarness({
+      search: () =>
+        harness.pages.length === 1
+          ? {
+              status: "ok",
+              value: {
+                matches: [{ accountId: "a", messageId: "m1" }],
+                nextPage: "page-2",
+                semantics: "exact",
+              },
+            }
+          : harness.pages.length === 2
+            ? pageTwo.promise
+            : exact(["m2"]),
+    });
+    const first = harness.engine.observeMailboxWindow(searchQuery("larger:5M"));
+    const running = harness.engine.runUntil(Date.now() + 5000);
+    await until(() => harness.pages.length === 2);
+
+    first.close();
+    await wait(SEARCH_CANCEL_GRACE_MS + 50);
+    pageTwo.resolve(exact(["late"]));
+    await running;
+
+    const again = harness.engine.observeMailboxWindow(searchQuery("larger:5M"));
+    await again.loadMore();
+    await harness.run();
+
+    expect(harness.pages).toEqual([null, "page-2", "page-2"]);
+    again.close();
+    await harness.engine.close();
+  });
 });
 
 const FALSE: MailPredicate = { kind: "any", predicates: [] };
@@ -449,6 +555,19 @@ function searchHarness(input: {
     | Awaited<ReturnType<MailboxSource["search"]>>;
   nowMs?: () => number;
 }) {
+  // Like the store, a search job already in it (queued or running) is not
+  // queued again; completing it removes it.
+  const stored = new Map<string, string>();
+  const jobKey = (job: {
+    accountId: string;
+    predicate: MailPredicate;
+    page: string | null;
+  }) => JSON.stringify([job.accountId, job.predicate, job.page]);
+  const control = {
+    /** Holds each job's completion until it settles. */
+    completeGate: null as Promise<void> | null,
+  };
+  const pages: Array<string | null> = [];
   const hydrations: string[] = [];
   const searchedBy: Array<[string, string]> = [];
   const jobs: ClaimedWork[] = [];
@@ -461,7 +580,10 @@ function searchHarness(input: {
       predicate: MailPredicate;
       page: string | null;
     }) {
+      if (stored.has(jobKey(job)))
+        return { databaseEpoch: "test", sequence: nextJob };
       nextJob += 1;
+      stored.set(jobKey(job), `job-${nextJob}`);
       jobs.push({
         kind: "search",
         jobId: `job-${nextJob}`,
@@ -476,7 +598,10 @@ function searchHarness(input: {
     async claimWork() {
       return jobs.shift() ?? null;
     },
-    async completeJob() {},
+    async completeJob({ jobId }: { jobId: string }) {
+      if (control.completeGate) await control.completeGate;
+      for (const [key, id] of stored) if (id === jobId) stored.delete(key);
+    },
     async deferJob() {},
     async applyHydration() {
       hydrations.push("apply");
@@ -512,11 +637,14 @@ function searchHarness(input: {
       predicate,
       session,
       signal,
+      page,
     }: {
       predicate: MailPredicate;
       session: { accountId: string };
       signal: AbortSignal;
+      page: string | null;
     }) {
+      pages.push(page);
       if (predicate.kind === "search") {
         searches.push(predicate.query);
         searchedBy.push([session.accountId, predicate.query]);
@@ -539,6 +667,8 @@ function searchHarness(input: {
   });
   return {
     engine,
+    control,
+    pages,
     hydrations,
     searches,
     searchedBy,

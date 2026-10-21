@@ -26,6 +26,9 @@ export const CUE_PROVIDER_SEARCH_QUEUE = 2;
  * the next account. Its local mail still counts.
  */
 export const CUE_ACCOUNT_SEARCH_TIMEOUT_MS = 8000;
+// The engine runs searches one at a time, so a queued one may wait about a
+// box behind another; past two, its start is taken as lost.
+const QUEUED_TIMEOUT_FACTOR = 2;
 
 export type CueSearchAccount = {
   id: string;
@@ -84,14 +87,15 @@ export type AccountSearchPhase =
  * Where each account's provider search is. At most `queueSize` are queued
  * or running at once, in the accounts' order; an account waiting its turn
  * reads its local mail alone. An account is timed out `timeoutMs` after the
- * engine began its search (`startedAtMs`), never counting its wait in the
- * queue, which frees its turn. `toQueue` are the accounts whose turn has
- * come and `toTimeOut` the ones whose time ran out, for the caller to
- * record.
+ * engine began its search (`startedAtMs`), never counting a normal wait in
+ * the queue, which frees its turn. One the engine never reports starting is
+ * timed out `QUEUED_TIMEOUT_FACTOR` boxes after it was queued, so it can't
+ * hold its turn for good. `toQueue` are the accounts whose turn has come and
+ * `toTimeOut` the ones whose time ran out, for the caller to record.
  */
 export function scheduleAccountSearches({
   accountIds,
-  queuedIds,
+  queuedAtMs,
   finishedIds,
   timedOutIds,
   startedAtMs,
@@ -100,7 +104,8 @@ export function scheduleAccountSearches({
   timeoutMs = CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
 }: {
   accountIds: string[];
-  queuedIds: ReadonlySet<string>;
+  /** When Cue queued each account's provider search. */
+  queuedAtMs: Readonly<Record<string, number>>;
   finishedIds: ReadonlySet<string>;
   timedOutIds: ReadonlySet<string>;
   /** When the engine began each running account's search. */
@@ -121,20 +126,24 @@ export function scheduleAccountSearches({
   let nextDeadlineMs: number | null = null;
   for (const id of accountIds) {
     const started = startedAtMs[id];
+    const queued = queuedAtMs[id];
+    const deadline =
+      started !== undefined
+        ? started + timeoutMs
+        : (queued ?? 0) + timeoutMs * QUEUED_TIMEOUT_FACTOR;
     if (finishedIds.has(id)) phases[id] = "finished";
     else if (timedOutIds.has(id)) phases[id] = "timedOut";
-    else if (!queuedIds.has(id)) phases[id] = "waiting";
-    else if (started !== undefined && nowMs - started >= timeoutMs) {
+    else if (queued === undefined) phases[id] = "waiting";
+    else if (nowMs >= deadline) {
       phases[id] = "timedOut";
       toTimeOut.push(id);
     } else {
       phases[id] = "searching";
       searching++;
-      if (started !== undefined)
-        nextDeadlineMs = Math.min(
-          nextDeadlineMs ?? Number.POSITIVE_INFINITY,
-          started + timeoutMs,
-        );
+      nextDeadlineMs = Math.min(
+        nextDeadlineMs ?? Number.POSITIVE_INFINITY,
+        deadline,
+      );
     }
   }
   const toQueue = accountIds

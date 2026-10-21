@@ -277,6 +277,21 @@ describe("useAllInboxesCueSearch", () => {
     expect(result.current.foundNothing).toBe(false);
   });
 
+  it("stops waiting on an account whose start never arrives", () => {
+    state.answered = new Set(["work"]);
+    const { result } = render([WORK, HOME]);
+
+    act(() => {
+      vi.advanceTimersByTime(2 * CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
+    });
+    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+      "work",
+    ]);
+    expect(result.current.timedOut.map((account) => account.id)).toEqual([
+      "home",
+    ]);
+  });
+
   it("asks with the routed account's labels and shows each account's searches", async () => {
     state.routedLabels = [{ name: "Receipts" }];
     const parts = (state.intent as { parts: Record<string, unknown> }).parts;

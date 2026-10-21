@@ -56,8 +56,8 @@ type Run = {
    * load later never start a search the queue didn't schedule.
    */
   searches: AccountCueSearch[] | null;
-  /** Accounts whose provider search Cue has queued. */
-  queued: string[];
+  /** When Cue queued each account's provider search. */
+  queued: Record<string, number>;
   /** Accounts whose provider has answered, or never will. */
   finished: string[];
   /** Accounts whose provider took too long, and was stopped. */
@@ -137,7 +137,7 @@ export function useAllInboxesCueSearch({
       readingLate: false,
       frozenKeys: null,
       searches: null,
-      queued: [],
+      queued: {},
       finished: [],
       timedOut: [],
       started: {},
@@ -190,6 +190,8 @@ export function useAllInboxesCueSearch({
         : NO_SEARCHES,
     [intent, searchAccounts, now, timeZone],
   );
+  // Frozen once read: a search that changed as labels loaded would be a new
+  // provider search the queue never scheduled.
   const frozenSearches = current?.searches;
   const searches = frozenSearches ?? builtSearches;
   const hasIntent = Boolean(intent);
@@ -210,7 +212,7 @@ export function useAllInboxesCueSearch({
   // answers or begins, and when a running one's time box runs out.
   const [clockMs, setClockMs] = useState(() => Date.now());
   const started = current?.started;
-  const queuedIds = useMemo(() => new Set(current?.queued), [current?.queued]);
+  const queuedAtMs = current?.queued ?? NO_STARTS;
   const finishedIds = useMemo(
     () => new Set(current?.finished),
     [current?.finished],
@@ -223,13 +225,13 @@ export function useAllInboxesCueSearch({
     () =>
       scheduleAccountSearches({
         accountIds: searchedIds,
-        queuedIds,
+        queuedAtMs,
         finishedIds,
         timedOutIds,
         startedAtMs: started ?? NO_STARTS,
         nowMs: clockMs,
       }),
-    [searchedIds, queuedIds, finishedIds, timedOutIds, started, clockMs],
+    [searchedIds, queuedAtMs, finishedIds, timedOutIds, started, clockMs],
   );
   const providerAccountIds = useMemo(
     () =>
@@ -293,7 +295,10 @@ export function useAllInboxesCueSearch({
       run?.query === query
         ? {
             ...run,
-            queued: [...new Set([...run.queued, ...queue])],
+            queued: {
+              ...Object.fromEntries(queue.map((id) => [id, Date.now()])),
+              ...run.queued,
+            },
             timedOut: [...new Set([...run.timedOut, ...timeOut])],
             finished: [...new Set([...run.finished, ...finish])],
             started: { ...Object.fromEntries(starts), ...run.started },

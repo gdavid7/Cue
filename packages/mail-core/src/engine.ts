@@ -689,24 +689,22 @@ export function createMailEngine(input: {
           const search =
             providerSearches.get(searchKey) ?? releasedSearches.get(searchKey);
           if (!search?.requestedPages.has(work.page)) {
-            await store.completeJob({
-              jobId: work.jobId,
-              attemptId: work.attemptId,
-            });
+            await completeDroppedSearchJob(work, searchKey);
             continue;
           }
           // Its own abort, so a search nobody wants any more stops without
           // stopping the rest of the engine's work.
           const abort = new AbortController();
           const stopWithEngine = () => abort.abort();
-          signal?.addEventListener("abort", stopWithEngine, { once: true });
           search.abort = abort;
-          if (work.page === null && search.startedAtMs === null) {
-            search.startedAtMs = runtime.nowMs();
-            await refreshViews();
-          }
           let searched: Awaited<ReturnType<MailboxSource["search"]>>;
           try {
+            if (signal?.aborted) abort.abort();
+            signal?.addEventListener("abort", stopWithEngine, { once: true });
+            if (work.page === null && search.startedAtMs === null) {
+              search.startedAtMs = runtime.nowMs();
+              await refreshViews();
+            }
             searched = await untilAborted(
               source.search({
                 session: work.session,
@@ -722,10 +720,7 @@ export function createMailEngine(input: {
             );
           } catch (error) {
             if (!signal?.aborted && abort.signal.aborted) {
-              await store.completeJob({
-                jobId: work.jobId,
-                attemptId: work.attemptId,
-              });
+              await completeDroppedSearchJob(work, searchKey);
               continue;
             }
             search.state = "unavailable";
@@ -738,10 +733,7 @@ export function createMailEngine(input: {
           // Cancelled as it answered: nobody will see what it found, so none
           // of it is fetched.
           if (abort.signal.aborted && !signal?.aborted) {
-            await store.completeJob({
-              jobId: work.jobId,
-              attemptId: work.attemptId,
-            });
+            await completeDroppedSearchJob(work, searchKey);
             continue;
           }
           if (searched.status === "unsupported") {
@@ -1153,7 +1145,7 @@ export function createMailEngine(input: {
       const state = viewState(search?.state ?? "searching");
       const current = byAccount.get(accountId);
       const startedAtMs =
-        search?.state === "searching" && search.startedAtMs !== null
+        isUnfinished(search?.state) && search?.startedAtMs != null
           ? Math.min(
               search.startedAtMs,
               current?.startedAtMs ?? Number.POSITIVE_INFINITY,
@@ -1175,7 +1167,9 @@ export function createMailEngine(input: {
       ...view,
       providerSearch: [...byAccount.values()].map(
         ({ startedAtMs, ...account }) =>
-          account.state === "searching" && startedAtMs !== undefined
+          isUnfinished(account.state) &&
+          !account.answered &&
+          startedAtMs !== undefined
             ? { ...account, startedAtMs }
             : account,
       ),
@@ -1237,12 +1231,16 @@ export function createMailEngine(input: {
         }
         if (search) {
           search.predicate = predicate;
+          clearCancelTimer(search);
           // Searching again, as committing the same query does, asks the
-          // provider again once its first answer has aged.
+          // provider again once its first answer has aged, or when a refresh
+          // was cancelled before it answered.
           if (
-            search.firstPageAtMs !== null &&
-            runtime.nowMs() - search.firstPageAtMs > SEARCH_REFRESH_AFTER_MS
+            search.refreshCancelled ||
+            (search.firstPageAtMs !== null &&
+              runtime.nowMs() - search.firstPageAtMs > SEARCH_REFRESH_AFTER_MS)
           ) {
+            search.refreshCancelled = false;
             search.firstPageAtMs = null;
             search.requestedPages.add(null);
             store
@@ -1261,8 +1259,10 @@ export function createMailEngine(input: {
             state: "searching",
             answered: false,
             firstPageAtMs: null,
+            refreshCancelled: false,
             startedAtMs: null,
             abort: null,
+            cancelTimer: null,
             pagesSinceDemand: 1,
             wantedRows: new Map(),
           };
@@ -1298,7 +1298,11 @@ export function createMailEngine(input: {
               if (releasedSearches.size <= MAX_RELEASED_SEARCHES) break;
               releasedSearches.delete(key);
             }
-            setTimeout(() => {
+            // One timer per search: a view that comes back clears it, and a
+            // later release starts the grace over.
+            clearCancelTimer(search);
+            search.cancelTimer = setTimeout(() => {
+              search.cancelTimer = null;
               if (search.wantedRows.size === 0) cancelProviderSearch(search);
             }, SEARCH_CANCEL_GRACE_MS);
           }
@@ -1325,7 +1329,32 @@ export function createMailEngine(input: {
       return;
     }
     // A refresh cut short is asked again when the search comes back.
-    if (search.firstPageAtMs === null) search.firstPageAtMs = 0;
+    if (search.firstPageAtMs === null) search.refreshCancelled = true;
+  }
+
+  function clearCancelTimer(search: ProviderSearch) {
+    if (search.cancelTimer === null) return;
+    clearTimeout(search.cancelTimer);
+    search.cancelTimer = null;
+  }
+
+  // The store ignores a search job already queued, so a view that asked for
+  // this page again while the dropped job was still in the store asked for
+  // nothing; it is asked for again once that job is gone.
+  async function completeDroppedSearchJob(
+    work: Extract<ClaimedWork, { kind: "search" }>,
+    searchKey: string,
+  ) {
+    await store.completeJob({ jobId: work.jobId, attemptId: work.attemptId });
+    const search = providerSearches.get(searchKey);
+    if (!search?.requestedPages.has(work.page)) return;
+    await store
+      .enqueueSearch({
+        accountId: work.accountId,
+        predicate: search.predicate,
+        page: work.page,
+      })
+      .catch(() => undefined);
   }
 
   function requestNextSearchPage(search: ProviderSearch) {
@@ -2169,10 +2198,14 @@ type ProviderSearch = {
   answered: boolean;
   /** When the provider last answered the first page, for a fresh search. */
   firstPageAtMs: number | null;
+  /** A refresh of the first page was cancelled, so it is asked again. */
+  refreshCancelled: boolean;
   /** When the provider began reading the first page; null while queued. */
   startedAtMs: number | null;
   /** Stops the page being read, while one is. */
   abort: AbortController | null;
+  /** Cancels the search once no view has wanted it for a grace period. */
+  cancelTimer: ReturnType<typeof setTimeout> | null;
   pagesSinceDemand: number;
   wantedRows: Map<symbol, number>;
 };
@@ -2186,6 +2219,11 @@ const VIEW_STATE_ORDER = [
   "unsupported",
   "complete",
 ] as const;
+
+// Still on its way: a time box applies from when the provider began it.
+function isUnfinished(state: string | undefined) {
+  return state === "searching" || state === "busy";
+}
 
 function viewState(
   state: ProviderSearch["state"],
