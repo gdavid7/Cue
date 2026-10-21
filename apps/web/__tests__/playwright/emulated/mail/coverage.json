@@ -22,7 +22,10 @@
     "hooks/useThreadBrief.ts",
     "utils/home/get-thread-brief.ts",
     "app/api/user/thread-brief/route.ts",
-    "hooks/useThread.ts"
+    "hooks/useThread.ts",
+    "utils/reader-prefetch.ts",
+    "app/(app)/[emailAccountId]/mail/reader-prefetch-plan.ts",
+    "app/(app)/[emailAccountId]/mail/use-reader-row-prefetch.ts"
   ],
   "rule-reply-suggestion.spec.ts": [
     "app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion.tsx",

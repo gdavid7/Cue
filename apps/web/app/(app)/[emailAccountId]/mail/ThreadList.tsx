@@ -16,6 +16,7 @@ import {
   getListThreadKey,
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { useReaderRowPrefetch } from "@/app/(app)/[emailAccountId]/mail/use-reader-row-prefetch";
 import { LoadingMiniSpinner } from "@/components/Loading";
 import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
@@ -64,6 +65,13 @@ export type ThreadListProps = {
    * email costs the server a provider read and a model call.
    */
   insightsPaused?: boolean;
+  /**
+   * Where opening a row shows it in the reader: a row the mouse rests on
+   * starts Cue's brief of it (see reader-prefetch).
+   */
+  prefetchReaderOnHover?: boolean;
+  /** The row the reader shows, which asks for itself. */
+  openThreadKey?: string | null;
 };
 
 export const ThreadList = memo(function ThreadList({
@@ -90,8 +98,15 @@ export const ThreadList = memo(function ThreadList({
   showSentOpenStatus = false,
   rowActions,
   insightsPaused = false,
+  prefetchReaderOnHover = false,
+  openThreadKey = null,
 }: ThreadListProps) {
   const { emailAccountId } = useAccount();
+  const { onRowHover, onRowHoverEnd } = useReaderRowPrefetch({
+    emailAccountId,
+    openThreadKey,
+    listKey,
+  });
   const isMobile = useIsMobile();
   const dayStart = useDayStart();
   const hasRows = threads.length > 0;
@@ -190,6 +205,8 @@ export const ThreadList = memo(function ThreadList({
           isSelected={row.isSelected}
           key={row.rowKey}
           layout={layout}
+          onHoverIntent={prefetchReaderOnHover ? onRowHover : undefined}
+          onHoverIntentEnd={prefetchReaderOnHover ? onRowHoverEnd : undefined}
           onOpen={row.onOpen}
           onSelectRangeTo={row.onSelectRangeTo}
           onToggleSelect={row.onToggleSelect}

@@ -42,6 +42,7 @@ const TOPIC_KEYWORDS = 6;
 const CALENDAR_WINDOW_DAYS = 30;
 const MAX_MESSAGE_TEXT = 600;
 const SNIPPET_LENGTH = 180;
+const SLOW_STEPS_LOG_MS = 1000;
 // Suggested replies are checked against these same items, so a short list
 // hides evidence the reply needs; the ranker still drops weak matches.
 const CONTEXT_LIMIT = 8;
@@ -130,14 +131,42 @@ export async function collectThreadContext({
   thread: EmailThread | null;
   items: (ThreadContextItem & { text: string })[];
 }> {
+  const startedAt = Date.now();
+  const timings: Record<string, number> = {};
+  const timed = <T>(step: string, work: Promise<T>) =>
+    work.finally(() => {
+      timings[`${step}Ms`] = Date.now() - startedAt;
+    });
+  // Calendar events don't depend on the thread, so they load while it does.
+  const eventsPromise = knownItems
+    ? null
+    : timed(
+        "calendar",
+        fetchCalendarEventsInWindow({
+          emailAccountId,
+          timeMin: addDays(now, -CALENDAR_WINDOW_DAYS),
+          timeMax: addDays(now, CALENDAR_WINDOW_DAYS),
+          maxResultsPerProvider: 50,
+          logger,
+        })
+          .then((result) => result.events)
+          .catch((error) => {
+            logger.warn("Failed to fetch calendar events for context", {
+              error,
+            });
+            return [];
+          }),
+      );
   // The reader can hold a thread the provider hasn't synced yet.
-  const thread = await emailProvider.getThread(threadId).catch((error) => {
-    // Context waits for spare Gmail quota rather than caching a partial
-    // result; the caller retries.
-    if (isGmailCallDeferredError(error)) throw error;
-    logger.warn("Failed to load thread for context", { error });
-    return null;
-  });
+  const thread = await timed("thread", emailProvider.getThread(threadId)).catch(
+    (error) => {
+      // Context waits for spare Gmail quota rather than caching a partial
+      // result; the caller retries.
+      if (isGmailCallDeferredError(error)) throw error;
+      logger.warn("Failed to load thread for context", { error });
+      return null;
+    },
+  );
   if (!thread?.messages.length) return { thread: null, items: [] };
   if (knownItems) return { thread, items: knownItems };
 
@@ -153,44 +182,47 @@ export async function collectThreadContext({
   // related mail, events and pages are personal data, so every open asks again.
   const [peopleThreads, topicThreads, events, connectors, linkedPages] =
     await Promise.all([
-      mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
-        emailProvider
-          .getThreadsWithParticipant({
-            participantEmail: p.email,
-            maxThreads: THREADS_PER_PARTICIPANT,
-            excludeThreadId: thread.id,
-          })
-          .catch((error) => {
-            if (isGmailCallDeferredError(error)) throw error;
-            logger.warn("Failed to fetch threads with participant", { error });
-            return [];
-          }),
+      timed(
+        "people",
+        mapWithConcurrency(participants, PARTICIPANT_CONCURRENCY, (p) =>
+          emailProvider
+            .getThreadsWithParticipant({
+              participantEmail: p.email,
+              maxThreads: THREADS_PER_PARTICIPANT,
+              excludeThreadId: thread.id,
+            })
+            .catch((error) => {
+              if (isGmailCallDeferredError(error)) throw error;
+              logger.warn("Failed to fetch threads with participant", {
+                error,
+              });
+              return [];
+            }),
+        ),
       ),
-      findTopicThreads({ focus, emailProvider }).catch((error) => {
-        if (isGmailCallDeferredError(error)) throw error;
-        logger.warn("Failed to search threads by topic", { error });
-        return [];
-      }),
-      fetchCalendarEventsInWindow({
-        emailAccountId,
-        timeMin: addDays(now, -CALENDAR_WINDOW_DAYS),
-        timeMax: addDays(now, CALENDAR_WINDOW_DAYS),
-        maxResultsPerProvider: 50,
-        logger,
-      })
-        .then((result) => result.events)
-        .catch((error) => {
-          logger.warn("Failed to fetch calendar events for context", { error });
+      timed(
+        "topic",
+        findTopicThreads({ focus, emailProvider }).catch((error) => {
+          if (isGmailCallDeferredError(error)) throw error;
+          logger.warn("Failed to search threads by topic", { error });
           return [];
         }),
-      fetchConnectorCandidates({
-        emailAccountId,
-        keywords: focusKeywords(focus, TOPIC_KEYWORDS),
-        signals: threadSignals(thread, userEmail),
-        logger,
-        now,
-      }),
-      fetchLinkedPages({ message: thread.messages.at(-1)!, logger }),
+      ),
+      eventsPromise ?? [],
+      timed(
+        "connectors",
+        fetchConnectorCandidates({
+          emailAccountId,
+          keywords: focusKeywords(focus, TOPIC_KEYWORDS),
+          signals: threadSignals(thread, userEmail),
+          logger,
+          now,
+        }),
+      ),
+      timed(
+        "linkedPages",
+        fetchLinkedPages({ message: thread.messages.at(-1)!, logger }),
+      ),
     ]);
 
   const otherThreads = uniqueById([
@@ -223,6 +255,16 @@ export async function collectThreadContext({
     linkedFrom: candidate.linkedFrom,
     reasons,
   }));
+  // When each source finished, from the start: which one the reader waits on.
+  const steps = {
+    ...timings,
+    totalMs: Date.now() - startedAt,
+    participantCount: participants.length,
+    itemCount: items.length,
+  };
+  if (steps.totalMs >= SLOW_STEPS_LOG_MS)
+    logger.info("Thread context steps", steps);
+  else logger.trace("Thread context steps", steps);
   return { thread, items };
 }
 
