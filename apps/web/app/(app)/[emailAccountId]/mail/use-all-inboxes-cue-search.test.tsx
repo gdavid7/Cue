@@ -17,6 +17,12 @@ const state = vi.hoisted(() => ({
   intent: undefined as unknown,
   /** Each account's local mail Cue's search finds. */
   rows: {} as Record<string, Row[]>,
+  /** Each account's mail its widened search finds. */
+  widerRows: {} as Record<string, Row[]>,
+  /** Accounts whose last resort the provider has answered. */
+  widerAnswered: new Set<string>(),
+  /** When the engine began each account's last resort. */
+  widerStartedAt: {} as Record<string, number>,
   /** Accounts whose provider has answered. */
   answered: new Set<string>(),
   /** When the engine began each account's search; absent while queued. */
@@ -24,7 +30,12 @@ const state = vi.hoisted(() => ({
   routedLabels: [] as { name: string }[],
   fetcher: undefined as undefined | (() => unknown),
   fetchBodies: [] as unknown[],
-  windows: [] as { accountIds: string[]; predicate?: MailPredicate }[],
+  windows: [] as {
+    accountIds: string[];
+    predicate?: MailPredicate;
+    /** A window of Cue's wider tiers, which drop the search's word. */
+    widened: boolean;
+  }[],
 }));
 
 vi.mock("swr", () => ({
@@ -62,11 +73,15 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
         isLoading: false,
         providerSearchAccounts: [],
       };
-    state.windows.push({ accountIds, predicate });
+    const widened = !JSON.stringify(predicate).includes("lease");
+    state.windows.push({ accountIds, predicate, widened });
     const providerIds = providerSearchAccounts(predicate);
+    const rows = widened ? state.widerRows : state.rows;
+    const answered = widened ? state.widerAnswered : state.answered;
+    const startedAt = widened ? state.widerStartedAt : state.startedAt;
     return {
       threads: accountIds.flatMap((accountId) =>
-        (state.rows[accountId] ?? []).map((row) => ({
+        (rows[accountId] ?? []).map((row) => ({
           id: row.id,
           account: accounts[accountId],
           messages: [
@@ -83,12 +98,11 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
       isLoading: false,
       providerSearchAccounts: providerIds.map((accountId) => ({
         accountId,
-        state: state.answered.has(accountId) ? "complete" : "searching",
-        answered: state.answered.has(accountId),
-        ...(state.answered.has(accountId) ||
-        state.startedAt[accountId] === undefined
+        state: answered.has(accountId) ? "complete" : "searching",
+        answered: answered.has(accountId),
+        ...(answered.has(accountId) || startedAt[accountId] === undefined
           ? {}
-          : { startedAtMs: state.startedAt[accountId] }),
+          : { startedAtMs: startedAt[accountId] }),
       })),
     };
   },
@@ -140,6 +154,9 @@ beforeEach(() => {
   state.routedLabels = [];
   state.fetchBodies = [];
   state.rows = {};
+  state.widerRows = {};
+  state.widerAnswered = new Set();
+  state.widerStartedAt = {};
   state.intent = {
     searches: ["from:sarah lease"],
     editableSearches: ["from:sarah lease"],
@@ -178,7 +195,7 @@ describe("useAllInboxesCueSearch", () => {
     expect(new Set(intentKeys).size).toBe(1);
     expect(intentKeys[0]).toContain("work");
 
-    const window = state.windows.at(-1);
+    const window = primaryWindow();
     expect(window?.accountIds).toEqual(["work", "home"]);
     expect(searchesOf(window?.predicate)).toEqual([
       { accountIds: ["work"], query: "from:sarah lease" },
@@ -221,7 +238,7 @@ describe("useAllInboxesCueSearch", () => {
   it("asks a few providers at a time, and the next once one answers", () => {
     const { rerender } = render([WORK, HOME, SIDE]);
     expect(CUE_PROVIDER_SEARCH_QUEUE).toBe(2);
-    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+    expect(providerSearchAccounts(primaryWindow()?.predicate)).toEqual([
       "work",
       "home",
     ]);
@@ -229,7 +246,7 @@ describe("useAllInboxesCueSearch", () => {
     state.answered = new Set(["work"]);
     rerender();
     rerender();
-    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+    expect(providerSearchAccounts(primaryWindow()?.predicate)).toEqual([
       "work",
       "home",
       "side",
@@ -237,7 +254,12 @@ describe("useAllInboxesCueSearch", () => {
   });
 
   it("shows what it found without waiting on a slow account, then stops it", () => {
-    state.rows = { work: [{ id: "w1", subject: "Lease from Sarah" }] };
+    state.rows = {
+      work: [
+        { id: "w1", subject: "Lease from Sarah" },
+        { id: "w2", subject: "Lease from Sarah" },
+      ],
+    };
     state.answered = new Set(["work"]);
     const { result, rerender } = render([WORK, HOME]);
     expect(result.current.stage).toBe("searching");
@@ -246,7 +268,10 @@ describe("useAllInboxesCueSearch", () => {
       vi.advanceTimersByTime(CUE_SEARCH_BUDGET_MS);
     });
     expect(result.current.stage).toBe("done");
-    expect(result.current.threads.map((thread) => thread.id)).toEqual(["w1"]);
+    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+      "w1",
+      "w2",
+    ]);
     expect(result.current.stillSearching.map((account) => account.id)).toEqual([
       "home",
     ]);
@@ -255,7 +280,7 @@ describe("useAllInboxesCueSearch", () => {
     act(() => {
       vi.advanceTimersByTime(CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
     });
-    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+    expect(providerSearchAccounts(primaryWindow()?.predicate)).toEqual([
       "work",
       "home",
     ]);
@@ -267,7 +292,7 @@ describe("useAllInboxesCueSearch", () => {
       vi.advanceTimersByTime(CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
     });
     // Its provider is no longer asked; its local mail still counts.
-    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+    expect(providerSearchAccounts(primaryWindow()?.predicate)).toEqual([
       "work",
     ]);
     expect(result.current.stillSearching).toEqual([]);
@@ -284,7 +309,7 @@ describe("useAllInboxesCueSearch", () => {
     act(() => {
       vi.advanceTimersByTime(2 * CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
     });
-    expect(providerSearchAccounts(state.windows.at(-1)?.predicate)).toEqual([
+    expect(providerSearchAccounts(primaryWindow()?.predicate)).toEqual([
       "work",
     ]);
     expect(result.current.timedOut.map((account) => account.id)).toEqual([
@@ -337,7 +362,7 @@ describe("useAllInboxesCueSearch", () => {
         enabled: true,
       }),
     );
-    const before = searchesOf(state.windows.at(-1)?.predicate);
+    const before = searchesOf(primaryWindow()?.predicate);
 
     labelsByAccount = {
       work: { L1: { id: "L1", name: "Receipts", type: "user" } },
@@ -345,7 +370,7 @@ describe("useAllInboxesCueSearch", () => {
     rerender();
     rerender();
 
-    expect(searchesOf(state.windows.at(-1)?.predicate)).toEqual(before);
+    expect(searchesOf(primaryWindow()?.predicate)).toEqual(before);
   });
 
   it("puts mail a slow account finds late below the rows already shown", () => {
@@ -371,6 +396,113 @@ describe("useAllInboxesCueSearch", () => {
     expect(result.current.stillSearching).toEqual([]);
   });
 });
+
+describe("useAllInboxesCueSearch widening", () => {
+  it("widens only the account whose search found too little, its mail below", () => {
+    state.rows = {
+      work: [
+        { id: "w1", subject: "Lease from Sarah" },
+        { id: "w2", subject: "Lease from Sarah" },
+      ],
+    };
+    state.answered = new Set(["work", "home"]);
+    state.widerRows = { home: [{ id: "h1", subject: "Hello from Sarah" }] };
+    const { result, rerender } = render([WORK, HOME]);
+    rerender();
+
+    const wider = widenedWindows();
+    expect(wider.length).toBeGreaterThan(0);
+    for (const window of wider) expect(window.accountIds).toEqual(["home"]);
+    // A tier reads the local mail alone: no provider search.
+    expect(providerSearchAccounts(wider.at(-1)?.predicate)).toEqual([]);
+    expect(result.current.widening).toMatchObject({
+      tier: "fewer_words",
+      onProvider: false,
+    });
+    expect(
+      result.current.threads.map((thread) => [
+        "account" in thread ? thread.account.id : null,
+        thread.id,
+      ]),
+    ).toEqual([
+      ["work", "w1"],
+      ["work", "w2"],
+      ["home", "h1"],
+    ]);
+    expect(result.current.stage).toBe("done");
+  });
+
+  it("doesn't widen while an account's search is still running", () => {
+    state.answered = new Set(["work"]);
+    state.rows = {
+      work: [
+        { id: "w1", subject: "Lease from Sarah" },
+        { id: "w2", subject: "Lease from Sarah" },
+      ],
+    };
+    const { result, rerender } = render([WORK, HOME]);
+    rerender();
+
+    expect(widenedWindows()).toEqual([]);
+    expect(result.current.widening).toBeNull();
+    expect(result.current.stage).toBe("searching");
+  });
+
+  it("sends a last resort through the same queue and time box", () => {
+    // Nothing turns up anywhere, so every account climbs to its last
+    // resort, while "side" still holds a turn with its first search.
+    state.answered = new Set(["work", "home"]);
+    const { result, rerender } = render([WORK, HOME, SIDE]);
+    for (let i = 0; i < 4; i++) rerender();
+
+    expect(providerSearchAccounts(primaryWindow()?.predicate)).toEqual([
+      "work",
+      "home",
+      "side",
+    ]);
+    // One turn is free beside "side", and "work" is first in line.
+    expect(providerSearchAccounts(widenedWindows().at(-1)?.predicate)).toEqual([
+      "work",
+    ]);
+    expect(result.current.widening?.onProvider).toBe(true);
+    expect(result.current.stillSearching).toEqual([]);
+
+    // The last resort is timed from its start like any provider search.
+    state.widerStartedAt = { work: Date.now() };
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(CUE_ACCOUNT_SEARCH_TIMEOUT_MS);
+    });
+    rerender();
+    expect(
+      providerSearchAccounts(widenedWindows().at(-1)?.predicate),
+    ).not.toContain("work");
+    // Its turn passes to the next account in line.
+    expect(providerSearchAccounts(widenedWindows().at(-1)?.predicate)).toEqual([
+      "home",
+    ]);
+  });
+
+  it("never widens into an account left out of All inboxes", () => {
+    state.answered = new Set(["work"]);
+    const { rerender } = render([WORK]);
+    for (let i = 0; i < 3; i++) rerender();
+
+    expect(widenedWindows().length).toBeGreaterThan(0);
+    for (const window of state.windows) {
+      expect(window.accountIds).toEqual(["work"]);
+      expect(JSON.stringify(window.predicate)).not.toMatch(/home|side/);
+    }
+  });
+});
+
+function primaryWindow() {
+  return state.windows.filter((window) => !window.widened).at(-1);
+}
+
+function widenedWindows() {
+  return state.windows.filter((window) => window.widened);
+}
 
 function searchesOf(predicate: MailPredicate | undefined) {
   const found: { accountIds?: string[]; query: string }[] = [];

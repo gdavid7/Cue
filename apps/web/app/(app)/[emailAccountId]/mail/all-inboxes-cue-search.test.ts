@@ -5,13 +5,21 @@ import {
   CUE_PROVIDER_SEARCH_QUEUE,
   getAccountCueSearches,
   getAccountsCuePredicate,
+  getAccountsWidenedSearches,
+  getAccountWideningLadders,
   getCueRankingSearch,
   getFinishedProviderSearches,
+  getNextAccountWidenings,
   getProviderSearchStarts,
   holdRowOrder,
+  lastResortSearchId,
   scheduleAccountSearches,
+  summarizeAccountWidenings,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes-cue-search";
-import { rankCueFoundThreads } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import {
+  rankCueFoundThreads,
+  rankWithWidened,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import type { SearchIntentParts } from "@/utils/mail-search/generated-search";
 
@@ -222,6 +230,44 @@ describe("scheduleAccountSearches", () => {
     expect(late.toQueue).toEqual(["b"]);
   });
 
+  it("queues an account's last resort behind the first searches, in the same queue", () => {
+    const { phases, toQueue } = schedule({
+      accountIds: ["a", "b", lastResortSearchId("a")],
+      queuedAtMs: { b: 0 },
+      finishedIds: new Set(["a"]),
+    });
+
+    // One turn is free: "b" holds the other, so the last resort takes it.
+    expect(toQueue).toEqual([lastResortSearchId("a")]);
+    expect(phases[lastResortSearchId("a")]).toBe("searching");
+    expect(
+      schedule({
+        accountIds: ["a", "b", "c", lastResortSearchId("a")],
+        queuedAtMs: { b: 0, c: 0 },
+        finishedIds: new Set(["a"]),
+      }).phases[lastResortSearchId("a")],
+    ).toBe("waiting");
+  });
+
+  it("takes an account's first search's time off its last resort's box", () => {
+    const id = lastResortSearchId("a");
+    const input = {
+      accountIds: [id],
+      queuedAtMs: { [id]: 0 },
+      startedAtMs: { [id]: 1000 },
+      spentMs: { [id]: 3000 },
+    };
+
+    expect(
+      schedule({ ...input, nowMs: 1000 + CUE_ACCOUNT_SEARCH_TIMEOUT_MS - 3001 })
+        .phases[id],
+    ).toBe("searching");
+    expect(
+      schedule({ ...input, nowMs: 1000 + CUE_ACCOUNT_SEARCH_TIMEOUT_MS - 3000 })
+        .toTimeOut,
+    ).toEqual([id]);
+  });
+
   it("keeps a timed-out account out of the queue", () => {
     const { phases, toQueue, nextDeadlineMs } = schedule({
       accountIds: ["a", "b"],
@@ -291,6 +337,141 @@ describe("cross-account ranking", () => {
     });
 
     expect(ranked.map((row) => row.id)).toEqual(["b-1", "a-1"]);
+  });
+
+  it("keeps each account's labels apart when a wider tier's mail joins in", () => {
+    const thread = (accountId: string, subject: string): ListThread =>
+      ({
+        id: `${accountId}-1`,
+        snippet: "",
+        account: {
+          id: accountId,
+          email: `${accountId}@example.com`,
+          name: null,
+          image: null,
+          provider: "google",
+        },
+        messages: [
+          {
+            id: `${accountId}-m`,
+            threadId: `${accountId}-1`,
+            labelIds: ["Label_3"],
+            internalDate: String(NOW.getTime()),
+            headers: { subject, from: "sarah", to: "", date: "" },
+          },
+        ],
+      }) as unknown as ListThread;
+    const context = {
+      searches: ["lease"],
+      labels: [
+        { id: "Label_3", name: "Newsletter", accountId: "a" },
+        { id: "Label_3", name: "Clients", accountId: "b" },
+      ],
+      now: NOW,
+      timeZone: "UTC",
+      provider: "google" as const,
+    };
+    // "a" found a newsletter, so it competes with what "b" widened to;
+    // "b"'s same label id is no newsletter, so its match isn't demoted.
+    const ranked = rankWithWidened(
+      [thread("a", "Lease")],
+      [thread("b", "Lease")],
+      context,
+    );
+
+    expect(ranked.map((row) => row.id)).toEqual(["b-1", "a-1"]);
+  });
+});
+
+describe("account widening", () => {
+  const searches = [
+    { accountId: "gmail", search: "from:sarah lease" },
+    { accountId: "outlook", search: "from:sarah lease" },
+  ];
+  const ladders = getAccountWideningLadders(
+    searches,
+    [GMAIL, OUTLOOK],
+    CONTEXT,
+  );
+  const settled = (count: number) => ({ settled: true, count });
+
+  it("builds a ladder only for the accounts searched", () => {
+    expect(Object.keys(ladders)).toEqual(["gmail", "outlook"]);
+    expect(ladders.gmail?.[0]?.searches).toEqual(["from:sarah"]);
+    // An account left out of All inboxes gets no ladder, so no wider search.
+    expect(
+      Object.keys(getAccountWideningLadders(searches, [GMAIL], CONTEXT)),
+    ).toEqual(["gmail"]);
+  });
+
+  it("widens only the account that found too little", () => {
+    const next = getNextAccountWidenings({
+      ladders,
+      widenings: {},
+      primary: { gmail: settled(5), outlook: settled(1) },
+      widened: {},
+      expired: false,
+      providerAllowedIds: new Set(["gmail", "outlook"]),
+    });
+
+    expect(next).toEqual({ outlook: { step: 0, onProvider: false } });
+    expect(getAccountsWidenedSearches(ladders, next ?? {})).toEqual([
+      { accountId: "outlook", search: "from:sarah" },
+    ]);
+  });
+
+  it("waits on an account whose search hasn't answered", () => {
+    expect(
+      getNextAccountWidenings({
+        ladders,
+        widenings: {},
+        primary: { gmail: { settled: false, count: 0 }, outlook: settled(3) },
+        widened: {},
+        expired: false,
+        providerAllowedIds: new Set(),
+      }),
+    ).toBeNull();
+  });
+
+  it("asks an account's provider last only when it found nothing and has time left", () => {
+    const input = {
+      ladders,
+      widenings: {
+        gmail: { step: 0, onProvider: false },
+        outlook: { step: 0, onProvider: false },
+      },
+      primary: { gmail: settled(0), outlook: settled(0) },
+      widened: { gmail: settled(0), outlook: settled(0) },
+      expired: false,
+    };
+
+    // Outlook's first provider search ran out its box, so it isn't asked again.
+    expect(
+      getNextAccountWidenings({
+        ...input,
+        providerAllowedIds: new Set(["gmail"]),
+      }),
+    ).toEqual({ gmail: { step: 0, onProvider: true } });
+    expect(
+      getNextAccountWidenings({
+        ...input,
+        expired: true,
+        providerAllowedIds: new Set(["gmail"]),
+      }),
+    ).toBeNull();
+  });
+
+  it("says which tier Cue widened to across accounts", () => {
+    expect(
+      summarizeAccountWidenings(ladders, {
+        outlook: { step: 0, onProvider: true },
+      }),
+    ).toEqual({
+      tier: "fewer_words",
+      searches: ["from:sarah"],
+      onProvider: true,
+    });
+    expect(summarizeAccountWidenings(ladders, {})).toBeNull();
   });
 });
 

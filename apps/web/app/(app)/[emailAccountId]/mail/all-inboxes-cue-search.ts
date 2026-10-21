@@ -1,5 +1,12 @@
 import type { MailboxView, MailPredicate } from "@inboxzero/mail-core/queries";
 import {
+  type CueWidening,
+  getWideningLadder,
+  getWideningStep,
+  shouldAskProviderLastResort,
+  type WideningStep,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search";
+import {
   type ActionableThread,
   getListThreadKey,
 } from "@/app/(app)/[emailAccountId]/mail/types";
@@ -7,6 +14,7 @@ import {
   buildGeneratedSearch,
   type SearchIntentParts,
 } from "@/utils/mail-search/generated-search";
+import { WIDENING_TIERS } from "@/utils/mail-search/natural-language-search";
 import {
   type SearchLabel,
   searchProvider,
@@ -92,6 +100,11 @@ export type AccountSearchPhase =
  * timed out `QUEUED_TIMEOUT_FACTOR` boxes after it was queued, so it can't
  * hold its turn for good. `toQueue` are the accounts whose turn has come and
  * `toTimeOut` the ones whose time ran out, for the caller to record.
+ *
+ * An id may also be an account's last resort (`lastResortSearchId`), which
+ * waits in the same queue; `spentMs` is the time its account's provider
+ * already took, which comes off its box, so an account's provider never
+ * runs longer in all than one box.
  */
 export function scheduleAccountSearches({
   accountIds,
@@ -99,6 +112,7 @@ export function scheduleAccountSearches({
   finishedIds,
   timedOutIds,
   startedAtMs,
+  spentMs = {},
   nowMs,
   queueSize = CUE_PROVIDER_SEARCH_QUEUE,
   timeoutMs = CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
@@ -110,6 +124,8 @@ export function scheduleAccountSearches({
   timedOutIds: ReadonlySet<string>;
   /** When the engine began each running account's search. */
   startedAtMs: Readonly<Record<string, number>>;
+  /** Time a search's account already spent on its provider. */
+  spentMs?: Readonly<Record<string, number>>;
   nowMs: number;
   queueSize?: number;
   timeoutMs?: number;
@@ -128,9 +144,10 @@ export function scheduleAccountSearches({
     const started = startedAtMs[id];
     const queued = queuedAtMs[id];
     const deadline =
-      started !== undefined
+      (started !== undefined
         ? started + timeoutMs
-        : (queued ?? 0) + timeoutMs * QUEUED_TIMEOUT_FACTOR;
+        : (queued ?? 0) + timeoutMs * QUEUED_TIMEOUT_FACTOR) -
+      (spentMs[id] ?? 0);
     if (finishedIds.has(id)) phases[id] = "finished";
     else if (timedOutIds.has(id)) phases[id] = "timedOut";
     else if (queued === undefined) phases[id] = "waiting";
@@ -151,6 +168,131 @@ export function scheduleAccountSearches({
     .slice(0, Math.max(0, queueSize - searching));
   for (const id of toQueue) phases[id] = "searching";
   return { phases, toQueue, toTimeOut, nextDeadlineMs };
+}
+
+/**
+ * The scheduler's id for an account's last resort: its widest searches sent
+ * to its provider too, once nothing local turned up.
+ */
+export function lastResortSearchId(accountId: string) {
+  return `${accountId}:last-resort`;
+}
+
+/**
+ * Each account's widening ladder, from its own search in its own syntax, as
+ * a single account's search widens. Accounts left out have none.
+ */
+export function getAccountWideningLadders(
+  searches: AccountCueSearch[],
+  accounts: CueSearchAccount[],
+  { now, timeZone }: { now: Date; timeZone: string },
+): Record<string, WideningStep[]> {
+  const ladders: Record<string, WideningStep[]> = {};
+  for (const account of accounts) {
+    const own = searches
+      .filter((search) => search.accountId === account.id)
+      .map(({ search }) => search);
+    if (!own.length) continue;
+    ladders[account.id] = getWideningLadder(own, {
+      now,
+      timeZone,
+      provider: searchProvider(account.provider) ?? "google",
+    });
+  }
+  return ladders;
+}
+
+export type AccountWidening = { step: number; onProvider: boolean };
+type LadderWindow = Parameters<typeof getWideningStep>[0]["primary"];
+const NOT_SETTLED: LadderWindow = { settled: false, count: 0 };
+
+/**
+ * The widening steps that change now, by account, or null when none does.
+ * Each account climbs its own ladder by the single-account rules: only once
+ * its own searches answered with too little, and never past the budget. Its
+ * last resort goes to its provider only when `providerAllowedIds` has it:
+ * its first provider search answered within its box.
+ */
+export function getNextAccountWidenings({
+  ladders,
+  widenings,
+  primary,
+  widened,
+  expired,
+  providerAllowedIds,
+}: {
+  ladders: Readonly<Record<string, WideningStep[]>>;
+  widenings: Readonly<Record<string, AccountWidening>>;
+  /** Each account's first search: its mail, and whether it has answered. */
+  primary: Readonly<Record<string, LadderWindow>>;
+  /** Each account's current tier; `count` is mail its first search missed. */
+  widened: Readonly<Record<string, LadderWindow>>;
+  expired: boolean;
+  providerAllowedIds: ReadonlySet<string>;
+}): Record<string, AccountWidening> | null {
+  const changes: Record<string, AccountWidening> = {};
+  for (const [accountId, ladder] of Object.entries(ladders)) {
+    const current = widenings[accountId];
+    const ladderState = {
+      step: current?.step ?? null,
+      primary: primary[accountId] ?? NOT_SETTLED,
+      widened: widened[accountId] ?? NOT_SETTLED,
+      ladderLength: ladder.length,
+      expired,
+    };
+    const step = getWideningStep(ladderState);
+    if (step === null) continue;
+    if (step !== ladderState.step)
+      changes[accountId] = { step, onProvider: false };
+    else if (
+      !current?.onProvider &&
+      providerAllowedIds.has(accountId) &&
+      shouldAskProviderLastResort(ladderState)
+    )
+      changes[accountId] = { step, onProvider: true };
+  }
+  return Object.keys(changes).length ? changes : null;
+}
+
+/** Each widening account's searches for its current tier. */
+export function getAccountsWidenedSearches(
+  ladders: Readonly<Record<string, WideningStep[]>>,
+  widenings: Readonly<Record<string, AccountWidening>>,
+): AccountCueSearch[] {
+  return Object.entries(ladders).flatMap(([accountId, ladder]) => {
+    const widening = widenings[accountId];
+    const tier = widening ? ladder[widening.step] : undefined;
+    return (tier?.searches ?? []).map((search) => ({ accountId, search }));
+  });
+}
+
+/**
+ * What Cue says it widened to across accounts: the widest tier any account
+ * reached, every account's searches for its tier, and whether any went to
+ * its provider.
+ */
+export function summarizeAccountWidenings(
+  ladders: Readonly<Record<string, WideningStep[]>>,
+  widenings: Readonly<Record<string, AccountWidening>>,
+): CueWidening | null {
+  let widest: WideningStep | null = null;
+  let onProvider = false;
+  const searches = new Set<string>();
+  for (const [accountId, ladder] of Object.entries(ladders)) {
+    const widening = widenings[accountId];
+    const tier = widening ? ladder[widening.step] : undefined;
+    if (!widening || !tier) continue;
+    for (const search of tier.searches) searches.add(search);
+    onProvider ||= widening.onProvider;
+    if (
+      !widest ||
+      WIDENING_TIERS.indexOf(tier.tier) > WIDENING_TIERS.indexOf(widest.tier)
+    )
+      widest = tier;
+  }
+  return widest
+    ? { tier: widest.tier, searches: [...searches], onProvider }
+    : null;
 }
 
 /** When the engine began each account's search that is still running. */

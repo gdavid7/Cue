@@ -6,14 +6,21 @@ import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-in
 import {
   type AccountCueSearch,
   type AccountSearchPhase,
+  type AccountWidening,
+  CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
   type CueSearchAccount,
   getAccountCueSearches,
   getAccountsCuePredicate,
+  getAccountsWidenedSearches,
+  getAccountWideningLadders,
   getCueRankingSearch,
   getFinishedProviderSearches,
+  getNextAccountWidenings,
   getProviderSearchStarts,
   holdRowOrder,
+  lastResortSearchId,
   scheduleAccountSearches,
+  summarizeAccountWidenings,
 } from "@/app/(app)/[emailAccountId]/mail/all-inboxes-cue-search";
 import {
   CUE_SEARCH_BUDGET_MS,
@@ -21,7 +28,10 @@ import {
   getCueSearchStage,
   getSearchAnswerRequest,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
-import { rankCueFoundThreads } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import {
+  rankCueFoundThreads,
+  rankWithWidened,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import {
   getListThreadKey,
   type ListThread,
@@ -41,6 +51,7 @@ const NO_ACCOUNTS: AllInboxesAccount[] = [];
 const NO_SEARCHES: AccountCueSearch[] = [];
 const NO_IDS: string[] = [];
 const NO_STARTS: Record<string, number> = {};
+const NO_WIDENINGS: Record<string, AccountWidening> = {};
 // The predicate carries the searches; the query only names the window.
 const PREDICATE_ONLY_QUERY: ThreadsQuery = { q: "" };
 
@@ -58,8 +69,11 @@ type Run = {
   searches: AccountCueSearch[] | null;
   /** When Cue queued each account's provider search. */
   queued: Record<string, number>;
-  /** Accounts whose provider has answered, or never will. */
-  finished: string[];
+  /**
+   * Searches whose provider has answered, or never will, and when Cue saw
+   * it. Keyed like `queued`: an account, or its last resort.
+   */
+  finished: Record<string, number>;
   /** Accounts whose provider took too long, and was stopped. */
   timedOut: string[];
   /**
@@ -67,6 +81,8 @@ type Run = {
    * window reloading for a new query doesn't restart an account's clock.
    */
   started: Record<string, number>;
+  /** Each account's step up its widening ladder, once it found too little. */
+  widenings: Record<string, AccountWidening>;
 };
 
 /**
@@ -79,6 +95,11 @@ type Run = {
  * holds up the others. What they find is ranked together on one scale and
  * each row keeps its account, so it opens there. Accounts left out of All
  * inboxes are never searched.
+ *
+ * An account whose search found too little widens it as a single account's
+ * does, tier by tier on its local mail, and as a last resort sends its
+ * widest searches to its provider through the same queue, within what is
+ * left of its time box.
  */
 export function useAllInboxesCueSearch({
   emailAccountId,
@@ -138,9 +159,10 @@ export function useAllInboxesCueSearch({
       frozenKeys: null,
       searches: null,
       queued: {},
-      finished: [],
+      finished: {},
       timedOut: [],
       started: {},
+      widenings: {},
     });
     const timeout = setTimeout(() => {
       setRun((current) =>
@@ -207,31 +229,81 @@ export function useAllInboxesCueSearch({
     () => searches.map((search) => search.accountId),
     [searches],
   );
+  const ladders = useMemo(
+    () =>
+      getAccountWideningLadders(searches, searchAccounts, { now, timeZone }),
+    [searches, searchAccounts, now, timeZone],
+  );
+  const widenings = current?.widenings ?? NO_WIDENINGS;
+  const widenedSearches = useMemo(
+    () => getAccountsWidenedSearches(ladders, widenings),
+    [ladders, widenings],
+  );
+  const widenedIdsKey = [
+    ...new Set(widenedSearches.map((search) => search.accountId)),
+  ].join("\n");
+  const widenedIds = useMemo(
+    () => (widenedIdsKey ? widenedIdsKey.split("\n") : NO_IDS),
+    [widenedIdsKey],
+  );
+  // An account's last resort waits its turn in the same queue as every
+  // account's first search.
+  const scheduledIds = useMemo(
+    () => [
+      ...searchedIds,
+      ...widenedIds
+        .filter((id) => widenings[id]?.onProvider)
+        .map(lastResortSearchId),
+    ],
+    [searchedIds, widenedIds, widenings],
+  );
 
   // Which accounts' providers search now: it looks again whenever one
   // answers or begins, and when a running one's time box runs out.
   const [clockMs, setClockMs] = useState(() => Date.now());
   const started = current?.started;
   const queuedAtMs = current?.queued ?? NO_STARTS;
+  const finishedAt = current?.finished ?? NO_STARTS;
   const finishedIds = useMemo(
-    () => new Set(current?.finished),
-    [current?.finished],
+    () => new Set(Object.keys(finishedAt)),
+    [finishedAt],
   );
   const timedOutIds = useMemo(
     () => new Set(current?.timedOut),
     [current?.timedOut],
   );
+  // What each account's first provider search took comes off its last
+  // resort's box.
+  const spentMs = useMemo(
+    () =>
+      Object.fromEntries(
+        searchedIds.map((id) => [
+          lastResortSearchId(id),
+          spentOnProvider(started?.[id], finishedAt[id]),
+        ]),
+      ),
+    [searchedIds, started, finishedAt],
+  );
   const { phases, toQueue, toTimeOut, nextDeadlineMs } = useMemo(
     () =>
       scheduleAccountSearches({
-        accountIds: searchedIds,
+        accountIds: scheduledIds,
         queuedAtMs,
         finishedIds,
         timedOutIds,
         startedAtMs: started ?? NO_STARTS,
+        spentMs,
         nowMs: clockMs,
       }),
-    [searchedIds, queuedAtMs, finishedIds, timedOutIds, started, clockMs],
+    [
+      scheduledIds,
+      queuedAtMs,
+      finishedIds,
+      timedOutIds,
+      started,
+      spentMs,
+      clockMs,
+    ],
   );
   const providerAccountIds = useMemo(
     () =>
@@ -267,28 +339,165 @@ export function useAllInboxesCueSearch({
     enabled: natural && Boolean(predicate),
   });
 
-  const newStarts = Object.entries(
-    getProviderSearchStarts(state.providerSearchAccounts),
-  ).filter(([id]) => providerAccountIds.has(id) && started?.[id] === undefined);
-  const answeredByProvider = getFinishedProviderSearches(
-    state.providerSearchAccounts,
-  ).filter((id) => providerAccountIds.has(id) && !finishedIds.has(id));
+  // The wider tiers, in a window of their own as for a single account, so
+  // each account's first search and its widening are told apart. A tier
+  // reads the local mail alone, except an account's last resort once its
+  // turn comes.
+  const widenedProviderIds = useMemo(
+    () =>
+      new Set(
+        widenedIds.filter((id) => {
+          const phase = phases[lastResortSearchId(id)];
+          return phase === "searching" || phase === "finished";
+        }),
+      ),
+    [widenedIds, phases],
+  );
+  const widenedPredicate = useMemo(
+    () =>
+      widenedSearches.length
+        ? getAccountsCuePredicate({
+            searches: widenedSearches,
+            accounts: searchAccounts,
+            providerAccountIds: widenedProviderIds,
+            // Unread narrows a search, which widening drops.
+            unreadOnly: false,
+            now,
+            timeZone,
+          })
+        : undefined,
+    [widenedSearches, searchAccounts, widenedProviderIds, now, timeZone],
+  );
+  const wider = useEngineMailThreads({
+    emailAccountId,
+    accountIds: widenedIds.length ? widenedIds : [emailAccountId],
+    accounts: accountsById,
+    query: PREDICATE_ONLY_QUERY,
+    predicate: widenedPredicate,
+    enabled: natural && Boolean(widenedPredicate),
+  });
+
+  const newStarts = [
+    ...Object.entries(
+      getProviderSearchStarts(state.providerSearchAccounts),
+    ).filter(([id]) => providerAccountIds.has(id)),
+    ...Object.entries(getProviderSearchStarts(wider.providerSearchAccounts))
+      .filter(([id]) => widenedProviderIds.has(id))
+      .map(([id, at]) => [lastResortSearchId(id), at] as const),
+  ].filter(([id]) => started?.[id] === undefined);
+  const answeredByProvider = [
+    ...getFinishedProviderSearches(state.providerSearchAccounts).filter((id) =>
+      providerAccountIds.has(id),
+    ),
+    ...getFinishedProviderSearches(wider.providerSearchAccounts)
+      .filter((id) => widenedProviderIds.has(id))
+      .map(lastResortSearchId),
+  ].filter((id) => !finishedIds.has(id));
+
+  useEffect(() => {
+    if (nextDeadlineMs === null) return;
+    // Pushed to the deadline, so a timer that fires early still lands on it.
+    const timeout = setTimeout(
+      () => setClockMs(Math.max(Date.now(), nextDeadlineMs)),
+      Math.max(0, nextDeadlineMs - Date.now()),
+    );
+    return () => clearTimeout(timeout);
+  }, [nextDeadlineMs]);
+
+  // An account's turn to search its provider, or a step up its ladder,
+  // changes a window's query; its rows stay while the new window loads, so
+  // they don't blink out.
+  const windowThreads = useHeldWhileLoading(query, state);
+  const widerThreads = useHeldWhileLoading(query, wider);
+  const primaryKeys = useMemo(
+    () => new Set(windowThreads.map(getListThreadKey)),
+    [windowThreads],
+  );
+  const widerNew = useMemo(
+    () =>
+      widerThreads.filter(
+        (thread) =>
+          !primaryKeys.has(getListThreadKey(thread)) &&
+          widenedIds.includes(accountIdOf(thread)),
+      ),
+    [widerThreads, primaryKeys, widenedIds],
+  );
+
+  // Each account climbs its own ladder on its own mail: one account finding
+  // plenty never stops another that found too little from widening.
+  const windowSettled =
+    natural &&
+    Boolean(predicate) &&
+    state.hasRemoteResponse &&
+    !state.isLoading;
+  const widerSettled =
+    Boolean(widenedPredicate) && wider.hasRemoteResponse && !wider.isLoading;
+  const isDone = (id: string) =>
+    phases[id] === "finished" || phases[id] === "timedOut";
+  const primaryCounts = countByAccount(windowThreads);
+  const widerCounts = countByAccount(widerNew);
+  const ladderPrimary = Object.fromEntries(
+    searchedIds.map((id) => [
+      id,
+      {
+        settled: windowSettled && isDone(id),
+        count: primaryCounts.get(id) ?? 0,
+      },
+    ]),
+  );
+  const ladderWidened = Object.fromEntries(
+    widenedIds.map((id) => [
+      id,
+      {
+        settled:
+          widerSettled &&
+          (!widenings[id]?.onProvider || isDone(lastResortSearchId(id))),
+        count: widerCounts.get(id) ?? 0,
+      },
+    ]),
+  );
+  // Only an account whose own provider answered within its box, with time
+  // left in it, may send its last resort there.
+  const providerAllowedIds = new Set(
+    searchedIds.filter(
+      (id) =>
+        phases[id] === "finished" &&
+        spentMs[lastResortSearchId(id)] < CUE_ACCOUNT_SEARCH_TIMEOUT_MS,
+    ),
+  );
+  const nextWidenings = getNextAccountWidenings({
+    ladders,
+    widenings,
+    primary: ladderPrimary,
+    widened: ladderWidened,
+    expired,
+    providerAllowedIds,
+  });
+
   const changesKey = JSON.stringify([
     toQueue,
     toTimeOut,
     answeredByProvider,
     newStarts,
+    nextWidenings,
   ]);
   useEffect(() => {
-    const [queue, timeOut, finish, starts] = JSON.parse(changesKey) as [
+    const [queue, timeOut, finish, starts, widen] = JSON.parse(changesKey) as [
       string[],
       string[],
       string[],
       [string, number][],
+      Record<string, AccountWidening> | null,
     ];
     if (
       !query ||
-      !(queue.length || timeOut.length || finish.length || starts.length)
+      !(
+        queue.length ||
+        timeOut.length ||
+        finish.length ||
+        starts.length ||
+        widen
+      )
     )
       return;
     setRun((run) =>
@@ -300,34 +509,16 @@ export function useAllInboxesCueSearch({
               ...run.queued,
             },
             timedOut: [...new Set([...run.timedOut, ...timeOut])],
-            finished: [...new Set([...run.finished, ...finish])],
+            finished: {
+              ...Object.fromEntries(finish.map((id) => [id, Date.now()])),
+              ...run.finished,
+            },
             started: { ...Object.fromEntries(starts), ...run.started },
+            widenings: widen ? { ...run.widenings, ...widen } : run.widenings,
           }
         : run,
     );
   }, [changesKey, query]);
-  useEffect(() => {
-    if (nextDeadlineMs === null) return;
-    // Pushed to the deadline, so a timer that fires early still lands on it.
-    const timeout = setTimeout(
-      () => setClockMs(Math.max(Date.now(), nextDeadlineMs)),
-      Math.max(0, nextDeadlineMs - Date.now()),
-    );
-    return () => clearTimeout(timeout);
-  }, [nextDeadlineMs]);
-
-  // An account's turn to search its provider changes the window's query;
-  // its rows stay while the new window loads, so they don't blink out.
-  const heldRef = useRef<{ query: string | null; threads: ListThread[] }>({
-    query: null,
-    threads: NO_THREADS,
-  });
-  let windowThreads = state.threads;
-  if (state.isLoading && heldRef.current.query === query)
-    windowThreads = heldRef.current.threads;
-  else if (!state.isLoading)
-    heldRef.current = { query, threads: windowThreads };
-
   const ranking = useMemo(
     () => ({
       searches: intent?.parts
@@ -340,9 +531,14 @@ export function useAllInboxesCueSearch({
     }),
     [intent, searchAccounts, now, timeZone],
   );
+  // As for one account: the first searches' matches lead, and what a wider
+  // tier added competes below them.
   const liveThreads = useMemo(
-    () => rankCueFoundThreads(windowThreads, ranking),
-    [windowThreads, ranking],
+    () =>
+      widenedIds.length
+        ? rankWithWidened(windowThreads, widerNew, ranking)
+        : rankCueFoundThreads(windowThreads, ranking),
+    [widenedIds, windowThreads, widerNew, ranking],
   );
   useEffect(() => {
     rowKeysRef.current = liveThreads.map(getListThreadKey);
@@ -362,18 +558,24 @@ export function useAllInboxesCueSearch({
   const threads = held?.threads ?? liveThreads;
 
   // As strings, so the same accounts keep the same lists from render to render.
+  const primaryPending = searchedIds.some((id) => isPending(phases[id]));
   const pendingKey = searchedIds
-    .filter((id) => isPending(phases[id]))
+    .filter(
+      (id) =>
+        isPending(phases[id]) || isPending(phases[lastResortSearchId(id)]),
+    )
     .join("\n");
   const timedOutKey = searchedIds
     .filter((id) => phases[id] === "timedOut")
     .join("\n");
+  // A step about to be taken isn't an answer yet, so "found nothing" never
+  // shows for a moment before Cue widens.
+  const widening = widenedIds.length > 0 || nextWidenings !== null;
   const settled =
-    natural &&
-    Boolean(predicate) &&
-    state.hasRemoteResponse &&
-    !state.isLoading &&
-    !pendingKey;
+    windowSettled &&
+    !pendingKey &&
+    !nextWidenings &&
+    (!widenedIds.length || widerSettled);
   const stage = getCueSearchStage({
     natural,
     intent: intent && {
@@ -381,10 +583,17 @@ export function useAllInboxesCueSearch({
       searches: searches.map(({ search }) => search),
     },
     expired,
-    primary: { settled, count: liveThreads.length },
-    widening: false,
-    widened: { settled: false, count: 0 },
+    primary: {
+      settled: windowSettled && !primaryPending,
+      count: liveThreads.length,
+    },
+    widening,
+    widened: { settled, count: widerNew.length },
   });
+  const shownWidening = useMemo(
+    () => summarizeAccountWidenings(ladders, widenings),
+    [ladders, widenings],
+  );
   const stillSearching = useMemo(
     () => (stage === "done" ? accountsIn(accounts, pendingKey) : NO_ACCOUNTS),
     [stage, pendingKey, accounts],
@@ -413,7 +622,8 @@ export function useAllInboxesCueSearch({
     intent: shownIntent,
     threads,
     foundNothing: stage === "done" && settled && !liveThreads.length,
-    widening: null,
+    /** The widest tier any account widened to, with each account's searches. */
+    widening: shownWidening,
     // The routed account's own searches: the answer is read from its mail.
     answerRequest: getSearchAnswerRequest({ query, natural, intent, stage }),
     /** Accounts Cue is still searching once it has shown what it found. */
@@ -421,6 +631,42 @@ export function useAllInboxesCueSearch({
     /** Accounts whose provider took too long; only their local mail shows. */
     timedOut,
   };
+}
+
+/** The rows a window showed last, kept while it loads a new query. */
+function useHeldWhileLoading(
+  query: string | null,
+  window: { threads: ListThread[]; isLoading: boolean },
+) {
+  const heldRef = useRef<{ query: string | null; threads: ListThread[] }>({
+    query: null,
+    threads: NO_THREADS,
+  });
+  if (window.isLoading && heldRef.current.query === query)
+    return heldRef.current.threads;
+  if (!window.isLoading) heldRef.current = { query, threads: window.threads };
+  return window.threads;
+}
+
+function spentOnProvider(
+  startedAtMs: number | undefined,
+  finishedAtMs: number | undefined,
+) {
+  if (startedAtMs === undefined || finishedAtMs === undefined) return 0;
+  return Math.max(0, finishedAtMs - startedAtMs);
+}
+
+function accountIdOf(thread: ListThread) {
+  return "account" in thread && thread.account ? thread.account.id : "";
+}
+
+function countByAccount(threads: ListThread[]) {
+  const counts = new Map<string, number>();
+  for (const thread of threads) {
+    const id = accountIdOf(thread);
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function isPending(phase: AccountSearchPhase | undefined) {
