@@ -176,6 +176,7 @@ import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
 import {
   InboxPreviewList,
+  useCatchUpOnWake,
   useFetchOpenedPreviewThreads,
   useIngestInboxPreview,
   useRetireInboxPreview,
@@ -809,6 +810,7 @@ export function MailShell() {
   }, [hasLocalMail, emailAccountId, lastSyncedAtMs, serverClockOffsetMs]);
   useFetchOpenedPreviewThreads();
   useIngestInboxPreview();
+  useCatchUpOnWake({ lastSyncedAtMs, enabled: !isAllAccounts });
   const listPlaceholderMessage = getListPlaceholderMessage({
     engineStarting: !client,
     isAllAccounts,

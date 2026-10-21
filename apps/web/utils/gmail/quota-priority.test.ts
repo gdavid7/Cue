@@ -43,6 +43,7 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "chat/confirm-email-action": "interactive",
   // Pages a person opened.
   "user/home": "interactive",
+  "user/inbox-catch-up": "interactive",
   labels: "interactive",
   "google/linking/callback": "interactive",
   "clean/onboarding": "interactive",

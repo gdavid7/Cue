@@ -258,6 +258,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/public-contact-context",
     // Pages and panels a person opened.
     "user/home",
+    // The newest inbox mail for the inbox a person came back to.
+    "user/inbox-catch-up",
     "user/contacts",
     "user/folders",
     "user/mail-splits",
