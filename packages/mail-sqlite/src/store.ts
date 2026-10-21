@@ -363,13 +363,12 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
-        const read = await readOrder(tx, input.requestedAt, digest);
-        for (const change of input.page.changes) {
-          await applyChange(tx, change, read);
-        }
+        // Targets go in first so the messages this page finds show the
+        // change while later pages are still being read.
+        const newTargets: MessageKey[] = [];
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
-          await tx.execute(
+          const inserted = await tx.execute(
             `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
              VALUES (?, ?, ?, ?)`,
             [
@@ -379,7 +378,19 @@ export async function createSqliteMailStore(
               input.page.conversation.conversationId,
             ],
           );
+          if (inserted.changedRows > 0) newTargets.push(key);
         }
+        const read = await readOrder(tx, input.requestedAt, digest);
+        for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessagePatch(tx, change))
+          ) {
+            continue;
+          }
+          await applyChange(tx, change, read);
+        }
+        await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
            SET next_page = ?, complete = ?
@@ -398,7 +409,11 @@ export async function createSqliteMailStore(
             input.previousPage,
           ],
         );
-        if (updated.changedRows === 0) return { status: "stale" };
+        // Checked above in this transaction; throwing rolls back the targets
+        // and changes already written, which returning would commit.
+        if (updated.changedRows === 0) {
+          throw new Error("Preparation page changed during its transaction");
+        }
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
