@@ -72,7 +72,7 @@ test("swipes a row right to flip its read state", async ({
   const { conversations, emailAccountId } = await openMail(page);
   const row = conversationWithSubject(page, conversations, SUBJECT);
   await expect(row).toBeVisible();
-  const wasUnread = await steadyUnread(row);
+  const wasUnread = await isUnread(row);
 
   const swipe = await touchSwipe(page, row, { from: "left" });
   await swipe.moveBy(200);
@@ -86,18 +86,12 @@ test("swipes a row right to flip its read state", async ({
   await expect.poll(() => isUnread(row)).toBe(!wasUnread);
   await expect(page.locator("[data-swiping]")).toHaveCount(0);
 
-  // And back, leaving the shared mailbox as it was. Outlook can briefly show
-  // the old state again while it syncs, so each swipe is checked against
-  // what the row shows when it's swiped.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const shownUnread = await steadyUnread(row);
-    if (shownUnread === wasUnread) break;
-    const back = await touchSwipe(page, row, { from: "left" });
-    await back.moveBy(200);
-    await back.end();
-    await expectReadState(page, emailAccountId, shownUnread);
-  }
-  await expect.poll(() => steadyUnread(row)).toBe(wasUnread);
+  // And back, leaving the shared mailbox as it was.
+  const back = await touchSwipe(page, row, { from: "left" });
+  await back.moveBy(200);
+  await back.end();
+  await expectReadState(page, emailAccountId, !wasUnread);
+  await expect.poll(() => isUnread(row)).toBe(wasUnread);
 });
 
 test("leaves a vertical scroll to the list", async ({ page }) => {
@@ -179,17 +173,6 @@ async function touchSwipe(
 
 async function isUnread(row: Locator) {
   return ((await row.textContent()) ?? "").includes("Unread,");
-}
-
-/** The row's read state once it has held for a second. */
-async function steadyUnread(row: Locator) {
-  let previous = await isUnread(row);
-  for (;;) {
-    await row.page().waitForTimeout(1000);
-    const current = await isUnread(row);
-    if (current === previous) return current;
-    previous = current;
-  }
 }
 
 async function expectMutation(
