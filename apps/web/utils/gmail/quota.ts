@@ -298,6 +298,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     // What a person scheduled, due now.
     "scheduled-actions/execute",
     "snoozed-threads/execute",
+    // Summarizing mail a person's own digest rule picked.
+    "digest",
     // A durable send it delivers raises itself to interactive.
     "scheduled-emails/execute",
     // Push for an account just signed in or linked.

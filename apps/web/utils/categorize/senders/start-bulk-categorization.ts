@@ -114,7 +114,9 @@ export async function startBulkCategorization({
 
         await publishToAiCategorizeSendersQueue({
           emailAccountId,
-          senders: sendersToQueue,
+          senderMessageIds: sendersToQueue.map(
+            (sender) => sender.sourceMessageId,
+          ),
         });
       }
 

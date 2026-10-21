@@ -32,7 +32,12 @@ describe("queued sender archive resume", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.newsletter.findFirst.mockResolvedValue({
+      id: "sender-1",
+      email: "news@example.com",
       status: NewsletterStatus.AUTO_ARCHIVED,
+    } as never);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      email: "user@example.com",
     } as never);
   });
 
@@ -40,6 +45,11 @@ describe("queued sender archive resume", () => {
     const response = await POST(resume(), {} as never);
 
     expect(response.status).toBe(200);
+    expect(prisma.newsletter.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "sender-1", emailAccountId: "account-1" },
+      }),
+    );
     expect(createEmailProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         emailAccountId: "account-1",
@@ -51,8 +61,33 @@ describe("queued sender archive resume", () => {
         emailAccountId: "account-1",
         senderEmail: "news@example.com",
         ownerEmail: "user@example.com",
+        newsletterId: "sender-1",
         startedAt: 1_700_000_000_000,
         deferrals: 2,
+      }),
+    );
+  });
+
+  it("still resumes a job queued with the sender's address before ids", async () => {
+    const response = await POST(
+      resume({
+        body: {
+          emailAccountId: "account-1",
+          provider: "google",
+          senderEmail: "news@example.com",
+          ownerEmail: "user@example.com",
+          startedAt: 1_700_000_000_000,
+          deferrals: 2,
+        },
+      }),
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(runQueuedSenderArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderEmail: "news@example.com",
+        ownerEmail: "user@example.com",
       }),
     );
   });
@@ -76,17 +111,22 @@ describe("queued sender archive resume", () => {
   });
 });
 
-function resume({ verified = true } = {}) {
+function resume({
+  verified = true,
+  body = {
+    emailAccountId: "account-1",
+    provider: "google",
+    newsletterId: "sender-1",
+    startedAt: 1_700_000_000_000,
+    deferrals: 2,
+  },
+}: {
+  verified?: boolean;
+  body?: Record<string, unknown>;
+} = {}) {
   return new Request("http://localhost/api/user/senders/archive-existing", {
     method: "POST",
     headers: verified ? { "x-test-verified": "1" } : {},
-    body: JSON.stringify({
-      emailAccountId: "account-1",
-      provider: "google",
-      senderEmail: "news@example.com",
-      ownerEmail: "user@example.com",
-      startedAt: 1_700_000_000_000,
-      deferrals: 2,
-    }),
+    body: JSON.stringify(body),
   }) as never;
 }

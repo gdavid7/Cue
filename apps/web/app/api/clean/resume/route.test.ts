@@ -36,7 +36,6 @@ const job = {
   emailAccountId: "account-1",
   jobId: "job-1",
   action: CleanAction.ARCHIVE,
-  instructions: "",
   skips: { reply: true, starred: true },
   markedDoneLabelId: "done-label",
   processedLabelId: "processed-label",

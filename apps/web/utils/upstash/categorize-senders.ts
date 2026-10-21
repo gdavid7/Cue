@@ -1,6 +1,6 @@
 import chunk from "lodash/chunk";
 import { deleteQueue, listQueues, publishToQstashQueue } from "@/utils/upstash";
-import type { AiCategorizeSenders } from "@/utils/categorize/senders/batch-validation";
+import type { AiCategorizeSendersJob } from "@/utils/categorize/senders/batch-validation";
 import { createScopedLogger } from "@/utils/logger";
 
 const logger = createScopedLogger("upstash");
@@ -18,11 +18,11 @@ const getCategorizeSendersQueueName = ({
  * Splits large arrays of senders into chunks of BATCH_SIZE to prevent overwhelming the system
  */
 export async function publishToAiCategorizeSendersQueue(
-  body: AiCategorizeSenders,
+  body: AiCategorizeSendersJob,
 ) {
   // Split senders into smaller chunks to process in batches
   const BATCH_SIZE = 50;
-  const chunks = chunk(body.senders, BATCH_SIZE);
+  const chunks = chunk(body.senderMessageIds, BATCH_SIZE);
 
   // Create new queue for each user so we can run multiple users in parallel
   const queueName = getCategorizeSendersQueueName({
@@ -31,7 +31,7 @@ export async function publishToAiCategorizeSendersQueue(
 
   logger.info("Publishing to AI categorize senders queue in chunks", {
     queueName,
-    totalSenders: body.senders.length,
+    totalSenders: body.senderMessageIds.length,
     numberOfChunks: chunks.length,
   });
 
@@ -44,8 +44,8 @@ export async function publishToAiCategorizeSendersQueue(
         path: "/api/user/categorize/senders/batch",
         body: {
           emailAccountId: body.emailAccountId,
-          senders: senderChunk,
-        } satisfies AiCategorizeSenders,
+          senderMessageIds: senderChunk,
+        } satisfies AiCategorizeSendersJob,
       }),
     ),
   );

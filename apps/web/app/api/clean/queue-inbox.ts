@@ -43,7 +43,6 @@ export async function queueCleanInboxThreads({
     emailAccountId,
     jobId,
     action,
-    instructions,
     skips,
     markedDoneLabelId,
     processedLabelId,
@@ -89,7 +88,6 @@ export async function queueCleanInboxThreads({
               processedLabelId,
               jobId,
               action,
-              instructions,
               skips,
             } satisfies CleanThreadBody,
             // give every user their own queue for ai processing. if we get too many parallel users we may need more
