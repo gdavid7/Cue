@@ -71,8 +71,8 @@ describe("pausing from the command palette", () => {
     expect(paused).toEqual([new Date(2026, 9, 23, 8, 0)]);
   });
 
-  it("offers nothing for a time it can't read or one in the past", () => {
-    for (const query of ["whenever", "yesterday at noon"])
+  it("offers nothing for a time it can't read, one in the past, or one past 30 days", () => {
+    for (const query of ["whenever", "yesterday at noon", "in 2 months"])
       expect(
         buildQuietPageCommands({
           now: WEDNESDAY_AFTERNOON,

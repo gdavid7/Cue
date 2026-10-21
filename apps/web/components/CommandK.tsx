@@ -83,7 +83,7 @@ type PalettePage = "root" | "snooze" | "quiet" | "accounts";
 const EMPTY_MESSAGES: Record<PalettePage, string> = {
   root: "No results found.",
   snooze: "Try a date like tomorrow at 3pm.",
-  quiet: "Try a time like 6pm or tomorrow at 9am.",
+  quiet: "Try a time like 6pm or tomorrow at 9am, up to 30 days ahead.",
   accounts: "No results found.",
 };
 
@@ -150,9 +150,9 @@ function CommandPaletteContent({
     ? activePage
     : "root";
   // Loading starts as the palette opens, so the parser is usually ready by
-  // the time someone types a snooze time.
+  // the time someone types a snooze or pause time.
   const parseSnoozeDate = useSnoozeDateParser(
-    open && (Boolean(mailCommandContext?.actions.snooze) || page === "quiet"),
+    open && (Boolean(mailCommandContext?.actions.snooze) || quiet.canPause),
   );
   const { setTheme } = useTheme();
 

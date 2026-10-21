@@ -246,4 +246,30 @@ describe("WebNewMailNotifications", () => {
     expect(shown).toEqual(["Dana"]);
     vi.useRealTimers();
   });
+
+  it("keeps trying to turn push back on when resuming after a pause fails", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    stubPermission("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "all");
+    window.localStorage.setItem(
+      "cue:web-notifications:quiet-until",
+      String(Date.now() + 1000),
+    );
+
+    render(<WebNewMailNotifications />);
+    expect(mocks.syncWebPush).toHaveBeenLastCalledWith("off");
+
+    mocks.syncWebPush.mockResolvedValueOnce(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(mocks.syncWebPush).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(mocks.syncWebPush).toHaveBeenCalledTimes(3);
+    expect(mocks.syncWebPush).toHaveBeenLastCalledWith("all");
+    vi.useRealTimers();
+  });
 });

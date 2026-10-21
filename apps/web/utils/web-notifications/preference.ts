@@ -12,6 +12,8 @@ const MODE_KEY = "cue:web-notifications:mode";
 const PROMPTED_KEY = "cue:web-notifications:prompted";
 const HINT_SHOWN_KEY = "cue:web-notifications:off-hint-shown";
 const QUIET_UNTIL_KEY = "cue:web-notifications:quiet-until";
+/** A pause longer than this is more likely a typo than a plan. */
+export const MAX_QUIET_MS = 30 * 24 * 60 * 60 * 1000;
 // setTimeout overflows past about 24.8 days; a longer pause re-arms.
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const CHANGE_EVENT = "cue:web-notifications:change";
@@ -93,9 +95,14 @@ export function readQuietUntilMs(now = Date.now()): number | null {
   }
 }
 
-export function pauseNotificationsUntil(untilMs: number) {
+/** A time already past is ignored; one beyond the limit is cut to it. */
+export function pauseNotificationsUntil(untilMs: number, now = Date.now()) {
+  if (!(untilMs > now)) return;
   try {
-    window.localStorage.setItem(QUIET_UNTIL_KEY, String(untilMs));
+    window.localStorage.setItem(
+      QUIET_UNTIL_KEY,
+      String(Math.min(untilMs, now + MAX_QUIET_MS)),
+    );
   } catch {
     // Without storage there is nowhere to keep a pause; notifications go on.
   }

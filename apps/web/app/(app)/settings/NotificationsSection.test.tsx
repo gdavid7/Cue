@@ -144,4 +144,29 @@ describe("NotificationsSection", () => {
 
     expect(screen.queryByRole("button", { name: "Pause…" })).toBeNull();
   });
+
+  it("will not pause past 30 days from a chosen date", async () => {
+    stubNotification("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "important");
+    render(<NotificationsSection />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause…" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Choose date and time/ }),
+    );
+    const input = screen.getByLabelText("Pause until date and time");
+    const pause = screen.getByRole("button", { name: "Pause" });
+
+    fireEvent.change(input, { target: { value: localInput(40) } });
+    expect(pause.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(input, { target: { value: localInput(2) } });
+    expect(pause.hasAttribute("disabled")).toBe(false);
+  });
 });
+
+function localInput(daysAhead: number) {
+  const date = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

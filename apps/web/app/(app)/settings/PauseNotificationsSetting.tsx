@@ -19,10 +19,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { format } from "date-fns";
 import {
+  MAX_QUIET_MS,
   pauseNotificationsUntil,
   resumeNotifications,
 } from "@/utils/web-notifications/preference";
+import { isWebPushAvailable } from "@/utils/web-push/subscription";
 import {
   formatQuietUntil,
   getQuietPresets,
@@ -42,7 +45,9 @@ export function PauseNotificationsSetting({
             Paused until {formatQuietUntil(new Date(quietUntilMs), new Date())}
           </ItemTitle>
           <ItemDescription>
-            Notifications on this device resume on their own then.
+            {isWebPushAvailable()
+              ? "Alerts resume then in any open Cue tab, or the next time you open Cue."
+              : "Notifications on this device resume on their own then."}
           </ItemDescription>
         </ItemContent>
         <ItemActions>
@@ -71,19 +76,17 @@ export function PauseNotificationsSetting({
 function PausePicker() {
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
-  const [custom, setCustom] = useState("");
-  const customDate = custom ? new Date(custom) : null;
-  const canPauseUntilCustom =
-    customDate !== null &&
-    !Number.isNaN(customDate.getTime()) &&
-    customDate.getTime() > Date.now();
+  const [custom, setCustom] = useState<{ value: string; until: Date | null }>({
+    value: "",
+    until: null,
+  });
   const now = new Date();
 
   const onOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (!nextOpen) {
       setShowCustom(false);
-      setCustom("");
+      setCustom({ value: "", until: null });
     }
   };
   const choose = (until: Date) => {
@@ -121,15 +124,27 @@ function PausePicker() {
               <input
                 aria-label="Pause until date and time"
                 className="mt-2 w-full rounded-md border border-input bg-background p-2 text-foreground text-sm"
-                onChange={(event) => setCustom(event.target.value)}
+                max={toDateTimeLocal(new Date(now.getTime() + MAX_QUIET_MS))}
+                min={toDateTimeLocal(now)}
+                onChange={(event) =>
+                  setCustom({
+                    value: event.target.value,
+                    until: validPauseEnd(event.target.value),
+                  })
+                }
                 type="datetime-local"
-                value={custom}
+                value={custom.value}
               />
             </label>
             <Button
               className="w-full"
-              disabled={!canPauseUntilCustom}
-              onClick={() => customDate && choose(customDate)}
+              disabled={!custom.until}
+              onClick={() => {
+                // Checked again: the picker may have stayed open a while.
+                const until = validPauseEnd(custom.value);
+                if (until) choose(until);
+                else setCustom({ value: custom.value, until: null });
+              }}
               size="sm"
               type="button"
             >
@@ -168,4 +183,18 @@ function PausePicker() {
       </PopoverContent>
     </Popover>
   );
+}
+
+/** A time to pause until, if it is ahead of now and within the limit. */
+function validPauseEnd(value: string) {
+  if (!value) return null;
+  const until = new Date(value);
+  const ms = until.getTime();
+  const now = Date.now();
+  if (Number.isNaN(ms) || ms <= now || ms > now + MAX_QUIET_MS) return null;
+  return until;
+}
+
+function toDateTimeLocal(date: Date) {
+  return format(date, "yyyy-MM-dd'T'HH:mm");
 }

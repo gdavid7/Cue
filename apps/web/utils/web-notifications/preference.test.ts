@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_QUIET_MS,
   pauseNotificationsUntil,
   readEffectiveMode,
   readQuietUntilMs,
@@ -71,6 +72,24 @@ describe("pausing notifications", () => {
     await vi.advanceTimersByTimeAsync(HOUR_MS);
 
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("ignores a time already past, without telling anyone", () => {
+    const onChange = vi.fn();
+    const unsubscribe = subscribeToPreference(onChange);
+
+    pauseNotificationsUntil(Date.now() - 1);
+
+    expect(readQuietUntilMs()).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("cuts a pause beyond 30 days to 30 days", () => {
+    pauseNotificationsUntil(Date.now() + 90 * 24 * HOUR_MS);
+
+    expect(readQuietUntilMs()).toBe(Date.now() + MAX_QUIET_MS);
+    expect(MAX_QUIET_MS).toBe(30 * 24 * HOUR_MS);
   });
 
   it("resumes early when asked", () => {

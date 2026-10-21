@@ -1,6 +1,7 @@
 import { MoonIcon } from "lucide-react";
 import type { SnoozeDateParser } from "@/app/(app)/[emailAccountId]/mail/snooze-date-parse";
 import type { Command } from "@/lib/commands/types";
+import { MAX_QUIET_MS } from "@/utils/web-notifications/preference";
 import {
   formatQuietUntil,
   getQuietPresets,
@@ -65,7 +66,8 @@ export function buildQuietPageCommands({
 }): Command[] {
   if (query.trim()) {
     const until = parseDate?.(query, now, { defaultHour: QUIET_MORNING_HOUR });
-    if (!until) return [];
+    // Past the limit there is no match, rather than a pause shorter than asked.
+    if (!until || until.getTime() > now.getTime() + MAX_QUIET_MS) return [];
     return [
       {
         id: "notifications-pause-typed",

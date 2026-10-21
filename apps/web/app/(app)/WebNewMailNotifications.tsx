@@ -40,6 +40,7 @@ import {
   isWebPushResyncDue,
   syncWebPushSubscription,
 } from "@/utils/web-push/subscription";
+import { syncWithRetry } from "@/utils/web-push/sync-with-retry";
 
 const MAX_WATCHED_ACCOUNTS = 50;
 const WATCHED_UNREAD_PAGE_SIZE = 25;
@@ -206,7 +207,14 @@ export function WebNewMailNotifications() {
       return;
     }
     if (!isWebPushResyncDue()) return;
-    syncWebPushSubscription(mode).catch(() => undefined);
+    return syncWithRetry({
+      sync: () => syncWebPushSubscription(mode),
+      // The scoped logger reads server-only env, so the browser warns directly.
+      onFailure: (attempt) =>
+        console.warn(
+          `[web-push] Subscription sync failed (attempt ${attempt + 1})`,
+        ),
+    });
   }, [active, mode, quiet]);
 
   // The one-time offer needs to know a first sync finished, and nothing else.
