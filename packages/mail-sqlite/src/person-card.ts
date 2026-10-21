@@ -33,6 +33,8 @@ type PersonMessage = {
   accountId: string;
   messageId: string;
   conversationId: string;
+  /** Its account and conversation, as one key. */
+  conversation: string;
   subject: string;
   receivedAtMs: number;
   from: "you" | "them" | "other";
@@ -74,6 +76,7 @@ export async function readPersonCard(
         accountId,
         messageId: String(row.message_id),
         conversationId: String(row.conversation_id),
+        conversation: conversationKey(accountId, String(row.conversation_id)),
         subject: String(row.subject),
         receivedAtMs: Number(row.received_at_ms),
         from:
@@ -91,7 +94,7 @@ export async function readPersonCard(
 
   const conversations = new Map<string, PersonCardConversation>();
   for (const message of messages) {
-    const key = conversationKey(message.accountId, message.conversationId);
+    const key = message.conversation;
     const existing = conversations.get(key);
     if (existing && existing.latestMessageAtMs >= message.receivedAtMs)
       continue;
@@ -396,7 +399,7 @@ function findCrossAccountCopies(
     return {
       hidden: new Map<string, PersonCardConversation>(),
       distinct: messages,
-      threadOf: messageConversation,
+      threadOf: (message: PersonMessage) => message.conversation,
     };
   const groupOf = new Map<PersonMessage, PersonMessage[]>();
   // Per fingerprint, its groups in arrival order. Messages come in arrival
@@ -456,7 +459,7 @@ function findCrossAccountCopies(
 
   const messagesByConversation = new Map<string, PersonMessage[]>();
   for (const message of messages) {
-    const key = messageConversation(message);
+    const key = message.conversation;
     const list = messagesByConversation.get(key);
     if (list) list.push(message);
     else messagesByConversation.set(key, [message]);
@@ -479,14 +482,12 @@ function findCrossAccountCopies(
   for (const key of ranked) {
     const own = messagesByConversation.get(key) ?? [];
     const keeper = (groupOf.get(own[0]) ?? [])
-      .map(messageConversation)
+      .map((copy) => copy.conversation)
       .find(
         (other) =>
           shown.has(other) &&
           own.every((message) =>
-            groupOf
-              .get(message)
-              ?.some((copy) => messageConversation(copy) === other),
+            groupOf.get(message)?.some((copy) => copy.conversation === other),
           ),
       );
     if (keeper)
@@ -497,7 +498,7 @@ function findCrossAccountCopies(
   const rank = new Map(ranked.map((key, index) => [key, index]));
   // A copy in a conversation that stays wins over one in a hidden conversation.
   const rankOf = (message: PersonMessage) => {
-    const key = messageConversation(message);
+    const key = message.conversation;
     return (hidden.has(key) ? ranked.length : 0) + (rank.get(key) ?? 0);
   };
   const distinct = messages.filter((message) => {
@@ -524,15 +525,12 @@ function findCrossAccountCopies(
   };
   for (const group of new Set(groupOf.values()))
     for (const copy of group.slice(1))
-      thread.set(
-        root(messageConversation(copy)),
-        root(messageConversation(group[0])),
-      );
+      thread.set(root(copy.conversation), root(group[0].conversation));
 
   return {
     hidden,
     distinct,
-    threadOf: (message: PersonMessage) => root(messageConversation(message)),
+    threadOf: (message: PersonMessage) => root(message.conversation),
   };
 }
 
@@ -553,10 +551,6 @@ function recipients(...lists: SqlValue[]) {
     }
   }
   return [...emails].sort();
-}
-
-function messageConversation(message: PersonMessage) {
-  return conversationKey(message.accountId, message.conversationId);
 }
 
 function byNewest(a: PersonCardConversation, b: PersonCardConversation) {
