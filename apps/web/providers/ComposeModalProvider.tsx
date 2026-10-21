@@ -111,6 +111,8 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
     (isAllAccountsMailView && otherReplyAccount)
       ? poppedOutReply
       : undefined;
+  // Not tied to All inboxes, unlike a popped-out reply: a new message already
+  // open from another account stays open, draft and all, when the view changes.
   const composeAccount =
     composeAccountId && composeAccountId !== emailAccountId
       ? accountsData?.emailAccounts.find(
@@ -122,6 +124,7 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
       ? accountsData.emailAccounts
       : undefined;
   const isOpen = isModalOpen && (!poppedOutReply || Boolean(reply));
+  const composedFrom = composeAccountId;
   // However the composer closes, a timing it never finished is dropped.
   useEffect(() => {
     if (!isOpen) return;
@@ -386,10 +389,15 @@ export function ComposeModalProvider(props: { children: React.ReactNode }) {
                       return true;
                     }}
                     onRestore={() => {
-                      setComposerKey((key) => key + 1);
+                      returnOpenReply();
+                      setPoppedOutReply(undefined);
+                      setInitialTo(undefined);
                       // The undone message's draft is the account's it was
-                      // composed from.
-                      openComposeFrom(composeAccountId);
+                      // composed from, even if Compose opened from another
+                      // account since.
+                      setComposeAccountId(composedFrom);
+                      setComposerKey((key) => key + 1);
+                      openModal();
                     }}
                     onSuccess={closeCompose}
                   />

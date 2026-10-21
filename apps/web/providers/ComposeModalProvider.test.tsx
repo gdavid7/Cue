@@ -31,6 +31,9 @@ class MockResizeObserver {
 
 const COLD_RENDER_TIMEOUT_MS = 5000;
 
+// Each account's composer's latest undo-send restore, as the held send keeps it.
+const restoreByAccount = vi.hoisted(() => new Map<string, () => void>());
+
 const navigation = vi.hoisted(() => ({
   pathname: "/account-a/mail",
   search: "",
@@ -81,8 +84,15 @@ vi.mock(
   async () => {
     const { useAccount } = await import("./EmailAccountProvider");
     return {
-      ComposeEmailFormLazy: ({ initialTo }: { initialTo?: string }) => {
+      ComposeEmailFormLazy: ({
+        initialTo,
+        onRestore,
+      }: {
+        initialTo?: string;
+        onRestore?: () => void;
+      }) => {
         const { emailAccountId, userEmail } = useAccount();
+        if (onRestore) restoreByAccount.set(emailAccountId, onRestore);
         return (
           <div data-initial-to={initialTo ?? ""} data-testid="composer">
             {emailAccountId} {userEmail}
@@ -265,6 +275,44 @@ describe("ComposeModalProvider focus", () => {
     fireEvent.click(screen.getByRole("button", { name: "Compose" }));
     expect((await screen.findByTestId("composer")).textContent).toBe(
       "account-a a@gmail.com",
+    );
+  });
+
+  it("restores an undone send into the account it was composed from, after Compose opened from another", async () => {
+    navigation.pathname = "/mail/u/0/all-inboxes";
+    restoreByAccount.clear();
+    renderProvider();
+    fireEvent.click(
+      await screen.findByRole(
+        "button",
+        { name: "Write to Ana from account-b" },
+        { timeout: COLD_RENDER_TIMEOUT_MS },
+      ),
+    );
+    expect(
+      (
+        await screen.findByTestId(
+          "composer",
+          {},
+          { timeout: COLD_RENDER_TIMEOUT_MS },
+        )
+      ).textContent,
+    ).toBe("account-b b@outlook.com");
+    const restoreB = restoreByAccount.get("account-b");
+    expect(restoreB).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close compose" }));
+    fireEvent.click(screen.getByRole("button", { name: "Compose" }));
+    expect((await screen.findByTestId("composer")).textContent).toBe(
+      "account-a a@gmail.com",
+    );
+
+    act(() => restoreB?.());
+
+    await waitFor(() =>
+      expect(screen.getByTestId("composer").textContent).toBe(
+        "account-b b@outlook.com",
+      ),
     );
   });
 
