@@ -15,6 +15,7 @@ import {
   syncWebPushQuietUntil,
   syncWebPushSubscription,
 } from "@/utils/web-push/subscription";
+import { syncWithRetry } from "@/utils/web-push/sync-with-retry";
 
 export type WebNotificationPermission = NotificationPermission | "unsupported";
 
@@ -100,7 +101,16 @@ async function requestPermissionFor(
   }
 }
 
+let stopPushPauseSync: (() => void) | undefined;
+
 function syncPushPause() {
-  if (isWebPushAvailable())
-    syncWebPushQuietUntil(readQuietUntilMs()).catch(() => undefined);
+  if (!isWebPushAvailable()) return;
+  // A newer pause or resume replaces one still being retried.
+  stopPushPauseSync?.();
+  stopPushPauseSync = syncWithRetry({
+    sync: () => syncWebPushQuietUntil(readQuietUntilMs()),
+    // The scoped logger reads server-only env, so the browser warns directly.
+    onFailure: (attempt) =>
+      console.warn(`[web-push] Pause sync failed (attempt ${attempt + 1})`),
+  });
 }

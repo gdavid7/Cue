@@ -76,6 +76,36 @@ describe("web push subscription actions", () => {
     });
   });
 
+  it("stores this browser's pause with the subscription, replacing any earlier owner's", async () => {
+    const quietUntil = Date.now() + 60 * 60 * 1000;
+
+    await saveWebPushSubscriptionAction({
+      ...subscription,
+      mode: "all",
+      quietUntil,
+    });
+    await saveWebPushSubscriptionAction({
+      ...subscription,
+      mode: "all",
+      quietUntil: null,
+    });
+
+    const [paused, unpaused] = prisma.webPushSubscription.upsert.mock.calls.map(
+      ([args]) => args,
+    );
+    expect(paused.create.quietUntil).toEqual(new Date(quietUntil));
+    expect(paused.update.quietUntil).toEqual(new Date(quietUntil));
+    expect(unpaused.create.quietUntil).toBeNull();
+    expect(unpaused.update.quietUntil).toBeNull();
+  });
+
+  it("treats a save without a pause as not paused", async () => {
+    await saveWebPushSubscriptionAction({ ...subscription, mode: "all" });
+
+    const [[args]] = prisma.webPushSubscription.upsert.mock.calls;
+    expect(args.update.quietUntil).toBeNull();
+  });
+
   it("switches an existing subscription to all new mail", async () => {
     await saveWebPushSubscriptionAction({ ...subscription, mode: "all" });
 

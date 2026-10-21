@@ -113,6 +113,41 @@ describe("pausing notifications", () => {
     expect(syncWebPushSubscription).not.toHaveBeenCalled();
   });
 
+  it("retries a pause the server didn't get, until a newer change replaces it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      stubNotification("granted");
+      const quiet = vi.mocked(syncWebPushQuietUntil);
+      quiet.mockResolvedValue(false);
+      const until = Date.now() + 60 * 60 * 1000;
+
+      pauseWebNotifications(until);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(quiet).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(quiet).toHaveBeenCalledTimes(2);
+      expect(quiet).toHaveBeenLastCalledWith(until);
+
+      resumeWebNotifications();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(quiet).toHaveBeenCalledTimes(3);
+      expect(quiet).toHaveBeenLastCalledWith(null);
+
+      quiet.mockResolvedValue(true);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      // Only the resume's own retry runs; the pause's was cancelled.
+      expect(quiet).toHaveBeenCalledTimes(4);
+      expect(quiet).toHaveBeenLastCalledWith(null);
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(quiet).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.mocked(syncWebPushQuietUntil).mockResolvedValue(true);
+      vi.useRealTimers();
+    }
+  });
+
   it("pauses only this tab's alerts when push is unavailable", () => {
     push.available = false;
 

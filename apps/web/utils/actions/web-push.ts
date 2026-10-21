@@ -19,7 +19,10 @@ export const saveWebPushSubscriptionAction = actionClientUser
   .metadata({ name: "saveWebPushSubscription" })
   .inputSchema(saveWebPushSubscriptionBody)
   .action(
-    async ({ ctx: { userId }, parsedInput: { endpoint, keys, mode } }) => {
+    async ({
+      ctx: { userId },
+      parsedInput: { endpoint, keys, mode, quietUntil },
+    }) => {
       if (!getWebPushVapidConfig())
         throw new SafeError("Push notifications aren't available.");
 
@@ -32,10 +35,11 @@ export const saveWebPushSubscriptionAction = actionClientUser
         mode: mode === "all" ? WebPushMode.ALL : WebPushMode.IMPORTANT,
         userId,
         userAgent,
+        quietUntil: toPauseEnd(quietUntil),
       };
 
       // The endpoint belongs to the browser, so whoever signs in there last
-      // owns it.
+      // owns it, with this browser's pause rather than the last owner's.
       await prisma.webPushSubscription.upsert({
         where: { endpoint },
         create: { endpoint, ...fields },
@@ -62,12 +66,13 @@ export const setWebPushQuietUntilAction = actionClientUser
     async ({ ctx: { userId }, parsedInput: { endpoint, quietUntil } }) => {
       await prisma.webPushSubscription.updateMany({
         where: { endpoint, userId },
-        data: {
-          quietUntil:
-            quietUntil === null
-              ? null
-              : new Date(Math.min(quietUntil, Date.now() + MAX_QUIET_MS)),
-        },
+        data: { quietUntil: toPauseEnd(quietUntil) },
       });
     },
   );
+
+function toPauseEnd(quietUntil: number | null) {
+  return quietUntil === null
+    ? null
+    : new Date(Math.min(quietUntil, Date.now() + MAX_QUIET_MS));
+}

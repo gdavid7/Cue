@@ -95,16 +95,11 @@ export async function syncWebPushSubscription(
     endpoint,
     keys: { p256dh: keys.p256dh, auth: keys.auth },
     mode,
+    // Sent with every save, so a new or replaced subscription holds pushes
+    // back too, and a previous owner's pause never carries over.
+    quietUntil: readQuietUntilMs(),
   });
   if (failed(result)) return false;
-  // A pause set before this subscription existed, or before the browser
-  // replaced it, still holds pushes back.
-  const quietUntil = readQuietUntilMs();
-  if (
-    quietUntil !== null &&
-    failed(await deps.setQuietUntil({ endpoint, quietUntil }))
-  )
-    return false;
   writeSyncedAt(Date.now());
   return true;
 }

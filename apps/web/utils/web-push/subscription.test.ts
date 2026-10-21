@@ -64,6 +64,7 @@ describe("syncWebPushSubscription", () => {
       endpoint: "https://fcm.googleapis.com/fcm/send/new",
       keys: { p256dh: "p256dh-key", auth: "auth" },
       mode: "important",
+      quietUntil: null,
     });
     expect(isWebPushResyncDue()).toBe(false);
   });
@@ -154,7 +155,7 @@ describe("syncWebPushQuietUntil", () => {
     expect(deps.setQuietUntil).not.toHaveBeenCalled();
   });
 
-  it("carries a pause set before the subscription to the server when it is saved", async () => {
+  it("saves this browser's pause with the subscription", async () => {
     const quietUntil = Date.now() + 60_000;
     window.localStorage.setItem(
       "cue:web-notifications:quiet-until",
@@ -164,17 +165,12 @@ describe("syncWebPushQuietUntil", () => {
 
     await expect(sync("all", deps)).resolves.toBe(true);
 
-    expect(deps.setQuietUntil).toHaveBeenCalledWith({
-      endpoint: "https://fcm.googleapis.com/fcm/send/new",
-      quietUntil,
-    });
-  });
-
-  it("sends no pause with a save while not paused", async () => {
-    const { deps } = setup(null);
-
-    await sync("all", deps);
-
+    expect(deps.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: "https://fcm.googleapis.com/fcm/send/new",
+        quietUntil,
+      }),
+    );
     expect(deps.setQuietUntil).not.toHaveBeenCalled();
   });
 });

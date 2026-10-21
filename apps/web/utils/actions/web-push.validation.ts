@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const quietUntilMs = z.number().int().positive().nullable();
+
 // The server posts to whatever endpoint a browser hands it, so only the push
 // services browsers actually use are accepted.
 const PUSH_SERVICE_HOST_SUFFIXES = [
@@ -20,6 +22,8 @@ export const saveWebPushSubscriptionBody = z.object({
     auth: z.string().min(1).max(128),
   }),
   mode: z.enum(["important", "all"]),
+  // This browser's pause, in epoch milliseconds; null when it isn't paused.
+  quietUntil: quietUntilMs.default(null),
 });
 export type SaveWebPushSubscriptionBody = z.infer<
   typeof saveWebPushSubscriptionBody
@@ -31,8 +35,8 @@ export const deleteWebPushSubscriptionBody = z.object({
 
 export const setWebPushQuietUntilBody = z.object({
   endpoint: z.string().min(1).max(2048),
-  // Epoch milliseconds; null clears the pause.
-  quietUntil: z.number().int().positive().nullable(),
+  // Null clears the pause.
+  quietUntil: quietUntilMs,
 });
 
 function isBrowserPushServiceEndpoint(value: string) {
