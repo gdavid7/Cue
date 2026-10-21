@@ -9,6 +9,7 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 const account = vi.hoisted(() => ({ provider: "google" }));
 const rules = vi.hoisted(() => ({ enabledArg: undefined as unknown }));
 const logOut = vi.hoisted(() => vi.fn());
+const toastError = vi.hoisted(() => vi.fn());
 const weather = vi.hoisted(() => ({
   dismissed: false,
   save: vi.fn(async () => true),
@@ -34,6 +35,7 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   }),
 }));
 vi.mock("@/utils/user", () => ({ logOut }));
+vi.mock("@/components/Toast", () => ({ toastError }));
 vi.mock("@/hooks/useTodayWeather", () => ({
   useTodayWeather: () => ({ dismissed: weather.dismissed, save: weather.save }),
 }));
@@ -58,6 +60,7 @@ describe("useCommandPaletteCommands", () => {
     vi.clearAllMocks();
     account.provider = "google";
     weather.dismissed = false;
+    weather.save.mockResolvedValue(true);
   });
 
   it("opens rules settings on a page that exists", () => {
@@ -130,5 +133,17 @@ describe("useCommandPaletteCommands", () => {
     // Clears the dismissal "Not now" stored, rather than a flag of its own.
     expect(weather.save).toHaveBeenCalledWith(null);
     expect(router.push).toHaveBeenCalledWith("/account-1/home");
+  });
+
+  it("says so when showing the weather again couldn't be saved", async () => {
+    weather.dismissed = true;
+    weather.save.mockResolvedValue(false);
+    const { result } = renderHook(() => useCommandPaletteCommands());
+
+    await result.current.commands
+      .find((c) => c.label === "Show weather on Today")
+      ?.action();
+
+    expect(toastError).toHaveBeenCalledTimes(1);
   });
 });

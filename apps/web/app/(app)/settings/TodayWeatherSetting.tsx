@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Item,
   ItemActions,
@@ -19,9 +20,12 @@ import { useTodayWeather } from "@/hooks/useTodayWeather";
  */
 export function TodayWeatherSetting() {
   const { user, dismissed, save } = useTodayWeather();
+  const [saving, setSaving] = useState(false);
 
   const toggle = async (on: boolean) => {
+    setSaving(true);
     const saved = await save(null, { dismissed: !on });
+    setSaving(false);
     if (!saved) toastError({ description: "Couldn't save. Try again." });
   };
 
@@ -40,6 +44,7 @@ export function TodayWeatherSetting() {
             <Switch
               aria-label="Weather on Today"
               checked={!dismissed}
+              disabled={saving}
               onCheckedChange={toggle}
             />
           ) : (

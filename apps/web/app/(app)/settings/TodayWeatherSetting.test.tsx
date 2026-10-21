@@ -106,6 +106,41 @@ describe("TodayWeatherSetting", () => {
       expect(toggle.getAttribute("aria-checked")).toBe("false"),
     );
   });
+
+  it("a save that throws is undone and says so too", async () => {
+    mocks.save.mockRejectedValue(new TypeError("Failed to fetch"));
+    renderWithToday();
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Weather on Today",
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("false"),
+    );
+    expect(screen.queryByRole("button", { name: "Show weather" })).toBeNull();
+  });
+
+  it("can't be toggled again while a save is on its way", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    mocks.save.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    renderWithToday();
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Weather on Today",
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(true));
+    finish({ data: { success: true } });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+  });
 });
 
 /** Settings and Today side by side, sharing the user's settings as in the app. */

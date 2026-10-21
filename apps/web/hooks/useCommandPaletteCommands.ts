@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { Command } from "@/lib/commands/types";
 import { useNavigation } from "@/components/SideNav";
+import { toastError } from "@/components/Toast";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useRules } from "@/hooks/useRules";
 import { useTodayWeather } from "@/hooks/useTodayWeather";
@@ -155,7 +156,8 @@ export function useCommandPaletteCommands({
         keywords: ["weather", "forecast", "today"],
         action: async () => {
           router.push(prefixPath(emailAccountId, "/home"));
-          await saveWeather(null);
+          if (!(await saveWeather(null)))
+            toastError({ description: "Couldn't save. Try again." });
         },
       });
 

@@ -77,6 +77,23 @@ describe("Today's cache", () => {
     expect(later?.today).toEqual(home().today);
   });
 
+  it("never says the calendar is clear from a saved copy, even the same day", () => {
+    writeCachedToday({
+      ...account,
+      data: home({
+        calendar: { connected: true, clearThroughTomorrow: true, next: null },
+      }),
+      now: NOW,
+    });
+
+    const later = readCachedToday({ ...account, now: NOW + HOUR });
+    expect(later?.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: false,
+      next: null,
+    });
+  });
+
   it("keeps an earlier day's conversations, and marks the rest of it unknown", () => {
     writeCachedToday({
       ...account,

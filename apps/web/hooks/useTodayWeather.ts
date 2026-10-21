@@ -29,8 +29,8 @@ export function useTodayWeather() {
       const result = await saveTodayWeatherAction({
         location: stored,
         dismissed,
-      });
-      if (result?.serverError || result?.validationErrors) {
+      }).catch(() => null);
+      if (!result || result.serverError || result.validationErrors) {
         mutate();
         return false;
       }
