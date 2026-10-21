@@ -321,5 +321,13 @@
     "app/(app)/[emailAccountId]/mail/SnoozedThreadList.tsx",
     "hooks/useAllAccountsList.ts",
     "hooks/useHiddenDraftMessageIds.ts"
+  ],
+  "pre-send-check.spec.ts": [
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "app/(app)/[emailAccountId]/compose/PreSendConfirmation.tsx",
+    "app/(app)/[emailAccountId]/compose/pre-send-warnings.ts",
+    "app/(app)/settings/PreSendCheckSetting.tsx",
+    "hooks/usePreSendCheck.ts",
+    "utils/email/escaped-markup.ts"
   ]
 }
