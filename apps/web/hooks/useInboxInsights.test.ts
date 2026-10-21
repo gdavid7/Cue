@@ -561,6 +561,113 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
   }
 });
 
+// PF-4: a page was asked about in thread-id order, which for Gmail's
+// time-ordered ids put the newest rows, the ones on screen, in the last
+// request, a spacing and two requests after the first.
+describe("useInboxInsights and the rows on screen", () => {
+  it("asks about the page in screen order, the rows on top first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(50);
+    renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.slice(0, 25)));
+
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(asked(1)).toEqual(threadIdsOf(rows.slice(25)));
+    vi.useRealTimers();
+  });
+
+  it("asks for the rows on screen and the next screenful on their own, in no more requests", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(30);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 0, end: 8 }));
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.slice(0, 16)));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    // Pages of 25 asked twice for 30 rows; so does this.
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(asked(1)).toEqual(threadIdsOf(rows.slice(16)));
+    vi.useRealTimers();
+  });
+
+  it("asks next about the rows the reader scrolled to, then the rest nearest first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(80);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 0, end: 8 }));
+    act(() => mail.settle());
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.slice(0, 16)));
+
+    act(() => result.current.setVisibleRows({ start: 60, end: 68 }));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(asked(1)).toEqual(threadIdsOf(rows.slice(60, 76)));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    // Pages of 25 asked four times for 80 rows; so does this.
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    // The rows either side of where the reader is, before those far above.
+    expect(asked(2).sort()).toEqual(
+      threadIdsOf([...rows.slice(39, 60), ...rows.slice(76)]).sort(),
+    );
+    expect(Object.keys(result.current.data ?? {})).toHaveLength(80);
+    vi.useRealTimers();
+  });
+
+  function answeringFetcher() {
+    const fetcher = vi.fn(async ([url]: [string, string]) =>
+      fromServer(
+        Object.fromEntries(
+          threadIdsIn(url).map((threadId) => [threadId, extraction(threadId)]),
+        ),
+      ),
+    );
+    return {
+      fetcher,
+      asked: (call: number) => threadIdsIn(fetcher.mock.calls[call]?.[0][0]),
+    };
+  }
+
+  function threadIdsIn(url: string | undefined) {
+    const items = new URL(url ?? "", "https://cue.test").searchParams.get(
+      "items",
+    );
+    return (items ?? "").split(",").map((pair) => pair.split(":")[0]);
+  }
+
+  // Gmail's thread ids grow with time and the list shows the newest first.
+  function newestFirst(count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      item({
+        emailAccountId: "work",
+        threadId: `t${String(count - index).padStart(3, "0")}`,
+      }),
+    );
+  }
+
+  function threadIdsOf(rows: { threadId: string }[]) {
+    return rows.map((row) => row.threadId);
+  }
+});
+
 function wrapperFor(fetcher: (key: [string, string]) => Promise<unknown>) {
   const cache = new Map();
   return ({ children }: { children: ReactNode }) =>

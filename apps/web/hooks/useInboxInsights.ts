@@ -1,5 +1,11 @@
 import groupBy from "lodash/groupBy";
-import { useEffect, useId, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { useSWRConfig } from "swr";
 import type { GetInboxInsightsResponse } from "@/app/api/user/inbox-insights/route";
 import { createBrowserCache } from "@/utils/browser-cache";
@@ -64,7 +70,15 @@ type AccountFetcher = (
   key: [string, string],
 ) => Promise<GetInboxInsightsResponse>;
 type Lane = "rows" | "open";
-type Wanted = { threadId: string; messageId: string; pair: string };
+type Wanted = {
+  threadId: string;
+  messageId: string;
+  pair: string;
+  /** The row's place in its reader's list, for asking about what's on screen first. */
+  index: number;
+};
+/** Rows `start` (inclusive) to `end` (exclusive) of a reader's list are on screen. */
+export type VisibleRows = { start: number; end: number };
 type Queue = {
   emailAccountId: string;
   lane: Lane;
@@ -84,6 +98,9 @@ type Queue = {
 };
 
 const queues = new Map<string, Queue>();
+// What each reader has on screen. Read when a request is built, so a scroll
+// reorders what is asked next without re-rendering the list.
+const visibleByReader = new Map<string, VisibleRows>();
 const attempts = new Map<string, number>();
 const meta = new Map<
   string,
@@ -105,7 +122,9 @@ let mailSettled = false;
  * deferral waits out its Retry-After. The open conversation's item is asked
  * for at once. Rows from different accounts are asked for with their own
  * account, as the combined inbox mixes them. While `enabled` is false
- * nothing is asked for.
+ * nothing is asked for. Items are in screen order; with `setVisibleRows`
+ * the rows on screen and the screenful after them are asked for first, and
+ * the rest after, nearest first.
  */
 export function useInboxInsights(
   items: InboxInsightItem[],
@@ -142,10 +161,28 @@ export function useInboxInsights(
     };
   }, [wantedKey, fetcher, readerId]);
 
+  useEffect(
+    () => () => {
+      visibleByReader.delete(readerId);
+    },
+    [readerId],
+  );
+  const setVisibleRows = useCallback(
+    (rows: VisibleRows) => {
+      visibleByReader.set(readerId, rows);
+    },
+    [readerId],
+  );
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: the queues and caches change with storeVersion
   return useMemo(() => {
     if (!enabled)
-      return { data: undefined, error: undefined, isLoading: false };
+      return {
+        data: undefined,
+        error: undefined,
+        isLoading: false,
+        setVisibleRows,
+      };
     const data: Record<string, ThreadInsightData> = {};
     let isLoading = false;
     // Like one request for the page: an error only when every account on
@@ -176,8 +213,8 @@ export function useInboxInsights(
     }
     const failing = [...errors.values()];
     const error = failing.every(Boolean) ? failing[0] : undefined;
-    return { data, error, isLoading };
-  }, [items, enabled, storeVersion]);
+    return { data, error, isLoading, setVisibleRows };
+  }, [items, enabled, storeVersion, setVisibleRows]);
 }
 
 /**
@@ -196,31 +233,31 @@ export function threadInsightItem({
   return { key: threadId, emailAccountId, threadId, messageId, open: true };
 }
 
-/** One request per account, lane and page of rows, ordered so it is stable. */
+/**
+ * One request per account, lane and page of rows, each in screen order so the
+ * rows on screen can be asked for first.
+ */
 export function getInboxInsightRequests(items: InboxInsightItem[]) {
   const byAccount = groupBy(
-    items,
+    items.map((item, index) => ({ ...item, index })),
     (item) => `${item.open ? "open" : "rows"}\u0000${item.emailAccountId}`,
   );
   return Object.keys(byAccount)
     .sort()
     .flatMap((group) => {
       const [lane, emailAccountId] = group.split("\u0000") as [Lane, string];
-      const unique = new Map(
-        byAccount[group].map((item) => [
-          item.key,
-          {
-            key: item.key,
-            threadId: item.threadId,
-            messageId: item.messageId,
-            pair: `${encodeURIComponent(item.threadId)}:${encodeURIComponent(item.messageId)}`,
-          },
-        ]),
-      );
-      const sorted = [...unique.values()].sort((a, b) =>
-        a.pair.localeCompare(b.pair),
-      );
-      return chunk(sorted, CHUNK_SIZE).map((chunkItems) => ({
+      const unique = new Map<string, Wanted & { key: string }>();
+      for (const item of byAccount[group]) {
+        if (unique.has(item.key)) continue;
+        unique.set(item.key, {
+          key: item.key,
+          threadId: item.threadId,
+          messageId: item.messageId,
+          pair: `${encodeURIComponent(item.threadId)}:${encodeURIComponent(item.messageId)}`,
+          index: item.index,
+        });
+      }
+      return chunk([...unique.values()], CHUNK_SIZE).map((chunkItems) => ({
         emailAccountId,
         lane,
         items: chunkItems,
@@ -259,6 +296,7 @@ export function resetInboxInsightRequestsForTesting() {
     if (queue.timer) clearTimeout(queue.timer);
   }
   queues.clear();
+  visibleByReader.clear();
   attempts.clear();
   answered.clear();
   meta.clear();
@@ -289,11 +327,7 @@ function pump(queue: Queue) {
   }
   const { emailAccountId, fetcher } = queue;
   if (!fetcher) return;
-  const wanted = [
-    ...new Map(
-      [...queue.readers.values()].flat().map((item) => [item.pair, item]),
-    ).values(),
-  ];
+  const wanted = byScreenPriority(queue.readers);
   const pending = wanted.filter(
     (item) =>
       !keptExtraction(emailAccountId, item.messageId) &&
@@ -315,7 +349,13 @@ function pump(queue: Queue) {
   if (needsMeta) queue.metaAttempts += 1;
   queue.refresh = false;
   const batch = pending.length
-    ? pending.slice(0, MAX_NEW_PER_REQUEST)
+    ? pending.slice(
+        0,
+        firstRequestSize(
+          pending.length,
+          pending.filter((item) => item.onScreen).length,
+        ),
+      )
     : kept.slice(0, CHUNK_SIZE);
   // Only the meeting list and settings are wanted when every email is kept;
   // naming them spares the server reading them.
@@ -502,6 +542,54 @@ function toThreadInsight({
       : null,
     reply,
   };
+}
+
+/**
+ * Every reader's rows, once each: those on screen and the screenful after
+ * them first, in screen order, then the rest by how far they are from it.
+ */
+function byScreenPriority(readers: Queue["readers"]) {
+  const ranked = new Map<
+    string,
+    Wanted & { rank: number; onScreen: boolean }
+  >();
+  for (const [readerId, items] of readers) {
+    const visible = visibleByReader.get(readerId);
+    for (const item of items) {
+      const placed = placeOnScreen(item.index, visible);
+      const existing = ranked.get(item.pair);
+      if (!existing || placed.rank < existing.rank)
+        ranked.set(item.pair, { ...item, ...placed });
+    }
+  }
+  return [...ranked.values()].sort((a, b) => a.rank - b.rank);
+}
+
+function placeOnScreen(index: number, visible: VisibleRows | undefined) {
+  if (!visible || visible.end <= visible.start)
+    return { rank: index, onScreen: false };
+  const end = visible.end + (visible.end - visible.start);
+  if (index >= visible.start && index < end)
+    return { rank: index - visible.start, onScreen: true };
+  const distance = index < visible.start ? visible.start - index : index - end;
+  return { rank: end - visible.start + distance, onScreen: false };
+}
+
+/**
+ * The rows on screen go in a request of their own size when that costs no
+ * extra request: each request also reads the account's calendar and counts
+ * against its rate limit, so the page still takes as many requests as it
+ * did in pages of MAX_NEW_PER_REQUEST.
+ */
+function firstRequestSize(pendingCount: number, onScreenCount: number) {
+  if (!onScreenCount) return MAX_NEW_PER_REQUEST;
+  const requests = Math.ceil(pendingCount / MAX_NEW_PER_REQUEST);
+  const smallestWithoutExtraRequest =
+    pendingCount - MAX_NEW_PER_REQUEST * (requests - 1);
+  return Math.min(
+    MAX_NEW_PER_REQUEST,
+    Math.max(onScreenCount, smallestWithoutExtraRequest),
+  );
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
