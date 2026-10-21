@@ -140,6 +140,10 @@ async function startInboxPreview(
   if (syncedAt !== null && !isLocalMailboxStale(syncedAt))
     return { preview: null, catchUp: false };
   const catchUp = syncedAt !== null;
+  // Only Gmail's engine takes the catch-up rows, so Outlook's would spend
+  // Graph quota and page time on mail nothing reads.
+  if (catchUp && !isGoogleProvider(account.provider))
+    return { preview: null, catchUp: false };
   return {
     preview: loadLandingInboxPreview(account, userId, catchUp),
     catchUp,
