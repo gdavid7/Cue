@@ -72,27 +72,32 @@ test("swipes a row right to flip its read state", async ({
   const { conversations, emailAccountId } = await openMail(page);
   const row = conversationWithSubject(page, conversations, SUBJECT);
   await expect(row).toBeVisible();
-  const wasUnread = await isUnread(row);
+  const wasUnread = await steadyUnread(row);
 
-  let swipe = await touchSwipe(page, row, { from: "left" });
+  const swipe = await touchSwipe(page, row, { from: "left" });
   await swipe.moveBy(200);
   await expect(page.locator('[data-swiping="toggleRead"]')).toHaveAttribute(
     "data-armed",
   );
   await capturePlaywrightCheckpoint(page, testInfo, "swipe-read-armed");
   await swipe.end();
-  await expect.poll(() => isUnread(row)).toBe(!wasUnread);
-  // The keyboard's and toolbar's read-state command, settled before the row
-  // is swiped back, so the second swipe reads the mailbox's settled state.
+  // The keyboard's and toolbar's read-state command, for the state shown.
   await expectReadState(page, emailAccountId, wasUnread);
+  await expect.poll(() => isUnread(row)).toBe(!wasUnread);
   await expect(page.locator("[data-swiping]")).toHaveCount(0);
 
-  // And back, leaving the shared mailbox as it was.
-  swipe = await touchSwipe(page, row, { from: "left" });
-  await swipe.moveBy(200);
-  await swipe.end();
-  await expectReadState(page, emailAccountId, !wasUnread);
-  await expect.poll(() => isUnread(row)).toBe(wasUnread);
+  // And back, leaving the shared mailbox as it was. Outlook can briefly show
+  // the old state again while it syncs, so each swipe is checked against
+  // what the row shows when it's swiped.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const shownUnread = await steadyUnread(row);
+    if (shownUnread === wasUnread) break;
+    const back = await touchSwipe(page, row, { from: "left" });
+    await back.moveBy(200);
+    await back.end();
+    await expectReadState(page, emailAccountId, shownUnread);
+  }
+  await expect.poll(() => steadyUnread(row)).toBe(wasUnread);
 });
 
 test("leaves a vertical scroll to the list", async ({ page }) => {
@@ -174,6 +179,17 @@ async function touchSwipe(
 
 async function isUnread(row: Locator) {
   return ((await row.textContent()) ?? "").includes("Unread,");
+}
+
+/** The row's read state once it has held for a second. */
+async function steadyUnread(row: Locator) {
+  let previous = await isUnread(row);
+  for (;;) {
+    await row.page().waitForTimeout(1000);
+    const current = await isUnread(row);
+    if (current === previous) return current;
+    previous = current;
+  }
 }
 
 async function expectMutation(

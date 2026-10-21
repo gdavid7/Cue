@@ -94,6 +94,22 @@ export function handleFrameLinkClick(
   if (url) open(url);
 }
 
+/**
+ * auxclick is any non-primary button. A middle click opens the link like a
+ * click; any other (a right click) only stops the frame from following it.
+ */
+export function handleFrameLinkAuxClick(
+  event: MouseEvent,
+  open: (url: string) => void,
+) {
+  if (event.button === 1) {
+    handleFrameLinkClick(event, open);
+    return;
+  }
+  const target = event.target as Element | null;
+  if (target?.closest?.("a")) event.preventDefault();
+}
+
 function decodeBookmark(id: string) {
   try {
     return decodeURIComponent(id);

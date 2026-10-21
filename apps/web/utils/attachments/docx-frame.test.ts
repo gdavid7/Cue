@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFrameElementFactory,
   DOCX_RENDER_OPTIONS,
+  handleFrameLinkAuxClick,
   handleFrameLinkClick,
 } from "@/utils/attachments/docx-frame";
 
@@ -167,6 +168,38 @@ function clickLink(href: string) {
     handleFrameLinkClick(clicked, open),
   );
   text.dispatchEvent(event);
+  link.remove();
+  return { event, open };
+}
+
+describe("handleFrameLinkAuxClick", () => {
+  it("opens a middle-clicked link in a new tab", () => {
+    const { event, open } = auxClickLink("https://example.com/", 1);
+    expect(event.defaultPrevented).toBe(true);
+    expect(open).toHaveBeenCalledWith("https://example.com/");
+  });
+
+  it("neither follows nor opens a right-clicked link", () => {
+    const { event, open } = auxClickLink("https://example.com/", 2);
+    expect(event.defaultPrevented).toBe(true);
+    expect(open).not.toHaveBeenCalled();
+  });
+});
+
+function auxClickLink(href: string, button: number) {
+  const link = document.createElement("a");
+  link.setAttribute("href", href);
+  document.body.append(link);
+  const open = vi.fn();
+  const event = new MouseEvent("auxclick", {
+    bubbles: true,
+    cancelable: true,
+    button,
+  });
+  link.addEventListener("auxclick", (clicked) =>
+    handleFrameLinkAuxClick(clicked, open),
+  );
+  link.dispatchEvent(event);
   link.remove();
   return { event, open };
 }

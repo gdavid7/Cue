@@ -31,6 +31,17 @@ export async function readOfficePackage(
   const entries = readCentralDirectory(bytes);
   if (!entries) return { refused: "invalid" };
   if (entries.length > MAX_ENTRIES) return { refused: "tooLarge" };
+  // Real Office files never repeat a part or point two parts at the same
+  // bytes; overlapping entries would multiply what one file can unpack.
+  if (
+    new Set(entries.map((entry) => entry.name)).size !== entries.length ||
+    new Set(entries.map((entry) => entry.localOffset)).size !== entries.length
+  )
+    return { refused: "invalid" };
+  // No Office part has this name, and object-keyed zip code would treat it as
+  // the object's prototype.
+  if (entries.some((entry) => entry.name === "__proto__"))
+    return { refused: "invalid" };
   let declared = 0;
   for (const entry of entries) {
     declared += entry.size;
@@ -42,8 +53,8 @@ export async function readOfficePackage(
   }
   if (declared > MAX_UNPACKED_BYTES) return { refused: "tooLarge" };
 
-  const files: Zippable = {};
-  let sinceYield = 0;
+  const files: Zippable = Object.create(null);
+  const pace = createPacer(signal);
   for (const entry of entries) {
     if (entry.name.endsWith("/")) continue;
     const data = readEntryData(bytes, entry);
@@ -52,7 +63,7 @@ export async function readOfficePackage(
       return { refused: "invalid" };
     let unpacked: Uint8Array | undefined = data;
     if (entry.method === 8) {
-      const inflated = inflateBounded(data, entry.size);
+      const inflated = await inflateBounded(data, entry.size, pace);
       if (inflated.produced > entry.size) return { refused: "tooLarge" };
       unpacked = inflated.output;
     }
@@ -60,12 +71,7 @@ export async function readOfficePackage(
     if (!unpacked || unpacked.length !== entry.size)
       return { refused: "invalid" };
     files[entry.name] = [unpacked, { level: 0 }];
-    sinceYield += unpacked.length;
-    if (sinceYield >= YIELD_EVERY_BYTES) {
-      sinceYield = 0;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      signal?.throwIfAborted();
-    }
+    await pace(unpacked.length);
   }
   return { package: zipSync(files) };
 }
@@ -73,24 +79,34 @@ export async function readOfficePackage(
 /**
  * Inflates `data`, keeping at most `limit` bytes; past that it stops feeding
  * the inflater and returns no output. `produced` is what was inflated in all.
+ * `pace` hands the page back between pushes, and throws once aborted.
  */
-export function inflateBounded(data: Uint8Array, limit: number) {
+export async function inflateBounded(
+  data: Uint8Array,
+  limit: number,
+  pace: Pacer = async () => {},
+) {
   const chunks: Uint8Array[] = [];
   let produced = 0;
   let over = false;
+  let pushed = 0;
   const inflater = new Inflate((chunk) => {
     produced += chunk.length;
+    pushed += chunk.length;
     if (produced > limit) over = true;
     else chunks.push(chunk);
   });
-  try {
-    for (let offset = 0; offset < data.length && !over; offset += PUSH_BYTES)
+  for (let offset = 0; offset < data.length && !over; offset += PUSH_BYTES) {
+    try {
       inflater.push(
         data.subarray(offset, offset + PUSH_BYTES),
         offset + PUSH_BYTES >= data.length,
       );
-  } catch {
-    return { produced };
+    } catch {
+      return { produced };
+    }
+    await pace(pushed);
+    pushed = 0;
   }
   if (over) return { produced };
   const output = new Uint8Array(produced);
@@ -100,6 +116,23 @@ export function inflateBounded(data: Uint8Array, limit: number) {
     position += chunk.length;
   }
   return { output, produced };
+}
+
+type Pacer = (bytes: number) => Promise<void>;
+
+/**
+ * Counts work in bytes and, every YIELD_EVERY_BYTES, gives the main thread
+ * back and stops if the preview was closed.
+ */
+function createPacer(signal?: AbortSignal): Pacer {
+  let sinceYield = 0;
+  return async (bytes) => {
+    sinceYield += bytes;
+    if (sinceYield < YIELD_EVERY_BYTES) return;
+    sinceYield = 0;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    signal?.throwIfAborted();
+  };
 }
 
 type Entry = {

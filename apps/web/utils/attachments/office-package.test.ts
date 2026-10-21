@@ -59,6 +59,53 @@ describe("readOfficePackage", () => {
     expect(await readOfficePackage(bomb)).toEqual({ refused: "tooLarge" });
   });
 
+  // Real Office files have neither; overlapping entries would multiply what
+  // one small file can unpack.
+  it("refuses a package that repeats a part name", async () => {
+    const zip = zipSync({ "a.xml": text("one"), "b.xml": text("two") });
+    expect(await readOfficePackage(renamePart(zip, "b.xml", "a.xml"))).toEqual({
+      refused: "invalid",
+    });
+  });
+
+  it("refuses two parts pointing at the same bytes", async () => {
+    const zip = zipSync({ "a.xml": text("one"), "b.xml": text("one") });
+    const view = new DataView(zip.buffer);
+    const centrals = offsetsOf(zip, 0x02_01_4b_50);
+    view.setUint32(
+      centrals[1] + 42,
+      view.getUint32(centrals[0] + 42, true),
+      true,
+    );
+
+    expect(await readOfficePackage(zip)).toEqual({ refused: "invalid" });
+  });
+
+  it("refuses a part named __proto__ without polluting anything", async () => {
+    const zip = zipSync({ "abcde.xml": text("hello") });
+
+    expect(
+      await readOfficePackage(renamePart(zip, "abcde.xml", "__proto__")),
+    ).toEqual({ refused: "invalid" });
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+  });
+
+  it("stops inside a large part once the preview is closed", async () => {
+    // Random bytes don't compress, so every check on declared sizes passes.
+    const noise = new Uint8Array(6 * MB);
+    for (let offset = 0; offset < noise.length; offset += 65_536)
+      crypto.getRandomValues(noise.subarray(offset, offset + 65_536));
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      readOfficePackage(
+        zipSync({ "word/document.xml": noise }),
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+  });
+
   it("refuses bytes that only start like a zip", async () => {
     expect(
       await readOfficePackage(new Uint8Array([80, 75, 3, 4, 1, 2, 3])),
@@ -67,22 +114,22 @@ describe("readOfficePackage", () => {
 });
 
 describe("inflateBounded", () => {
-  it("stops inflating soon after the limit instead of finishing", () => {
-    const deflated = zipSync({ part: new Uint8Array(64 * MB) }, { level: 1 });
+  it("stops inflating soon after the limit instead of finishing", async () => {
+    const deflated = zipSync({ part: new Uint8Array(16 * MB) }, { level: 1 });
     const data = entryData(deflated);
 
-    const { output, produced } = inflateBounded(data, 1024);
+    const { output, produced } = await inflateBounded(data, 1024);
 
     expect(output).toBeUndefined();
-    // At most one push past the limit, never the 64 MB the data holds.
+    // At most one push past the limit, never the 16 MB the data holds.
     expect(produced).toBeLessThan(2 * MB);
   });
 
-  it("returns everything within the limit", () => {
+  it("returns everything within the limit", async () => {
     const text = new TextEncoder().encode("<w:document/>".repeat(100));
     const data = entryData(zipSync({ part: text }));
 
-    expect(inflateBounded(data, text.length).output).toEqual(text);
+    expect((await inflateBounded(data, text.length)).output).toEqual(text);
   });
 });
 
@@ -104,4 +151,28 @@ function entryData(zip: Uint8Array) {
   const compressed = view.getUint32(18, true);
   const start = 30 + view.getUint16(26, true) + view.getUint16(28, true);
   return zip.subarray(start, start + compressed);
+}
+
+function text(value: string) {
+  return new TextEncoder().encode(value);
+}
+
+function offsetsOf(zip: Uint8Array, signature: number) {
+  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  const offsets: number[] = [];
+  for (let offset = 0; offset + 4 <= zip.length; offset++)
+    if (view.getUint32(offset, true) === signature) offsets.push(offset);
+  return offsets;
+}
+
+/** Renames a part in both headers; the names must be the same length. */
+function renamePart(zip: Uint8Array, from: string, to: string) {
+  const bytes = zip.slice();
+  const fromBytes = text(from);
+  if (to.length !== from.length) throw new Error("names must match in length");
+  const toBytes = text(to);
+  for (let offset = 0; offset + fromBytes.length <= bytes.length; offset++)
+    if (fromBytes.every((byte, index) => bytes[offset + index] === byte))
+      bytes.set(toBytes, offset);
+  return bytes;
 }

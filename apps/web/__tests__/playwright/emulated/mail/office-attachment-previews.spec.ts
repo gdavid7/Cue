@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
@@ -62,7 +62,7 @@ test("previews a Word attachment in the browser, sending it nowhere", async ({
   const download = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Download" }).click();
   expect((await download).suggestedFilename()).toBe(DOCX);
-  expect(thirdPartyRequests()).toEqual([]);
+  expect(thirdPartyRequests.sent()).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });
@@ -121,7 +121,11 @@ test("keeps a hostile Word document from loading or navigating anything", async 
 
   // Give any late image or stylesheet load time to show up.
   await page.waitForTimeout(1000);
-  expect(thirdPartyRequests()).toEqual([]);
+  expect(thirdPartyRequests.sent()).toEqual([]);
+  // The VML shape's inline background is only stoppable by the frame's CSP.
+  expect(thirdPartyRequests.blockedByCsp()).toContain(
+    "image https://tracker.invalid/vml.png",
+  );
 });
 
 test("previews an Excel attachment sheet by sheet", async ({
@@ -142,7 +146,7 @@ test("previews an Excel attachment sheet by sheet", async ({
   await expect(
     dialog.getByRole("cell", { name: "Approved by finance" }),
   ).toBeVisible();
-  expect(thirdPartyRequests()).toEqual([]);
+  expect(thirdPartyRequests.sent()).toEqual([]);
 });
 
 test("keeps PowerPoint attachments download-only", async ({ page }) => {
@@ -174,7 +178,9 @@ async function openInsertedThread(page: Page) {
 /**
  * Requests of any kind that leave the app and the emulators, as an online
  * viewer, an upload or a document's tracking image would, plus the
- * "<app>/null" a missing image part used to request.
+ * "<app>/null" a missing image part used to request. Chromium still reports
+ * a request the frame's CSP refused; those never reach the network, so they
+ * are listed apart, as proof the CSP is in force.
  */
 function watchThirdPartyRequests(page: Page) {
   const allowed = new Set(
@@ -187,14 +193,27 @@ function watchThirdPartyRequests(page: Page) {
       .filter((url): url is string => !!url)
       .map((url) => new URL(url).origin),
   );
-  const offending: string[] = [];
+  const attempted = new Map<Request, string>();
+  const blockedByCsp: string[] = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.protocol === "data:" || url.protocol === "blob:") return;
     if (!allowed.has(url.origin) || url.pathname.endsWith("/null"))
-      offending.push(`${request.resourceType()} ${url.origin}${url.pathname}`);
+      attempted.set(
+        request,
+        `${request.resourceType()} ${url.origin}${url.pathname}`,
+      );
   });
-  return () => offending;
+  page.on("requestfailed", (request) => {
+    const label = attempted.get(request);
+    if (!label || !/csp/i.test(request.failure()?.errorText ?? "")) return;
+    attempted.delete(request);
+    blockedByCsp.push(label);
+  });
+  return {
+    sent: () => [...attempted.values()],
+    blockedByCsp: () => blockedByCsp,
+  };
 }
 
 async function insertMessageWithAttachments(

@@ -11,6 +11,7 @@ import {
   createFrameElementFactory,
   DOCX_FRAME_DOCUMENT,
   DOCX_RENDER_OPTIONS,
+  handleFrameLinkAuxClick,
   handleFrameLinkClick,
 } from "@/utils/attachments/docx-frame";
 
@@ -39,13 +40,13 @@ export default function DocxAttachmentPreview({
     const body = doc?.getElementById("docx-body");
     if (!frameReady || !doc || !styles || !body) return;
     let cancelled = false;
-    const onClick = (event: MouseEvent) =>
-      handleFrameLinkClick(event, (url) =>
-        window.open(url, "_blank", "noopener,noreferrer"),
-      );
-    // auxclick is a middle click, which would open the link on its own.
+    const open = (url: string) =>
+      window.open(url, "_blank", "noopener,noreferrer");
+    const onClick = (event: MouseEvent) => handleFrameLinkClick(event, open);
+    const onAuxClick = (event: MouseEvent) =>
+      handleFrameLinkAuxClick(event, open);
     doc.addEventListener("click", onClick);
-    doc.addEventListener("auxclick", onClick);
+    doc.addEventListener("auxclick", onAuxClick);
     renderAsync(file, body, styles, {
       ...DOCX_RENDER_OPTIONS,
       h: createFrameElementFactory(doc),
@@ -60,7 +61,7 @@ export default function DocxAttachmentPreview({
     return () => {
       cancelled = true;
       doc.removeEventListener("click", onClick);
-      doc.removeEventListener("auxclick", onClick);
+      doc.removeEventListener("auxclick", onAuxClick);
       styles.replaceChildren();
       body.replaceChildren();
     };
