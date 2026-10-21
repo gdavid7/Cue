@@ -485,16 +485,28 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     await waitFor(() => expect(result.current.data).toEqual(WORK_ONLY));
     expect(result.current.error).toBeUndefined();
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
     expect(busy.personalRequests()).toBe(2);
     expect(result.current.data).toEqual(WORK_ONLY);
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
     expect(busy.personalRequests()).toBe(3);
     expect(result.current.data).toEqual(BOTH);
   });
 
   it("stops asking for an account that keeps failing after five more tries", async () => {
+    const busy = personalBusy(Number.POSITIVE_INFINITY, { status: 500 });
+    const { result } = renderHook(() => useInboxInsights(items), {
+      wrapper: wrapperFor(busy.fetcher),
+    });
+    await waitFor(() => expect(result.current.data).toEqual(WORK_ONLY));
+
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(busy.personalRequests()).toBe(6);
+    expect(result.current.data).toEqual(WORK_ONLY);
+  });
+
+  it("keeps a deferred account's rows queued past the usual tries, waiting longer each time", async () => {
     const busy = personalBusy(Number.POSITIVE_INFINITY, {
       status: 503,
       retryAfterMs: 1000,
@@ -504,9 +516,31 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     });
     await waitFor(() => expect(result.current.data).toEqual(WORK_ONLY));
 
+    // Not before the rows' 15 s spacing, though Retry-After said 1 s.
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(busy.personalRequests()).toBe(1);
     await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
-    expect(busy.personalRequests()).toBe(6);
-    expect(result.current.data).toEqual(WORK_ONLY);
+    expect(busy.personalRequests()).toBeGreaterThan(6);
+    // Never more often than the spacing: at most 40 in 10 minutes.
+    expect(busy.personalRequests()).toBeLessThanOrEqual(41);
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it("shows no error while every account is deferred, and fills in once the budget is back", async () => {
+    const one = [item({ emailAccountId: "personal", threadId: "t1" })];
+    const busy = personalBusy(8, { status: 503, retryAfterMs: 20_000 });
+    const { result } = renderHook(() => useInboxInsights(one), {
+      wrapper: wrapperFor(busy.fetcher),
+    });
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(busy.personalRequests()).toBe(1);
+    expect(result.current.error).toBeUndefined();
+
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(busy.personalRequests()).toBe(9);
+    expect(result.current.data).toEqual({ "personal:t1": SHOWN });
+    expect(result.current.error).toBeUndefined();
   });
 
   it("asks once per retry however many readers share the rows", async () => {
@@ -518,7 +552,7 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     await waitFor(() => expect(result.current[0].data).toEqual(WORK_ONLY));
     expect(busy.personalRequests()).toBe(1);
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
     expect(busy.personalRequests()).toBe(2);
     expect(result.current[0].data).toEqual(BOTH);
     expect(result.current[1].data).toEqual(BOTH);

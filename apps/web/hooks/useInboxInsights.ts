@@ -33,6 +33,9 @@ const ROW_REQUEST_SPACING_MS = 15_000;
 // note is waited on, so it starts sooner.
 const BACKOFF_BASE_MS: Record<Lane, number> = { rows: 5000, open: 1000 };
 
+// A deferral that names no wait: the account's budget refills each minute.
+const DEFERRAL_FALLBACK_MS = 15_000;
+
 // What Cue read from each email, kept in this browser for as long as the
 // email could still be on screen: the server keeps none of it (RD-3).
 const extractions = createBrowserCache<InboxInsightExtraction>({
@@ -97,6 +100,8 @@ type Queue = {
   timer: ReturnType<typeof setTimeout> | null;
   waitingForMail: boolean;
   failures: number;
+  /** Consecutive answers that said the account's Gmail budget is spent. */
+  deferrals: number;
   /** Requests made only for the account's settings and meetings. */
   metaAttempts: number;
   /** Asked to read the kept rows' drafted replies again (refreshInboxInsights). */
@@ -426,14 +431,31 @@ function pump(queue: Queue) {
         }
       }
       queue.failures = 0;
+      queue.deferrals = 0;
       queue.error = undefined;
       queue.nextAtMs =
         Date.now() + (queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0);
     })
     .catch((error: unknown) => {
+      const status = (error as { status?: number } | null)?.status;
+      if (isDeferral(error)) {
+        // The account's Gmail budget is spent for now: nothing went wrong, so
+        // the rows stay queued with their tries back, and are asked for once
+        // the window has passed, never sooner than the rows' usual spacing.
+        queue.deferrals += 1;
+        for (const item of batch) refundAttempt({ emailAccountId, ...item });
+        const hint = getRetryHint(
+          error as { status?: number; retryAfterMs?: number },
+          queue.deferrals,
+        );
+        const waitMs = hint.kind === "wait" ? hint.ms : DEFERRAL_FALLBACK_MS;
+        queue.nextAtMs =
+          Date.now() +
+          Math.max(waitMs, queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0);
+        return;
+      }
       queue.failures += 1;
       queue.error = error;
-      const status = (error as { status?: number } | null)?.status;
       // A rate limit is asked about once more, after its window.
       if (status === 429) {
         for (const item of batch) {
@@ -477,6 +499,7 @@ function queueFor(emailAccountId: string, lane: Lane) {
     timer: null,
     waitingForMail: false,
     failures: 0,
+    deferrals: 0,
     metaAttempts: 0,
     refresh: false,
     error: undefined,
@@ -499,6 +522,20 @@ function countAttempt(
 ) {
   const key = attemptKey(item);
   attempts.set(key, to ?? (attempts.get(key) ?? 0) + 1);
+}
+
+function refundAttempt(item: { emailAccountId: string; messageId: string }) {
+  const key = attemptKey(item);
+  const count = attempts.get(key) ?? 0;
+  if (count > 0) attempts.set(key, count - 1);
+}
+
+function isDeferral(error: unknown) {
+  const { status, retryAfterMs } = (error ?? {}) as {
+    status?: number;
+    retryAfterMs?: number;
+  };
+  return status === 503 && typeof retryAfterMs === "number";
 }
 
 function keptExtraction(emailAccountId: string, messageId: string) {
