@@ -1,6 +1,6 @@
 name: Production Health
 
-# An hourly synthetic user for https://cue-inbox.vercel.app plus an Axiom and
+# An hourly synthetic user for https://cuemail.tech plus an Axiom and
 # Sentry digest. Setup and secrets: apps/web/__tests__/playwright/prod/README.md
 #
 # Only schedule and manual dispatch trigger this workflow, so pull requests
@@ -34,7 +34,7 @@ jobs:
       run:
         working-directory: apps/web
     env:
-      CUE_QA_BASE_URL: https://cue-inbox.vercel.app
+      CUE_QA_BASE_URL: https://cuemail.tech
       CUE_QA_EMAIL: ${{ secrets.CUE_QA_EMAIL }}
       CUE_QA_IMAP_APP_PASSWORD: ${{ secrets.CUE_QA_IMAP_APP_PASSWORD }}
       # Optional: the Outlook QA mailbox linked to the QA user; unset skips

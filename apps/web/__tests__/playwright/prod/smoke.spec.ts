@@ -40,7 +40,7 @@ const credentials = readQaMailboxCredentials();
 const outlookMailbox = credentials
   ? readQaOutlookMailbox(credentials.email)
   : null;
-const baseUrl = process.env.CUE_QA_BASE_URL || "https://cue-inbox.vercel.app";
+const baseUrl = process.env.CUE_QA_BASE_URL || "https://cuemail.tech";
 const run = new RobotRun(
   baseUrl,
   process.env.CUE_QA_RESULTS_FILE || ".tmp/qa-robot/results.json",

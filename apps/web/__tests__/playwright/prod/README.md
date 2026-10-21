@@ -1,6 +1,6 @@
 # Production robot
 
-A synthetic user that walks https://cue-inbox.vercel.app every hour as a
+A synthetic user that walks https://cuemail.tech every hour as a
 dedicated QA Gmail account, plus a digest of the last hour of Axiom logs and
 the last day of Sentry issues. The workflow is
 `.github/workflows/prod-health.yml`; each run prints one JSON block between
@@ -75,7 +75,7 @@ failure fails the job.
 4. **Add it as a test user** of the Google Cloud OAuth app (APIs & Services →
    OAuth consent screen → Audience → Test users).
 5. **Sign in to Cue once with Google** as that account at
-   https://cue-inbox.vercel.app, finish onboarding and connect Gmail. It
+   https://cuemail.tech, finish onboarding and connect Gmail. It
    should be the account's only (first) mailbox. Turn on the AI assistant and
    reply tracking if they are not on by default, so Today and chat have
    something to show.
