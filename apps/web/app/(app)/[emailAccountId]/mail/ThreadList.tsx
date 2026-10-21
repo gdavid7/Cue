@@ -130,7 +130,7 @@ export const ThreadList = memo(function ThreadList({
     useSentMessageOpensForThreads(sentThreadIds);
   const insightItems = useMemo(
     () =>
-      threads.flatMap((thread) => {
+      threads.flatMap((thread, index) => {
         const messageId =
           thread.latestMessageId ??
           thread.messages.findLast(
@@ -146,13 +146,14 @@ export const ThreadList = memo(function ThreadList({
                 ),
                 threadId: thread.id,
                 messageId,
+                index,
               },
             ]
           : [];
       }),
     [threads, emailAccountId],
   );
-  const { data: insights } = useInboxInsights(insightItems, {
+  const { data: insights, setVisibleRows } = useInboxInsights(insightItems, {
     enabled: !insightsPaused,
   });
   const groupHeaderClassName = cn(
@@ -193,6 +194,7 @@ export const ThreadList = memo(function ThreadList({
       }
       onLoadMore={onLoadMore}
       onOpen={onOpenThread}
+      onVisibleRowsChange={setVisibleRows}
       onSelectRangeTo={onSelectRangeTo}
       onToggleSelect={onToggleSelect}
       renderItem={(row) => (
