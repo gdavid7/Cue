@@ -1,6 +1,7 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { isSessionExpiredErrorBody } from "@/utils/session-expired";
+import { isSigningOut } from "@/utils/signing-out";
 
 /**
  * onSessionExpired runs where the request ran, which may be a worker with no
@@ -35,7 +36,11 @@ export function createMailHttpRequest(
       };
     }
     const json = await response.json().catch(() => null);
-    if (response.status === 401 && isSessionExpiredErrorBody(json)) {
+    if (
+      response.status === 401 &&
+      !isSigningOut() &&
+      isSessionExpiredErrorBody(json)
+    ) {
       onSessionExpired();
       return { status: response.status, json, sessionExpired: true };
     }

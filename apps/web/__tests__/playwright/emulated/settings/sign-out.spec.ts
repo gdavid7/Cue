@@ -21,10 +21,12 @@ test("signs out in one click from the mail account menu", async ({ page }) => {
   await openSignedInMail(page);
 
   await accountMenuButton(page).click();
+  const unauthorized = collectUnauthorizedApiResponses(page);
   const clickedAt = Date.now();
   await page.getByRole("menuitem", { name: "Sign out" }).click();
 
   await expectSignedOut(page, clickedAt);
+  expect(unauthorized).toEqual([]);
 });
 
 test("signs out in one click from Settings", async ({ page }) => {
@@ -36,11 +38,26 @@ test("signs out in one click from Settings", async ({ page }) => {
   await expect(
     settings.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible();
+  const unauthorized = collectUnauthorizedApiResponses(page);
   const clickedAt = Date.now();
   await settings.getByRole("button", { name: "Sign out", exact: true }).click();
 
   await expectSignedOut(page, clickedAt);
+  expect(unauthorized).toEqual([]);
 });
+
+// Requests the page sends after the session row is deleted answer 401. Once
+// sign-out starts the page must send none, or the burst reads as a session
+// expiring under the user.
+function collectUnauthorizedApiResponses(page: Page) {
+  const unauthorized: string[] = [];
+  page.on("response", (response) => {
+    const { pathname } = new URL(response.url());
+    if (response.status() === 401 && pathname.startsWith("/api/"))
+      unauthorized.push(pathname);
+  });
+  return unauthorized;
+}
 
 async function openSignedInMail(page: Page) {
   await signIn(page);

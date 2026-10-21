@@ -1,4 +1,5 @@
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { withSigningOutSignal } from "@/utils/signing-out";
 
 /**
  * A wrapper around the native fetch function that automatically adds the
@@ -19,7 +20,13 @@ export const fetchWithAccount = async ({
     headers.set(EMAIL_ACCOUNT_HEADER, emailAccountId);
   }
 
-  const newInit = { ...init, headers };
+  // Once sign-out starts the signal is aborted, so this rejects with an
+  // AbortError instead of sending a request that would answer 401.
+  const newInit = {
+    ...init,
+    headers,
+    signal: withSigningOutSignal(init?.signal),
+  };
 
   return fetch(url, newInit);
 };

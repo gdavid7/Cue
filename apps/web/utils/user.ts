@@ -3,6 +3,7 @@
 import { toastLoading } from "@/components/Toast";
 import { signOut } from "@/utils/auth-client";
 import { clearLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
+import { startSigningOut } from "@/utils/signing-out";
 import { stopEmailAccountsFetches } from "@/utils/fetch-email-accounts";
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { wipeLocalMailbox } from "@/utils/mail-engine/wipe-local-mailbox";
@@ -30,6 +31,7 @@ export function logOut(callbackUrl = "/login") {
 
 async function signOutAndLeave(callbackUrl: string) {
   toastLoading("Signing out…");
+  startSigningOut();
   stopEmailAccountsFetches();
   clearPersistedSwrCache();
   clearBrowserCaches();

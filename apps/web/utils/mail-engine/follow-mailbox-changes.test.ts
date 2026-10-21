@@ -7,6 +7,7 @@ import {
   followMailboxChanges,
   getFollowedAccountIds,
 } from "./follow-mailbox-changes";
+import { resetSigningOut, startSigningOut } from "@/utils/signing-out";
 
 const visibilityDescriptor = Object.getOwnPropertyDescriptor(
   document,
@@ -46,6 +47,18 @@ describe("followMailboxChanges", () => {
     stops.push(stop);
     return { onChange, stop };
   }
+
+  it("closes the stream when sign-out starts and does not reopen it", () => {
+    follow();
+    expect(sources).toHaveLength(1);
+
+    startSigningOut();
+    window.dispatchEvent(new Event("focus"));
+
+    expect(sources[0].closed).toBe(true);
+    expect(sources).toHaveLength(1);
+    resetSigningOut();
+  });
 
   it("syncs when the server signals a mailbox change", () => {
     const { onChange } = follow();

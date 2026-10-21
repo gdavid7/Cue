@@ -71,6 +71,16 @@ describe("logOut", () => {
     expect(mocks.redirect).toHaveBeenCalledWith("/login");
   });
 
+  it("stops the page's API traffic as soon as sign-out starts", async () => {
+    const logOut = await loadLogOut();
+    const { isSigningOut } = await import("./signing-out");
+
+    const done = logOut();
+
+    expect(isSigningOut()).toBe(true);
+    await done;
+  });
+
   it("signs out once however many times it is clicked", async () => {
     const logOut = await loadLogOut();
 
