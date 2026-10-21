@@ -124,6 +124,28 @@ describe("getBatchWithRetry", () => {
     );
   });
 
+  it("logs why the retry budget ran out", async () => {
+    const retryAt = new Date(Date.now() + 90_000).toISOString();
+    getBatch.mockResolvedValue([
+      batchError(429, "rateLimitExceeded", `Retry after ${retryAt}`),
+    ]);
+    const logger = createScopedLogger("batch-with-retry-test");
+    const warn = vi.spyOn(logger, "warn");
+
+    await runWithGmailQuota({ priority: "interactive" }, () =>
+      fetchBatch(logger, ["m1"]),
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      "Gmail retry budget exhausted",
+      expect.objectContaining({
+        attemptCount: 1,
+        lastStatus: 429,
+        lastReason: "rateLimitExceeded",
+      }),
+    );
+  });
+
   it("keeps the backoff within the blocking limit when Gmail names a distant time", async () => {
     const retryAt = new Date(Date.now() + 120_000).toISOString();
     getBatch

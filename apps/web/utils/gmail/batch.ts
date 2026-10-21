@@ -19,6 +19,12 @@ import { timeRequestDependency } from "@/utils/request-metrics";
 const logger = createScopedLogger("gmail/batch");
 
 const BATCH_LIMIT = 100;
+// Sync pages measured 12-22s, mostly this fetch, and a timeout rejects the whole
+// getBatch (discarding loaded chunks), so sync-priority 100-item batches need
+// room. On 30s-maxDuration routes the platform limit fires first (interactive
+// batches are small). getBatch does not retry the timeout itself; only callers
+// wrapped in withGmailRetry do, so it surfaces as an error rather than hanging.
+export const GMAIL_BATCH_FETCH_TIMEOUT_MS = 45_000;
 
 // Uses Gmail batch API to get multiple responses in one request
 // https://developers.google.com/gmail/api/guides/batch
@@ -79,6 +85,7 @@ async function sendBatch(
             "User-Agent": "Cue (gzip)",
           },
           body: batchRequestBody,
+          signal: AbortSignal.timeout(GMAIL_BATCH_FETCH_TIMEOUT_MS),
         });
         return {
           textRes: await res.text(),
