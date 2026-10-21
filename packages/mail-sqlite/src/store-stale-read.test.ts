@@ -499,9 +499,134 @@ describe("provider reads sent before a confirmed local change", () => {
   });
 });
 
+// The read toggle (swipe, shortcut, toolbar) sends the opposite of the read
+// state the row shows, so a stale copy shown between two toggles makes the
+// second one repeat the first.
+describe("toggling read on Outlook while sync reads are out", () => {
+  it("keeps each toggle when the page read before it lands after it", async () => {
+    const store = await mailbox("microsoft");
+    const beforeFirst = await store.readRevision();
+    await confirm(store, READ, [patch("microsoft", { read: true })]);
+    await applyPage(store, "1", "2", [patch("microsoft")], beforeFirst);
+    expect(await readM1(store)).toMatchObject({ read: true });
+
+    const beforeSecond = await store.readRevision();
+    await confirm(store, UNREAD, [patch("microsoft")]);
+    await applyPage(
+      store,
+      "2",
+      "3",
+      [patch("microsoft", { read: true })],
+      beforeSecond,
+    );
+
+    expect(await readM1(store)).toMatchObject({ read: false });
+    await store.close();
+  });
+
+  it("shows a toggle still going out over a page that lands first", async () => {
+    const store = await mailbox("microsoft");
+    const admission = await store.admitMetadata({
+      accountId: "acc-1",
+      commandId: "read-pending",
+      targets: [M1],
+      change: READ,
+    });
+    expect(admission.status).toBe("queued");
+    const work = await claim(store, "command");
+    // Read while the command was going out, from before the provider had it.
+    await applyPage(
+      store,
+      "1",
+      "2",
+      [patch("microsoft")],
+      await store.readRevision(),
+    );
+    expect(await readM1(store)).toMatchObject({ read: true });
+
+    await store.settleAttempt({
+      attemptId: work.attemptId,
+      operation: work.operation,
+      result: {
+        status: "confirmed",
+        receiptId: null,
+        observations: [],
+        targets: [{ key: M1, outcome: "applied", code: null }],
+      },
+    });
+
+    expect(await readM1(store)).toMatchObject({ read: true });
+    await store.close();
+  });
+
+  it("keeps a conversation's toggle when a page read before it lands", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    const admission = await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "read-c1",
+      conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+      change: READ,
+      observedRevision: (await store.inspect()).revision,
+    });
+    expect(admission.status).toBe("preparing");
+    const preparing = await claim(store, "prepare");
+    await store.applyPreparationPage({
+      accountId: "acc-1",
+      commandId: "read-c1",
+      attemptId: preparing.attemptId,
+      session: preparing.session,
+      previousPage: preparing.page,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: preparing.resolutionId,
+        keys: [M1],
+        changes: [patch("microsoft")],
+        nextPage: null,
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+    await store.finishPreparation({
+      accountId: "acc-1",
+      commandId: "read-c1",
+    });
+    const work = await claim(store, "command");
+    await store.settleAttempt({
+      attemptId: work.attemptId,
+      operation: work.operation,
+      result: {
+        status: "confirmed",
+        receiptId: null,
+        observations: [patch("microsoft", { read: true })],
+        targets: [{ key: M1, outcome: "applied", code: null }],
+      },
+    });
+
+    await applyPage(store, "1", "2", [patch("microsoft")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ read: true });
+    await store.close();
+  });
+
+  it("applies a read change made in Outlook after the toggle", async () => {
+    const store = await mailbox("microsoft");
+    await confirm(store, READ, [patch("microsoft", { read: true })]);
+    const requestedAt = await store.readRevision();
+
+    // Marked unread again in Outlook on the web.
+    await applyPage(store, "1", "2", [patch("microsoft")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ read: false });
+    await store.close();
+  });
+});
+
 const SESSION = { accountId: "acc-1", generation: "g1" };
 const M1 = { accountId: "acc-1", messageId: "m1" };
 const STAR: MetadataChange = { kind: "set_starred", starred: true };
+const READ: MetadataChange = { kind: "set_read", read: true };
+const UNREAD: MetadataChange = { kind: "set_read", read: false };
 const ARCHIVE: MetadataChange = { kind: "archive" };
 const UNARCHIVE: MetadataChange = { kind: "unarchive" };
 const REMOVED_FROM_INBOX: ProviderChange = {
