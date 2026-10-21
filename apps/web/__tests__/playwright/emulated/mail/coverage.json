@@ -388,5 +388,9 @@
     "utils/mail-engine/embedding-worker-client.ts",
     "utils/mail-search/semantic-embedding.ts",
     "utils/mail-search/text-embedder.ts"
+  ],
+  "wake-catch-up.spec.ts": [
+    "utils/mail-engine/wake-catch-up.ts",
+    "app/api/user/inbox-catch-up/route.ts"
   ]
 }
