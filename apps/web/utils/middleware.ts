@@ -454,6 +454,8 @@ async function authenticate(
       }),
     });
 
+    // The handler has not run, so the client may refresh the session and
+    // replay even a write that gets this code (utils/session-refresh.ts).
     return NextResponse.json(
       {
         error: "Unauthorized",
