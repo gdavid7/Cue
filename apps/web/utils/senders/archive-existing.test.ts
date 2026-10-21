@@ -111,6 +111,7 @@ describe("archiveExistingSenderMail when the Gmail quota gate defers it", () => 
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.emailMessage.count.mockResolvedValue(0 as never);
+    prisma.newsletter.findFirst.mockResolvedValue({ id: "sender-1" } as never);
   });
 
   it("schedules the queued archive again after the deferral passes", async () => {
@@ -134,14 +135,15 @@ describe("archiveExistingSenderMail when the Gmail quota gate defers it", () => 
     const [{ path, body, notBefore }] =
       vi.mocked(publishToQstashAt).mock.calls[0];
     expect(path).toBe(ARCHIVE_EXISTING_RESUME_PATH);
+    // The resume names the sender by its row; addresses stay out of the queue.
     expect(body).toEqual({
       emailAccountId: "account-1",
       provider: "google",
-      senderEmail: "news@example.com",
-      ownerEmail: "user@example.com",
+      newsletterId: "sender-1",
       startedAt: expect.any(Number),
       deferrals: 1,
     });
+    expect(JSON.stringify(body)).not.toContain("@");
     expect((body as { startedAt: number }).startedAt).toBeGreaterThanOrEqual(
       before,
     );
@@ -170,6 +172,26 @@ describe("archiveExistingSenderMail when the Gmail quota gate defers it", () => 
       .mock.calls.map(([options]) => options.deduplicationId);
     expect(first).not.toContain("news@example.com");
     expect(first).not.toBe(second);
+  });
+
+  it("does not schedule a resume when the sender has no row to name it by", async () => {
+    prisma.newsletter.findFirst.mockResolvedValue(null);
+    const emailProvider = provider();
+    emailProvider.bulkArchiveSenderOrThrow.mockRejectedValue(
+      new GmailCallDeferredError(30_000, "background"),
+    );
+
+    await runQueuedSenderArchive({
+      emailAccountId: "account-1",
+      emailProvider: emailProvider as never,
+      senderEmail: "news@example.com",
+      ownerEmail: "user@example.com",
+      logger,
+      startedAt: 1_700_000_000_000,
+      deferrals: 0,
+    });
+
+    expect(publishToQstashAt).not.toHaveBeenCalled();
   });
 
   it("gives up after repeated deferrals", async () => {

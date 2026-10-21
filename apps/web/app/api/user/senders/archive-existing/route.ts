@@ -9,11 +9,15 @@ import { runQueuedSenderArchive } from "@/utils/senders/archive-existing";
 
 export const maxDuration = 300;
 
+// The sender is named by its row and the owner by the account, so the queue
+// never holds an address (founder rule R-1).
 const bodySchema = z.object({
   emailAccountId: z.string().min(1),
   provider: z.string().min(1),
-  senderEmail: z.string().min(1),
-  ownerEmail: z.string().min(1),
+  newsletterId: z.string().min(1).optional(),
+  // TODO(RD-3b): remove after one deploy. Resumes queued before ids replaced
+  // addresses still carry them.
+  senderEmail: z.string().min(1).optional(),
   startedAt: z.number().int().positive(),
   deferrals: z.number().int().nonnegative(),
 });
@@ -30,24 +34,40 @@ export const POST = withError(
     const {
       emailAccountId,
       provider,
+      newsletterId,
       senderEmail,
-      ownerEmail,
       startedAt,
       deferrals,
     } = parsed.data;
     const logger = request.logger.with({ emailAccountId });
 
+    if (!newsletterId && !senderEmail) {
+      return new Response("Invalid payload structure", { status: 400 });
+    }
+
     // The person may have stopped auto-archiving this sender while the
     // archive waited.
-    const sender = await prisma.newsletter.findFirst({
-      where: {
-        emailAccountId,
-        email: { equals: senderEmail, mode: "insensitive" },
-      },
-      select: { status: true },
-    });
-    if (sender?.status !== NewsletterStatus.AUTO_ARCHIVED) {
+    const [sender, emailAccount] = await Promise.all([
+      prisma.newsletter.findFirst({
+        where: newsletterId
+          ? { id: newsletterId, emailAccountId }
+          : {
+              emailAccountId,
+              email: { equals: senderEmail, mode: "insensitive" },
+            },
+        select: { email: true, status: true },
+      }),
+      prisma.emailAccount.findUnique({
+        where: { id: emailAccountId },
+        select: { email: true },
+      }),
+    ]);
+    if (!sender || sender.status !== NewsletterStatus.AUTO_ARCHIVED) {
       logger.info("Sender no longer auto-archived; skipping queued archive");
+      return NextResponse.json({ ok: true });
+    }
+    if (!emailAccount) {
+      logger.info("Email account no longer exists; skipping queued archive");
       return NextResponse.json({ ok: true });
     }
 
@@ -59,8 +79,8 @@ export const POST = withError(
     await runQueuedSenderArchive({
       emailAccountId,
       emailProvider,
-      senderEmail,
-      ownerEmail,
+      senderEmail: sender.email,
+      ownerEmail: emailAccount.email,
       logger,
       startedAt,
       deferrals,
