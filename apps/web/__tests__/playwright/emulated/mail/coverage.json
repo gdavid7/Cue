@@ -317,6 +317,7 @@
     "app/(app)/[emailAccountId]/mail/use-engine-mail-threads.ts"
   ],
   "today-inbox-switch.spec.ts": [
+    "app/(app)/(mail-shell)/layout.tsx",
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/MailShellSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/MailFrame.tsx",

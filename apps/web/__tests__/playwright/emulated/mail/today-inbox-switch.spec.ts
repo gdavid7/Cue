@@ -98,6 +98,8 @@ test("switching between Today and the inbox answers at once", async ({
         Number(cost.remountedSidebar),
       );
       recorder.add(`to-${destination}-workers-${phase}`, cost.workersCreated);
+      // Both share one route layout, so the sidebar and what it loaded stay.
+      expect.soft(cost.remountedSidebar).toBe(false);
       // One open of Today is one Gmail read at most, however it was reached.
       expect.soft(cost.homeLoads).toBeLessThanOrEqual(1);
     };
