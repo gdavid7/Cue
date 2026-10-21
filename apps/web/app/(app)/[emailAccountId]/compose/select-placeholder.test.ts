@@ -53,6 +53,18 @@ describe("selectPlaceholderIn", () => {
     );
   });
 
+  it("starts after an accent that was written as a separate mark", () => {
+    const root = editor("<p>Jose\u0301{name}</p>");
+    expect(selectPlaceholderIn(root, "{name}")).toBe(true);
+    expect(selected()).toBe("{name}");
+  });
+
+  it("selects what the check flags when written with non-breaking spaces", () => {
+    const root = editor("<p>Dear {{\u00a0first_name\u00a0}},</p>");
+    expect(selectPlaceholderIn(root, "{{ first_name }}")).toBe(true);
+    expect(selected()).toBe("{{\u00a0first_name\u00a0}}");
+  });
+
   it("matches through non-breaking spaces and different Unicode forms", () => {
     const root = editor("<p>Café  [First Name] ok</p>");
     expect(selectPlaceholderIn(root, "[First Name]")).toBe(true);

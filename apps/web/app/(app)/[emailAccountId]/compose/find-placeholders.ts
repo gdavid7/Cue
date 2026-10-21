@@ -1,6 +1,14 @@
 import { SNIPPET_VARIABLE_TOKENS } from "@/utils/snippets/expand-snippet";
 
 const MAX_PLACEHOLDER_LENGTH = 60;
+// What the check leaves out of a message: code, quoted text and link text.
+export const PLACEHOLDER_IGNORED_SELECTOR =
+  "pre, code, blockquote, .gmail_quote, a";
+
+// Tags corporate mail systems add to a message. A short list, only for the
+// capitalised single-word brackets this check would otherwise flag.
+const BANNER_LABELS = new Set(["external", "image", "draft", "urgent"]);
+
 // Runs inside the Send click, so a very long message is only read this far.
 const MAX_SCANNED_LENGTH = 50_000;
 
@@ -45,6 +53,7 @@ export function findPlaceholderMatches(text: string) {
     // owns the text and nothing inside it is looked at again.
     if (match.slice(1).findIndex(Boolean) < SKIPPED.length) continue;
     if (match[0].length > MAX_PLACEHOLDER_LENGTH) continue;
+    if (BANNER_LABELS.has(match[0].slice(1, -1).toLowerCase())) continue;
     matches.push({ text: match[0], index: match.index });
   }
   return matches;
@@ -58,7 +67,7 @@ export function findPlaceholderMatches(text: string) {
 export function findPlaceholders(text: string) {
   return [
     ...new Set(
-      findPlaceholderMatches(text.normalize("NFC")).map(({ text }) => text),
+      findPlaceholderMatches(normalizeForScan(text)).map(({ text }) => text),
     ),
   ];
 }
@@ -67,4 +76,9 @@ export function findPlaceholders(text: string) {
 // so the scanner as a whole stays case-sensitive.
 function anyCase(token: string) {
   return [...token].map((char) => `[${char}${char.toUpperCase()}]`).join("");
+}
+
+/** The form the check reads text in, so what it flags can be found again. */
+export function normalizeForScan(text: string) {
+  return text.replace(/\u00a0/g, " ").normalize("NFC");
 }

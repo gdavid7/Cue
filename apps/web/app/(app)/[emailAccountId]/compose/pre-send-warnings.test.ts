@@ -27,7 +27,7 @@ const draft = (overrides: Partial<PreSendDraft> = {}): PreSendDraft => {
     cc: "sam@example.com",
     subject: "Re: Lunch",
     bodyText,
-    bodyTextWithoutCode: bodyText,
+    placeholderText: bodyText,
     attachmentCount: 0,
     ...overrides,
   };
@@ -276,15 +276,24 @@ describe("mentionsAttachment", () => {
 describe("getComposeBodyText", () => {
   it("can leave out code, which may hold a placeholder on purpose", () => {
     const html = "<p>Use <code>{name}</code> here</p><pre>[Company]</pre>";
-    expect(getComposeBodyText(html, { withoutCode: true })).toBe("Use  here");
+    expect(getComposeBodyText(html, { forPlaceholders: true })).toBe(
+      "Use  here",
+    );
     expect(getComposeBodyText(html)).toContain("{name}");
+  });
+
+  it("can leave out link text, which the placeholder check does not read", () => {
+    const html = '<p>Hi <a href="https://x.com">[Click Here]</a> {name}</p>';
+    expect(getComposeBodyText(html, { forPlaceholders: true })).toBe(
+      "Hi  {name}",
+    );
   });
 
   it("keeps code for the other checks", () => {
     const html = "<p>Attached</p><pre>&amp;lt;p&amp;gt;</pre>";
     const bodyText = getComposeBodyText(html);
     expect(
-      ids(draft({ bodyText, bodyTextWithoutCode: "Attached" }), reply),
+      ids(draft({ bodyText, placeholderText: "Attached" }), reply),
     ).toContain("escaped-markup");
     expect(
       mentionsAttachment(getComposeBodyText("<code>attached</code>")),

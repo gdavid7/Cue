@@ -1,6 +1,9 @@
 import { extractEmailAddresses } from "@/utils/email";
 import { findEscapedMarkup } from "@/utils/email/escaped-markup";
-import { findPlaceholders } from "./find-placeholders";
+import {
+  findPlaceholders,
+  PLACEHOLDER_IGNORED_SELECTOR,
+} from "./find-placeholders";
 
 export const LARGE_REPLY_RECIPIENT_COUNT = 10;
 const MAX_PLACEHOLDERS_SHOWN = 3;
@@ -12,8 +15,8 @@ export type PreSendDraft = {
   subject: string;
   /** The text the user wrote, without the quoted message or signature. */
   bodyText: string;
-  /** `bodyText` without code, which can hold placeholders on purpose. */
-  bodyTextWithoutCode: string;
+  /** `bodyText` without code and link text, which can hold placeholders on purpose. */
+  placeholderText: string;
   /** Files, inline images and files the message carries from elsewhere. */
   attachmentCount: number;
 };
@@ -106,7 +109,7 @@ export function getPreSendWarnings(
     });
   }
 
-  const placeholders = findPlaceholders(draft.bodyTextWithoutCode);
+  const placeholders = findPlaceholders(draft.placeholderText);
   if (placeholders.length) {
     warnings.push({
       id: "placeholders",
@@ -174,11 +177,16 @@ export function mentionsAttachment(text: string) {
  * The text the user wrote in the editor, leaving out a forwarded or quoted
  * message, which can mention attachments the user never meant to send.
  */
-export function getComposeBodyText(html: string, { withoutCode = false } = {}) {
+export function getComposeBodyText(
+  html: string,
+  { forPlaceholders = false } = {},
+) {
   const document = new DOMParser().parseFromString(html, "text/html");
-  if (withoutCode)
-    for (const code of document.body.querySelectorAll("pre, code"))
-      code.remove();
+  if (forPlaceholders)
+    for (const ignored of document.body.querySelectorAll(
+      PLACEHOLDER_IGNORED_SELECTOR,
+    ))
+      ignored.remove();
   for (const quoted of document.body.querySelectorAll(
     "blockquote, .gmail_quote",
   ))

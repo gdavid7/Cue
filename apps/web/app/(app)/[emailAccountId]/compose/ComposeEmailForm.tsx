@@ -1378,8 +1378,8 @@ function ComposeEmailFormContent({
             ...recipients,
             subject: data.subject ?? "",
             bodyText: getComposeBodyText(editableHtml),
-            bodyTextWithoutCode: getComposeBodyText(editableHtml, {
-              withoutCode: true,
+            placeholderText: getComposeBodyText(editableHtml, {
+              forPlaceholders: true,
             }),
             attachmentCount:
               attachmentsRef.current.length +
