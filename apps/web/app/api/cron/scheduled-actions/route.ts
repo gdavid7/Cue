@@ -163,8 +163,7 @@ async function processScheduledActions(logger: Logger) {
   };
 }
 
-// Runs every minute, the most frequent tick in the app, so new-mailbox health
-// piggybacks on it.
+// The most frequent tick in the app, so new-mailbox health piggybacks on it.
 function runScheduledWork(logger: Logger) {
   return runCronJob({
     logger,

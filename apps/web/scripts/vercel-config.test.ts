@@ -44,15 +44,21 @@ describe("vercel.json", () => {
 
   // Send later, snooze wake-ups, server-held undo sends and scheduled
   // check-ins have no other scheduler when QStash is off, so they are only as
-  // punctual as these crons.
-  it("runs the crons behind user-timed actions every minute", () => {
+  // punctual as these crons. The interval is a cost choice; a daily schedule
+  // here is the regression.
+  it("runs the crons behind user-timed actions at least every 10 minutes", () => {
     for (const timedPath of [
       "/api/cron/scheduled-actions",
       "/api/cron/automation-jobs",
     ]) {
-      expect(
-        config.crons?.find((cron) => cron.path === timedPath)?.schedule,
-      ).toBe("* * * * *");
+      const schedule = config.crons?.find(
+        (cron) => cron.path === timedPath,
+      )?.schedule;
+      const [minute, ...rest] = schedule?.split(" ") ?? [];
+      expect(rest, timedPath).toEqual(["*", "*", "*", "*"]);
+      const everyMinutes =
+        minute === "*" ? 1 : Number(minute.match(/^\*\/(\d+)$/)?.[1]);
+      expect(everyMinutes, timedPath).toBeLessThanOrEqual(10);
     }
   });
 

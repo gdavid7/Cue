@@ -3,7 +3,11 @@ import type { SnoozedThread } from "@/generated/prisma/client";
 import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import { releaseSnoozedThreadForRetry } from "@/utils/snooze/scheduler";
+import { isMissingConversation } from "@/utils/email/thread-not-found";
+import {
+  endSnoozedThreadWithoutRestore,
+  releaseSnoozedThreadForRetry,
+} from "@/utils/snooze/scheduler";
 
 export async function executeSnoozedThread(
   snoozedThread: SnoozedThread,
@@ -14,7 +18,15 @@ export async function executeSnoozedThread(
   try {
     await provider.unarchiveThread(snoozedThread.threadId);
   } catch (error) {
-    await releaseSnoozedThreadForRetry(snoozedThread.id, leaseStartedAt);
+    if (isMissingConversation(error)) {
+      await endSnoozedThreadWithoutRestore(snoozedThread.id, leaseStartedAt);
+      logger.warn("Snoozed thread is gone; ended its wake-up", {
+        error,
+        snoozedThreadId: snoozedThread.id,
+      });
+      return { success: true as const };
+    }
+    await releaseSnoozedThreadForRetry(snoozedThread, leaseStartedAt);
     logger.error("Failed to restore snoozed thread", {
       error,
       snoozedThreadId: snoozedThread.id,

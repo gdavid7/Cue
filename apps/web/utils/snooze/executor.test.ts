@@ -3,11 +3,15 @@ import { createTestLogger } from "@/__tests__/helpers";
 import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import { createMockEmailProvider } from "@/utils/__mocks__/email-provider";
 import prisma from "@/utils/__mocks__/prisma";
-import { releaseSnoozedThreadForRetry } from "@/utils/snooze/scheduler";
+import {
+  endSnoozedThreadWithoutRestore,
+  releaseSnoozedThreadForRetry,
+} from "@/utils/snooze/scheduler";
 import { executeSnoozedThread } from "./executor";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/snooze/scheduler", () => ({
+  endSnoozedThreadWithoutRestore: vi.fn(),
   releaseSnoozedThreadForRetry: vi.fn(),
 }));
 
@@ -60,9 +64,27 @@ describe("executeSnoozedThread", () => {
 
     expect(result.success).toBe(false);
     expect(releaseSnoozedThreadForRetry).toHaveBeenCalledWith(
+      snoozedThread,
+      leaseStartedAt,
+    );
+  });
+
+  it("ends the snooze without a retry when the thread is gone", async () => {
+    const provider = createMockEmailProvider({
+      unarchiveThread: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error("Not Found"), { status: 404 }),
+        ),
+    });
+
+    await executeSnoozedThread(snoozedThread, provider, logger, leaseStartedAt);
+
+    expect(endSnoozedThreadWithoutRestore).toHaveBeenCalledWith(
       "snooze",
       leaseStartedAt,
     );
+    expect(releaseSnoozedThreadForRetry).not.toHaveBeenCalled();
   });
 
   it("leaves a restored thread claim for stale recovery when finalization fails", async () => {

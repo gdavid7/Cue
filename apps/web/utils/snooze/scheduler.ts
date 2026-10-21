@@ -7,10 +7,13 @@ import { getInternalApiUrl } from "@/utils/internal-api";
 import { createScopedLogger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
+import {
+  getRetryDelayMs,
+  MAX_RETRY_ATTEMPTS,
+} from "@/utils/retry/background-backoff";
 
 const logger = createScopedLogger("snoozed-threads");
 export const SNOOZE_EXECUTION_LEASE_MS = 15 * 60 * 1000;
-const SNOOZE_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 export async function scheduleSnoozedThread({
   emailAccountId,
@@ -342,9 +345,39 @@ export async function markSnoozedThreadAsExecuting(
 }
 
 export async function releaseSnoozedThreadForRetry(
-  id: string,
+  snoozedThread: Pick<SnoozedThread, "id" | "restoreAttempts">,
   leaseStartedAt: Date,
   now = new Date(),
+) {
+  const restoreAttempts = snoozedThread.restoreAttempts + 1;
+  const gaveUp = restoreAttempts >= MAX_RETRY_ATTEMPTS;
+  await prisma.snoozedThread.updateMany({
+    where: {
+      id: snoozedThread.id,
+      status: SnoozedThreadStatus.EXECUTING,
+      updatedAt: leaseStartedAt,
+    },
+    data: gaveUp
+      ? { status: SnoozedThreadStatus.CANCELLED, restoreAttempts }
+      : {
+          status: SnoozedThreadStatus.PENDING,
+          restoreAttempts,
+          scheduledFor: new Date(
+            now.getTime() + getRetryDelayMs(restoreAttempts),
+          ),
+        },
+  });
+  if (gaveUp)
+    logger.error("Gave up restoring a snoozed thread", {
+      snoozedThreadId: snoozedThread.id,
+      restoreAttempts,
+    });
+}
+
+/** Ends a snooze whose thread is gone, as there is nothing left to restore. */
+export async function endSnoozedThreadWithoutRestore(
+  id: string,
+  leaseStartedAt: Date,
 ) {
   await prisma.snoozedThread.updateMany({
     where: {
@@ -352,10 +385,7 @@ export async function releaseSnoozedThreadForRetry(
       status: SnoozedThreadStatus.EXECUTING,
       updatedAt: leaseStartedAt,
     },
-    data: {
-      scheduledFor: new Date(now.getTime() + SNOOZE_RETRY_DELAY_MS),
-      status: SnoozedThreadStatus.PENDING,
-    },
+    data: { status: SnoozedThreadStatus.CANCELLED },
   });
 }
 

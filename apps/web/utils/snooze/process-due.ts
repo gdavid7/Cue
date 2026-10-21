@@ -29,8 +29,8 @@ export async function processDueSnoozedThreads(logger: Logger) {
   const snoozedThreads = await prisma.snoozedThread.findMany({
     where: {
       scheduledFor: { lte: now },
-      // A disconnected mailbox fails every restore, and the cron runs every
-      // minute; its wake-ups stay due and go out once it reconnects.
+      // A disconnected mailbox fails every restore and would use up its
+      // retries; its wake-ups stay due and go out once it reconnects.
       emailAccount: { account: { disconnectedAt: null } },
       OR: [
         { status: SnoozedThreadStatus.PENDING },
@@ -100,7 +100,7 @@ export async function processSnoozedThread(
       ? { status: "processed" }
       : { status: "failed", reason: "restore" };
   } catch (error) {
-    await releaseSnoozedThreadForRetry(snoozedThread.id, leaseStartedAt);
+    await releaseSnoozedThreadForRetry(snoozedThread, leaseStartedAt);
     itemLogger.error("Failed to process snoozed thread", { error });
     return { status: "failed", reason: "restore" };
   }

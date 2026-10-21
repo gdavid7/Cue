@@ -11,11 +11,15 @@ import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 
 vi.mock("server-only", () => ({}));
 
-const restores = vi.hoisted(() => ({ threadIds: [] as string[] }));
+const restores = vi.hoisted(() => ({
+  threadIds: [] as string[],
+  failure: null as Error | null,
+}));
 
 vi.mock("@/utils/email/provider", () => ({
   createEmailProvider: vi.fn(async () => ({
     unarchiveThread: async (threadId: string) => {
+      if (restores.failure) throw restores.failure;
       restores.threadIds.push(threadId);
       // Widens the window in which an overlapping run could slip in.
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -25,10 +29,11 @@ vi.mock("@/utils/email/provider", () => ({
 
 const RUN_DB_TESTS = process.env.RUN_DB_TESTS;
 
-// The scheduled-actions cron runs every minute and a run can last minutes, so
-// runs overlap and must never restore a thread twice.
+// The scheduled-actions cron ticks more often than a run can last, so runs
+// overlap and must never restore a thread twice, and a restore that can't
+// succeed must not be retried at every tick forever.
 describe.skipIf(!RUN_DB_TESTS)(
-  "snooze wake-ups from overlapping cron runs (real database)",
+  "snooze wake-ups from frequent cron runs (real database)",
   { timeout: 30_000 },
   () => {
     let prisma: typeof import("@/utils/prisma").default;
@@ -50,6 +55,7 @@ describe.skipIf(!RUN_DB_TESTS)(
 
     beforeEach(async () => {
       restores.threadIds = [];
+      restores.failure = null;
       await prisma.user.deleteMany({
         where: { email: { in: [accountEmail, disconnectedEmail] } },
       });
@@ -120,6 +126,66 @@ describe.skipIf(!RUN_DB_TESTS)(
       await processDueSnoozedThreads(logger);
 
       expect(restores.threadIds).toEqual(["disconnected"]);
+    });
+
+    test("spaces out the retries of a failing restore, then gives up", async () => {
+      const emailAccountId = await seedAccount(prisma, accountEmail);
+      const snoozedThread = await prisma.snoozedThread.create({
+        data: {
+          emailAccountId,
+          scheduledFor: new Date(Date.now() - 60_000),
+          threadId: "keeps-failing",
+        },
+      });
+      restores.failure = Object.assign(new Error("Backend Error"), {
+        status: 503,
+      });
+
+      const waitsInMinutes: number[] = [];
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const startedAt = Date.now();
+        await processDueSnoozedThreads(logger);
+        const row = await prisma.snoozedThread.findUniqueOrThrow({
+          where: { id: snoozedThread.id },
+        });
+        if (row.status !== SnoozedThreadStatus.PENDING) break;
+        waitsInMinutes.push(
+          Math.round((row.scheduledFor.getTime() - startedAt) / 60_000),
+        );
+        // Time passes until the retry is due.
+        await prisma.snoozedThread.update({
+          where: { id: snoozedThread.id },
+          data: { scheduledFor: new Date(Date.now() - 1000) },
+        });
+      }
+
+      expect(waitsInMinutes).toEqual([5, 10, 20, 40, 80, 160, 320, 360, 360]);
+      await expect(
+        prisma.snoozedThread.findUniqueOrThrow({
+          where: { id: snoozedThread.id },
+        }),
+      ).resolves.toMatchObject({
+        status: SnoozedThreadStatus.CANCELLED,
+        restoreAttempts: 10,
+      });
+    });
+
+    test("ends a wake-up whose conversation is gone without retrying", async () => {
+      const emailAccountId = await seedAccount(prisma, accountEmail);
+      await prisma.snoozedThread.create({
+        data: {
+          emailAccountId,
+          scheduledFor: new Date(Date.now() - 60_000),
+          threadId: "deleted",
+        },
+      });
+      restores.failure = Object.assign(new Error("Not Found"), { status: 404 });
+
+      await processDueSnoozedThreads(logger);
+
+      await expect(
+        prisma.snoozedThread.findFirstOrThrow({ where: { emailAccountId } }),
+      ).resolves.toMatchObject({ status: SnoozedThreadStatus.CANCELLED });
     });
   },
 );

@@ -14,8 +14,8 @@ import { redis } from "@/utils/redis";
 import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
 
 // Mailboxes at least an hour past first sign-in (EmailAccount.createdAt) that
-// have not had the event get it. The tick runs every minute, so a mailbox is
-// usually seen right at the hour. The window still spans more than a day so a
+// have not had the event get it. The tick runs every few minutes or more
+// often, so a mailbox is usually seen soon after the hour. The window still spans more than a day so a
 // deployment that can only tick daily (Vercel Hobby) covers every mailbox.
 const MIN_AGE_MS = 60 * 60 * 1000;
 const MAX_AGE_MS = 26 * 60 * 60 * 1000;
