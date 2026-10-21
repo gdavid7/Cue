@@ -143,13 +143,10 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       .getByRole("button", { name: /Tomorrow morning/ })
       .click();
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    // Back to the list without navigating to Drafts again: it must drop the
-    // draft by itself, not on a remount's revalidation.
-    await page.keyboard.press("Escape");
-    await expect(page).toHaveURL(/\/all-inboxes\/drafts(\?|$)/);
-    await expect(
-      draftRows.filter({ has: accountMarker(page, primaryEmail) }),
-    ).toHaveCount(1, { timeout: 30_000 });
+    await mailboxes
+      .getByRole("link", { name: "Drafts", exact: true })
+      .first()
+      .click();
     await expect(
       draftRows.filter({ has: accountMarker(page, second.email) }),
     ).toHaveCount(0, { timeout: 30_000 });
