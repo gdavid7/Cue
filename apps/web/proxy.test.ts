@@ -14,14 +14,40 @@ describe("proxy matcher", () => {
     expect(matchesProxy("/")).toBe(true);
     expect(matchesProxy("/pricing")).toBe(true);
     expect(matchesProxy("/pricing/")).toBe(true);
-    expect(matchesProxy("/about")).toBe(false);
-    expect(matchesProxy("/missing-page")).toBe(false);
+    expect(matchesProxy("/about")).toBe(true);
     expect(matchesProxy("/api/v1/rules")).toBe(false);
+    expect(matchesProxy("/_next/static/a.js")).toBe(false);
+    expect(matchesProxy("/icons/icon-192x192.png")).toBe(false);
+    expect(matchesProxy("/sw.js")).toBe(false);
+    expect(matchesProxy("/monitoring")).toBe(false);
+    expect(matchesProxy("/.well-known/x")).toBe(false);
   });
 
   it("runs for mail links, to keep them through login", () => {
     expect(matchesProxy("/mail/u/0/inbox")).toBe(true);
     expect(matchesProxy("/mail/u/1/label/receipts/thread-1")).toBe(true);
+  });
+});
+
+describe("proxy old hosts", () => {
+  it("permanently redirects old-host pages to the new domain", () => {
+    vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://cuemail.tech");
+    const response = proxy(
+      new NextRequest("https://cue-inbox.vercel.app/about?x=1", {
+        headers: { host: "cue-inbox.vercel.app" },
+      }),
+    );
+    vi.unstubAllEnvs();
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe(
+      "https://cuemail.tech/about?x=1",
+    );
+  });
+
+  it("passes other pages through untouched", () => {
+    const response = proxy(new NextRequest("http://localhost:3000/about"));
+    expect(response.status).toBe(200);
   });
 });
 
