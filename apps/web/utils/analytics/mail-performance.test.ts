@@ -1,10 +1,31 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { log } from "next-axiom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMailPerformanceSummary,
   MAIL_PERFORMANCE_SAMPLE_RATE,
+  recordMailMark,
+  resetMailPerformanceForTesting,
   shouldSampleSession,
   summarizeDurations,
 } from "@/utils/analytics/mail-performance";
+import { scheduleSummaryFlush } from "@/utils/analytics/summary-flush";
+
+vi.mock("next-axiom", () => ({
+  log: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+    flush: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+vi.mock("@/env", () => ({
+  env: { NEXT_PUBLIC_AXIOM_TOKEN: "test-token" },
+}));
+vi.mock("@/utils/analytics/summary-flush", () => ({
+  scheduleSummaryFlush: vi.fn(),
+}));
 
 describe("summarizeDurations", () => {
   it("reports nearest-rank percentiles of measured values", () => {
@@ -37,6 +58,9 @@ describe("buildMailPerformanceSummary", () => {
         input_event: [],
         long_task: [],
         thread_switch: [],
+        first_row_cached: [],
+        first_row_fresh: [],
+        compose_ready: [],
       }),
     ).toBeNull();
   });
@@ -47,6 +71,9 @@ describe("buildMailPerformanceSummary", () => {
         input_event: [],
         long_task: [60, 150],
         thread_switch: [20, 80],
+        first_row_cached: [],
+        first_row_fresh: [],
+        compose_ready: [],
       }),
     ).toEqual({
       long_task_count: 2,
@@ -72,5 +99,83 @@ describe("shouldSampleSession", () => {
     );
     expect(shouldSampleSession(MAIL_PERFORMANCE_SAMPLE_RATE)).toBe(false);
     expect(shouldSampleSession(0.99)).toBe(false);
+  });
+});
+
+describe("recordMailMark", () => {
+  const capture = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetMailPerformanceForTesting();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function flushSummary() {
+    const flush = vi.mocked(scheduleSummaryFlush).mock.calls[0]?.[0];
+    flush?.(capture);
+    return vi.mocked(log.info).mock.calls[0]?.[1] as
+      | Record<string, unknown>
+      | undefined;
+  }
+
+  it("sends nothing when the session is not sampled", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.99);
+
+    recordMailMark("first_row_cached", 120);
+    recordMailMark("compose_ready", 80);
+
+    expect(scheduleSummaryFlush).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it("reports the first row once per page, tagged by where rows came from", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+
+    recordMailMark("first_row_cached", 120);
+    recordMailMark("first_row_cached", 900);
+    recordMailMark("first_row_fresh", 1500);
+
+    const fields = flushSummary();
+    expect(fields).toMatchObject({
+      scope: "mail-performance",
+      first_row_cached_count: 1,
+      first_row_cached_p50_ms: 120,
+    });
+    expect(fields).not.toHaveProperty("first_row_fresh_count");
+  });
+
+  it("tags a network-backed first row as fresh", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+
+    recordMailMark("first_row_fresh", 1500);
+
+    const fields = flushSummary();
+    expect(fields).toMatchObject({
+      first_row_fresh_count: 1,
+      first_row_fresh_p50_ms: 1500,
+    });
+    expect(fields).not.toHaveProperty("first_row_cached_count");
+  });
+
+  it("records each compose open and carries only numbers", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+
+    recordMailMark("compose_ready", 80);
+    recordMailMark("compose_ready", 200);
+
+    const fields = flushSummary() as Record<string, unknown>;
+    expect(fields).toMatchObject({
+      compose_ready_count: 2,
+      compose_ready_p50_ms: 80,
+      compose_ready_max_ms: 200,
+    });
+    for (const [key, value] of Object.entries(fields)) {
+      if (key !== "scope") expect(typeof value).toBe("number");
+    }
   });
 });

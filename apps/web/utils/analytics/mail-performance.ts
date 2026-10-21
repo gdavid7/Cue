@@ -13,7 +13,24 @@ type MailPerformanceSamples = {
   input_event: number[];
   long_task: number[];
   thread_switch: number[];
+  first_row_cached: number[];
+  first_row_fresh: number[];
+  compose_ready: number[];
 };
+
+/**
+ * Moments users feel. `first_row_*` is navigation start to the first painted
+ * inbox row, split by whether the browser already held the mailbox (`cached`)
+ * or had to fetch it (`fresh`). `compose_ready` is the Compose click to a
+ * focusable editor. Thread open is `thread_switch`.
+ */
+export type MailMark = "first_row_cached" | "first_row_fresh" | "compose_ready";
+
+const ONCE_PER_PAGE_MARKS: ReadonlySet<MailMark> = new Set([
+  "first_row_cached",
+  "first_row_fresh",
+]);
+const firedPageMarks = new Set<MailMark>();
 
 let samples: MailPerformanceSamples = emptySamples();
 let sampled: boolean | undefined;
@@ -37,6 +54,27 @@ export function shouldSampleSession(random: number): boolean {
 export function recordThreadSwitchLatency(durationMs: number) {
   if (!sampled) return;
   pushSample(samples.thread_switch, durationMs);
+}
+
+/**
+ * Durations only; callers pass no ids, addresses or subjects. First-row marks
+ * count once per page load, whichever tag they carry.
+ */
+export function recordMailMark(mark: MailMark, durationMs: number) {
+  if (!isMailPerformanceSampled()) return;
+  if (ONCE_PER_PAGE_MARKS.has(mark)) {
+    if (firedPageMarks.size > 0) return;
+    firedPageMarks.add(mark);
+  }
+  if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  pushSample(samples[mark], durationMs);
+  measureMark(mark, durationMs);
+}
+
+export function resetMailPerformanceForTesting() {
+  samples = emptySamples();
+  sampled = undefined;
+  firedPageMarks.clear();
 }
 
 export function buildMailPerformanceSummary(
@@ -116,6 +154,19 @@ function getMailEngineReadyTiming(): Record<string, number> {
   return ready ? { mail_engine_ready_ms: Math.round(ready.startTime) } : {};
 }
 
+// Visible in the browser's performance timeline next to the other entries.
+function measureMark(mark: MailMark, durationMs: number) {
+  try {
+    const end = performance.now();
+    performance.measure(`cue:${mark}`, {
+      start: Math.max(0, end - durationMs),
+      end,
+    });
+  } catch {
+    // The measure is a debugging aid; the sample is already recorded.
+  }
+}
+
 function observe(
   type: string,
   onEntry: (entry: PerformanceEntry) => void,
@@ -144,5 +195,12 @@ function percentile(sorted: number[], p: number) {
 }
 
 function emptySamples(): MailPerformanceSamples {
-  return { input_event: [], long_task: [], thread_switch: [] };
+  return {
+    input_event: [],
+    long_task: [],
+    thread_switch: [],
+    first_row_cached: [],
+    first_row_fresh: [],
+    compose_ready: [],
+  };
 }
