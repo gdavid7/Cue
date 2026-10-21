@@ -1,56 +1,66 @@
 import { describe, expect, it } from "vitest";
-import { getLegacyHostRedirect } from "@/utils/legacy-host";
+import {
+  getLegacyHostRedirects,
+  LEGACY_PAGE_SOURCE,
+} from "@/utils/legacy-host";
 
-const baseUrl = "https://cuemail.tech";
+describe("getLegacyHostRedirects", () => {
+  it("builds one permanent redirect gated to the old hosts", () => {
+    const [redirect, ...rest] = getLegacyHostRedirects("https://cuemail.tech");
 
-function redirect(host: string | null, pathname: string, search = "") {
-  return getLegacyHostRedirect({ host, pathname, search, baseUrl });
-}
+    expect(rest).toEqual([]);
+    expect(redirect.permanent).toBe(true);
+    expect(redirect.destination).toBe("https://cuemail.tech/:path");
+    expect(redirect.has).toEqual([
+      {
+        type: "host",
+        value: "cue-inbox\\.vercel\\.app|cue-ten-blue\\.vercel\\.app",
+      },
+    ]);
+    const hostPattern = new RegExp(`^(?:${redirect.has[0].value})$`);
+    expect(hostPattern.test("cue-inbox.vercel.app")).toBe(true);
+    expect(hostPattern.test("cue-ten-blue.vercel.app")).toBe(true);
+    expect(hostPattern.test("cue-git-feature-team.vercel.app")).toBe(false);
+    expect(hostPattern.test("localhost")).toBe(false);
+  });
 
-describe("getLegacyHostRedirect", () => {
-  it("sends pages on the old hosts to the same path and query on the new domain", () => {
-    expect(redirect("cue-inbox.vercel.app", "/")).toBe("https://cuemail.tech/");
-    expect(
-      redirect("cue-ten-blue.vercel.app", "/mail/u/0/inbox", "?q=a%20b"),
-    ).toBe("https://cuemail.tech/mail/u/0/inbox?q=a%20b");
+  it("adds nothing when the base URL is unset, invalid or itself a legacy host", () => {
+    expect(getLegacyHostRedirects(undefined)).toEqual([]);
+    expect(getLegacyHostRedirects("not a url")).toEqual([]);
+    expect(getLegacyHostRedirects("https://cue-inbox.vercel.app")).toEqual([]);
+  });
+});
+
+describe("legacy page source", () => {
+  // Next compiles "/:path(<pattern>)" with path-to-regexp; the custom pattern
+  // is the whole contract, so it is matched here against the path after "/".
+  const pattern = new RegExp(
+    `^${LEGACY_PAGE_SOURCE.slice("/:path(".length, -1)}$`,
+  );
+  const matches = (pathname: string) => pattern.test(pathname.slice(1));
+
+  it.each([
+    "/",
+    "/pricing",
+    "/login",
+    "/mail/u/0/inbox",
+    "/mail/u/0/inbox/a.b",
+    "/mail/u/0/label/Label_1.2",
+    "/apiary",
+  ])("redirects page %s", (pathname) => {
+    expect(matches(pathname)).toBe(true);
   });
 
   it.each([
     "/api/google/webhook",
-    "/api/outlook/webhook",
     "/_next/static/chunks/a.js",
     "/monitoring",
+    "/monitoring/x",
     "/.well-known/openid-configuration",
     "/sw.js",
+    "/robots.txt",
     "/icons/icon-192x192.png",
-    "/manifest.webmanifest",
-  ])("leaves %s where it is", (pathname) => {
-    expect(redirect("cue-inbox.vercel.app", pathname)).toBeNull();
-  });
-
-  it("never redirects previews, localhost or the new host", () => {
-    expect(redirect("cue-git-feature-team.vercel.app", "/")).toBeNull();
-    expect(redirect("localhost:3000", "/")).toBeNull();
-    expect(redirect("cuemail.tech", "/")).toBeNull();
-    expect(redirect(null, "/")).toBeNull();
-  });
-
-  it("does not redirect when the base URL is the request host or unset", () => {
-    expect(
-      getLegacyHostRedirect({
-        host: "cue-inbox.vercel.app",
-        pathname: "/",
-        search: "",
-        baseUrl: "https://cue-inbox.vercel.app",
-      }),
-    ).toBeNull();
-    expect(
-      getLegacyHostRedirect({
-        host: "cue-inbox.vercel.app",
-        pathname: "/",
-        search: "",
-        baseUrl: undefined,
-      }),
-    ).toBeNull();
+  ])("leaves %s on the old host", (pathname) => {
+    expect(matches(pathname)).toBe(false);
   });
 });

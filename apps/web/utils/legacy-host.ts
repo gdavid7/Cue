@@ -1,47 +1,38 @@
-const LEGACY_HOSTS = new Set([
-  "cue-inbox.vercel.app",
-  "cue-ten-blue.vercel.app",
-]);
+const LEGACY_HOSTS = ["cue-inbox.vercel.app", "cue-ten-blue.vercel.app"];
 
 // Webhooks, push notifications and crons are still registered against the old
-// hosts, so only page requests move; the rest keep being served in place.
-const UNREDIRECTED_PREFIXES = [
-  "/api/",
-  "/_next/",
-  "/monitoring",
-  "/.well-known/",
-];
+// hosts, so only page requests move; API, Next internals, the service worker,
+// well-known files and static files (anything with an extension, except mail
+// addresses, whose ids can contain dots) keep being served in place.
+export const LEGACY_PAGE_SOURCE =
+  "/:path((?!api/|_next/|monitoring(?:/|$)|\\.well-known/|sw\\.js$)(?!(?!mail/).*\\.[A-Za-z0-9]+$).*)";
 
-export function getLegacyHostRedirect({
-  host,
-  pathname,
-  search,
-  baseUrl,
-}: {
-  host: string | null;
-  pathname: string;
-  search: string;
-  baseUrl: string | undefined;
-}): string | null {
-  if (!host || !baseUrl || !LEGACY_HOSTS.has(host.toLowerCase())) return null;
-  if (isUnredirectedPath(pathname)) return null;
+export function getLegacyHostRedirects(baseUrl: string | undefined) {
+  const target = parseOrigin(baseUrl);
+  if (!target || LEGACY_HOSTS.includes(target.host.toLowerCase())) return [];
 
-  let target: URL;
+  return [
+    {
+      source: LEGACY_PAGE_SOURCE,
+      has: [
+        {
+          type: "host" as const,
+          value: LEGACY_HOSTS.map((host) => host.replaceAll(".", "\\.")).join(
+            "|",
+          ),
+        },
+      ],
+      destination: `${target.origin}/:path`,
+      permanent: true,
+    },
+  ];
+}
+
+function parseOrigin(baseUrl: string | undefined) {
+  if (!baseUrl) return null;
   try {
-    target = new URL(baseUrl);
+    return new URL(baseUrl);
   } catch {
     return null;
   }
-  if (target.host.toLowerCase() === host.toLowerCase()) return null;
-
-  return `${target.origin}${pathname}${search}`;
-}
-
-function isUnredirectedPath(pathname: string) {
-  if (pathname === "/sw.js") return true;
-  if (UNREDIRECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-    return true;
-  }
-  // Static assets, manifests and other files.
-  return /\.[a-z0-9]+$/i.test(pathname.split("/").pop() ?? "");
 }
