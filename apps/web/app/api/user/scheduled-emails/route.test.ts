@@ -114,7 +114,9 @@ describe("POST /api/user/scheduled-emails", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ id: "scheduled-1" });
-    expect(authMock).toHaveBeenCalledWith(expect.any(Headers));
+    expect(authMock).toHaveBeenCalledWith(expect.any(Headers), {
+      disableCookieCache: true,
+    });
     expect(authMock.mock.calls[0][0].get("cookie")).toContain(
       "better-auth.session_token",
     );

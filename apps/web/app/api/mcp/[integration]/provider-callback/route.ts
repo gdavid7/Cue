@@ -58,7 +58,7 @@ export const GET = withError(
       env.NEXT_PUBLIC_BASE_URL,
     );
 
-    const session = await auth();
+    const session = await auth(undefined, { disableCookieCache: true });
     const emailAccount =
       session?.user.id === userId
         ? await prisma.emailAccount.findFirst({

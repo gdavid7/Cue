@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { MailSplitFilterKind } from "@/generated/prisma/enums";
 import type { Account } from "better-auth";
 import { setSessionCookie } from "better-auth/cookies";
+import { memoryAdapter } from "better-auth/adapters/memory";
+import { makeSignature } from "better-auth/crypto";
 import { cookies } from "next/headers";
 import { createReferral } from "@/utils/referral/referral-code";
 import { captureException } from "@/utils/error";
@@ -11,6 +13,7 @@ import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import {
+  auth,
   betterAuthConfig,
   handleLinkAccount,
   handleReferralOnSignUp,
@@ -208,6 +211,81 @@ describe("betterAuthConfig", () => {
         }),
       ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("session revocation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("checks the database when asked to bypass the cookie cache", async () => {
+    const getSession = vi.mocked(betterAuthConfig.api.getSession);
+    getSession.mockResolvedValue(null);
+    const requestHeaders = new Headers();
+
+    await auth(requestHeaders, { disableCookieCache: true });
+    expect(getSession).toHaveBeenLastCalledWith({
+      headers: requestHeaders,
+      query: { disableCookieCache: true },
+    });
+
+    await auth(requestHeaders);
+    expect(getSession).toHaveBeenLastCalledWith({
+      headers: requestHeaders,
+      query: { disableCookieCache: false },
+    });
+  });
+
+  it("rejects a revoked session at once without the cookie cache and within a minute with it", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date"],
+      now: new Date("2026-01-01T00:00:00Z"),
+    });
+    const { realAuth, cookie, token } = await signedInWithConfiguredSession();
+    const context = await realAuth.$context;
+
+    await context.internalAdapter.deleteSession(token);
+
+    const cached = () =>
+      realAuth.api.getSession({ headers: new Headers({ cookie }) });
+    const uncached = () =>
+      realAuth.api.getSession({
+        headers: new Headers({ cookie }),
+        query: { disableCookieCache: true },
+      });
+
+    expect(await uncached()).toBeNull();
+    // The residual window: a copied cache cookie still reads as signed in.
+    vi.setSystemTime(new Date("2026-01-01T00:00:59Z"));
+    expect(await cached()).not.toBeNull();
+    vi.setSystemTime(new Date("2026-01-01T00:01:01Z"));
+    expect(await cached()).toBeNull();
+  });
+
+  it("clears the cache cookie on sign-out", async () => {
+    const { realAuth, cookie, token } = await signedInWithConfiguredSession();
+    const response = await realAuth.handler(
+      new Request("http://localhost:3000/api/auth/sign-out", {
+        method: "POST",
+        headers: { cookie, origin: "http://localhost:3000" },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    for (const name of ["session_token", "session_data"]) {
+      expect(
+        response.headers
+          .getSetCookie()
+          .some(
+            (setCookie) =>
+              setCookie.startsWith(`better-auth.${name}=`) &&
+              setCookie.includes("Max-Age=0"),
+          ),
+      ).toBe(true);
+    }
+    const context = await realAuth.$context;
+    expect(await context.internalAdapter.findSession(token)).toBeNull();
   });
 });
 
@@ -940,4 +1018,51 @@ function mockNewGoogleMailbox() {
     { id: "email_account_1" },
     { id: "account_1" },
   ] as never);
+}
+
+// A real Better Auth instance on the app's own session settings, signed in
+// with both the session token and its cookie cache, as a browser holds them.
+async function signedInWithConfiguredSession() {
+  const { betterAuth } =
+    await vi.importActual<typeof import("better-auth")>("better-auth");
+  const now = new Date();
+  const realAuth = betterAuth({
+    baseURL: "http://localhost:3000",
+    secret: "test-secret-with-enough-entropy-for-session-cache",
+    database: memoryAdapter({
+      user: [
+        {
+          id: "owner",
+          email: "owner@example.invalid",
+          name: "Owner",
+          emailVerified: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      session: [],
+      account: [],
+      verification: [],
+    }),
+    session: (betterAuthConfig as any).options.session,
+    rateLimit: { enabled: false },
+  });
+  const context = await realAuth.$context;
+  const session = await context.internalAdapter.createSession("owner");
+  if (!session) throw new Error("No session");
+  const tokenCookie = `better-auth.session_token=${encodeURIComponent(`${session.token}.${await makeSignature(session.token, context.secret)}`)}`;
+  const { headers: setHeaders } = await realAuth.api.getSession({
+    headers: new Headers({ cookie: tokenCookie }),
+    returnHeaders: true,
+  });
+  const cacheCookies = setHeaders
+    .getSetCookie()
+    .filter((setCookie) => setCookie.startsWith("better-auth.session_data"))
+    .map((setCookie) => setCookie.split(";")[0]);
+  if (cacheCookies.length === 0) throw new Error("No cookie cache");
+  return {
+    realAuth,
+    token: session.token,
+    cookie: [tokenCookie, ...cacheCookies].join("; "),
+  };
 }

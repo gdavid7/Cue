@@ -160,7 +160,9 @@ describe("mobile auth callback route", () => {
       {} as never,
     );
 
-    expect(authMock).toHaveBeenCalledWith(expect.any(Headers));
+    expect(authMock).toHaveBeenCalledWith(expect.any(Headers), {
+      disableCookieCache: true,
+    });
     expect(redeemMobileAuthStateMock).toHaveBeenCalledWith({
       state: "state-1234567890",
       sessionToken: "session-token",

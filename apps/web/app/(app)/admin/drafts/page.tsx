@@ -40,7 +40,7 @@ const BUCKET_LABELS: Record<(typeof SIMILARITY_BUCKETS)[number], string> = {
 };
 
 export default async function AdminDraftFunnelPage() {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
 
   if (!isAdmin({ email: session?.user.email })) {
     return (

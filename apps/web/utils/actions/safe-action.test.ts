@@ -6,7 +6,13 @@ import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
 } from "@/utils/gmail/quota";
-import { actionClientUser } from "./safe-action";
+import { auth } from "@/utils/auth";
+import { SESSION_EXPIRED_MESSAGE } from "@/utils/session-expired";
+import {
+  actionClient,
+  actionClientUser,
+  adminActionClient,
+} from "./safe-action";
 
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/utils/auth", () => ({
@@ -83,5 +89,31 @@ describe("server actions and the Gmail quota gate", () => {
       caller: "cleanInbox",
       priority: "background",
     });
+  });
+});
+
+describe("server actions and revoked sessions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The session cookie cache outlives a revocation; the database does not.
+  it("rejects a revoked session at once in every signed-in action client", async () => {
+    vi.mocked(auth).mockImplementation(async (_headers, options) =>
+      options?.disableCookieCache
+        ? null
+        : ({ user: { id: "user-1", email: "user@example.com" } } as any),
+    );
+    const run = vi.fn();
+
+    const results = await Promise.all([
+      actionClient.metadata({ name: "sendEmail" }).action(run)("account-1"),
+      actionClientUser.metadata({ name: "deleteAccount" }).action(run)(),
+      adminActionClient.metadata({ name: "adminAction" }).action(run)(),
+    ]);
+
+    for (const result of results)
+      expect(result?.serverError).toBe(SESSION_EXPIRED_MESSAGE);
+    expect(run).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,7 @@ export async function verifyEmailAccountAccess(
   redirectUrl: URL,
   responseHeaders: Headers,
 ): Promise<{ userId: string }> {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
   if (!session?.user?.id) {
     logger.warn("Unauthorized OAuth callback - no session");
     redirectUrl.searchParams.set("error", "unauthorized");
