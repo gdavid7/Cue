@@ -602,6 +602,7 @@ export function EmailMessage({
                   draftMessage={draft}
                   draftSessionMessageId={sessionMessageId}
                   message={message}
+                  threadMessages={threadMessages}
                   onCloseCompose={() => closeMailboxDraft(sessionMessageId)}
                   onRestoreCompose={() =>
                     setDraftDismissed(sessionMessageId, false)
@@ -1154,7 +1155,12 @@ function ReplyPanel({
       });
       return {
         ...reply,
-        ...(threadMessages && getThreadAddresses([message, ...threadMessages])),
+        ...(threadMessages &&
+          getThreadAddresses(
+            threadMessages.some((item) => item.id === message.id)
+              ? threadMessages
+              : [message, ...threadMessages],
+          )),
         to: suggestedRecipients?.to ?? reply.to,
         cc: suggestedRecipients?.cc ?? reply.cc,
         bcc: suggestedRecipients?.bcc ?? reply.bcc,
