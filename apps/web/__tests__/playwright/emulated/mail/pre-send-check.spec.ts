@@ -16,6 +16,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }) => {
+  // A case skipped for its provider never opened a page.
+  if (page.url() === "about:blank") return;
   await page.evaluate(
     (key) => localStorage.removeItem(key),
     PRE_SEND_CHECK_KEY,
@@ -350,8 +352,9 @@ async function insertGmailMessage(input: {
       internalDate: String(Date.now() - minutesAgo * 60_000),
     }),
   });
-  expect(response.ok, await response.text()).toBe(true);
-  return (await response.json()) as { id: string; threadId: string };
+  const text = await response.text();
+  expect(response.ok, text).toBe(true);
+  return JSON.parse(text) as { id: string; threadId: string };
 }
 
 async function openThreadMessage(
@@ -367,6 +370,9 @@ async function openThreadMessage(
 
 async function addRecipient(message: Locator, address: string) {
   const to = message.getByRole("combobox", { name: "To" });
+  // A reply starts as a one-line summary of who it goes to.
+  if (!(await to.isVisible()))
+    await message.getByRole("button", { name: /^(Reply|Draft) to / }).click();
   await to.fill(address);
   await to.press("Enter");
   await expect(
