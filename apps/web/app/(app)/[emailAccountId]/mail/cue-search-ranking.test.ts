@@ -167,7 +167,7 @@ describe("rankWithWidened with the search by meaning", () => {
     from: "Ben (Remodeling) <ben@remodel.example>",
   });
 
-  it("puts mail the model finds clearly close among the first search's matches, by fit", () => {
+  it("puts mail the model finds clearly close right after the first search's matches, and above one it demotes", () => {
     const ranked = rankWithWidened(
       [primaryMatch],
       [],
@@ -220,6 +220,37 @@ describe("rankWithWidened with the search by meaning", () => {
         ),
       ),
     ).toEqual(["newer", "older"]);
+  });
+
+  it("keeps the first search's matches ahead of a wider tier's match however close the model finds it", () => {
+    const exact = thread("exact", {
+      daysAgo: 30,
+      subject: "Renewal",
+      preview: "Your contract is attached",
+    });
+    const close = thread("close", {
+      daysAgo: 1,
+      subject: "Acme contract signed",
+    });
+    expect(
+      ids(
+        rankWithWidened(
+          [exact],
+          [close],
+          withSimilarity("contract renewal", { close: 0.7 }),
+        ),
+      ),
+    ).toEqual(["exact", "close"]);
+    expect(
+      ids(
+        rankWithWidened(
+          [exact],
+          [],
+          withSimilarity("contract renewal", { close: 0.7 }),
+          [close],
+        ),
+      ),
+    ).toEqual(["exact", "close"]);
   });
 
   it("leads with what a wider tier found when the model finds it clearly close too, above mail found by meaning alone", () => {

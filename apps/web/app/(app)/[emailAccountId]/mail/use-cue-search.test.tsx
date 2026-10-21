@@ -515,6 +515,25 @@ describe("searchByMeaning", () => {
     await expect(pending).resolves.toEqual([]);
   });
 
+  it("counts the budget from when the search was committed, for a search by meaning that starts later", async () => {
+    // The reading's words are searched once the reading lands, so the
+    // search still gives up within the budget from commit.
+    const committedAtMs = Date.now() - 3000;
+    let settled = false;
+    const pending = searchByMeaning(
+      () => new Promise(() => undefined),
+      query,
+      committedAtMs,
+    ).then((matches) => {
+      settled = true;
+      return matches;
+    });
+    await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS - 3000 - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual([]);
+  });
+
   it("finds nothing when the engine can't search by meaning", async () => {
     await expect(
       searchByMeaning(() => Promise.reject(new Error("no model")), query),

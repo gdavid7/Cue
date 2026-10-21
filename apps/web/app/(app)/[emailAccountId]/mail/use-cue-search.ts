@@ -363,16 +363,20 @@ function useSemanticThreads({
   const searchSemantic = client?.searchSemantic;
   const active = Boolean(enabled && query && searchSemantic);
   const readsWords = active && Boolean(readingWords) && readingWords !== query;
+  // The reading's words are searched only once the reading lands; both
+  // searches give up at the same budget from commit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new search is a new commit
+  const committedAtMs = useMemo(() => Date.now(), [query]);
   const fetchMatches = ([, accountId, text]: readonly [
     string,
     string,
     string,
   ]) =>
-    searchByMeaning(searchSemantic, {
-      accountId,
-      text,
-      limit: CUE_SEMANTIC_RESULTS,
-    });
+    searchByMeaning(
+      searchSemantic,
+      { accountId, text, limit: CUE_SEMANTIC_RESULTS },
+      committedAtMs,
+    );
   const swrOptions = { revalidateOnFocus: false, shouldRetryOnError: false };
   const { data: typedMatches } = useSWR(
     active ? (["cue-semantic", emailAccountId, query] as const) : null,
@@ -434,19 +438,23 @@ function useSemanticThreads({
 }
 
 /**
- * The search by meaning, within the search's budget: a model still
- * downloading, or no vectors, leaves the search as it was.
+ * The search by meaning, within the search's budget from `committedAtMs`: a
+ * model still downloading, or no vectors, leaves the search as it was.
  */
 export function searchByMeaning(
   searchSemantic: MailClient["searchSemantic"],
   query: SemanticSearchQuery,
+  committedAtMs = Date.now(),
 ): Promise<SemanticMatch[]> {
   if (!searchSemantic) return Promise.resolve(NO_MATCHES);
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     searchSemantic(query).catch(() => NO_MATCHES),
     new Promise<SemanticMatch[]>((resolve) => {
-      timer = setTimeout(() => resolve(NO_MATCHES), CUE_SEARCH_BUDGET_MS);
+      timer = setTimeout(
+        () => resolve(NO_MATCHES),
+        Math.max(0, committedAtMs + CUE_SEARCH_BUDGET_MS - Date.now()),
+      );
     }),
   ]).finally(() => clearTimeout(timer));
 }
