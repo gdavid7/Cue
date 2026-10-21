@@ -38,9 +38,9 @@ const logger = createTestLogger();
 describe("getCalendarClientWithRefresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prisma.calendarConnection.findMany.mockResolvedValue([
+    prisma.calendarConnection.findUnique.mockResolvedValue(
       calendarConnection(),
-    ]);
+    );
     prisma.calendarConnection.updateMany.mockResolvedValue({ count: 1 });
   });
 
@@ -87,19 +87,26 @@ describe("getCalendarClientWithRefresh", () => {
     });
   });
 
-  it("does not disconnect other accounts or credentials replaced by a reconnect", async () => {
-    prisma.calendarConnection.findMany.mockResolvedValue([
+  it("only reads and disconnects the connection whose refresh failed", async () => {
+    vi.mocked(requestMicrosoftToken).mockResolvedValue(
+      tokenErrorResponse("invalid_grant"),
+    );
+    await expect(refreshExpiredCalendarClient()).rejects.toBeInstanceOf(
+      SafeError,
+    );
+    expect(prisma.calendarConnection.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "connection-id" } }),
+    );
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not disconnect credentials replaced by a reconnect", async () => {
+    prisma.calendarConnection.findUnique.mockResolvedValue(
       calendarConnection({
-        id: "other-connection",
-        accessToken: "other-access",
-        refreshToken: "other-refresh",
-      }),
-      calendarConnection({
-        id: "connection-id",
         accessToken: "new-access",
-        refreshToken: "refresh-token",
+        refreshToken: "new-refresh",
       }),
-    ]);
+    );
     vi.mocked(requestMicrosoftToken).mockResolvedValue(
       tokenErrorResponse("invalid_grant"),
     );
@@ -152,7 +159,7 @@ describe("getCalendarClientWithRefresh", () => {
     vi.mocked(requestMicrosoftToken).mockResolvedValue(
       tokenErrorResponse("invalid_grant"),
     );
-    prisma.calendarConnection.findMany.mockRejectedValueOnce(
+    prisma.calendarConnection.findUnique.mockRejectedValueOnce(
       new Error("database unavailable"),
     );
     await expect(refreshExpiredCalendarClient()).rejects.toBeInstanceOf(
@@ -169,7 +176,7 @@ describe("getCalendarClientWithRefresh", () => {
       "temporarily_unavailable",
     );
 
-    expect(prisma.calendarConnection.findMany).not.toHaveBeenCalled();
+    expect(prisma.calendarConnection.findUnique).not.toHaveBeenCalled();
     expect(prisma.calendarConnection.updateMany).not.toHaveBeenCalled();
   });
 });
@@ -179,7 +186,7 @@ function refreshExpiredCalendarClient() {
     accessToken: "stale-access-token",
     refreshToken: "refresh-token",
     expiresAt: Date.now() - 1000,
-    emailAccountId: "email-account-id",
+    connectionId: "connection-id",
     logger,
   });
 }

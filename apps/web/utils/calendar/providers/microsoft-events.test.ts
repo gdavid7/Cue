@@ -661,7 +661,7 @@ function createProvider({ calendarIds }: { calendarIds?: string[] } = {}) {
     {
       accessToken: "access-token",
       calendarIds,
-      emailAccountId: "email-account-id",
+      connectionId: "connection-id",
       expiresAt: null,
       refreshToken: "refresh-token",
     },
