@@ -227,30 +227,24 @@ async function readName(
   email: string,
 ): Promise<string | null> {
   if (!accountIds.length) return null;
+  // Same bar as readOtherAddresses: NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS.
+  // Only names that pass compete, so a short exchange under a new name
+  // neither replaces nor blanks one you have used for longer.
   const [row] = await tx.query(
-    `SELECT name FROM contact_stats
-     WHERE account_id IN (${placeholders(accountIds)}) AND email = ?
-       AND sent = 1 AND name != ''
-     GROUP BY name ORDER BY SUM(count) DESC, MAX(last_at) DESC, name LIMIT 1`,
-    [...accountIds, email],
+    `SELECT i.name, COUNT(*) AS times, MAX(i.last_at) AS latest
+     FROM contact_interactions i
+     CROSS JOIN messages m
+       ON m.account_id = i.account_id AND m.message_id = i.message_id
+     WHERE i.account_id IN (${placeholders(accountIds)})
+       AND i.email = ? AND i.sent = 1 AND i.name != ''
+       AND lower(trim(i.name)) != ?
+     GROUP BY i.account_id, i.name
+     HAVING COUNT(DISTINCT m.conversation_id) >= ?
+       AND MAX(i.last_at) - MIN(i.last_at) >= ?
+     ORDER BY times DESC, latest DESC, i.name LIMIT 1`,
+    [...accountIds, email, email, NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS],
   );
-  const name = row ? String(row.name) : "";
-  if (!name || normalizeEmail(name) === email) return null;
-  const [vouched] = await tx.query(
-    `SELECT 1 FROM (
-       SELECT COUNT(DISTINCT m.conversation_id) AS conversations,
-              MAX(i.last_at) - MIN(i.last_at) AS span
-       FROM contact_interactions i
-       CROSS JOIN messages m
-         ON m.account_id = i.account_id AND m.message_id = i.message_id
-       WHERE i.account_id IN (${placeholders(accountIds)})
-         AND i.email = ? AND i.name = ? AND i.sent = 1
-       GROUP BY i.account_id
-     )
-     WHERE conversations >= ? AND span >= ? LIMIT 1`,
-    [...accountIds, email, name, NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS],
-  );
-  return vouched ? name : null;
+  return row ? String(row.name) : null;
 }
 
 /**
@@ -269,8 +263,9 @@ async function readOtherAddresses(
   own: Set<string>,
 ): Promise<string[]> {
   if (name.trim().split(/\s+/u).length < 2) return [];
-  // CROSS JOIN keeps the plan on the name's tokens; left to itself SQLite
-  // walks every contact in the account.
+  // Same bar as readName: NAME_MIN_CONVERSATIONS, NAME_MIN_SPAN_MS. CROSS
+  // JOIN keeps the plan on the name's tokens; left to itself SQLite walks
+  // every contact in the account.
   const rows = await tx.query(
     `SELECT email, MAX(last_at) AS last_at FROM (
        SELECT t.email, MAX(i.last_at) AS last_at,

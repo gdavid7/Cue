@@ -382,6 +382,25 @@ describe("readPersonCard", () => {
     expect((await read(store)).name).toBe("Ana Lima");
   });
 
+  it("keeps the name you have used for weeks over a burst of mail under another", async () => {
+    const sentAs = (id: string, to: string, at: number) =>
+      mail({ id, from: ME, to: [to], at, roles: ["sent"] });
+    // Two months as Ana Lima, then a busy day after she changed jobs, or a
+    // stranger's quick replies copying another name back to her address.
+    for (const renamed of ["Ana Lima (Acme)", "IT Desk"]) {
+      const { store } = await setup();
+      await write(store, [
+        sentAs("1", ANA, T0),
+        sentAs("2", ANA, T0 + 30 * DAY),
+        sentAs("3", ANA, T0 + 60 * DAY),
+        ...[4, 5, 6, 7].map((n) =>
+          sentAs(String(n), `${renamed} <ana@example.com>`, T0 + 61 * DAY + n),
+        ),
+      ]);
+      expect((await read(store)).name).toBe("Ana Lima");
+    }
+  });
+
   it("shows a message that reached two of your accounts once", async () => {
     const { store } = await setup(["a", "b"]);
     const exchange = (account: string, offset: number) =>
