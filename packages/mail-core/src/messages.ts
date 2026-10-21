@@ -32,6 +32,8 @@ export type MessageAttachmentDescriptor = z.infer<
 >;
 
 export const MAX_RECIPIENTS = 500;
+// RFC 5322's line limit; a longer header can't be a real Message-ID.
+export const MAX_INTERNET_MESSAGE_ID_LENGTH = 998;
 
 export const messageMetadataSchema = z.object({
   subject: z.string().max(16_384),
@@ -51,6 +53,15 @@ export const messageMetadataSchema = z.object({
   roles: z.array(mailboxRoleSchema).max(8),
   hasAttachments: z.boolean(),
   snoozedUntilMs: z.number().int().nullable().optional(),
+  /**
+   * The RFC 5322 Message-ID header, the same in every mailbox the message
+   * reached, so one message in two of the user's accounts can show once.
+   */
+  internetMessageId: z
+    .string()
+    .min(1)
+    .max(MAX_INTERNET_MESSAGE_ID_LENGTH)
+    .optional(),
 });
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
 

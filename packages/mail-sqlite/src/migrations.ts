@@ -6,6 +6,7 @@ import {
   migrateIncrementalConversationIndex,
   migrateMembershipIndex,
 } from "./conversation-index";
+import { migrateInternetMessageIds } from "./internet-message-id";
 import { migrateMessageEmbeddings } from "./message-embeddings";
 import { migrateMessageSearchIndex } from "./message-search-index";
 
@@ -438,6 +439,7 @@ export async function migrateMailbox(
   await migrateEmptyMeetingInvitationBodies(tx);
   await migrateContactSuggestions(tx);
   await migrateMessageEmbeddings(tx);
+  await migrateInternetMessageIds(tx);
 }
 
 // Delta sync once stored a meeting invitation's flag without its body. Dropping

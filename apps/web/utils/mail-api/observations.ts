@@ -1,5 +1,6 @@
 import {
   MAX_ATTACHMENT_CONTENT_ID_LENGTH,
+  MAX_INTERNET_MESSAGE_ID_LENGTH,
   MAX_RECIPIENTS,
   type MessageAttachmentDescriptor,
   type MessageMetadata,
@@ -61,6 +62,7 @@ export function parsedMessageMetadata(message: ParsedMessage): MessageMetadata {
     roles,
     hasAttachments:
       message.hasAttachment ?? Boolean(message.attachments?.length),
+    ...internetMessageId(message),
   };
 }
 
@@ -148,6 +150,14 @@ function descriptorFromParsed(
         ? contentId
         : null,
   };
+}
+
+// Gmail's Message-ID header, or Outlook's internetMessageId, which the
+// Outlook parser files under the same header.
+function internetMessageId(message: ParsedMessage) {
+  const value = message.headers["message-id"]?.trim();
+  if (!value || value.length > MAX_INTERNET_MESSAGE_ID_LENGTH) return {};
+  return { internetMessageId: value };
 }
 
 function receivedAtMs(message: ParsedMessage): number {

@@ -489,6 +489,105 @@ describe("readPersonCard", () => {
     expect(card.awaitingYou.map((c) => c.conversationId)).toEqual(["b-t2"]);
   });
 
+  it("shows a message that reached two accounts once by its Message-ID, however each provider stamped it", async () => {
+    const { store } = await setup(["a", "b"]);
+    await write(
+      store,
+      [
+        mail({
+          id: "a1",
+          from: ANA,
+          at: T0,
+          subject: "Plan",
+          messageId: "<plan@mail>",
+        }),
+      ],
+      "a",
+    );
+    await write(
+      store,
+      [
+        // Arrived minutes later and with a tagged subject in the other mailbox.
+        mail({
+          id: "b1",
+          from: ANA,
+          to: [ME, "me@b.example"],
+          at: T0 + 10 * 60_000,
+          subject: "[External] Plan",
+          messageId: "<PLAN@mail>",
+        }),
+      ],
+      "b",
+    );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.conversations).toHaveLength(1);
+  });
+
+  it("keeps look-alike messages apart when their Message-IDs differ", async () => {
+    const { store } = await setup(["a", "b"]);
+    await write(
+      store,
+      [
+        mail({
+          id: "a1",
+          from: ANA,
+          at: T0,
+          subject: "Weekly",
+          messageId: "<w1@mail>",
+        }),
+      ],
+      "a",
+    );
+    await write(
+      store,
+      [
+        mail({
+          id: "b1",
+          from: ANA,
+          at: T0 + 10_000,
+          subject: "Weekly",
+          messageId: "<w2@mail>",
+        }),
+      ],
+      "b",
+    );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.conversations.map((c) => c.conversationId).sort()).toEqual([
+      "a1",
+      "b1",
+    ]);
+  });
+
+  it("still finds a copy whose Message-ID isn't stored yet by its sender, subject and time", async () => {
+    const { store } = await setup(["a", "b"]);
+    await write(
+      store,
+      [
+        mail({
+          id: "a1",
+          from: ANA,
+          at: T0,
+          subject: "Plan",
+          messageId: "<plan@mail>",
+        }),
+      ],
+      "a",
+    );
+    await write(
+      store,
+      [mail({ id: "b1", from: ANA, at: T0 + 20_000, subject: "Plan" })],
+      "b",
+    );
+
+    const card = await read(store, { accountIds: ["a", "b"] });
+
+    expect(card.conversations).toHaveLength(1);
+  });
+
   it("shows separate conversations that only share a subject", async () => {
     const { store } = await setup(["a", "b"]);
     await write(
@@ -734,6 +833,7 @@ function mail({
   roles = ["inbox"],
   labels = [],
   attachments = false,
+  messageId,
 }: {
   id: string;
   conversation?: string;
@@ -744,6 +844,8 @@ function mail({
   roles?: ("sent" | "inbox" | "trash")[];
   labels?: string[];
   attachments?: boolean;
+  /** The Message-ID header. */
+  messageId?: string;
 }): ProviderChange {
   return {
     kind: "message_patch",
@@ -768,6 +870,7 @@ function mail({
       labelIds: labels,
       categoryIds: [],
       hasAttachments: attachments,
+      ...(messageId ? { internetMessageId: messageId } : {}),
     },
   };
 }
