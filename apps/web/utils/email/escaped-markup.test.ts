@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findEscapedMarkup } from "./suggestion-text";
+import { findEscapedMarkup } from "./escaped-markup";
 
 describe("findEscapedMarkup", () => {
   it("accepts plain punctuation", () => {

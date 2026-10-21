@@ -1,6 +1,6 @@
-// What a suggested reply must never show: HTML entities or tags that leaked
-// into the text (DR-6 showed "I&#x27;m"). Returns the kinds found, never the
-// text, because the health report is public.
+// What a message's text must never show: HTML entities or tags that leaked
+// into it (DR-6 showed "I&#x27;m"). Returns the kinds found, never the text,
+// because the health report is public.
 const LEAKS = [
   { name: "&#", pattern: /&#/ },
   { name: "&amp;", pattern: /&amp;/i },
