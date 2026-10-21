@@ -109,10 +109,18 @@ export async function runMailBulkJobStep({
   now?: () => number;
   wait?: (ms: number) => Promise<unknown>;
 }): Promise<StepResult> {
+  // A job that is gone or no longer running never lists again, so its view
+  // goes too rather than waiting for the retention sweep.
+  const endListing = () => listings.remove(body.jobId, body.emailAccountId);
   const job = await store.get(body.jobId);
-  if (!job || job.emailAccountId !== body.emailAccountId) return "missing";
-  if (!isActiveMailBulkJob(job.status))
+  if (!job || job.emailAccountId !== body.emailAccountId) {
+    await endListing();
+    return "missing";
+  }
+  if (!isActiveMailBulkJob(job.status)) {
+    await endListing();
     return settleStatus(store, body.jobId, job.status);
+  }
 
   const deadline =
     now() +
@@ -122,16 +130,18 @@ export async function runMailBulkJobStep({
   const targetCap =
     maxTargets ??
     (durable ? MAX_JOB_TARGETS : singleDeliveryTargetCap(job.action, provider));
-  const queued: MailBulkJobQueuedBody = {
+  const queuedBody = (deferrals = 0): MailBulkJobQueuedBody => ({
     jobId: body.jobId,
     emailAccountId: body.emailAccountId,
-    deferrals: 0,
-  };
-  const endListing = () => listings.remove(body.jobId, body.emailAccountId);
+    deferrals,
+  });
 
   const runPhases = async (): Promise<StepResult> => {
     const current = await store.get(body.jobId);
-    if (!current) return "missing";
+    if (!current) {
+      await endListing();
+      return "missing";
+    }
     if (current.status === "listing") {
       const listing = await readListing(body, listings);
       if (!listing) {
@@ -173,7 +183,7 @@ export async function runMailBulkJobStep({
           pageToken = undefined;
         }
         if (pageToken && outOfTime()) {
-          await enqueueMailBulkJob(queued);
+          await enqueueMailBulkJob(queuedBody());
           return "continued";
         }
       } while (pageToken);
@@ -197,7 +207,7 @@ export async function runMailBulkJobStep({
       logger,
       outOfTime,
       wait,
-      continueLater: () => enqueueMailBulkJob(queued),
+      continueLater: () => enqueueMailBulkJob(queuedBody()),
     });
   };
 
@@ -216,7 +226,7 @@ export async function runMailBulkJobStep({
       }
       return failOrResume({
         error,
-        body: { ...queued, deferrals: body.deferrals },
+        body: queuedBody(body.deferrals),
         job,
         durable,
         store,
@@ -270,7 +280,12 @@ async function failOrResume({
       action: job.action,
     });
   } else {
-    logger.error("Bulk mail action failed", { error, action: job.action });
+    // Only the error's kind: a Graph error carries the request it failed on,
+    // which repeats the view's search.
+    logger.error("Bulk mail action failed", {
+      action: job.action,
+      ...describeError(error),
+    });
   }
   await endListing();
   // A job asked to stop ends as stopped, not failed.
@@ -535,4 +550,17 @@ async function readListing(
     ...legacy,
   });
   return legacy;
+}
+
+function describeError(error: unknown) {
+  if (!(error instanceof Error)) return { errorName: typeof error };
+  const { code, statusCode } = error as {
+    code?: unknown;
+    statusCode?: unknown;
+  };
+  return {
+    errorName: error.name,
+    errorCode: typeof code === "string" ? code : undefined,
+    statusCode: typeof statusCode === "number" ? statusCode : undefined,
+  };
 }

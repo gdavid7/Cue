@@ -4,8 +4,9 @@ import {
 } from "@/utils/actions/mail-bulk-matching.validation";
 import prisma from "@/utils/prisma";
 
-// A listing left behind by a job that never finished is dropped by the next
-// job its account starts, once it is older than any job lives.
+// A job writes its listing after every page and lives a day at most, so one
+// untouched that long was left behind. The account's next job and the daily
+// retention sweep drop it.
 const ABANDONED_LISTING_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -29,7 +30,7 @@ export const mailBulkJobListings = {
     await prisma.mailBulkJobListing.deleteMany({
       where: {
         emailAccountId,
-        createdAt: { lt: new Date(Date.now() - ABANDONED_LISTING_MS) },
+        updatedAt: { lt: abandonedBefore() },
       },
     });
     await prisma.mailBulkJobListing.create({
@@ -67,4 +68,16 @@ export const mailBulkJobListings = {
       where: { jobId, emailAccountId },
     });
   },
+
+  /** Every account's listings left behind; resolves how many were dropped. */
+  async deleteAbandoned() {
+    const { count } = await prisma.mailBulkJobListing.deleteMany({
+      where: { updatedAt: { lt: abandonedBefore() } },
+    });
+    return count;
+  },
 };
+
+function abandonedBefore() {
+  return new Date(Date.now() - ABANDONED_LISTING_MS);
+}

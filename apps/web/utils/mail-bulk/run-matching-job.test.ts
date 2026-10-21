@@ -544,6 +544,50 @@ describe("runMailBulkJobStep", () => {
     expect(provider.listMatchingMessages).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "has expired from Redis", status: undefined },
+    { name: "was stopped before this delivery", status: "cancelled" as const },
+    { name: "was failed as stale", status: "failed" as const },
+    { name: "is waiting to stop", status: "stopping" as const },
+  ])("drops the job's listing when the job $name", async ({ status }) => {
+    const store = createStore();
+    if (status) await store.create(JOB_ID, newJob({ status }));
+    const listings = createListings({ scope: { q: "from:alice@example.com" } });
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+
+    await runStep({ store, provider, listings });
+
+    expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toBeNull();
+  });
+
+  it("logs a failure without the request it failed on", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = createProvider({ pages: [] });
+    const graphError = Object.assign(
+      new Error(
+        'Request to /me/messages?$search="from:alice@example.com" failed',
+      ),
+      {
+        code: "BadRequest",
+        statusCode: 400,
+        url: 'https://graph.microsoft.com/v1.0/me/messages?$search="from:alice@example.com"',
+      },
+    );
+    vi.mocked(provider.listMatchingMessages).mockRejectedValue(graphError);
+    const errorLog = vi.spyOn(logger, "error");
+
+    await expect(runStep({ store, provider })).resolves.toBe("failed");
+
+    expect(errorLog).toHaveBeenCalledWith(
+      "Bulk mail action failed",
+      expect.objectContaining({ errorCode: "BadRequest", statusCode: 400 }),
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("@");
+    errorLog.mockRestore();
+  });
+
   it("queues only the job's ids and counters, never the view or a page link", async () => {
     const store = createStore();
     await store.create(JOB_ID, newJob({ action: "archive" }));

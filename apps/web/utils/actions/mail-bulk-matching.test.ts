@@ -86,6 +86,22 @@ describe("mail bulk matching actions", () => {
     });
   });
 
+  it("fails the job and drops its view when it can't be queued", async () => {
+    mockEnqueue.mockRejectedValueOnce(new Error("queue down"));
+
+    const result = await startMatchingBulkActionAction("account-1", {
+      scope: { q: "from:alice@example.com" },
+      action: "archive",
+    });
+
+    expect(result?.serverError).toBeDefined();
+    const [jobId] = [...jobs.keys()];
+    expect(jobs.get(jobId)?.status).toBe("failed");
+    expect(prisma.mailBulkJobListing.deleteMany).toHaveBeenCalledWith({
+      where: { jobId, emailAccountId: "account-1" },
+    });
+  });
+
   it("refuses to delete forever where the provider can't", async () => {
     mockCreateEmailProvider.mockResolvedValue({});
 

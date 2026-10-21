@@ -55,7 +55,7 @@ describe("mailBulkJobListings", () => {
     expect(prisma.mailBulkJobListing.deleteMany).toHaveBeenCalledWith({
       where: {
         emailAccountId: "account-1",
-        createdAt: { lt: expect.any(Date) },
+        updatedAt: { lt: expect.any(Date) },
       },
     });
     expect(prisma.mailBulkJobListing.create).toHaveBeenCalledWith({
@@ -65,5 +65,17 @@ describe("mailBulkJobListings", () => {
         scope: { type: "inbox" },
       },
     });
+  });
+
+  it("sweeps every account's listings untouched for a day", async () => {
+    prisma.mailBulkJobListing.deleteMany.mockResolvedValue({ count: 2 });
+    const before = Date.now();
+
+    await expect(mailBulkJobListings.deleteAbandoned()).resolves.toBe(2);
+
+    const [args] = prisma.mailBulkJobListing.deleteMany.mock.calls[0];
+    const cutoff = (args?.where?.updatedAt as { lt: Date }).lt.getTime();
+    expect(Object.keys(args?.where ?? {})).toEqual(["updatedAt"]);
+    expect(before - cutoff).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
   });
 });

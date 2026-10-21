@@ -60,7 +60,18 @@ export const startMatchingBulkActionAction = actionClient
         updatedAt: Date.now(),
       });
       await mailBulkJobListings.create({ jobId, emailAccountId, scope });
-      await enqueueMailBulkJob({ jobId, emailAccountId, deferrals: 0 });
+      try {
+        await enqueueMailBulkJob({ jobId, emailAccountId, deferrals: 0 });
+      } catch (error) {
+        // Nothing will ever list this view, so it isn't kept.
+        await mailBulkJobListings.remove(jobId, emailAccountId);
+        await mailBulkJobStore.transition(
+          jobId,
+          ACTIVE_MAIL_BULK_JOB_STATUSES,
+          "failed",
+        );
+        throw error;
+      }
       logger.info("Started bulk action on matching mail", { action, jobId });
       return { jobId };
     },
