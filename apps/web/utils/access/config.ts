@@ -31,7 +31,7 @@ export const GOOGLE_OAUTH_TEST_USERS_URL =
   "https://console.cloud.google.com/apis/credentials/consent";
 
 /** The sign-in link the founder sends with a beta invite. */
-export const BETA_SIGN_IN_URL = "https://cue-inbox.vercel.app/login";
+export const BETA_SIGN_IN_URL = "https://cuemail.tech/login";
 
 /** Domains that are Gmail; the request form only takes these addresses. */
 export const GMAIL_DOMAINS = ["gmail.com", "googlemail.com"];

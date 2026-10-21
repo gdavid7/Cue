@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 // The production robot: no web server, no emulators, one signed-in QA account.
 // Point CUE_QA_BASE_URL at another deployment (a preview, or a local server
 // whose QA account can receive sign-in codes over IMAP) to run it elsewhere.
-const baseURL = process.env.CUE_QA_BASE_URL || "https://cue-inbox.vercel.app";
+const baseURL = process.env.CUE_QA_BASE_URL || "https://cuemail.tech";
 
 export default defineConfig({
   testDir: ".",

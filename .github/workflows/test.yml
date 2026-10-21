@@ -31,7 +31,8 @@ jobs:
       matrix:
         shard: [1, 2]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Shard 1 (unit + database tests) runs close to 10 minutes and was cancelled after passing.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4

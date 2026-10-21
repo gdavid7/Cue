@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { appUrl } from "@/utils/playwright/app-origin";
 import {
   buildGroundTruth,
   type GroundTruth,
@@ -232,7 +233,7 @@ async function inboxLoad(
   onReconnect: () => void,
 ) {
   await page.goto("about:blank");
-  await page.goto(inboxPath, { waitUntil: "commit" });
+  await page.goto(appUrl(page, inboxPath), { waitUntil: "commit" });
   const reconnect = page.getByText(/Reconnect (this|your) account/i).first();
   // A browser without a local mailbox first sees the server's placeholder
   // rows, then the mail engine's list; each is timed on its own.
@@ -391,7 +392,7 @@ async function newMail(
   };
   await mailbox.deliver(runTag, [closedMessage], mailbox.deliveryMethods[0]);
   await page.waitForTimeout(mailbox.settleMs);
-  await page.goto(inboxPath, { waitUntil: "commit" });
+  await page.goto(appUrl(page, inboxPath), { waitUntil: "commit" });
   const shown = await page
     .waitForFunction(
       rowWithSubjectShown,
@@ -443,7 +444,7 @@ async function chat(
           question.facts.map((fact) => fact.anyOf[0]).join("; "),
         );
       }
-      await page.goto(`/${accountId}/assistant`);
+      await page.goto(appUrl(page, `/${accountId}/assistant`));
       const input = page.getByTestId("chat-input");
       await expect(input).toBeVisible({ timeout: 60_000 });
       const answersShown = page.locator(".is-assistant");
@@ -739,7 +740,7 @@ async function outlookJourney(
   const inboxPath = buildMailPath({ accountIndex: account.index });
 
   await page.goto("about:blank");
-  await page.goto(inboxPath, { waitUntil: "commit" });
+  await page.goto(appUrl(page, inboxPath), { waitUntil: "commit" });
   metrics["firstRowMs:outlook"] = await page
     .waitForFunction(firstInboxRowVisible, undefined, {
       polling: "raf",
@@ -816,7 +817,7 @@ async function outlookJourney(
 async function openInbox(page: Page, inboxPath: string) {
   const conversations = page.getByRole("listbox", { name: "Conversations" });
   if (!new URL(page.url(), "http://x").pathname.startsWith(inboxPath)) {
-    await page.goto(inboxPath, { waitUntil: "commit" });
+    await page.goto(appUrl(page, inboxPath), { waitUntil: "commit" });
   }
   await expect(
     conversations.getByRole("option").first(),

@@ -33,13 +33,13 @@ describe("desktop shell helpers", () => {
   it("uses Cue's production origin by default", () => {
     vi.stubEnv("INBOX_ZERO_APP_URL", undefined);
 
-    expect(DEFAULT_APP_URL).toBe("https://cue-inbox.vercel.app");
-    expect(getDesktopAppOrigin()).toBe("https://cue-inbox.vercel.app");
+    expect(DEFAULT_APP_URL).toBe("https://cuemail.tech");
+    expect(getDesktopAppOrigin()).toBe("https://cuemail.tech");
     expect(getDesktopLoginUrl(getDesktopAppOrigin())).toBe(
-      "https://cue-inbox.vercel.app/login",
+      "https://cuemail.tech/login",
     );
     expect(getDesktopHomeUrl(getDesktopAppOrigin())).toBe(
-      "https://cue-inbox.vercel.app/welcome-redirect?mode=mail",
+      "https://cuemail.tech/welcome-redirect?mode=mail",
     );
   });
 
