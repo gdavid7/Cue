@@ -42,6 +42,9 @@ export default async function AdminPage() {
         <PageHeader title="Admin" />
         <div className="flex gap-2">
           <Button asChild variant="outline" size="sm">
+            <Link href="/admin/beta">Beta testers</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
             <Link href="/admin/feedback">Feedback</Link>
           </Button>
           <Button asChild variant="outline" size="sm">

@@ -4,8 +4,11 @@ import {
   ThreadTrackerType,
 } from "@/generated/prisma/enums";
 import { ACTIVATION_EVENTS } from "@/utils/analytics/activation";
-import { ErrorType, watchLapsedErrorKey } from "@/utils/error-messages";
 import { createScopedLogger, type Logger } from "@/utils/logger";
+import {
+  getErrorTypes,
+  getWatchStatus,
+} from "@/utils/analytics/mailbox-health";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
 import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
@@ -190,23 +193,6 @@ async function getFirstHourHealth(mailbox: Mailbox, now: Date) {
     hasSyncCursor: Boolean(mailbox.lastSyncedHistoryId),
     errorTypes: getErrorTypes(mailbox.user.errorMessages, emailAccountId),
   };
-}
-
-function getWatchStatus(expiresAt: Date | null, now: Date) {
-  if (!expiresAt) return "missing";
-  return expiresAt <= now ? "expired" : "active";
-}
-
-// Stored keys are fixed ErrorType names, except the watch-lapsed key, which
-// carries the mailbox id and may belong to the user's other mailbox.
-function getErrorTypes(errorMessages: unknown, emailAccountId: string) {
-  if (!errorMessages || typeof errorMessages !== "object") return [];
-  const knownTypes = new Set<string>(Object.values(ErrorType));
-  return Object.keys(errorMessages).flatMap((key) => {
-    if (key === watchLapsedErrorKey(emailAccountId))
-      return [ErrorType.EMAIL_WATCH_LAPSED];
-    return knownTypes.has(key) ? [key] : [];
-  });
 }
 
 function sentKeyFor(emailAccountId: string) {

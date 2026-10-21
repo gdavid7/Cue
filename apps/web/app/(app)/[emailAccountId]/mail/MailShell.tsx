@@ -80,6 +80,7 @@ import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePick
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
+import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -572,6 +573,7 @@ export function MailShell() {
       setSearchDraft(undefined);
       setSettledSearch(q);
       noteRumSearchCommit(q);
+      if (q) noteGetStartedStep("ask");
       updateLocation((current) => {
         const view = current.view ?? INBOX_VIEW;
         if (q) {

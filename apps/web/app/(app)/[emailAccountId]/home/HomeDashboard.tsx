@@ -63,6 +63,7 @@ import {
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatTime } from "./today-format";
+import { GetStartedChecklist } from "./GetStartedChecklist";
 import { TodayWeather } from "./TodayWeather";
 import {
   type TodayRowCorrection,
@@ -498,6 +499,8 @@ export function HomeDashboard() {
           </p>
         ) : null}
       </header>
+
+      <GetStartedChecklist />
 
       <LoadingContent
         hasData={Boolean(data)}
