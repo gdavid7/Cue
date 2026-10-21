@@ -9,7 +9,6 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { BRAND_ICON_URL } from "@/utils/branding";
-import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { buildMailPath } from "@/utils/mail-url";
 import type { CueMembershipResponse } from "@/app/api/user/mail-splits/cue-membership/route";
 import {
@@ -20,6 +19,7 @@ import {
 import {
   chooseWebNotificationMode,
   getWebNotificationPermission,
+  isDesktopShell,
   recordWebNotificationOffer,
   shouldOfferWebNotifications,
 } from "@/utils/web-notifications/permission";
@@ -225,12 +225,6 @@ export function WebNewMailNotifications() {
   }, [mightOffer, client, connectedAccountIds]);
 
   return null;
-}
-
-function isDesktopShell() {
-  return (
-    Boolean(getInboxZeroDesktopApp()) || /Electron/i.test(navigator.userAgent)
-  );
 }
 
 function offerNotifications() {

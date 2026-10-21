@@ -81,6 +81,7 @@ import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { noteGetStartedStep } from "@/utils/get-started/client-steps";
+import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -2461,6 +2462,9 @@ export function MailShell() {
               )}
               {!isAllAccounts && (
                 <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
+              )}
+              {!isAllAccounts && (
+                <NotificationsOffHint ready={!isTourOpen && !isFirstSync} />
               )}
               {routeFailed ? (
                 <p

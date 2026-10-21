@@ -101,6 +101,13 @@ const featureGroups = [
     ],
   },
   {
+    name: "mail-notifications",
+    specs: [
+      "mail/web-notifications.spec.ts",
+      "mail/notifications-off-hint.spec.ts",
+    ],
+  },
+  {
     name: "mail-search",
     specs: [
       "mail/search.spec.ts",
