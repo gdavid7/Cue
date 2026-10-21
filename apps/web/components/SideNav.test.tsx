@@ -6,6 +6,7 @@ import { useNavigation } from "./SideNav";
 
 const mocks = vi.hoisted(() => ({
   allAccounts: false,
+  today: true,
   cleaner: false,
   provider: "google",
   emailAccounts: [] as unknown[],
@@ -31,7 +32,10 @@ vi.mock("@/hooks/useMailHref", () => ({
 }));
 vi.mock("@/hooks/useTodayHref", () => ({
   useAllAccountsScope: () => mocks.allAccounts,
-  useTodayHref: () => (mocks.allAccounts ? "/a/home?accounts=all" : "/a/home"),
+  useTodayHref: () => {
+    if (!mocks.today) return null;
+    return mocks.allAccounts ? "/a/home?accounts=all" : "/a/home";
+  },
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
@@ -54,6 +58,20 @@ vi.mock("@/components/connectors/ConnectorsList", () => ({
 }));
 
 describe("useNavigation", () => {
+  afterEach(() => {
+    mocks.today = true;
+  });
+
+  it("keeps Today in the list but disabled while there is no account", () => {
+    mocks.today = false;
+    const { manageItems } = renderHook(() => useNavigation()).result.current;
+    const today = manageItems.find((i) => i.name === "Today");
+
+    expect(today?.disabled).toBe(true);
+    expect(today?.href).not.toContain("/home");
+    expect(manageItems.find((i) => i.name === "Inbox")?.disabled).toBeFalsy();
+  });
+
   it("across accounts: Inbox and Today keep the scope, and account pages name their account", () => {
     mocks.allAccounts = true;
     const { manageItems, toolsItems } = renderHook(() => useNavigation()).result

@@ -23,7 +23,7 @@ export function TodayIntroLine({ ready }: { ready: boolean }) {
   const hintId = getTodayIntroHintId(emailAccountId);
   const todayHref = useTodayHref();
 
-  if (!ready || !user) return null;
+  if (!ready || !user || !todayHref) return null;
   const setupDone = user.dismissedHints.includes(
     getInboxStyleHintId(emailAccountId),
   );

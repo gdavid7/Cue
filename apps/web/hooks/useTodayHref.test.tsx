@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   pathname: "/mail/u/0/inbox",
   search: "",
   emailAccounts: [] as unknown[],
+  emailAccountId: "account-a",
 }));
 
 vi.mock("next/navigation", () => ({
@@ -22,13 +23,14 @@ vi.mock("@/hooks/useAccounts", () => ({
   useAccounts: () => ({ data: { emailAccounts: mocks.emailAccounts } }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
-  useAccount: () => ({ emailAccountId: "account-a" }),
+  useAccount: () => ({ emailAccountId: mocks.emailAccountId }),
 }));
 
 describe("useTodayHref", () => {
   beforeEach(() => {
     window.localStorage.clear();
     mocks.emailAccounts = [account("account-a"), account("account-b")];
+    mocks.emailAccountId = "account-a";
   });
   afterEach(() => window.localStorage.clear());
 
@@ -69,6 +71,12 @@ describe("useTodayHref", () => {
     expect(renderHook(() => useTodayHref()).result.current).toBe(
       "/account-a/home",
     );
+  });
+
+  it("has no Today to open until there is an account", () => {
+    mocks.emailAccountId = "";
+    at("/mail/u/0/all-inboxes/inbox");
+    expect(renderHook(() => useTodayHref()).result.current).toBeNull();
   });
 
   it("is one account's Today with one account in All inboxes", () => {
