@@ -3,8 +3,9 @@ import {
   ExecutedRuleStatus,
   ScheduledActionStatus,
 } from "@/generated/prisma/enums";
-import type { ScheduledAction } from "@/generated/prisma/client";
+import type { Prisma, ScheduledAction } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
+import { isNotFoundError } from "@/utils/prisma-helpers";
 import type { Logger } from "@/utils/logger";
 import { getEmailAccountWithAiAndTokens } from "@/utils/user/get";
 import { runActionFunction } from "@/utils/ai/actions";
@@ -26,7 +27,9 @@ import { isSendingActionType } from "@/utils/ai/sending-action";
 const MODULE = "scheduled-actions-executor";
 
 /**
- * Execute a scheduled action
+ * Execute a scheduled action. `scheduledAction` must be the row as this run
+ * claimed it: every write is fenced on that claim, so a run that outlived its
+ * lease and was recovered by another run stops instead of acting twice.
  */
 export async function executeScheduledAction(
   scheduledAction: ScheduledAction,
@@ -53,7 +56,7 @@ export async function executeScheduledAction(
     const emailMessage = await validateEmailState(client, scheduledAction, log);
     if (!emailMessage) {
       await markActionCompleted(
-        scheduledAction.id,
+        scheduledAction,
         null,
         log,
         "Email no longer exists",
@@ -89,7 +92,7 @@ export async function executeScheduledAction(
       log,
     });
 
-    await markActionCompleted(scheduledAction.id, executedAction?.id, log);
+    await markActionCompleted(scheduledAction, executedAction?.id, log);
     await checkAndCompleteExecutedRule(scheduledAction.executedRuleId, log);
 
     log.info("Successfully executed scheduled action", {
@@ -99,12 +102,17 @@ export async function executeScheduledAction(
 
     return { success: true, executedActionId: executedAction?.id };
   } catch (error: unknown) {
+    if (error instanceof LostClaimError) {
+      log.warn("Another run took over this scheduled action, stopping");
+      return { success: false, error };
+    }
+
     log.error("Failed to execute scheduled action", {
       scheduledActionId: scheduledAction.id,
       error,
     });
 
-    await markActionFailed(scheduledAction.id, error, log);
+    await markActionFailed(scheduledAction, error, log);
     await checkAndCompleteExecutedRule(scheduledAction.executedRuleId, log);
     return { success: false, error };
   }
@@ -281,22 +289,22 @@ async function executeDelayedAction({
  * Mark scheduled action as completed
  */
 async function markActionCompleted(
-  scheduledActionId: string,
+  scheduledAction: ScheduledAction,
   executedActionId: string | null | undefined,
   log: Logger,
   reason?: string,
 ) {
-  await prisma.scheduledAction.update({
-    where: { id: scheduledActionId },
+  const { count } = await prisma.scheduledAction.updateMany({
+    where: getClaimWhere(scheduledAction),
     data: {
       status: ScheduledActionStatus.COMPLETED,
       executedAt: new Date(),
       executedActionId: executedActionId || undefined,
     },
   });
+  if (!count) throw new LostClaimError();
 
   log.info("Marked scheduled action as completed", {
-    scheduledActionId,
     executedActionId,
     reason,
   });
@@ -306,21 +314,20 @@ async function markActionCompleted(
  * Mark scheduled action as failed
  */
 async function markActionFailed(
-  scheduledActionId: string,
+  scheduledAction: ScheduledAction,
   error: unknown,
   log: Logger,
 ) {
-  await prisma.scheduledAction.update({
-    where: { id: scheduledActionId },
-    data: {
-      status: ScheduledActionStatus.FAILED,
-    },
+  const { count } = await prisma.scheduledAction.updateMany({
+    where: getClaimWhere(scheduledAction),
+    data: { status: ScheduledActionStatus.FAILED },
   });
+  if (!count) {
+    log.warn("Another run took over this scheduled action, not failing it");
+    return;
+  }
 
-  log.warn("Marked scheduled action as failed", {
-    scheduledActionId,
-    error,
-  });
+  log.warn("Marked scheduled action as failed", { error });
 }
 
 /**
@@ -374,37 +381,73 @@ export async function checkAndCompleteExecutedRule(
   }
 }
 
+/** The claim a run holds on a scheduled action, for fencing its writes. */
+export function getClaimWhere(scheduledAction: ScheduledAction) {
+  return {
+    id: scheduledAction.id,
+    status: ScheduledActionStatus.EXECUTING,
+    executionStartedAt: scheduledAction.executionStartedAt,
+  } satisfies Prisma.ScheduledActionWhereInput;
+}
+
+class LostClaimError extends Error {
+  constructor() {
+    super("Scheduled action was claimed by another run");
+    this.name = "LostClaimError";
+  }
+}
+
 // A reclaimed retry reuses the interrupted run's record. A first run links its
 // record in the same write that creates it, before the provider call, so a run
 // killed mid-send leaves a record the cron can reconcile instead of resending.
+// Both are fenced on the claim, so a run that lost it never reaches the provider.
 async function getOrCreateExecutedAction(
   actionItem: ActionItem,
   scheduledAction: ScheduledAction,
 ) {
   if (scheduledAction.executedActionId) {
-    const existing = await prisma.executedAction.findUnique({
-      where: { id: scheduledAction.executedActionId },
+    const existing = await prisma.executedAction.findFirst({
+      where: {
+        id: scheduledAction.executedActionId,
+        scheduledAction: getClaimWhere(scheduledAction),
+      },
     });
-    if (existing) return existing;
+    if (!existing) throw new LostClaimError();
+    return existing;
   }
 
-  return prisma.executedAction.create({
-    data: {
-      type: actionItem.type,
-      label: actionItem.label,
-      subject: actionItem.subject,
-      content: actionItem.content,
-      to: actionItem.to,
-      cc: actionItem.cc,
-      bcc: actionItem.bcc,
-      url: actionItem.url,
-      staticAttachments: actionItem.staticAttachments ?? undefined,
-      selectedAttachments: actionItem.selectedAttachments ?? undefined,
-      executedRuleId: scheduledAction.executedRuleId,
-      scheduledAction: { connect: { id: scheduledAction.id } },
-      ...(isSendingActionType(actionItem.type)
-        ? { executionStartedAt: new Date() }
-        : {}),
-    },
-  });
+  try {
+    const { executedAction } = await prisma.scheduledAction.update({
+      where: {
+        ...getClaimWhere(scheduledAction),
+        executedAction: { is: null },
+      },
+      data: {
+        executedAction: {
+          create: {
+            type: actionItem.type,
+            label: actionItem.label,
+            subject: actionItem.subject,
+            content: actionItem.content,
+            to: actionItem.to,
+            cc: actionItem.cc,
+            bcc: actionItem.bcc,
+            url: actionItem.url,
+            staticAttachments: actionItem.staticAttachments ?? undefined,
+            selectedAttachments: actionItem.selectedAttachments ?? undefined,
+            executedRuleId: scheduledAction.executedRuleId,
+            ...(isSendingActionType(actionItem.type)
+              ? { executionStartedAt: new Date() }
+              : {}),
+          },
+        },
+      },
+      select: { executedAction: true },
+    });
+    if (!executedAction) throw new LostClaimError();
+    return executedAction;
+  } catch (error) {
+    if (isNotFoundError(error)) throw new LostClaimError();
+    throw error;
+  }
 }

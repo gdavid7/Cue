@@ -60,7 +60,8 @@ vi.mock("@/utils/user/get", () => ({
 
 const RUN_DB_TESTS = process.env.RUN_DB_TESTS;
 const accountEmail = "scheduled-action-recovery-test@example.com";
-const STALE_START = new Date(Date.now() - 60 * 60_000);
+// Past the 10-minute lease, but recent enough to repeat a repeatable action.
+const STALE_START = new Date(Date.now() - 20 * 60_000);
 
 // A run killed mid-action leaves the action EXECUTING. The cron must finish it
 // without ever sending an email twice.
@@ -283,6 +284,85 @@ describe.skipIf(!RUN_DB_TESTS)(
       await expectExecutedRuleStatus(executedRuleId, ExecutedRuleStatus.ERROR);
     });
 
+    test("a stalled run that wakes after recovery sent the reply does not send it again", async () => {
+      const { scheduledActionId, executedRuleId } = await seedScheduledAction({
+        actionType: ActionType.REPLY,
+      });
+      // The original run claimed the action, then stalled before linking.
+      const original = await prisma.scheduledAction.findUniqueOrThrow({
+        where: { id: scheduledActionId },
+      });
+
+      await recoverStaleScheduledActions(logger);
+      expect(provider.calls).toEqual([ActionType.REPLY]);
+
+      const result = await executeScheduledAction(
+        original,
+        await getProvider(),
+        logger,
+      );
+
+      expect(result.success).toBe(false);
+      expect(provider.calls).toEqual([ActionType.REPLY]);
+      await expect(
+        getScheduledAction(scheduledActionId),
+      ).resolves.toMatchObject({ status: ScheduledActionStatus.COMPLETED });
+      await expect(
+        prisma.executedAction.count({ where: { executedRuleId } }),
+      ).resolves.toBe(1);
+      await expectExecutedRuleStatus(
+        executedRuleId,
+        ExecutedRuleStatus.APPLIED,
+      );
+    });
+
+    test("a run that outlives its lease cannot complete an action recovery failed", async () => {
+      const { scheduledActionId, executedRuleId } = await seedScheduledAction({
+        actionType: ActionType.REPLY,
+      });
+      const original = await prisma.scheduledAction.findUniqueOrThrow({
+        where: { id: scheduledActionId },
+      });
+      // Recovery runs while the original is inside its provider call.
+      provider.onCall = async () => {
+        provider.onCall = null;
+        await recoverStaleScheduledActions(logger);
+      };
+
+      await executeScheduledAction(original, await getProvider(), logger);
+
+      expect(provider.calls).toEqual([ActionType.REPLY]);
+      await expect(
+        getScheduledAction(scheduledActionId),
+      ).resolves.toMatchObject({ status: ScheduledActionStatus.FAILED });
+      await expectExecutedRuleStatus(executedRuleId, ExecutedRuleStatus.ERROR);
+    });
+
+    test("does not repeat an archive on mail that has been stuck for weeks", async () => {
+      const longAgo = new Date(Date.now() - 21 * 24 * 60 * 60_000);
+      const { scheduledActionId, executedRuleId } = await seedScheduledAction({
+        actionType: ActionType.ARCHIVE,
+        legacy: true,
+        scheduledFor: longAgo,
+      });
+
+      await recoverStaleScheduledActions(logger);
+
+      expect(provider.calls).toEqual([]);
+      await expect(
+        getScheduledAction(scheduledActionId),
+      ).resolves.toMatchObject({
+        status: ScheduledActionStatus.FAILED,
+        executedAction: {
+          executionStatus: ExecutedActionStatus.FAILED,
+          executionError: expect.objectContaining({
+            code: "EXECUTION_INTERRUPTED",
+          }),
+        },
+      });
+      await expectExecutedRuleStatus(executedRuleId, ExecutedRuleStatus.ERROR);
+    });
+
     async function seedScheduledAction({
       actionType,
       status = ScheduledActionStatus.EXECUTING,
@@ -291,6 +371,7 @@ describe.skipIf(!RUN_DB_TESTS)(
       executionStartedAt = STALE_START,
       executionAttempts = 1,
       legacy = false,
+      scheduledFor = STALE_START,
     }: {
       actionType: ActionType;
       status?: ScheduledActionStatus;
@@ -300,6 +381,7 @@ describe.skipIf(!RUN_DB_TESTS)(
       executionAttempts?: number;
       // Stuck by a build that recorded no lease and linked no executed action.
       legacy?: boolean;
+      scheduledFor?: Date;
     }) {
       const executedRule = await prisma.executedRule.create({
         data: {
@@ -327,7 +409,7 @@ describe.skipIf(!RUN_DB_TESTS)(
           actionType,
           messageId: "message-1",
           threadId: "thread-1",
-          scheduledFor: STALE_START,
+          scheduledFor,
           status,
           ...(status === ScheduledActionStatus.EXECUTING && !legacy
             ? { executionStartedAt, executionAttempts }
@@ -336,7 +418,7 @@ describe.skipIf(!RUN_DB_TESTS)(
         },
       });
       if (legacy) {
-        await prisma.$executeRaw`UPDATE "ScheduledAction" SET "updatedAt" = ${STALE_START} WHERE id = ${scheduledAction.id}`;
+        await prisma.$executeRaw`UPDATE "ScheduledAction" SET "updatedAt" = ${scheduledFor} WHERE id = ${scheduledAction.id}`;
       }
       return {
         scheduledActionId: scheduledAction.id,

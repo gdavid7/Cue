@@ -10,15 +10,21 @@ import { createEmailProvider } from "@/utils/email/provider";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { hasTimeBeforeRequestDeadline } from "@/utils/request-deadline-reader";
+import { isNotFoundError } from "@/utils/prisma-helpers";
 import {
   checkAndCompleteExecutedRule,
   executeScheduledAction,
+  getClaimWhere,
 } from "@/utils/scheduled-actions/executor";
 
 // Both routes that run actions are killed after 300 seconds, so an action
 // claimed longer ago than this has no live run left.
 const EXECUTION_LEASE_MS = 10 * 60 * 1000;
+// Runs in all, counting the one that was first interrupted.
 const MAX_EXECUTION_ATTEMPTS = 3;
+// Repeating an archive or label long after it was due could undo how the user
+// has filed the mail since.
+const MAX_RETRY_AGE_MS = 60 * 60 * 1000;
 const BATCH_SIZE = 50;
 const ITEM_RESERVE_MS = 30_000;
 
@@ -37,9 +43,19 @@ const SEND_OUTCOME_UNKNOWN = {
   message:
     "The run was stopped while carrying out this action, so whether it went out is unknown. It was not repeated, so nothing is sent twice.",
 };
-const EXECUTION_INTERRUPTED = {
+const EXECUTION_INTERRUPTED_REPEATEDLY = {
   code: "EXECUTION_INTERRUPTED",
   message: `The run was stopped before this action finished, ${MAX_EXECUTION_ATTEMPTS} times in a row, so it was not tried again.`,
+};
+const EXECUTION_INTERRUPTED_TOO_LONG_AGO = {
+  code: "EXECUTION_INTERRUPTED",
+  message:
+    "The run was stopped before this action finished, and it was due too long ago to try again safely.",
+};
+const RECOVERY_FAILED = {
+  code: "RECOVERY_FAILED",
+  message:
+    "The run was stopped before this action finished, and it could not be finished afterwards.",
 };
 
 /**
@@ -49,6 +65,23 @@ const EXECUTION_INTERRUPTED = {
  * repeats when that record holds no outcome.
  */
 export async function recoverStaleScheduledActions(logger: Logger) {
+  try {
+    return await recoverBatch(logger);
+  } catch (error) {
+    logger.error("Recovering interrupted scheduled actions failed", { error });
+    return {
+      retried: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      left: 0,
+      total: 0,
+      error: true,
+    };
+  }
+}
+
+async function recoverBatch(logger: Logger) {
   const staleBefore = subMilliseconds(new Date(), EXECUTION_LEASE_MS);
   const staleWhere = {
     status: ScheduledActionStatus.EXECUTING,
@@ -97,22 +130,29 @@ export async function recoverStaleScheduledActions(logger: Logger) {
       continue;
     }
 
+    const claimed = {
+      ...staleAction,
+      executionStartedAt: claimedAt,
+      executionAttempts: staleAction.executionAttempts + 1,
+    };
     try {
-      const outcome = await recoverAction(staleAction, claimedAt, log);
+      const outcome = await recoverAction(staleAction, claimed, log);
       counts[outcome] += 1;
     } catch (error) {
       log.error("Failed to recover interrupted scheduled action", { error });
-      await failAction(staleAction, null, log);
+      await failAction(claimed, RECOVERY_FAILED, log);
       counts.failed += 1;
     }
   }
 
-  return { ...counts, total: staleActions.length };
+  return { ...counts, total: staleActions.length, error: false };
 }
 
+// `staleAction` is the row as the interrupted run left it; `claimed` is this
+// run's claim on it, which fences every write.
 async function recoverAction(
   staleAction: StaleScheduledAction,
-  claimedAt: Date,
+  claimed: StaleScheduledAction,
   log: Logger,
 ): Promise<"retried" | "completed" | "failed"> {
   const { executedAction } = staleAction;
@@ -122,11 +162,11 @@ async function recoverAction(
       executionStatus: executedAction.executionStatus,
     });
     if (executedAction.executionStatus === ExecutedActionStatus.FAILED) {
-      await failAction(staleAction, null, log);
+      await failAction(claimed, null, log);
       return "failed";
     }
-    await prisma.scheduledAction.update({
-      where: { id: staleAction.id },
+    await prisma.scheduledAction.updateMany({
+      where: getClaimWhere(claimed),
       data: {
         status: ScheduledActionStatus.COMPLETED,
         executedAt: executedAction.executedAt ?? new Date(),
@@ -145,7 +185,7 @@ async function recoverAction(
     !REPEATABLE_ACTION_TYPES.has(staleAction.actionType)
   ) {
     log.warn("Interrupted scheduled action has an unknown outcome");
-    await failAction(staleAction, SEND_OUTCOME_UNKNOWN, log);
+    await failAction(claimed, SEND_OUTCOME_UNKNOWN, log);
     return "failed";
   }
 
@@ -153,14 +193,20 @@ async function recoverAction(
     log.warn("Interrupted scheduled action keeps getting stopped", {
       attempts: staleAction.executionAttempts,
     });
-    await failAction(staleAction, EXECUTION_INTERRUPTED, log);
+    await failAction(claimed, EXECUTION_INTERRUPTED_REPEATEDLY, log);
+    return "failed";
+  }
+
+  if (staleAction.scheduledFor.getTime() < Date.now() - MAX_RETRY_AGE_MS) {
+    log.warn("Interrupted scheduled action is too old to repeat");
+    await failAction(claimed, EXECUTION_INTERRUPTED_TOO_LONG_AGO, log);
     return "failed";
   }
 
   const accountProvider = staleAction.emailAccount?.account?.provider;
   if (!accountProvider) {
     log.error("Email account or provider missing");
-    await failAction(staleAction, null, log);
+    await failAction(claimed, null, log);
     return "failed";
   }
 
@@ -170,20 +216,12 @@ async function recoverAction(
     provider: accountProvider,
     logger: log,
   });
-  const result = await executeScheduledAction(
-    {
-      ...staleAction,
-      executionStartedAt: claimedAt,
-      executionAttempts: staleAction.executionAttempts + 1,
-    },
-    client,
-    log,
-  );
+  const result = await executeScheduledAction(claimed, client, log);
   return result.success ? "retried" : "failed";
 }
 
 async function failAction(
-  staleAction: StaleScheduledAction,
+  claimed: StaleScheduledAction,
   reason: { code: string; message: string } | null,
   log: Logger,
 ) {
@@ -193,31 +231,50 @@ async function failAction(
     statusCode: null,
     requestId: null,
   };
-  if (error && staleAction.executedAction) {
-    await persistExecutedActionOutcome({
-      actionId: staleAction.executedAction.id,
-      status: ExecutedActionStatus.FAILED,
-      error,
-      logger: log,
-    });
-  } else if (error) {
+
+  if (error && !claimed.executedAction) {
     // Gives the rule's history an action that says why it failed.
-    await prisma.executedAction.create({
-      data: {
-        type: staleAction.actionType,
-        executedRuleId: staleAction.executedRuleId,
-        executionStatus: ExecutedActionStatus.FAILED,
-        executionError: error,
-        executedAt: new Date(),
-        scheduledAction: { connect: { id: staleAction.id } },
-      },
+    try {
+      await prisma.scheduledAction.update({
+        where: { ...getClaimWhere(claimed), executedAction: { is: null } },
+        data: {
+          status: ScheduledActionStatus.FAILED,
+          executedAction: {
+            create: {
+              type: claimed.actionType,
+              executedRuleId: claimed.executedRuleId,
+              executionStatus: ExecutedActionStatus.FAILED,
+              executionError: error,
+              executedAt: new Date(),
+            },
+          },
+        },
+      });
+    } catch (updateError) {
+      if (!isNotFoundError(updateError)) throw updateError;
+      log.warn("Another run took over this scheduled action, not failing it");
+      return;
+    }
+  } else {
+    const { count } = await prisma.scheduledAction.updateMany({
+      where: getClaimWhere(claimed),
+      data: { status: ScheduledActionStatus.FAILED },
     });
+    if (!count) {
+      log.warn("Another run took over this scheduled action, not failing it");
+      return;
+    }
+    if (error && claimed.executedAction) {
+      await persistExecutedActionOutcome({
+        actionId: claimed.executedAction.id,
+        status: ExecutedActionStatus.FAILED,
+        error,
+        logger: log,
+      });
+    }
   }
-  await prisma.scheduledAction.update({
-    where: { id: staleAction.id },
-    data: { status: ScheduledActionStatus.FAILED },
-  });
-  await checkAndCompleteExecutedRule(staleAction.executedRuleId, log);
+
+  await checkAndCompleteExecutedRule(claimed.executedRuleId, log);
 }
 
 type StaleScheduledAction = Prisma.ScheduledActionGetPayload<{

@@ -55,7 +55,7 @@ describe("executor", () => {
 
   describe("executeScheduledAction", () => {
     it("preserves the provider link when executing a delayed action", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.COMPLETED);
+      mockClaimHeld();
       mockExecutedActionCreate();
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 0 });
@@ -75,8 +75,8 @@ describe("executor", () => {
           }),
         }),
       );
-      expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
-        where: { id: "scheduled-action-123" },
+      expect(prisma.scheduledAction.updateMany).toHaveBeenCalledWith({
+        where: claimWhere,
         data: {
           status: ScheduledActionStatus.COMPLETED,
           executedAt: expect.any(Date),
@@ -95,7 +95,7 @@ describe("executor", () => {
     });
 
     it("persists provider message IDs for delayed sending actions", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.COMPLETED);
+      mockClaimHeld();
       mockExecutedActionCreate({ type: ActionType.REPLY });
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 0 });
@@ -110,11 +110,11 @@ describe("executor", () => {
         logger,
       );
 
-      expect(prisma.executedAction.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
+      expectExecutedActionCreated(
+        expect.objectContaining({
           executionStartedAt: expect.any(Date),
         }),
-      });
+      );
       expect(prisma.executedAction.update).toHaveBeenCalledWith({
         where: { id: "executed-action-123" },
         data: {
@@ -127,7 +127,7 @@ describe("executor", () => {
     });
 
     it("records skipped delayed actions without failing the scheduled action", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.COMPLETED);
+      mockClaimHeld();
       mockExecutedActionCreate({ type: ActionType.FORWARD });
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 0 });
@@ -170,10 +170,7 @@ describe("executor", () => {
         selectedAttachments,
       };
 
-      mockScheduledActionUpdate(
-        ScheduledActionStatus.COMPLETED,
-        scheduledActionWithAttachments,
-      );
+      mockClaimHeld();
       mockExecutedActionCreate({
         type: ActionType.REPLY,
         content: "Reply with attachment",
@@ -189,19 +186,19 @@ describe("executor", () => {
         logger,
       );
 
-      expect(prisma.executedAction.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
+      expectExecutedActionCreated(
+        expect.objectContaining({
           type: ActionType.REPLY,
           content: "Reply with attachment",
           selectedAttachments,
         }),
-      });
+      );
     });
 
     it("should complete the ExecutedRule when the email no longer exists", async () => {
       const emailProvider = await getMockEmailProvider();
       (emailProvider.getMessage as any).mockResolvedValueOnce(null);
-      mockScheduledActionUpdate(ScheduledActionStatus.COMPLETED);
+      mockClaimHeld();
       mockCompletionCounts({ pendingActions: 0, failedActions: 0 });
       mockExecutedRuleUpdate(ExecutedRuleStatus.APPLIED);
 
@@ -215,8 +212,8 @@ describe("executor", () => {
         success: true,
         reason: "Email no longer exists",
       });
-      expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
-        where: { id: "scheduled-action-123" },
+      expect(prisma.scheduledAction.updateMany).toHaveBeenCalledWith({
+        where: claimWhere,
         data: {
           status: ScheduledActionStatus.COMPLETED,
           executedAt: expect.any(Date),
@@ -227,7 +224,7 @@ describe("executor", () => {
     });
 
     it("should handle execution errors and mark as failed", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.FAILED);
+      mockClaimHeld();
       mockExecutedActionCreate();
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 1 });
@@ -251,8 +248,8 @@ describe("executor", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
-        where: { id: "scheduled-action-123" },
+      expect(prisma.scheduledAction.updateMany).toHaveBeenCalledWith({
+        where: claimWhere,
         data: { status: ScheduledActionStatus.FAILED },
       });
       expect(prisma.executedAction.update).toHaveBeenCalledTimes(1);
@@ -282,10 +279,7 @@ describe("executor", () => {
         ...mockScheduledAction,
         actionType: ActionType.NOTIFY_SENDER,
       };
-      mockScheduledActionUpdate(
-        ScheduledActionStatus.FAILED,
-        scheduledNotificationAction,
-      );
+      mockClaimHeld();
       mockExecutedActionCreate({ type: ActionType.NOTIFY_SENDER });
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 1 });
@@ -305,8 +299,8 @@ describe("executor", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
-        where: { id: "scheduled-action-123" },
+      expect(prisma.scheduledAction.updateMany).toHaveBeenCalledWith({
+        where: claimWhere,
         data: { status: ScheduledActionStatus.FAILED },
       });
       expect(prisma.executedAction.update).toHaveBeenCalledWith({
@@ -334,10 +328,7 @@ describe("executor", () => {
         ...mockScheduledAction,
         actionType: ActionType.NOTIFY_SENDER,
       };
-      mockScheduledActionUpdate(
-        ScheduledActionStatus.COMPLETED,
-        scheduledNotificationAction,
-      );
+      mockClaimHeld();
       mockExecutedActionCreate({ type: ActionType.NOTIFY_SENDER });
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 0 });
@@ -354,8 +345,8 @@ describe("executor", () => {
         success: true,
         executedActionId: "executed-action-123",
       });
-      expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
-        where: { id: "scheduled-action-123" },
+      expect(prisma.scheduledAction.updateMany).toHaveBeenCalledWith({
+        where: claimWhere,
         data: {
           status: ScheduledActionStatus.COMPLETED,
           executedAt: expect.any(Date),
@@ -374,7 +365,7 @@ describe("executor", () => {
     });
 
     it("should handle account not found errors", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.FAILED);
+      mockClaimHeld();
       mockCompletionCounts({ pendingActions: 0, failedActions: 1 });
       mockExecutedRuleUpdate(
         ExecutedRuleStatus.ERROR,
@@ -389,8 +380,8 @@ describe("executor", () => {
       );
 
       expect(result.success).toBe(false);
-      expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
-        where: { id: "scheduled-action-123" },
+      expect(prisma.scheduledAction.updateMany).toHaveBeenCalledWith({
+        where: claimWhere,
         data: { status: ScheduledActionStatus.FAILED },
       });
       expectExecutedRuleStatus(
@@ -400,7 +391,7 @@ describe("executor", () => {
     });
 
     it("should transition ExecutedRule to ERROR when some actions fail and others succeed", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.COMPLETED);
+      mockClaimHeld();
       mockExecutedActionCreate({ id: "executed-action-456" });
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 0, failedActions: 2 });
@@ -423,7 +414,7 @@ describe("executor", () => {
     });
 
     it("should not update ExecutedRule status when actions are still pending", async () => {
-      mockScheduledActionUpdate(ScheduledActionStatus.COMPLETED);
+      mockClaimHeld();
       mockExecutedActionCreate({ id: "executed-action-101" });
       mockExecutedRuleFind();
       mockCompletionCounts({ pendingActions: 2 });
@@ -459,7 +450,9 @@ const mockScheduledAction = {
   threadId: "thread-123",
   emailAccountId: "account-123",
   scheduledFor: new Date("2024-01-01T12:00:00Z"),
-  status: ScheduledActionStatus.PENDING,
+  status: ScheduledActionStatus.EXECUTING,
+  executionStartedAt: new Date("2024-01-01T12:00:05Z"),
+  executionAttempts: 1,
   label: null,
   subject: null,
   content: null,
@@ -482,18 +475,27 @@ async function getMockEmailProvider() {
   });
 }
 
-function mockScheduledActionUpdate(
-  status: ScheduledActionStatus,
-  scheduledAction = mockScheduledAction,
-) {
-  prisma.scheduledAction.update.mockResolvedValue({
-    ...scheduledAction,
-    status,
-  } as any);
+// The run's writes are fenced on the claim it was handed.
+const claimWhere = {
+  id: "scheduled-action-123",
+  status: ScheduledActionStatus.EXECUTING,
+  executionStartedAt: new Date("2024-01-01T12:00:05Z"),
+};
+
+function mockClaimHeld() {
+  prisma.scheduledAction.updateMany.mockResolvedValue({ count: 1 });
+}
+
+function expectExecutedActionCreated(create: unknown) {
+  expect(prisma.scheduledAction.update).toHaveBeenCalledWith({
+    where: { ...claimWhere, executedAction: { is: null } },
+    data: { executedAction: { create } },
+    select: { executedAction: true },
+  });
 }
 
 function mockExecutedActionCreate(overrides = {}) {
-  prisma.executedAction.create.mockResolvedValue({
+  const executedAction = {
     id: "executed-action-123",
     type: ActionType.ARCHIVE,
     label: null,
@@ -512,7 +514,8 @@ function mockExecutedActionCreate(overrides = {}) {
     draftId: null,
     draftStatus: null,
     ...overrides,
-  });
+  };
+  prisma.scheduledAction.update.mockResolvedValue({ executedAction } as any);
 }
 
 function mockExecutedRuleFind() {

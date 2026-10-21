@@ -130,8 +130,9 @@ async function processScheduledActions(logger: Logger) {
         logger: actionLogger,
       });
 
+      // The claimed row, which fences the run's writes on this claim.
       const executionResult = await executeScheduledAction(
-        scheduledAction,
+        markedAction,
         provider,
         actionLogger,
       );
@@ -184,14 +185,7 @@ function runScheduledWork(logger: Logger) {
 async function processScheduledMail(logger: Logger) {
   // QStash delivers each action once, so a run it started that was killed is
   // only ever finished from here.
-  const recoverInterrupted = recoverStaleScheduledActions(logger).catch(
-    (error) => {
-      logger.error("Recovering interrupted scheduled actions failed", {
-        error,
-      });
-      return { error: true };
-    },
-  );
+  const recoverInterrupted = recoverStaleScheduledActions(logger);
 
   if (!env.QSTASH_TOKEN) {
     const [

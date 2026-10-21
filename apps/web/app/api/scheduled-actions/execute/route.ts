@@ -120,8 +120,9 @@ export const POST = withError(
         provider: scheduledAction.emailAccount.account.provider,
         logger,
       });
+      // The claimed row, which fences the run's writes on this claim.
       const executionResult = await executeScheduledAction(
-        scheduledAction,
+        markedAction,
         provider,
         logger,
       );
