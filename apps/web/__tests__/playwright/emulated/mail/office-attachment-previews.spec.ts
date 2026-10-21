@@ -59,6 +59,30 @@ test("previews a Word attachment in the browser, sending it nowhere", async ({
   await expect(document.getByText("Beta invites")).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "office-docx-preview");
 
+  // On a phone the page zooms to the frame's width instead of scrolling
+  // sideways at its printed 816px.
+  const desktopViewport = page.viewportSize();
+  await page.setViewportSize({ width: 375, height: 812 });
+  const frame = dialog.locator(`iframe[title="${DOCX}"]`);
+  await expect
+    .poll(() =>
+      frame.evaluate((element: HTMLIFrameElement) => {
+        const root = element.contentDocument?.documentElement;
+        return root ? root.scrollWidth - root.clientWidth : null;
+      }),
+    )
+    .toBe(0);
+  await expect(document.getByText("Quarterly planning notes")).toBeVisible();
+  expect(
+    await page.evaluate(() => window.document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+  await capturePlaywrightCheckpoint(
+    page,
+    testInfo,
+    "office-docx-preview-phone",
+  );
+  if (desktopViewport) await page.setViewportSize(desktopViewport);
+
   const download = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Download" }).click();
   expect((await download).suggestedFilename()).toBe(DOCX);

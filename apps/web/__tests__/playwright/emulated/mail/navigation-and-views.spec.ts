@@ -312,8 +312,11 @@ test("creates and edits a label and shows every keyboard workflow", async ({
     await expect(editDialog).toBeHidden();
     await page.reload();
     await page
-      .getByRole("link", { name: labelName, exact: true })
-      .click({ button: "right" });
+      .getByRole("button", {
+        name: `Category options for ${labelName}`,
+        exact: true,
+      })
+      .click();
     await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
     await expect(
       editDialog.getByRole("radio", { name: "Dark blue" }),
@@ -405,7 +408,19 @@ test("creates and edits a label and shows every keyboard workflow", async ({
     ).toHaveValue(`${updatedLabelName}/Clients/Acme`);
     await editDialog.getByRole("button", { name: "Cancel" }).click();
 
-    await grandchild.click({ button: "right" });
+    // The row's visible options button opens the same menu as a right click.
+    await grandchild.hover();
+    await page
+      .getByRole("button", {
+        name: `Label options for ${updatedLabelName}/Clients/Acme`,
+        exact: true,
+      })
+      .click();
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "gmail-label-options-menu",
+    );
     await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
     const deleteDialog = page.getByRole("alertdialog", {
       name: `Delete ${labelType}?`,

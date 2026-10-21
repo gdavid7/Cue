@@ -1,7 +1,13 @@
 "use client";
 
-import { type FormEvent, type ReactNode, useState } from "react";
-import { PencilIcon, Trash2Icon } from "lucide-react";
+import {
+  type ComponentType,
+  type FormEvent,
+  type ReactNode,
+  useRef,
+  useState,
+} from "react";
+import { MoreHorizontalIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -24,6 +30,16 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -85,6 +101,7 @@ export function MailboxItemContextMenu({
   currentColor,
   colorOptions = [],
   visibility,
+  showOptionsButton = true,
   onEdit,
   onDelete,
 }: {
@@ -99,6 +116,8 @@ export function MailboxItemContextMenu({
   colorOptions?: readonly MailboxItemColorOption[];
   /** Omitted for providers without visibility settings, which hides the menu section. */
   visibility?: MailboxItemVisibility;
+  /** The collapsed rail has no room for the row's options button. */
+  showOptionsButton?: boolean;
   onEdit: (edit: MailboxItemEdit) => Promise<boolean>;
   onDelete: (item: MailboxItem) => Promise<boolean>;
 }) {
@@ -108,6 +127,9 @@ export function MailboxItemContextMenu({
   const [isDeleting, setIsDeleting] = useState(false);
   const [name, setName] = useState(item.name);
   const [color, setColor] = useState<EmailLabelColor | null>(null);
+  // Opening a dialog from the options menu keeps focus in the dialog rather
+  // than letting the closing menu hand it back to its button.
+  const openedDialogFromMenu = useRef(false);
   const showsName = editMode !== "color";
   const showsColor = editMode !== "name";
 
@@ -189,64 +211,64 @@ export function MailboxItemContextMenu({
     }
   };
 
+  const menuItems = (parts: MenuParts) => (
+    <MailboxItemMenuItems
+      parts={parts}
+      typeName={typeName}
+      visibility={visibility}
+      onEdit={() => {
+        openedDialogFromMenu.current = true;
+        openEditor();
+      }}
+      onDelete={() => {
+        openedDialogFromMenu.current = true;
+        setIsDeleteOpen(true);
+      }}
+      onVisibilityChange={updateVisibility}
+    />
+  );
+
   return (
     <>
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <div>{children}</div>
+          <div
+            className={cn(
+              "group/mailbox-item relative",
+              // Touch has no hover to reveal the options button, so it stays
+              // visible and the row's count moves clear of it.
+              showOptionsButton && "[@media(hover:none)]:[&_a]:pr-9",
+            )}
+          >
+            {children}
+            {showOptionsButton && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`${capitalize(typeName)} options for ${item.name}`}
+                    className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground data-[state=open]:opacity-100 group-focus-within/mailbox-item:opacity-100 group-hover/mailbox-item:opacity-100 pointer-coarse:after:absolute pointer-coarse:after:-inset-2 pointer-coarse:after:content-[''] [@media(hover:hover)]:bg-sidebar-accent [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-has-[[aria-current=page]]/mailbox-item:bg-card [@media(hover:hover)]:group-has-[[data-highlighted]]/mailbox-item:bg-card"
+                  >
+                    <MoreHorizontalIcon className="size-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  className="w-48"
+                  onCloseAutoFocus={(event) => {
+                    if (!openedDialogFromMenu.current) return;
+                    openedDialogFromMenu.current = false;
+                    event.preventDefault();
+                  }}
+                >
+                  {menuItems(DROPDOWN_MENU_PARTS)}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-48">
-          <ContextMenuItem className="gap-2" onSelect={openEditor}>
-            <PencilIcon className="size-4" />
-            Edit
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="gap-2 text-destructive focus:text-destructive"
-            onSelect={() => setIsDeleteOpen(true)}
-          >
-            <Trash2Icon className="size-4" />
-            Delete
-          </ContextMenuItem>
-          {visibility && (
-            <>
-              <ContextMenuSeparator />
-              <ContextMenuLabel className="text-muted-foreground text-xs">
-                In {typeName} list
-              </ContextMenuLabel>
-              <ContextMenuRadioGroup
-                value={visibility.labelList ?? labelVisibility.labelShow}
-                onValueChange={(value) =>
-                  updateVisibility({
-                    labelListVisibility: value as LabelVisibility,
-                  })
-                }
-              >
-                {LABEL_LIST_OPTIONS.map((option) => (
-                  <ContextMenuRadioItem key={option.value} value={option.value}>
-                    {option.name}
-                  </ContextMenuRadioItem>
-                ))}
-              </ContextMenuRadioGroup>
-              <ContextMenuSeparator />
-              <ContextMenuLabel className="text-muted-foreground text-xs">
-                In message list
-              </ContextMenuLabel>
-              <ContextMenuRadioGroup
-                value={visibility.messageList ?? messageVisibility.show}
-                onValueChange={(value) =>
-                  updateVisibility({
-                    messageListVisibility: value as MessageVisibility,
-                  })
-                }
-              >
-                {MESSAGE_LIST_OPTIONS.map((option) => (
-                  <ContextMenuRadioItem key={option.value} value={option.value}>
-                    {option.name}
-                  </ContextMenuRadioItem>
-                ))}
-              </ContextMenuRadioGroup>
-            </>
-          )}
+          {menuItems(CONTEXT_MENU_PARTS)}
         </ContextMenuContent>
       </ContextMenu>
 
@@ -347,4 +369,118 @@ export function MailboxItemContextMenu({
       </AlertDialog>
     </>
   );
+}
+
+type MenuParts = {
+  Item: ComponentType<{
+    className?: string;
+    onSelect?: () => void;
+    children: ReactNode;
+  }>;
+  Label: ComponentType<{ className?: string; children: ReactNode }>;
+  RadioGroup: ComponentType<{
+    value?: string;
+    onValueChange?: (value: string) => void;
+    children: ReactNode;
+  }>;
+  RadioItem: ComponentType<{ value: string; children: ReactNode }>;
+  Separator: ComponentType;
+};
+
+const CONTEXT_MENU_PARTS: MenuParts = {
+  Item: ContextMenuItem,
+  Label: ContextMenuLabel,
+  RadioGroup: ContextMenuRadioGroup,
+  RadioItem: ContextMenuRadioItem,
+  Separator: ContextMenuSeparator,
+};
+
+const DROPDOWN_MENU_PARTS: MenuParts = {
+  Item: DropdownMenuItem,
+  Label: DropdownMenuLabel,
+  RadioGroup: DropdownMenuRadioGroup,
+  RadioItem: DropdownMenuRadioItem,
+  Separator: DropdownMenuSeparator,
+};
+
+/** The same menu opens from a right click and from the row's options button. */
+function MailboxItemMenuItems({
+  parts: { Item, Label, RadioGroup, RadioItem, Separator },
+  typeName,
+  visibility,
+  onEdit,
+  onDelete,
+  onVisibilityChange,
+}: {
+  parts: MenuParts;
+  typeName: string;
+  visibility?: MailboxItemVisibility;
+  onEdit: () => void;
+  onDelete: () => void;
+  onVisibilityChange: (
+    update: Pick<
+      Extract<MailboxItemEdit, { kind: "label" }>,
+      "labelListVisibility" | "messageListVisibility"
+    >,
+  ) => void;
+}) {
+  return (
+    <>
+      <Item className="gap-2" onSelect={onEdit}>
+        <PencilIcon className="size-4" />
+        Edit
+      </Item>
+      <Item
+        className="gap-2 text-destructive focus:text-destructive"
+        onSelect={onDelete}
+      >
+        <Trash2Icon className="size-4" />
+        Delete
+      </Item>
+      {visibility && (
+        <>
+          <Separator />
+          <Label className="text-muted-foreground text-xs">
+            In {typeName} list
+          </Label>
+          <RadioGroup
+            value={visibility.labelList ?? labelVisibility.labelShow}
+            onValueChange={(value) =>
+              onVisibilityChange({
+                labelListVisibility: value as LabelVisibility,
+              })
+            }
+          >
+            {LABEL_LIST_OPTIONS.map((option) => (
+              <RadioItem key={option.value} value={option.value}>
+                {option.name}
+              </RadioItem>
+            ))}
+          </RadioGroup>
+          <Separator />
+          <Label className="text-muted-foreground text-xs">
+            In message list
+          </Label>
+          <RadioGroup
+            value={visibility.messageList ?? messageVisibility.show}
+            onValueChange={(value) =>
+              onVisibilityChange({
+                messageListVisibility: value as MessageVisibility,
+              })
+            }
+          >
+            {MESSAGE_LIST_OPTIONS.map((option) => (
+              <RadioItem key={option.value} value={option.value}>
+                {option.name}
+              </RadioItem>
+            ))}
+          </RadioGroup>
+        </>
+      )}
+    </>
+  );
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
