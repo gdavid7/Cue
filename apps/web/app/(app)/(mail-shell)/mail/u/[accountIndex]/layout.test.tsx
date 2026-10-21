@@ -65,9 +65,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/mail/MailScreen", () => ({
   MailScreen: () => null,
 }));
-vi.mock("@/app/(app)/[emailAccountId]/mail/MailScreenLayout", () => ({
-  MailScreenLayout: ({ children }: { children: React.ReactNode }) => children,
-}));
 
 import { InboxPreviewSeed } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import MailRouteLayout from "./layout";

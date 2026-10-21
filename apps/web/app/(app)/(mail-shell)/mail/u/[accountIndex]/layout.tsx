@@ -2,7 +2,6 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { InboxPreviewSeed } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import { MailScreen } from "@/app/(app)/[emailAccountId]/mail/MailScreen";
-import { MailScreenLayout } from "@/app/(app)/[emailAccountId]/mail/MailScreenLayout";
 import { auth } from "@/utils/auth";
 import {
   LAST_EMAIL_ACCOUNT_COOKIE,
@@ -85,7 +84,7 @@ export default async function MailRouteLayout({
     session.user.id,
   );
   return (
-    <MailScreenLayout>
+    <>
       {/* Always here, so the mail screen keeps its place in the tree. */}
       <InboxPreviewSeed
         emailAccountId={account.id}
@@ -96,7 +95,7 @@ export default async function MailRouteLayout({
         <MailScreen />
       </InboxPreviewSeed>
       {children}
-    </MailScreenLayout>
+    </>
   );
 }
 
