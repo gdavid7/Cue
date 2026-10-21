@@ -112,6 +112,23 @@ describe("getPreSendWarnings", () => {
       );
     });
 
+    it("trusts recipients the user set up, such as a rule's own", () => {
+      const ruleReply = {
+        ...reply,
+        chosenAddresses: ["Finance <finance@partner.example>"],
+      };
+      expect(
+        ids(draft({ to: "finance@partner.example", cc: "" }), ruleReply),
+      ).toEqual([]);
+      const [warning] = getPreSendWarnings(
+        draft({ to: "finance@partner.example", cc: "jo@example.com" }),
+        ruleReply,
+      );
+      expect(warning.message).toBe(
+        "jo@example.com wasn't on the message you're replying to.",
+      );
+    });
+
     it("matches thread addresses regardless of case or display name", () => {
       expect(
         ids(draft({ to: "ALEX@Example.com", cc: "Sam <sam@example.com>" })),

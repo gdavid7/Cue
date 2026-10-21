@@ -18,6 +18,8 @@ export type PreSendContext = {
   kind: "new" | "reply" | "forward";
   /** Everyone on the message being replied to. */
   repliedToAddresses: string[];
+  /** Recipients the user set up ahead, such as a rule's own; never new. */
+  chosenAddresses?: string[];
   ownEmails: string[];
 };
 
@@ -72,7 +74,12 @@ export function getPreSendWarnings(
         fix: "recipients",
       });
     }
-    const known = new Set(uniqueAddresses(context.repliedToAddresses));
+    const known = new Set(
+      uniqueAddresses([
+        ...context.repliedToAddresses,
+        ...(context.chosenAddresses ?? []),
+      ]),
+    );
     const added = recipients.filter((address) => !known.has(address));
     if (added.length) {
       warnings.push({
