@@ -131,6 +131,82 @@ describe("drafts a send stands in for, across a reload", () => {
     expect(reloaded.current).toEqual([]);
   });
 
+  it("keeps every send's drafts hidden after a reload, however many copies a draft was saved as", async () => {
+    const before = await loadPage();
+    const saves = Array.from({ length: 60 }, (_, index) => `save-${index}`);
+    before.hideSendingDraftMessages("account-a", saves, "send-a");
+    before.hideSendingDraftMessages("account-a", ["draft-b"], "send-b");
+
+    const after = await loadPage();
+    const { result } = renderHook(
+      () => after.useHiddenDraftMessageIds("account-a"),
+      { wrapper },
+    );
+
+    expect(result.current).toEqual([...saves.slice(-50), "draft-b"]);
+  });
+
+  it("keeps the sends it can read when one stored send is unreadable", async () => {
+    storage.set(
+      "cue:sending-drafts",
+      JSON.stringify([
+        { emailAccountId: "account-a" },
+        {
+          emailAccountId: "account-a",
+          operationId: "send-b",
+          messageIds: ["draft-b"],
+        },
+      ]),
+    );
+
+    const after = await loadPage();
+    const { result } = renderHook(
+      () => after.useHiddenDraftMessageIds("account-a"),
+      { wrapper },
+    );
+
+    expect(result.current).toEqual(["draft-b"]);
+  });
+
+  it("shows a draft again when its send may not have gone out, but not while it waits for a reconnect", async () => {
+    const before = await loadPage();
+    before.hideSendingDraftMessages("account-a", ["draft-a"], "send-a");
+    before.hideSendingDraftMessages("account-a", ["draft-b"], "send-b");
+
+    const after = await loadPage();
+    const stop = after.resumeSendingDrafts();
+    const engine = createClient({ "send-a": "queued", "send-b": "queued" });
+    after.setActiveMailClient(engine.client);
+    const { result } = renderHook(
+      () => after.useHiddenDraftMessageIds("account-a"),
+      { wrapper },
+    );
+
+    act(() => engine.set("send-a", "uncertain"));
+    act(() => engine.set("send-b", "blocked_auth"));
+    expect(result.current).toEqual(["draft-b"]);
+    stop();
+  });
+
+  it("watches a send queued on this page too", async () => {
+    const page = await loadPage();
+    const stop = page.resumeSendingDrafts();
+    const engine = createClient({ "send-a": "queued" });
+    page.setActiveMailClient(engine.client);
+    const { result } = renderHook(
+      () => page.useHiddenDraftMessageIds("account-a"),
+      { wrapper },
+    );
+
+    act(() => {
+      page.hideSendingDraftMessages("account-a", ["draft-a"], "send-a");
+    });
+    expect(result.current).toEqual(["draft-a"]);
+    act(() => engine.set("send-a", "failed"));
+    expect(result.current).toEqual([]);
+    stop();
+  });
+
   it("keeps the draft hidden once its send has gone out", async () => {
     const before = await loadPage();
     before.hideSendingDraftMessages("account-a", ["draft-a"], "send-a");

@@ -123,7 +123,8 @@ async function getUpcomingData(emailAccountId: string) {
     LIMIT 200
   `;
   // A sent draft stays in the mailbox here until sync reports it gone, so the
-  // client keeps it out of Drafts for a while after.
+  // client keeps it out of Drafts for a while after. An undo hold is sent by
+  // the device's engine, which drops its drafts itself once it goes out.
   const sent = await prisma.scheduledEmail.findMany({
     where: {
       emailAccountId,
@@ -137,6 +138,8 @@ async function getUpcomingData(emailAccountId: string) {
   });
   return {
     scheduledEmails,
-    sentDraftMessageIds: sent.flatMap((row) => row.draftMessageIds),
+    sentDraftMessageIds: [
+      ...new Set(sent.flatMap((row) => row.draftMessageIds)),
+    ],
   };
 }
