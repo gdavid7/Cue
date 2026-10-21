@@ -901,6 +901,7 @@ describe("Middleware", () => {
       mockAuth.mockResolvedValue(null as any);
       mockReq = createMockRequest("GET", "http://localhost/api/test", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+        cookie: "__Secure-better-auth.session_token=expired",
       });
       const handler = createEmailAccountHandler();
 
@@ -922,6 +923,41 @@ describe("Middleware", () => {
       expect(handler).not.toHaveBeenCalled();
     });
 
+    it("answers a request that cannot carry a session with the 401 and no account read", async () => {
+      mockAuth.mockResolvedValue(null as any);
+      mockReq = createMockRequest("GET", "http://localhost/api/test", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+        cookie: "display=compact",
+      });
+      mockOwnedAccount(mockUserId, mockEmail);
+      const handler = createEmailAccountHandler();
+
+      const response = await withEmailAccount(handler)(mockReq, mockContext);
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({
+        error: "Unauthorized",
+        errorCode: "SESSION_EXPIRED",
+        isKnownError: true,
+      });
+      expect(mockPrismaEmailAccountFindUnique).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("still checks the account when a session is found without a session cookie", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/test", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount("someone-else", mockEmail);
+      const handler = createEmailAccountHandler();
+
+      const response = await withEmailAccount(handler)(mockReq, mockContext);
+
+      expect(mockPrismaEmailAccountFindUnique).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(403);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
     it("reads the account alongside the session, not after it", async () => {
       let resolveSession: (session: unknown) => void = () => undefined;
       mockAuth.mockReturnValue(
@@ -931,6 +967,7 @@ describe("Middleware", () => {
       );
       mockReq = createMockRequest("GET", "http://localhost/api/test", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+        authorization: "Bearer session-token",
       });
       mockOwnedAccount(mockUserId, mockEmail);
       const handler = createEmailAccountHandler();

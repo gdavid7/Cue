@@ -1,6 +1,7 @@
 import "server-only";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
+import { runWithPreAuthAuditContext } from "@/utils/audit/context";
 
 // "1" says the account is the user's. Ids only: the address never sits in
 // Redis (RD-3). Removal and merges delete it; the expiry bounds a missed path.
@@ -33,17 +34,21 @@ export async function getEmailAccount({
  * mail provider, or null when the account is not theirs.
  */
 export function startEmailAccountOwnershipCheck(emailAccountId: string) {
-  const read = prisma.emailAccount.findUnique({
-    where: { id: emailAccountId },
-    select: {
-      userId: true,
-      email: true,
-      account: { select: { provider: true } },
-    },
+  const read = runWithPreAuthAuditContext(() => {
+    const query = prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: {
+        userId: true,
+        email: true,
+        account: { select: { provider: true } },
+      },
+    });
+    // Starts the query (inside this context: Prisma runs it on first use), and
+    // keeps a failure nobody waits for (no session) from surfacing as an
+    // unhandled rejection; the check still sees it.
+    query.catch(() => undefined);
+    return query;
   });
-  // Starts the query, and keeps a failure nobody waits for (no session) from
-  // surfacing as an unhandled rejection; the check still sees it.
-  read.catch(() => undefined);
 
   return async (userId: string) => {
     if (!userId) return null;

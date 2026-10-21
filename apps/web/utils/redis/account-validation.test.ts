@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import prisma from "@/utils/__mocks__/prisma";
+import { runWithAuditContext, setAuditContext } from "@/utils/audit/context";
+import { recordAuditEvent } from "@/utils/audit/delivery";
+import { __testing__ as auditExtension } from "@/utils/audit/prisma-extension";
 import {
   getEmailAccount,
   invalidateAccountOwnership,
@@ -10,6 +13,10 @@ import {
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
+vi.mock("@/utils/audit/delivery", () => ({
+  isAuditLoggingEnabled: () => true,
+  recordAuditEvent: vi.fn(),
+}));
 vi.mock("@/utils/redis", async () => ({
   redis: (await import("@/__tests__/mocks/recording-redis.mock")).recordingRedis
     .client,
@@ -110,7 +117,74 @@ describe("startEmailAccountOwnershipCheck", () => {
 
     await expect(check("user-1")).rejects.toThrow("db down");
   });
+
+  // The request's audit context gains the caller once the session resolves,
+  // and the audit extension reads it when the query finishes; the read made
+  // before that is the pre-auth check's, whatever finishes first.
+  it("audits the read as a pre-auth check, not as the caller", async () => {
+    let finishQuery: () => void = () => undefined;
+    const queryFinished = new Promise<void>((resolve) => {
+      finishQuery = resolve;
+    });
+    prisma.emailAccount.findUnique.mockImplementation(((args: unknown) =>
+      lazyAuditedQuery(args, async () => {
+        await queryFinished;
+        return {
+          userId: "someone-else",
+          email: "me@example.com",
+          account: { provider: "google" },
+        };
+      })) as never);
+
+    await runWithAuditContext(
+      { actorType: "anonymous", requestId: "request-1", source: "api/test" },
+      async () => {
+        const check = startEmailAccountOwnershipCheck("account-1");
+        setAuditContext({ actorType: "user", userId: "caller" });
+        finishQuery();
+        expect(await check("caller")).toBeNull();
+      },
+    );
+
+    expect(recordAuditEvent).toHaveBeenCalledTimes(1);
+    expect(recordAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "EmailAccount",
+        operation: "findUnique",
+        status: "success",
+        result_count: 1,
+        actor_type: "pre_auth",
+        user_id: null,
+        email_account_id: null,
+        api_key_id: null,
+        request_id: "request-1",
+        source: "api/test",
+      }),
+    );
+  });
 });
+
+// Like a Prisma query: it runs, audited, on first use, in the async context
+// of that use, and only once.
+function lazyAuditedQuery(args: unknown, query: () => Promise<unknown>) {
+  let started: Promise<unknown> | undefined;
+  const run = () =>
+    (started ??= auditExtension.auditPrismaOperation({
+      model: "EmailAccount",
+      operation: "findUnique",
+      args,
+      query,
+    }));
+  return {
+    // biome-ignore lint/suspicious/noThenProperty: models a Prisma thenable
+    then: (
+      onFulfilled?: (value: unknown) => unknown,
+      onRejected?: (reason: unknown) => unknown,
+    ) => run().then(onFulfilled, onRejected),
+    catch: (onRejected: (reason: unknown) => unknown) =>
+      run().catch(onRejected),
+  };
+}
 
 describe("account ownership in Redis", () => {
   beforeEach(() => {

@@ -142,7 +142,8 @@ function withMiddleware<T extends NextRequest>(
     const requestMetrics = createRequestMetrics();
     // What the request paid before its handler ran: session and account
     // checks, and creating the provider. A request the middleware answered
-    // itself spent all of it there.
+    // itself spent all of it there, including an account read started
+    // alongside the session and then discarded (a 401 or a refused account).
     let preHandler:
       | { preHandlerMs: number; preHandlerDbCalls: number }
       | undefined;
@@ -419,19 +420,15 @@ function withMiddleware<T extends NextRequest>(
   };
 }
 
-async function authMiddleware(
+function authMiddleware(req: NextRequest) {
+  return authenticate(req, getAuthLogContext(req));
+}
+
+async function authenticate(
   req: NextRequest,
+  authLogContext: AuthLogContext,
 ): Promise<RequestWithAuth | Response> {
   const baseLogger = getLogger(req);
-  const authLogContext = {
-    path: new URL(req.url).pathname,
-    method: req.method,
-    hasCookie: req.headers.has("cookie"),
-    cookieNames: parseCookieNames(req.headers.get("cookie")),
-    hasAuthorization: req.headers.has("authorization"),
-    expoOrigin: req.headers.get("expo-origin") ?? null,
-    userAgent: req.headers.get("user-agent") ?? null,
-  };
 
   let session: Awaited<ReturnType<typeof auth>>;
   try {
@@ -500,6 +497,29 @@ export function getUnauthorizedReason({
   return "session_cookie_unresolved";
 }
 
+type AuthLogContext = ReturnType<typeof getAuthLogContext>;
+
+function getAuthLogContext(req: NextRequest) {
+  return {
+    path: new URL(req.url).pathname,
+    method: req.method,
+    hasCookie: req.headers.has("cookie"),
+    cookieNames: parseCookieNames(req.headers.get("cookie")),
+    hasAuthorization: req.headers.has("authorization"),
+    expoOrigin: req.headers.get("expo-origin") ?? null,
+    userAgent: req.headers.get("user-agent") ?? null,
+  };
+}
+
+// False only when the request offers nothing a session could come from, so
+// its 401 is certain before the session lookup answers.
+function mayCarrySession({ cookieNames, hasAuthorization }: AuthLogContext) {
+  return (
+    hasAuthorization ||
+    cookieNames.some((name) => name.includes("session_token"))
+  );
+}
+
 function parseCookieNames(cookieHeader: string | null): string[] {
   if (!cookieHeader) return [];
   return cookieHeader
@@ -525,14 +545,20 @@ async function resolveEmailAccount(
   { request: RequestWithEmailAccount; provider: string | null } | Response
 > {
   const emailAccountId = req.headers.get(EMAIL_ACCOUNT_HEADER);
-  const checkOwnership = emailAccountId
-    ? startEmailAccountOwnershipCheck(emailAccountId)
-    : null;
+  const authLogContext = getAuthLogContext(req);
+  // A request that cannot have a session is not worth an account read; should
+  // the session lookup still find one, the account is read after it instead.
+  let checkOwnership =
+    emailAccountId && mayCarrySession(authLogContext)
+      ? startEmailAccountOwnershipCheck(emailAccountId)
+      : null;
 
-  const authReq = await authMiddleware(req);
+  const authReq = await authenticate(req, authLogContext);
   if (authReq instanceof Response) return authReq;
 
   const userId = authReq.auth.userId;
+  if (emailAccountId)
+    checkOwnership ??= startEmailAccountOwnershipCheck(emailAccountId);
 
   if (!emailAccountId || !checkOwnership) {
     return NextResponse.json(

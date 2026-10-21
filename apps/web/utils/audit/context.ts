@@ -6,7 +6,8 @@ export type AuditActorType =
   | "email_account"
   | "api_key"
   | "admin"
-  | "system";
+  | "system"
+  | "pre_auth";
 
 export type AuditContext = {
   requestId?: string;
@@ -29,6 +30,22 @@ export function runWithAuditContext<T>(
 ): T {
   const mergedContext = mergeAuditContext(getAuditContext(), context);
   return auditContextStorage.run(mergedContext, callback);
+}
+
+/**
+ * Runs a read made before the request is authenticated (such as the account
+ * read that starts alongside the session) in its own context, keeping only the
+ * request's id and source. The request's context is filled in as auth
+ * succeeds, and the audit event is attributed when the query finishes, so
+ * without this the same read would be logged under no actor or the caller
+ * depending on which finished first.
+ */
+export function runWithPreAuthAuditContext<T>(callback: () => T): T {
+  const { requestId, source } = getAuditContext();
+  return auditContextStorage.run(
+    normalizeAuditContext({ requestId, source, actorType: "pre_auth" }),
+    callback,
+  );
 }
 
 export function setAuditContext(context: AuditContext) {
