@@ -94,7 +94,9 @@ test("keeps a hostile Word document from loading or navigating anything", async 
   const opened = await popup;
   await opened.waitForURL("https://phish.invalid/login");
   await opened.close();
-  await expect(document.getByText("Hostile document")).toBeVisible();
+  await expect(
+    document.getByText("Hostile document", { exact: true }),
+  ).toBeVisible();
   expect(
     await frame.evaluate(
       (element: HTMLIFrameElement) => element.contentWindow?.location.href,
