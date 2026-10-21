@@ -49,8 +49,18 @@ import { mutationPayloadToChange } from "@/utils/mail-engine/mutation-change";
 import { submitConversationChange } from "@/utils/mail-engine/submit-conversations";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 import { AccountCommandList } from "@/components/AccountCommandList";
-import { toastError } from "@/components/Toast";
+import { toastError, toastSuccess } from "@/components/Toast";
 import { trackMailAction } from "@/utils/analytics/mail-usage";
+import { useNotificationsQuiet } from "@/hooks/useNotificationsQuiet";
+import {
+  buildQuietPageCommands,
+  buildQuietRootCommand,
+} from "@/utils/web-notifications/quiet-command-palette";
+import { formatQuietUntil } from "@/utils/web-notifications/quiet-presets";
+import {
+  pauseNotificationsUntil,
+  resumeNotifications,
+} from "@/utils/web-notifications/preference";
 
 const SECTION_ORDER: CommandSection[] = [
   "actions",
@@ -66,6 +76,15 @@ const SECTION_LABELS: Record<CommandSection, string> = {
   rules: "Rules",
   accounts: "Switch Account",
   settings: "Settings",
+};
+
+type PalettePage = "root" | "snooze" | "quiet" | "accounts";
+
+const EMPTY_MESSAGES: Record<PalettePage, string> = {
+  root: "No results found.",
+  snooze: "Try a date like tomorrow at 3pm.",
+  quiet: "Try a time like 6pm or tomorrow at 9am.",
+  accounts: "No results found.",
 };
 
 /** Still shown in ⌘K when a conversation is selected and mail actions take over. */
@@ -121,18 +140,19 @@ function CommandPaletteContent({
   const [open, setOpen] = useAtom(commandPaletteOpenAtom);
   const setShortcutsOpen = useSetAtom(shortcutsDialogOpenAtom);
   const setFeedbackOpen = useSetAtom(feedbackDialogOpenAtom);
-  const [activePage, setPage] = React.useState<"root" | "snooze" | "accounts">(
-    "root",
-  );
+  const [activePage, setPage] = React.useState<PalettePage>("root");
   const [search, setSearch] = React.useState("");
-  const page =
-    activePage === "snooze" && !mailCommandContext?.actions.snooze
-      ? "root"
-      : activePage;
+  const quiet = useNotificationsQuiet();
+  const page = pageStillAvailable(activePage, {
+    canSnooze: Boolean(mailCommandContext?.actions.snooze),
+    canPauseNotifications: quiet.canPause,
+  })
+    ? activePage
+    : "root";
   // Loading starts as the palette opens, so the parser is usually ready by
   // the time someone types a snooze time.
   const parseSnoozeDate = useSnoozeDateParser(
-    open && Boolean(mailCommandContext?.actions.snooze),
+    open && (Boolean(mailCommandContext?.actions.snooze) || page === "quiet"),
   );
   const { setTheme } = useTheme();
 
@@ -299,6 +319,17 @@ function CommandPaletteContent({
       parseDate: parseSnoozeDate,
       query: search,
     });
+  } else if (page === "quiet") {
+    allCommands = buildQuietPageCommands({
+      parseDate: parseSnoozeDate,
+      query: search,
+      pause: (until) => {
+        pauseNotificationsUntil(until.getTime());
+        toastSuccess({
+          description: `Notifications paused until ${formatQuietUntil(until, new Date())}`,
+        });
+      },
+    });
   } else {
     const actionCommands = mailCommandContext
       ? [
@@ -332,6 +363,20 @@ function CommandPaletteContent({
       ...commands,
       ...themeCommands,
     ];
+    if (quiet.canPause)
+      allCommands.push(
+        buildQuietRootCommand({
+          quietUntilMs: quiet.quietUntilMs,
+          openPausePage: () => {
+            setSearch("");
+            setPage("quiet");
+          },
+          resume: () => {
+            resumeNotifications();
+            toastSuccess({ description: "Notifications resumed" });
+          },
+        }),
+      );
     allCommands.push({
       id: "send-feedback",
       label: "Send feedback",
@@ -343,7 +388,7 @@ function CommandPaletteContent({
   }
 
   const filteredCommands =
-    page === "snooze" || !search.trim()
+    page === "snooze" || page === "quiet" || !search.trim()
       ? allCommands
       : fuzzySearch(search, allCommands);
   const groupedCommands = groupCommands(filteredCommands);
@@ -392,6 +437,7 @@ function CommandPaletteContent({
           {
             root: "Type a command or search...",
             snooze: "When should it return? Try Friday at 3pm",
+            quiet: "Pause until when? Try 6pm or Monday 9am",
             accounts: "Search accounts...",
           }[page]
         }
@@ -414,11 +460,7 @@ function CommandPaletteContent({
           </div>
         ) : (
           <>
-            <CommandEmpty>
-              {page === "snooze"
-                ? "Try a date like tomorrow at 3pm."
-                : "No results found."}
-            </CommandEmpty>
+            <CommandEmpty>{EMPTY_MESSAGES[page]}</CommandEmpty>
             {SECTION_ORDER.map((section, index) => {
               const sectionCommands = groupedCommands[section];
               if (sectionCommands.length === 0) return null;
@@ -479,12 +521,13 @@ function CommandPaletteContent({
 /** Across accounts, the mail actions' heading says which account they run in. */
 function sectionHeading(
   section: CommandSection,
-  page: "root" | "snooze" | "accounts",
+  page: PalettePage,
   account: string | undefined,
 ) {
+  const pageHeading = { snooze: "Snooze until", quiet: "Pause notifications" };
   const heading =
-    page === "snooze" && section === "actions"
-      ? "Snooze until"
+    section === "actions" && (page === "snooze" || page === "quiet")
+      ? pageHeading[page]
       : SECTION_LABELS[section];
   return section === "actions" && account ? `${heading} · ${account}` : heading;
 }
@@ -501,4 +544,15 @@ function groupCommands(commands: Command[]) {
   for (const command of commands) groups[command.section].push(command);
 
   return groups;
+}
+
+// A page whose action went away while open (mail deselected, notifications
+// turned off in another tab) falls back to the first page.
+function pageStillAvailable(
+  page: PalettePage,
+  available: { canSnooze: boolean; canPauseNotifications: boolean },
+) {
+  if (page === "snooze") return available.canSnooze;
+  if (page === "quiet") return available.canPauseNotifications;
+  return true;
 }

@@ -26,6 +26,7 @@ import {
 import {
   hasBeenAskedToEnable,
   readEffectiveMode,
+  readQuietUntilMs,
   readStoredMode,
   subscribeToPreference,
 } from "@/utils/web-notifications/preference";
@@ -71,6 +72,11 @@ export function WebNewMailNotifications() {
     subscribeToPreference,
     readStoredMode,
     () => null,
+  );
+  const quiet = useSyncExternalStore(
+    subscribeToPreference,
+    () => readQuietUntilMs() !== null,
+    () => false,
   );
   // The desktop app shows its own notifications.
   const isDesktopApp = useSyncExternalStore(
@@ -128,6 +134,8 @@ export function WebNewMailNotifications() {
         getWebNotificationPermission() === "granted"
           ? readEffectiveMode()
           : "off",
+      // Read from storage each time: the pause may be set in another tab.
+      isQuiet: () => readQuietUntilMs() !== null,
       isLeader: () => leader,
       isForeground: focus.isAnyTabFocused,
       notify: (conversations) =>
@@ -188,10 +196,18 @@ export function WebNewMailNotifications() {
 
   // Keeps the server's copy of this browser's push subscription fresh, so mail
   // still notifies after the browser rotates it or the server dropped it.
+  // Browsers require every push to show a notification, so a pause turns push
+  // off for this browser, and the end of the pause, seen by any open tab or
+  // the next one opened, turns it back on.
   useEffect(() => {
-    if (!active || !isWebPushAvailable() || !isWebPushResyncDue()) return;
+    if (!active || !isWebPushAvailable()) return;
+    if (quiet) {
+      syncWebPushSubscription("off").catch(() => undefined);
+      return;
+    }
+    if (!isWebPushResyncDue()) return;
     syncWebPushSubscription(mode).catch(() => undefined);
-  }, [active, mode]);
+  }, [active, mode, quiet]);
 
   // The one-time offer needs to know a first sync finished, and nothing else.
   const mightOffer =

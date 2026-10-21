@@ -9,7 +9,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotificationsSection } from "@/app/(app)/settings/NotificationsSection";
-import { readStoredMode } from "@/utils/web-notifications/preference";
+import {
+  readQuietUntilMs,
+  readStoredMode,
+} from "@/utils/web-notifications/preference";
 
 const { push } = vi.hoisted(() => ({ push: { available: false } }));
 
@@ -112,5 +115,33 @@ describe("NotificationsSection", () => {
         .getByRole("combobox", { name: "Desktop notifications" })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("pauses this browser's notifications without turning them off, then resumes", async () => {
+    stubNotification("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "important");
+    render(<NotificationsSection />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Pause…" }));
+    fireEvent.click(await screen.findByRole("button", { name: /For 1 hour/ }));
+
+    expect(readQuietUntilMs()).not.toBeNull();
+    expect(readStoredMode()).toBe("important");
+    expect(screen.getByText(/^Paused until /)).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Paused" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    expect(readQuietUntilMs()).toBeNull();
+    expect(screen.queryByRole("img", { name: "Paused" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Pause…" })).toBeTruthy();
+  });
+
+  it("offers no pause while notifications are off", () => {
+    stubNotification("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "off");
+    render(<NotificationsSection />);
+
+    expect(screen.queryByRole("button", { name: "Pause…" })).toBeNull();
   });
 });

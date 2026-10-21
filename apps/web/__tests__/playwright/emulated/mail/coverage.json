@@ -371,7 +371,13 @@
     "utils/web-notifications/notifier.ts",
     "utils/web-notifications/unread-title.ts",
     "utils/web-notifications/permission.ts",
-    "hooks/useInboxUnreadCount.ts"
+    "hooks/useInboxUnreadCount.ts",
+    "utils/web-notifications/preference.ts",
+    "utils/web-notifications/quiet-presets.ts",
+    "utils/web-notifications/quiet-command-palette.ts",
+    "hooks/useNotificationsQuiet.ts",
+    "app/(app)/settings/NotificationsSection.tsx",
+    "app/(app)/settings/PauseNotificationsSetting.tsx"
   ],
   "notifications-off-hint.spec.ts": [
     "app/(app)/[emailAccountId]/mail/NotificationsOffHint.tsx",
