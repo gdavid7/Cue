@@ -216,34 +216,34 @@ function getPrompt({
 
   const writingStylePrompt = trimmedWritingStyle
     ? `<writing_style>
-${trimmedWritingStyle}
+${escapeTags(trimmedWritingStyle)}
 </writing_style>
 `
     : "";
   const learnedWritingStylePrompt = trimmedLearnedWritingStyle
     ? `<learned_writing_style>
-${trimmedLearnedWritingStyle}
+${escapeTags(trimmedLearnedWritingStyle)}
 </learned_writing_style>
 `
     : "";
 
-  return `<source_email_sender>${senderEmail}</source_email_sender>
-<source_email_domain>${senderDomain || "unknown"}</source_email_domain>
+  return `<source_email_sender>${escapeTags(senderEmail)}</source_email_sender>
+<source_email_domain>${escapeTags(senderDomain) || "unknown"}</source_email_domain>
 
 <incoming_email>
-${incomingEmailContent}
+${escapeTags(incomingEmailContent)}
 </incoming_email>
 
 ${
   composeAssistOutcomes
     ? formatComposeAssistOutcomes(composeAssistOutcomes, startingDraftText)
     : `<ai_draft>
-${draftText}
+${escapeTags(draftText)}
 </ai_draft>`
 }
 
 <user_sent>
-${sentText}
+${escapeTags(sentText)}
 </user_sent>
 
 <existing_memories>
@@ -295,7 +295,7 @@ ${escapeTags(outcome.suggestion)}
 </cue_suggestions>`;
 }
 
-// Text the user and Cue wrote can't open or close the prompt's tags.
+// Email text, drafts and style notes can't open or close the prompt's tags.
 function escapeTags(text: string) {
   return text.replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 }

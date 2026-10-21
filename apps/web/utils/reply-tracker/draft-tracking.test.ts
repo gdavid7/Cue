@@ -571,9 +571,9 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
   });
 
   it("logs the reply against Cue's suggestions and learns when the user changed one", async () => {
-    vi.mocked(prisma.composeAssistReply.findFirst).mockResolvedValue(
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("Could you kindly provide your pricing?"),
-    );
+    ]);
     const provider = {
       getDraft: vi.fn(),
       getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
@@ -586,7 +586,7 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
       logger,
     });
 
-    expect(prisma.composeAssistReply.findFirst).toHaveBeenCalledWith(
+    expect(prisma.composeAssistReply.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           emailAccountId: "account-1",
@@ -610,9 +610,9 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
   });
 
   it("logs without learning when the reply sent Cue's suggestion as written", async () => {
-    vi.mocked(prisma.composeAssistReply.findFirst).mockResolvedValue(
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("please include pricing for  seat counts."),
-    );
+    ]);
 
     await trackSentDraftStatus({
       emailAccountId: "account-1",
@@ -628,10 +628,81 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
     expect(saveDraftSendLogReplyMemory).not.toHaveBeenCalled();
   });
 
-  it("does not learn when the reply went to someone other than the sender", async () => {
-    vi.mocked(prisma.composeAssistReply.findFirst).mockResolvedValue(
-      createComposeAssistReply("Could you kindly provide your pricing?"),
+  it("lets the saved suggested reply learn when Cue's suggestions teach nothing", async () => {
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
+      createComposeAssistReply("please include pricing for seat counts."),
+    ]);
+    vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
+      createSuggestedReplyDraft(),
     );
+    vi.mocked(isMeaningfulDraftEdit).mockReturnValue(true);
+    vi.mocked(prisma.draftSendLog.create)
+      .mockResolvedValueOnce({ id: "compose-assist-log" } as any)
+      .mockResolvedValueOnce({ id: "suggested-reply-log" } as any);
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: createSentMessage(),
+      provider: {
+        getDraft: vi.fn().mockResolvedValue(null),
+        getMessage: vi.fn().mockResolvedValue(createSourceMessage()),
+      } as any,
+      logger,
+    });
+
+    expect(saveDraftSendLogReplyMemory).toHaveBeenCalledTimes(1);
+    expect(saveDraftSendLogReplyMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ draftSendLogId: "suggested-reply-log" }),
+    );
+  });
+
+  it("finds the suggestions made for this reply among others in the thread", async () => {
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
+      {
+        ...createComposeAssistReply("Suggestions for another message."),
+        id: "other-reply",
+        messageId: "source-other",
+      },
+      createComposeAssistReply("Could you kindly provide your pricing?"),
+    ]);
+    const getMessage = vi.fn(async (messageId: string) =>
+      messageId === "source-other"
+        ? {
+            ...createSourceMessage(),
+            id: "source-other",
+            headers: {
+              ...createSourceMessage().headers,
+              "message-id": "<source-other@example.com>",
+            },
+          }
+        : createSourceMessage(),
+    );
+
+    await trackSentDraftStatus({
+      emailAccountId: "account-1",
+      message: {
+        ...createSentMessage(),
+        headers: {
+          ...createSentMessage().headers,
+          "in-reply-to": "<source-1@example.com>",
+        },
+      } as ParsedMessage,
+      provider: { getDraft: vi.fn(), getMessage } as any,
+      logger,
+    });
+
+    expect(prisma.draftSendLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        composeAssistReplyId: "compose-assist-reply-1",
+      }),
+    });
+    expect(prisma.draftSendLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not learn when the reply went to someone other than the sender", async () => {
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
+      createComposeAssistReply("Could you kindly provide your pricing?"),
+    ]);
 
     await trackSentDraftStatus({
       emailAccountId: "account-1",
@@ -648,9 +719,9 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
   });
 
   it("learns once, from Cue's suggestions, when the reply started from a saved suggested reply", async () => {
-    vi.mocked(prisma.composeAssistReply.findFirst).mockResolvedValue(
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("Could you kindly provide your pricing?"),
-    );
+    ]);
     vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
       createSuggestedReplyDraft(),
     );
@@ -682,9 +753,9 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
   });
 
   it("ignores Cue's suggestions made for another message in the thread", async () => {
-    vi.mocked(prisma.composeAssistReply.findFirst).mockResolvedValue(
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("Could you kindly provide your pricing?"),
-    );
+    ]);
 
     await trackSentDraftStatus({
       emailAccountId: "account-1",
@@ -707,9 +778,9 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
   });
 
   it("treats a repeated delivery of the same send as already logged", async () => {
-    vi.mocked(prisma.composeAssistReply.findFirst).mockResolvedValue(
+    vi.mocked(prisma.composeAssistReply.findMany).mockResolvedValue([
       createComposeAssistReply("Could you kindly provide your pricing?"),
-    );
+    ]);
     vi.mocked(prisma.suggestedReplyDraft.findFirst).mockResolvedValue(
       createSuggestedReplyDraft(),
     );
@@ -739,7 +810,10 @@ describe("trackSentDraftStatus for Cue's suggestions in the composer", () => {
 });
 
 describe("sentReplyAnswers", () => {
-  const now = new Date("2026-03-17T12:00:00.000Z");
+  // createSentMessage's internalDate.
+  const sentAt = 1_710_000_000_000;
+  const hoursBeforeSend = (hours: number) =>
+    new Date(sentAt - hours * 60 * 60 * 1000);
 
   it("matches the reply to the message its threading headers answer", () => {
     const sentMessage = {
@@ -753,8 +827,7 @@ describe("sentReplyAnswers", () => {
       sentReplyAnswers({
         sentMessage,
         sourceMessage: createSourceMessage(),
-        suggestionsUpdatedAt: new Date("2026-03-10T12:00:00.000Z"),
-        now,
+        suggestionsUpdatedAt: hoursBeforeSend(24 * 5),
       }),
     ).toBe(true);
   });
@@ -763,19 +836,16 @@ describe("sentReplyAnswers", () => {
     const args = {
       sentMessage: createSentMessage(),
       sourceMessage: createSourceMessage(),
-      now,
     };
     expect(
-      sentReplyAnswers({
-        ...args,
-        suggestionsUpdatedAt: new Date("2026-03-17T10:00:00.000Z"),
-      }),
+      sentReplyAnswers({ ...args, suggestionsUpdatedAt: hoursBeforeSend(2) }),
     ).toBe(true);
     expect(
-      sentReplyAnswers({
-        ...args,
-        suggestionsUpdatedAt: new Date("2026-03-16T12:00:00.000Z"),
-      }),
+      sentReplyAnswers({ ...args, suggestionsUpdatedAt: hoursBeforeSend(24) }),
+    ).toBe(false);
+    // Suggestions made after the message went out were for another reply.
+    expect(
+      sentReplyAnswers({ ...args, suggestionsUpdatedAt: hoursBeforeSend(-1) }),
     ).toBe(false);
   });
 
@@ -784,8 +854,7 @@ describe("sentReplyAnswers", () => {
       sentReplyAnswers({
         sentMessage: createSentMessage(),
         sourceMessage: { ...createSourceMessage(), threadId: "thread-2" },
-        suggestionsUpdatedAt: now,
-        now,
+        suggestionsUpdatedAt: hoursBeforeSend(1),
       }),
     ).toBe(false);
   });
@@ -1623,7 +1692,8 @@ function createForwardedSentMessage(): ParsedMessage {
 function createComposeAssistReply(suggestion: string): any {
   return {
     id: "compose-assist-reply-1",
-    updatedAt: new Date(),
+    // An hour before createSentMessage was sent.
+    updatedAt: new Date(1_710_000_000_000 - 60 * 60 * 1000),
     messageId: "source-1",
     outcomes: [
       {

@@ -28,11 +28,12 @@ describe("recordComposeAssistOutcomeAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.limited = false;
+    // The action's auth check selects only these fields.
     prisma.emailAccount.findUnique.mockResolvedValue(
       getMockEmailAccountWithAccount({
         email: "user@example.com",
         userId: "user-1",
-      }),
+      }) as any,
     );
     prisma.composeAssistReply.findFirst.mockResolvedValue(null);
   });

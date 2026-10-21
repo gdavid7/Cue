@@ -5,6 +5,7 @@ import prisma from "@/utils/prisma";
 import { withPrismaRetry } from "@/utils/prisma-retry";
 import { calculateSimilarity } from "@/utils/similarity-score";
 import { isDuplicateError } from "@/utils/prisma-helpers";
+import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
 import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
@@ -38,6 +39,9 @@ const SUGGESTION_MIN_COMPARABLE_LENGTH = 40;
 // How long after the user last used Cue on a reply a send without threading
 // headers still counts as that reply.
 const UNTHREADED_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+// Replies in one thread the user used Cue on but hasn't sent yet.
+const MAX_COMPOSE_ASSIST_CANDIDATES = 3;
 /**
  * Checks if a sent message originated from an AI draft (a rule's draft or a
  * suggested reply the user saved) and logs its similarity.
@@ -63,9 +67,9 @@ export async function trackSentDraftStatus({
   }
 
   // Cue's help in the composer is its own source, alongside any rule draft
-  // or suggested reply the user started from. When it was used, the send
-  // learns once, from what the user did with Cue: a draft's own comparison
-  // would count Cue's wording as the user's edits.
+  // or suggested reply the user started from. Each send learns once: from
+  // what the user did with Cue when that teaches something (with the draft
+  // as its starting point), otherwise from the draft's own comparison.
   let learnFromDraft = true;
   try {
     learnFromDraft = !(await trackSentComposeAssistReply({
@@ -634,7 +638,8 @@ function learnReplyMemoriesAfterResponse({
 /**
  * A reply written with Cue's suggestions in the composer. What the user
  * accepted, changed or discarded, set against what they sent, teaches reply
- * memories. Returns whether the send was logged against Cue's suggestions.
+ * memories. Returns whether this send's learning comes from Cue's
+ * suggestions, so no other source learns from it too.
  */
 async function trackSentComposeAssistReply({
   emailAccountId,
@@ -649,7 +654,7 @@ async function trackSentComposeAssistReply({
   provider: EmailProvider;
   logger: Logger;
 }): Promise<boolean> {
-  const composeAssistReply = await prisma.composeAssistReply.findFirst({
+  const candidates = await prisma.composeAssistReply.findMany({
     where: {
       emailAccountId,
       threadId: message.threadId,
@@ -657,6 +662,7 @@ async function trackSentComposeAssistReply({
       updatedAt: { gt: getReplyMemoryRetentionCutoff() },
     },
     orderBy: { updatedAt: "desc" },
+    take: MAX_COMPOSE_ASSIST_CANDIDATES,
     select: {
       id: true,
       updatedAt: true,
@@ -665,38 +671,53 @@ async function trackSentComposeAssistReply({
       emailAccount: { select: { signature: true } },
     },
   });
-  if (!composeAssistReply) return false;
+
+  // The thread may hold suggestions for other replies; the sent message
+  // belongs to the one whose message it answers.
+  let match:
+    | {
+        composeAssistReply: (typeof candidates)[number];
+        sourceMessage: ParsedMessage;
+      }
+    | undefined;
+  for (const composeAssistReply of candidates) {
+    const sourceMessage = await provider
+      .getMessage(composeAssistReply.messageId)
+      .catch((error) => {
+        logger.warn("Failed to load the message Cue's suggestions were for", {
+          error,
+        });
+        return null;
+      });
+    if (
+      sourceMessage &&
+      sentReplyAnswers({
+        sentMessage: message,
+        sourceMessage,
+        suggestionsUpdatedAt: composeAssistReply.updatedAt,
+      })
+    ) {
+      match = { composeAssistReply, sourceMessage };
+      break;
+    }
+  }
+  if (!match) return false;
+  const { composeAssistReply, sourceMessage } = match;
   const outcomes = parseComposeAssistOutcomes(composeAssistReply.outcomes);
   if (!outcomes.length) return false;
 
-  const {
-    sourceMessage,
-    sentMessageRepliesToSource,
-    sentText,
-    draftSendLogData,
-  } = await compareSentReplyWithDraft({
-    draftId: null,
-    draftText: getAcceptedSuggestionsText(outcomes),
-    sourceMessageId: composeAssistReply.messageId,
-    accountSignature: composeAssistReply.emailAccount.signature,
-    sentMessageId,
-    message,
-    provider,
-    logger,
-  });
-  if (
-    !sourceMessage ||
-    !sentReplyAnswers({
-      sentMessage: message,
+  const { sentMessageRepliesToSource, sentText, draftSendLogData } =
+    await compareSentReplyWithDraft({
+      draftId: null,
+      draftText: getAcceptedSuggestionsText(outcomes),
+      sourceMessageId: composeAssistReply.messageId,
       sourceMessage,
-      suggestionsUpdatedAt: composeAssistReply.updatedAt,
-    })
-  ) {
-    logger.info("Sent message is not the reply Cue's suggestions were for", {
-      composeAssistReplyId: composeAssistReply.id,
+      accountSignature: composeAssistReply.emailAccount.signature,
+      sentMessageId,
+      message,
+      provider,
+      logger,
     });
-    return false;
-  }
 
   let draftSendLog: { id: string };
   try {
@@ -711,7 +732,8 @@ async function trackSentComposeAssistReply({
       { logger },
     );
   } catch (error) {
-    // A repeated delivery of the same send found the reply already logged.
+    // A repeated delivery of the same send, which the first delivery
+    // already logged and learned from.
     if (isDuplicateError(error)) {
       logger.warn("Cue's suggestions in this reply were already logged", {
         composeAssistReplyId: composeAssistReply.id,
@@ -726,10 +748,10 @@ async function trackSentComposeAssistReply({
     sentMessageRepliesToSource,
   });
 
-  if (sentMessageRepliesToSource === false || !sentText) return true;
+  if (sentMessageRepliesToSource === false || !sentText) return false;
   const replyMemorySentText = sentText.slice(0, 4000);
   if (!hasLearnableComposeAssistOutcome(outcomes, replyMemorySentText))
-    return true;
+    return false;
 
   learnReplyMemoriesAfterResponse({
     emailAccountId,
@@ -984,6 +1006,7 @@ async function compareSentReplyWithDraft({
   draftId,
   draftText,
   sourceMessageId,
+  sourceMessage: loadedSourceMessage,
   accountSignature,
   sentMessageId,
   message,
@@ -994,6 +1017,8 @@ async function compareSentReplyWithDraft({
   draftId: string | null;
   draftText: string | null;
   sourceMessageId: string;
+  /** Already loaded by the caller; otherwise fetched here. */
+  sourceMessage?: ParsedMessage;
   accountSignature: string | null | undefined;
   sentMessageId: string;
   message: ParsedMessage;
@@ -1002,13 +1027,14 @@ async function compareSentReplyWithDraft({
 }) {
   const [draft, sourceMessage] = await Promise.all([
     draftId ? provider.getDraft(draftId) : null,
-    provider.getMessage(sourceMessageId).catch((error) => {
-      logger.warn("Failed to load source message for sent draft tracking", {
-        error,
-        draftId,
-      });
-      return null;
-    }),
+    loadedSourceMessage ??
+      provider.getMessage(sourceMessageId).catch((error) => {
+        logger.warn("Failed to load source message for sent draft tracking", {
+          error,
+          draftId,
+        });
+        return null;
+      }),
   ]);
 
   // Pass full message to properly handle Outlook HTML content
@@ -1132,12 +1158,10 @@ export function sentReplyAnswers({
   sentMessage,
   sourceMessage,
   suggestionsUpdatedAt,
-  now = new Date(),
 }: {
   sentMessage: ParsedMessage;
   sourceMessage: ParsedMessage;
   suggestionsUpdatedAt: Date;
-  now?: Date;
 }) {
   if (sourceMessage.threadId !== sentMessage.threadId) return false;
   const sourceHeaderId = sourceMessage.headers["message-id"]?.trim();
@@ -1148,7 +1172,7 @@ export function sentReplyAnswers({
     .filter(Boolean)
     .join(" ");
   if (sourceHeaderId && threading) return threading.includes(sourceHeaderId);
-  return (
-    now.getTime() - suggestionsUpdatedAt.getTime() <= UNTHREADED_REPLY_WINDOW_MS
-  );
+  // The provider's clock and ours can disagree by a little.
+  const gap = getMessageTimestamp(sentMessage) - suggestionsUpdatedAt.getTime();
+  return gap >= -CLOCK_SKEW_MS && gap <= UNTHREADED_REPLY_WINDOW_MS;
 }

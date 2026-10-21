@@ -24,7 +24,8 @@ ALTER TABLE "DraftSendLog" ADD COLUMN "composeAssistReplyId" TEXT;
 CREATE UNIQUE INDEX "DraftSendLog_composeAssistReplyId_key" ON "DraftSendLog"("composeAssistReplyId");
 
 -- AddForeignKey
-ALTER TABLE "DraftSendLog" ADD CONSTRAINT "DraftSendLog_composeAssistReplyId_fkey" FOREIGN KEY ("composeAssistReplyId") REFERENCES "ComposeAssistReply"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- NOT VALID like the check below; the next migration validates both.
+ALTER TABLE "DraftSendLog" ADD CONSTRAINT "DraftSendLog_composeAssistReplyId_fkey" FOREIGN KEY ("composeAssistReplyId") REFERENCES "ComposeAssistReply"("id") ON DELETE CASCADE ON UPDATE CASCADE NOT VALID;
 
 -- A send log compares the sent reply against exactly one draft source.
 ALTER TABLE "DraftSendLog" DROP CONSTRAINT "DraftSendLog_one_draft_source_check";

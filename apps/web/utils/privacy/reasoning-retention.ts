@@ -135,8 +135,7 @@ export async function enforceDraftSentTextRetention({
       // from; only the text the user and Cue wrote goes.
       prisma.composeAssistReply.updateMany({
         where: {
-          createdAt: { lt: cutoff },
-          draftSendLog: { isNot: null },
+          draftSendLog: { is: { createdAt: { lt: cutoff } } },
           NOT: { outcomes: { equals: [] } },
         },
         data: { outcomes: [] },

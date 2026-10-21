@@ -1,4 +1,5 @@
 import {
+  DraftEmailStatus,
   ReplyMemoryKind,
   ReplyMemoryScopeType,
 } from "@/generated/prisma/enums";
@@ -40,6 +41,8 @@ const PROMPTABLE_REPLY_MEMORY_KINDS = [
 const MIN_PREFERENCE_EVIDENCE_FOR_LEARNED_STYLE = 10;
 const PREFERENCE_EVIDENCE_PER_LEARNED_STYLE_REFRESH = 5;
 const MAX_PREFERENCE_EVIDENCE_FOR_LEARNED_STYLE = 25;
+// The same bound the sent text has.
+const MAX_STARTING_DRAFT_TEXT = 4000;
 
 export async function saveDraftSendLogReplyMemory({
   draftSendLogId,
@@ -317,10 +320,16 @@ async function processReplyMemoryDraftSendLog({
   logger: Logger;
 }) {
   // Overlapping syncs (two sends close together) each pick up the same log;
-  // only the one that claims it learns from it.
+  // only the one that claims this attempt learns from it. The claim spends an
+  // attempt rather than marking the log done, so work cut off midway (a
+  // timeout, a deploy) is retried by a later sync.
   const claim = await prisma.draftSendLog.updateMany({
-    where: { id: draftSendLog.id, replyMemoryProcessedAt: null },
-    data: { replyMemoryProcessedAt: new Date() },
+    where: {
+      id: draftSendLog.id,
+      replyMemoryProcessedAt: null,
+      replyMemoryAttemptCount: draftSendLog.replyMemoryAttemptCount,
+    },
+    data: { replyMemoryAttemptCount: { increment: 1 } },
   });
   if (claim.count !== 1) return;
 
@@ -814,34 +823,32 @@ async function markDraftSendLogReplyMemoryProcessed(
   });
 }
 
+// The attempt was already counted when it was claimed; a failed one is
+// retried by a later sync until the attempts run out.
 async function recordDraftSendLogReplyMemoryFailure(
   draftSendLog: Pick<
     DraftSendLogReplyMemoryPayload,
     "id" | "replyMemoryAttemptCount"
   >,
 ) {
-  const nextAttemptCount = draftSendLog.replyMemoryAttemptCount + 1;
+  const attemptCount = draftSendLog.replyMemoryAttemptCount + 1;
+  if (attemptCount < MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS) return;
 
   await prisma.draftSendLog.update({
     where: { id: draftSendLog.id },
-    data:
-      nextAttemptCount >= MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS
-        ? {
-            replyMemoryAttemptCount: { increment: 1 },
-            replyMemoryProcessedAt: new Date(),
-            replyMemorySentText: null,
-          }
-        : {
-            replyMemoryAttemptCount: { increment: 1 },
-            // Releases the claim so a later sync tries again.
-            replyMemoryProcessedAt: null,
-          },
+    data: {
+      replyMemoryProcessedAt: new Date(),
+      replyMemorySentText: null,
+    },
   });
 }
 
 /**
  * The rule draft or saved suggested reply a reply written with Cue started
- * from, logged against the same send.
+ * from, logged against the same send. Only one the user actually used: a
+ * rule draft counted as sent, or a saved suggested reply whose mailbox draft
+ * was gone when the reply went. A suggestion left waiting was never the
+ * reply's starting point.
  */
 async function getStartingDraftText({
   emailAccountId,
@@ -857,20 +864,31 @@ async function getStartingDraftText({
       sentMessageId,
       id: { not: draftSendLogId },
       OR: [
-        { executedAction: { executedRule: { emailAccountId } } },
-        { suggestedReplyDraft: { emailAccountId } },
+        {
+          executedAction: {
+            executedRule: { emailAccountId },
+            draftStatus: DraftEmailStatus.LIKELY_SENT,
+          },
+        },
+        {
+          suggestedReplyDraft: { emailAccountId },
+          similarityMetadata: {
+            path: ["lifecycle", "draftExists"],
+            equals: false,
+          },
+        },
       ],
     },
+    orderBy: { createdAt: "desc" },
     select: {
       executedAction: { select: { content: true } },
       suggestedReplyDraft: { select: { content: true } },
     },
   });
-  return (
+  const text =
     startingDraft?.executedAction?.content ??
-    startingDraft?.suggestedReplyDraft?.content ??
-    null
-  );
+    startingDraft?.suggestedReplyDraft?.content;
+  return text ? text.slice(0, MAX_STARTING_DRAFT_TEXT) : null;
 }
 
 const draftSendLogReplyMemoryInclude = {

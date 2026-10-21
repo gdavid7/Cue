@@ -650,10 +650,28 @@ describe("reply-memory", () => {
     );
     expect(prisma.draftSendLog.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({
+        where: {
           sentMessageId: "sent-1",
           id: { not: "draft-send-log-1" },
-        }),
+          // Only a draft the user used: a rule draft counted as sent, or a
+          // saved suggested reply whose mailbox draft went with the send.
+          OR: [
+            {
+              executedAction: {
+                executedRule: { emailAccountId: "account-1" },
+                draftStatus: "LIKELY_SENT",
+              },
+            },
+            {
+              suggestedReplyDraft: { emailAccountId: "account-1" },
+              similarityMetadata: {
+                path: ["lifecycle", "draftExists"],
+                equals: false,
+              },
+            },
+          ],
+        },
+        orderBy: { createdAt: "desc" },
       }),
     );
     expect(prisma.replyMemorySource.upsert).toHaveBeenCalledWith(
@@ -664,6 +682,47 @@ describe("reply-memory", () => {
         },
       }),
     );
+  });
+
+  it("gives no starting draft when the reply didn't use one", async () => {
+    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({ count: 1 });
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      {
+        ...createDraftSendLog({ sourceMessageId: "source-3" }),
+        executedAction: null,
+        suggestedReplyDraft: null,
+        composeAssistReply: {
+          id: "compose-assist-reply-1",
+          messageId: "source-3",
+          emailAccountId: "account-1",
+          outcomes: [
+            {
+              outcome: "discarded",
+              request: "politely decline",
+              refinements: [],
+              original: "",
+              suggestion: "We are so sorry, but we must decline.",
+            },
+          ],
+        },
+      },
+    ] as any);
+    // A rule's suggestion left waiting is logged for the send too, but as
+    // unused, so the lookup for a used starting draft finds nothing.
+    vi.mocked(prisma.draftSendLog.findFirst).mockResolvedValue(null);
+    vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.draftSendLog.update).mockResolvedValue({} as any);
+    mockGenerateObject.mockResolvedValue({ object: { memories: [] } });
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: createReplyMemoryProvider() as any,
+      logger,
+    });
+
+    const { prompt } = mockGenerateObject.mock.calls[0][0];
+    expect(prompt).toContain("<cue_suggestions>");
+    expect(prompt).not.toContain("<starting_draft>");
   });
 
   it("leaves a log to the sync that claimed it first", async () => {
@@ -679,10 +738,7 @@ describe("reply-memory", () => {
       logger,
     });
 
-    expect(prisma.draftSendLog.updateMany).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1", replyMemoryProcessedAt: null },
-      data: { replyMemoryProcessedAt: expect.any(Date) },
-    });
+    expectAttemptClaimed(0);
     expect(provider.getMessage).not.toHaveBeenCalled();
     expect(mockGenerateObject).not.toHaveBeenCalled();
   });
@@ -1149,6 +1205,53 @@ Can you send pricing?`,
     ]);
   });
 
+  it("retries a log whose earlier attempt was cut off, and gives up after the last one", async () => {
+    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({ count: 1 });
+    // A sync claimed attempt one, then the function was stopped midway: the
+    // log is still unprocessed, with that attempt spent.
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      createDraftSendLog({ replyMemoryAttemptCount: 1 }),
+    ] as any);
+    vi.mocked(prisma.replyMemory.findMany).mockResolvedValue([]);
+    vi.mocked(prisma.draftSendLog.update).mockResolvedValue({} as any);
+    mockGenerateObject.mockResolvedValue({ object: { memories: [] } });
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: createReplyMemoryProvider() as any,
+      logger,
+    });
+
+    expectAttemptClaimed(1);
+    expect(mockGenerateObject).toHaveBeenCalledTimes(1);
+    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
+      where: { id: "draft-send-log-1" },
+      data: { replyMemoryProcessedAt: expect.any(Date) },
+    });
+
+    vi.clearAllMocks();
+    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({ count: 1 });
+    vi.mocked(prisma.draftSendLog.findMany).mockResolvedValue([
+      createDraftSendLog({ replyMemoryAttemptCount: 2 }),
+    ] as any);
+    vi.mocked(prisma.draftSendLog.update).mockResolvedValue({} as any);
+
+    await syncReplyMemoriesFromDraftSendLogs({
+      emailAccountId: "account-1",
+      provider: { getMessage: vi.fn().mockResolvedValue(null) } as any,
+      logger,
+    });
+
+    expectAttemptClaimed(2);
+    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
+      where: { id: "draft-send-log-1" },
+      data: {
+        replyMemoryProcessedAt: expect.any(Date),
+        replyMemorySentText: null,
+      },
+    });
+  });
+
   it("increments retry state when the source email cannot be loaded", async () => {
     vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
       count: 1,
@@ -1172,13 +1275,9 @@ Can you send pricing?`,
 
     expect(mockGenerateObject).not.toHaveBeenCalled();
     expect(prisma.replyMemory.upsert).not.toHaveBeenCalled();
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: {
-        replyMemoryAttemptCount: { increment: 1 },
-        replyMemoryProcessedAt: null,
-      },
-    });
+    expectAttemptClaimed(0);
+    // Not finished: a later sync tries again.
+    expect(prisma.draftSendLog.update).not.toHaveBeenCalled();
   });
 
   it("increments retry state when non-source reply memory processing fails", async () => {
@@ -1216,13 +1315,9 @@ Can you send pricing?`,
       logger,
     });
 
-    expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
-      where: { id: "draft-send-log-1" },
-      data: {
-        replyMemoryAttemptCount: { increment: 1 },
-        replyMemoryProcessedAt: null,
-      },
-    });
+    expectAttemptClaimed(0);
+    // Not finished: a later sync tries again.
+    expect(prisma.draftSendLog.update).not.toHaveBeenCalled();
   });
 
   it("stops a failing draft send log from starving newer pending rows", async () => {
@@ -1259,9 +1354,19 @@ Can you send pricing?`,
       }),
     ];
 
-    vi.mocked(prisma.draftSendLog.updateMany).mockResolvedValue({
-      count: 1,
-    });
+    vi.mocked(prisma.draftSendLog.updateMany).mockImplementation(
+      async ({ where, data }: any) => {
+        const log = draftSendLogs.find((entry) => entry.id === where.id);
+        if (
+          !log ||
+          log.replyMemoryProcessedAt ||
+          log.replyMemoryAttemptCount !== where.replyMemoryAttemptCount
+        )
+          return { count: 0 };
+        log.replyMemoryAttemptCount += data.replyMemoryAttemptCount.increment;
+        return { count: 1 };
+      },
+    );
     vi.mocked(prisma.draftSendLog.findMany).mockImplementation(
       async () =>
         draftSendLogs
@@ -1276,7 +1381,9 @@ Can you send pricing?`,
               left.replyMemoryAttemptCount - right.replyMemoryAttemptCount ||
               left.createdAt.getTime() - right.createdAt.getTime(),
           )
-          .slice(0, 5) as any,
+          .slice(0, 5)
+          // Rows as read, not the stored ones.
+          .map((log) => ({ ...log })) as any,
     );
     vi.mocked(prisma.draftSendLog.update).mockImplementation(
       async ({ where, data }: any) => {
@@ -1354,7 +1461,6 @@ Can you send pricing?`,
     expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
       where: { id: "draft-send-log-1" },
       data: {
-        replyMemoryAttemptCount: { increment: 1 },
         replyMemoryProcessedAt: expect.any(Date),
         replyMemorySentText: null,
       },
@@ -1400,7 +1506,6 @@ Can you send pricing?`,
     expect(prisma.draftSendLog.update).toHaveBeenCalledWith({
       where: { id: "draft-send-log-1" },
       data: {
-        replyMemoryAttemptCount: { increment: 1 },
         replyMemoryProcessedAt: expect.any(Date),
         replyMemorySentText: null,
       },
@@ -2147,4 +2252,15 @@ function existingReplyMemoryDecision(matchingExistingMemoryId: string) {
     matchingExistingMemoryId,
     newMemory: null,
   };
+}
+
+function expectAttemptClaimed(attemptCount: number) {
+  expect(prisma.draftSendLog.updateMany).toHaveBeenCalledWith({
+    where: {
+      id: "draft-send-log-1",
+      replyMemoryProcessedAt: null,
+      replyMemoryAttemptCount: attemptCount,
+    },
+    data: { replyMemoryAttemptCount: { increment: 1 } },
+  });
 }

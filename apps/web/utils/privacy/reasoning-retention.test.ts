@@ -98,8 +98,7 @@ describe("enforceReasoningRetention", () => {
     });
     expect(prisma.composeAssistReply.updateMany).toHaveBeenCalledWith({
       where: {
-        createdAt: { lt: subDays(now, 14) },
-        draftSendLog: { isNot: null },
+        draftSendLog: { is: { createdAt: { lt: subDays(now, 14) } } },
         NOT: { outcomes: { equals: [] } },
       },
       data: { outcomes: [] },
