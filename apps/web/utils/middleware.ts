@@ -101,6 +101,14 @@ export interface MiddlewareOptions {
    * quota waits then give up in time to answer before the platform kills it.
    */
   maxDuration?: number;
+  /**
+   * A POST that only reads, such as mail sync. Like a GET it trusts the
+   * session cookie cache (up to a minute stale after revocation) instead of
+   * checking the session in the database. Side effects such a route may have
+   * must be bookkeeping the caller cannot steer, like the debounced Gmail
+   * catch-up nudge mail/v1 changes schedules.
+   */
+  readOnly?: boolean;
   requestTiming?: {
     runningWarnAfterMs?: number;
     slowWarnAfterMs?: number;
@@ -420,19 +428,24 @@ function withMiddleware<T extends NextRequest>(
   };
 }
 
-function authMiddleware(req: NextRequest) {
-  return authenticate(req, getAuthLogContext(req));
+function authMiddleware(req: NextRequest, options?: MiddlewareOptions) {
+  return authenticate(req, getAuthLogContext(req), {
+    disableCookieCache: mayChangeState(req, options),
+  });
 }
 
 async function authenticate(
   req: NextRequest,
   authLogContext: AuthLogContext,
+  { disableCookieCache }: { disableCookieCache: boolean },
 ): Promise<RequestWithAuth | Response> {
   const baseLogger = getLogger(req);
 
   let session: Awaited<ReturnType<typeof auth>>;
   try {
-    session = await timeRequestDependency("auth", () => auth(req.headers));
+    session = await timeRequestDependency("auth", () =>
+      auth(req.headers, { disableCookieCache }),
+    );
   } catch (error) {
     baseLogger.warn("Auth middleware failed", {
       ...authLogContext,
@@ -513,6 +526,13 @@ function getAuthLogContext(req: NextRequest) {
   };
 }
 
+// A revoked session's cookie cache still passes until it expires, so a request
+// that can change something checks the session in the database instead.
+function mayChangeState(req: NextRequest, options?: MiddlewareOptions) {
+  if (options?.readOnly) return false;
+  return !["GET", "HEAD", "OPTIONS"].includes(req.method);
+}
+
 // False only when the request offers nothing a session could come from, so
 // its 401 is certain before the session lookup answers.
 function mayCarrySession({ cookieNames, hasAuthorization }: AuthLogContext) {
@@ -555,7 +575,9 @@ async function resolveEmailAccount(
       ? startEmailAccountOwnershipCheck(emailAccountId)
       : null;
 
-  const authReq = await authenticate(req, authLogContext);
+  const authReq = await authenticate(req, authLogContext, {
+    disableCookieCache: mayChangeState(req, options),
+  });
   if (authReq instanceof Response) return authReq;
 
   const userId = authReq.auth.userId;
@@ -698,8 +720,12 @@ async function resolveEmailAccount(
 
 async function emailProviderMiddleware(
   req: NextRequest,
+  options?: MiddlewareOptions,
 ): Promise<RequestWithEmailProvider | Response> {
-  const resolved = await resolveEmailAccount(req);
+  // allowOrgAdmins never applied to provider access; only readOnly does.
+  const resolved = await resolveEmailAccount(req, {
+    readOnly: options?.readOnly,
+  });
   if (resolved instanceof Response) return resolved;
 
   const emailAccountReq = resolved.request;
@@ -760,7 +786,9 @@ async function emailProviderMiddleware(
 async function adminMiddleware(
   req: NextRequest,
 ): Promise<RequestWithAuth | Response> {
-  const authReq = await authMiddleware(req);
+  const authReq = await authenticate(req, getAuthLogContext(req), {
+    disableCookieCache: true,
+  });
   if (authReq instanceof Response) return authReq;
 
   const user = await prisma.user.findUnique({
@@ -816,13 +844,13 @@ export function withError(
 export function withAuth(
   scope: string,
   handler: NextHandler<RequestWithAuth>,
-  options?: Pick<MiddlewareOptions, "maxDuration">,
+  options?: Pick<MiddlewareOptions, "maxDuration" | "readOnly">,
 ): NextHandler;
 export function withAuth(handler: NextHandler<RequestWithAuth>): NextHandler;
 export function withAuth(
   scopeOrHandler: string | NextHandler<RequestWithAuth>,
   handler?: NextHandler<RequestWithAuth>,
-  options?: Pick<MiddlewareOptions, "maxDuration">,
+  options?: Pick<MiddlewareOptions, "maxDuration" | "readOnly">,
 ): NextHandler {
   if (typeof scopeOrHandler === "string") {
     return withMiddleware(handler!, authMiddleware, options, scopeOrHandler);

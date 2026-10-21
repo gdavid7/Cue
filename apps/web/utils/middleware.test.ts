@@ -1321,6 +1321,91 @@ describe("Middleware", () => {
       });
     });
   });
+
+  // A revoked session's cache cookie stays readable until it expires; requests
+  // that change something check the database so revocation applies at once.
+  describe("session cookie cache", () => {
+    const mockUserId = "user-123";
+    const mockAccountId = "acc-456";
+    const lastAuthOptions = () => mockAuth.mock.lastCall?.[1];
+
+    beforeEach(() => {
+      mockAuth.mockResolvedValue({ user: { id: mockUserId } } as any);
+      mockOwnedAccount(mockUserId, "test@example.com");
+      mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
+    });
+
+    const ok = async () => NextResponse.json({ ok: true });
+
+    it.each([
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+    ])("checks the database for a %s", async (method) => {
+      const request = createMockRequest(method, "http://localhost/api/x", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+
+      await withAuth("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+      await withEmailAccount("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+      await withEmailProvider("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+    });
+
+    it("trusts the cookie cache for reads", async () => {
+      const request = createMockRequest("GET", "http://localhost/api/x", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+
+      await withEmailProvider("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: false });
+    });
+
+    it("trusts the cookie cache for a read sent as a POST that opts in", async () => {
+      const request = createMockRequest("POST", "http://localhost/api/x", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+
+      await withEmailProvider("x", ok, { readOnly: true })(
+        request,
+        mockContext,
+      );
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: false });
+    });
+
+    it("checks the database for every admin request", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        email: "admin@example.com",
+      } as any);
+      mockIsAdmin.mockReturnValue(true);
+
+      await withAdmin("admin/x", ok)(
+        createMockRequest("GET", "http://localhost/api/admin/x"),
+        mockContext,
+      );
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+    });
+
+    it("rejects a session the database no longer holds", async () => {
+      mockAuth.mockImplementation(async (_headers, options) =>
+        options?.disableCookieCache
+          ? null
+          : ({ user: { id: mockUserId } } as any),
+      );
+      const handler = vi.fn(ok);
+
+      const response = await withAuth("x", handler)(
+        createMockRequest("DELETE", "http://localhost/api/x"),
+        mockContext,
+      );
+
+      expect(response.status).toBe(401);
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
 });
 
 function createMockRequest(

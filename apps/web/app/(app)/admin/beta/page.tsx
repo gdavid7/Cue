@@ -25,7 +25,7 @@ const CHECKLIST_STATUS_LABELS = {
 } as const;
 
 export default async function AdminBetaTestersPage() {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
 
   if (!isAdmin({ email: session?.user.email })) {
     return (

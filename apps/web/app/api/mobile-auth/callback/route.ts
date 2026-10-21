@@ -70,7 +70,9 @@ export const GET = withError("mobile-auth/callback", async (request) => {
     );
   }
 
-  const session = await auth(request.headers);
+  const session = await auth(request.headers, {
+    disableCookieCache: true,
+  });
   const userId = session?.user?.id;
   if (!userId || !session.session.token) {
     logger.warn("Mobile auth callback rejected", {
