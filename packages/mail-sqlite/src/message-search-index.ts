@@ -12,10 +12,9 @@ import {
 const BACKLOG_BATCH_ROWS = 100;
 
 // contentless_delete (SQLite 3.43+) lets rows be replaced and removed by rowid
-// without the index keeping the text it tokenized. The porter stemmer folds
-// a word's endings on both the indexed text and the query, so "invoices"
-// finds "invoice"; it leaves words it has no rule for, as in most languages
-// and every script without spaces, as unicode61 tokenized them.
+// without the index keeping the text it tokenized. Words are indexed as
+// written, not stemmed, so a prefix typed past a word's stem still matches;
+// the query adds word forms instead (searchMatchQuery).
 const MESSAGE_FTS_SQL = `
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
   subject,
@@ -25,14 +24,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
   attachments,
   content = '',
   contentless_delete = 1,
-  tokenize = 'porter unicode61'
+  tokenize = 'unicode61'
 );
 `;
 
 // Rebuilds the index empty whenever what it stores changes: 0006 dropped the
 // index's own copy of every message's text, 0007 replaced raw HTML bodies
 // with their visible text and split unspaced scripts into characters, 0012
-// stemmed words, joined hyphenated compounds, and added attachment names.
+// joined hyphenated compounds and added attachment names.
 // Dropping is fast; indexSearchBacklog re-adds rows in engine-paced batches
 // so opening the mailbox never waits on a full rebuild.
 export async function migrateMessageSearchIndex(tx: SqlTransaction) {

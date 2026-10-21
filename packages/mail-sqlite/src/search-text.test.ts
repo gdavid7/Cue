@@ -49,15 +49,32 @@ describe("htmlToSearchText", () => {
 
 describe("searchMatchQuery", () => {
   it("ANDs each term as a quoted prefix token", () => {
-    expect(searchMatchQuery("quarterly invoice inv", "term")).toBe(
-      '"quarterly"* "invoice"* "inv"*',
+    expect(searchMatchQuery("quarterly report inv", "term")).toBe(
+      '"quarterly"* "report"* "inv"*',
     );
   });
 
-  it("also matches two words or a hyphenated term written as one word", () => {
-    expect(searchMatchQuery("wi fi", "term")).toBe('("wi"* "fi"*) OR "wifi"*');
+  it("ANDs two words and also matches them as one exact word", () => {
+    expect(searchMatchQuery("quarterly inv", "term")).toBe(
+      '("quarterly"* "inv"*) OR "quarterlyinv"',
+    );
+    expect(searchMatchQuery("wi fi", "term")).toBe('("wi"* "fi"*) OR "wifi"');
+  });
+
+  it("matches a word's stem as a prefix when it drops a short ending", () => {
+    expect(searchMatchQuery("invoices shipping", "term")).toBe(
+      '("invoic"* "ship"*) OR "invoicesshipping"',
+    );
+    // A stem that drops a long derivation, or isn't a prefix of the word,
+    // and words outside plain Latin letters stay as typed.
+    expect(searchMatchQuery("organization happy Häuser 請求", "term")).toBe(
+      '"organization"* "happy"* "Häuser"* "請 求"*',
+    );
+  });
+
+  it("also matches a hyphenated term written as one word", () => {
     expect(searchMatchQuery("wi-fi setup guide", "term")).toBe(
-      '("wi-fi"* OR "wifi"*) "setup"* "guide"*',
+      '("wi-fi"* OR "wifi"*) "setup"* "guid"*',
     );
     expect(searchMatchQuery("wi-fi", "phrase")).toBe('"wi-fi"*');
   });
@@ -75,20 +92,20 @@ describe("searchMatchQuery", () => {
   });
 
   it("matches a single character as a whole word", () => {
-    expect(searchMatchQuery("a invoice due", "term")).toBe(
-      '"a" "invoice"* "due"*',
+    expect(searchMatchQuery("a report due", "term")).toBe(
+      '"a" "report"* "due"*',
     );
   });
 
   it("splits scripts written without spaces into a character phrase", () => {
-    expect(searchMatchQuery("請求書 invoice", "term")).toBe(
-      '"請 求 書"* "invoice"*',
+    expect(searchMatchQuery("請求書 report", "term")).toBe(
+      '"請 求 書"* "report"*',
     );
   });
 
   it("drops terms with nothing to search for", () => {
-    expect(searchMatchQuery("invoice ---", "term")).toBe('"invoice"*');
-    expect(searchMatchQuery("... invoice ---", "term")).toBe('"invoice"*');
+    expect(searchMatchQuery("report ---", "term")).toBe('"report"*');
+    expect(searchMatchQuery("... report ---", "term")).toBe('"report"*');
     expect(searchMatchQuery("... ---", "term")).toBeNull();
     expect(searchMatchQuery('"*"', "phrase")).toBeNull();
   });

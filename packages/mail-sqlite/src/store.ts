@@ -3463,6 +3463,7 @@ async function insertMessageContent(
     html: body.html,
     text: storedTextPart(body.html, body.text),
   };
+  const attachmentsJson = JSON.stringify(body.attachments ?? []);
   await tx.execute(
     `INSERT INTO message_content(account_id, message_id, version, html, text, attachments_json, is_meeting_invitation)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -3476,7 +3477,7 @@ async function insertMessageContent(
       body.version,
       await encodeMessageBody(codec, stored.html),
       await encodeMessageBody(codec, stored.text),
-      JSON.stringify(body.attachments ?? []),
+      attachmentsJson,
       body.isMeetingInvitation ? 1 : 0,
     ],
   );
@@ -3484,7 +3485,7 @@ async function insertMessageContent(
   // produces the same search row.
   await indexMessageContent(tx, body.key, {
     ...stored,
-    attachments: body.attachments ?? [],
+    attachments: parseStoredAttachments(attachmentsJson),
   });
 }
 

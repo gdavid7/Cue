@@ -51,7 +51,8 @@ const VARIANT_MESSAGES = [
   {
     id: "power",
     subject: "Electricity bill",
-    text: "Your monthly invoices are ready",
+    from: "Dana Hastings <billing@power.example>",
+    text: "Your monthly invoices are ready and shipping is free",
     attachments: [],
   },
   {
@@ -314,6 +315,18 @@ describe("word variants and attachments", () => {
     expect(await search(store, text("subject", "factura"))).toEqual([
       "factura",
     ]);
+    expect(await search(store, text("any", "shipped"))).toEqual(["power"]);
+    await close();
+  });
+
+  it("matches a word or name typed past its stem", async () => {
+    const { store, close } = await variantMailbox();
+
+    for (const value of ["electri", "electrici", "electricit", "shipp"]) {
+      expect(await search(store, text("any", value))).toEqual(["power"]);
+    }
+    expect(await search(store, text("any", "hasti"))).toEqual(["power"]);
+    expect(await search(store, text("any", "hastings"))).toEqual(["power"]);
     await close();
   });
 
@@ -411,7 +424,7 @@ async function variantMailbox(): Promise<{
           {
             id: message.id,
             subject: message.subject,
-            from: "sender@example.com",
+            from: ("from" in message && message.from) || "sender@example.com",
             to: ["me@example.com"],
             read: true,
           },

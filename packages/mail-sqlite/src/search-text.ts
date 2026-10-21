@@ -1,4 +1,5 @@
 import type { MessageAttachmentDescriptor } from "@inboxzero/mail-core/messages";
+import { stemmer } from "stemmer";
 
 // Text written to and matched against message_fts. The index and the query
 // must be prepared the same way, so both sides go through this module.
@@ -52,9 +53,10 @@ export function searchableAttachments(
 // Builds an FTS5 query where each term, or the whole phrase, is one quoted
 // string: quoting makes FTS5 read operators, column filters, and punctuation
 // as plain text, and the trailing * matches words as they are being typed.
-// A hyphenated term, or two words, also match written as one word, the way
-// a joined compound is indexed. Resolves null when nothing in the input can
-// match an indexed token.
+// A term also matches other forms of its word (see stemPrefix), a hyphenated
+// term also matches written as one word, the way a joined compound is
+// indexed, and two words also match as that one whole word. Resolves null
+// when nothing in the input can match an indexed token.
 export function searchMatchQuery(
   value: string,
   match: "term" | "phrase",
@@ -65,15 +67,39 @@ export function searchMatchQuery(
   if (!parts.length) return null;
   if (match === "phrase") return quoteTerm(parts[0]);
   const terms = parts.map((part) => {
-    const quoted = quoteTerm(part);
     const joined = part.replace(HYPHENS, "");
-    return isJoinable(part) && joined !== part
-      ? `(${quoted} OR ${quoteTerm(joined)})`
-      : quoted;
+    const forms = [
+      stemPrefix(part) ?? quoteTerm(part),
+      ...(isJoinable(part) && joined !== part ? [quoteTerm(joined)] : []),
+    ];
+    return forms.length > 1 ? `(${forms.join(" OR ")})` : forms[0];
   });
-  if (parts.length === 2 && parts.every(isJoinable))
-    return `(${terms.join(" ")}) OR ${quoteTerm(parts.join("").replace(HYPHENS, ""))}`;
+  if (parts.length === 2 && parts.every(isJoinable)) {
+    const whole = parts.join("").replace(HYPHENS, "").replaceAll('"', "");
+    return `(${terms.join(" ")}) OR "${whole}"`;
+  }
   return terms.join(" ");
+}
+
+// The index keeps words as written, so the query matches the word's stem as
+// a prefix, which also covers the word as typed: "invoices" also finds
+// "invoice", "shipping" finds "shipped". The stemmer's
+// rules are English suffixes, which also fold plurals in other languages
+// written in plain Latin letters ("facturas"); words with other letters are
+// left as typed. Only a short ending is dropped, so a long derivation
+// ("organization" to "organ") doesn't widen into unrelated words.
+function stemPrefix(part: string): string | null {
+  if (!PLAIN_LATIN_WORD.test(part)) return null;
+  const word = part.toLowerCase();
+  const stem = stemmer(word);
+  if (
+    stem === word ||
+    !word.startsWith(stem) ||
+    stem.length < MIN_STEM_LENGTH ||
+    word.length - stem.length > MAX_STEMMED_ENDING
+  )
+    return null;
+  return `"${stem}"*`;
 }
 
 // Runs during sync for every HTML-only body, in a worker or Node process with
@@ -125,6 +151,9 @@ const HYPHENS = /[-\u2010\u2011]/gu;
 const MAX_JOINED_COMPOUNDS = 200;
 const MAX_COMPOUND_LENGTH = 64;
 const FORMAT_NAME = /^[a-z0-9]{2,4}$/;
+const PLAIN_LATIN_WORD = /^[a-z]+$/i;
+const MIN_STEM_LENGTH = 4;
+const MAX_STEMMED_ENDING = 4;
 
 const UNSPACED_SCRIPT =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/gu;
