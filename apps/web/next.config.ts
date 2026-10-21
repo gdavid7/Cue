@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { env } from "./env";
 import { isIndexingAllowed } from "./utils/indexing";
+import { getLegacyHostRedirects } from "./utils/legacy-host";
 import type { NextConfig } from "next";
 
 const isDevelopment = process.env.NODE_ENV === "development";
@@ -262,6 +263,7 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   async redirects() {
     return [
+      ...getLegacyHostRedirects(env.NEXT_PUBLIC_BASE_URL),
       {
         destination: "/mail",
         has: [
