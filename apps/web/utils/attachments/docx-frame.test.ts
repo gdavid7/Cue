@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFrameElementFactory,
   DOCX_RENDER_OPTIONS,
+  fitDocxToFrame,
   handleFrameLinkAuxClick,
   handleFrameLinkClick,
 } from "@/utils/attachments/docx-frame";
@@ -186,6 +187,36 @@ describe("handleFrameLinkAuxClick", () => {
   });
 });
 
+describe("fitDocxToFrame", () => {
+  // A Letter page is 816px wide; with the wrapper's 16px padding each side it
+  // needs 848px.
+  it("zooms the pages down to a phone-width frame", () => {
+    const doc = renderedDocument({ frameWidth: 375, pageWidth: 816 });
+
+    fitDocxToFrame(doc);
+
+    expect(Number(wrapperOf(doc).style.zoom)).toBeCloseTo(375 / 848);
+  });
+
+  it("leaves pages that already fit at full size", () => {
+    const doc = renderedDocument({ frameWidth: 1200, pageWidth: 816 });
+
+    fitDocxToFrame(doc);
+
+    expect(wrapperOf(doc).style.zoom).toBe("");
+  });
+
+  it("fits again at full size once the frame widens", () => {
+    const doc = renderedDocument({ frameWidth: 375, pageWidth: 816 });
+    fitDocxToFrame(doc);
+    setWidth(doc.documentElement, "clientWidth", 1200);
+
+    fitDocxToFrame(doc);
+
+    expect(wrapperOf(doc).style.zoom).toBe("");
+  });
+});
+
 function auxClickLink(href: string, button: number) {
   const link = document.createElement("a");
   link.setAttribute("href", href);
@@ -202,4 +233,38 @@ function auxClickLink(href: string, button: number) {
   link.dispatchEvent(event);
   link.remove();
   return { event, open };
+}
+
+function renderedDocument({
+  frameWidth,
+  pageWidth,
+}: {
+  frameWidth: number;
+  pageWidth: number;
+}) {
+  // A real frame, so the wrapper's padding comes from computed styles.
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument as Document;
+  doc.body.innerHTML =
+    '<div class="docx-wrapper" style="padding: 16px"><section class="docx"></section></div>';
+  setWidth(doc.documentElement, "clientWidth", frameWidth);
+  const page = doc.querySelector("section");
+  if (page) setWidth(page, "offsetWidth", pageWidth);
+  return doc;
+}
+
+function wrapperOf(doc: Document) {
+  return doc.querySelector(".docx-wrapper") as HTMLElement;
+}
+
+function setWidth(
+  element: Element,
+  property: "clientWidth" | "offsetWidth",
+  width: number,
+) {
+  Object.defineProperty(element, property, {
+    configurable: true,
+    value: width,
+  });
 }

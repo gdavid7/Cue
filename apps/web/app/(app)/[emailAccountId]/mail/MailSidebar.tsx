@@ -726,6 +726,7 @@ export function MailboxGroups({
                 }}
                 typeName="folder"
                 editMode="name"
+                showOptionsButton={!collapsed}
               >
                 <NavRow
                   href={hrefFor({ kind: "folder", folderId: folder.id })}
@@ -918,6 +919,7 @@ function LabelBranch({
         editMode={props.labelEditMode}
         currentColor={label.color}
         colorOptions={props.editing?.labelColorOptions}
+        showOptionsButton={!collapsed}
         visibility={
           props.supportsLabelVisibility
             ? {
