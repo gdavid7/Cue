@@ -23,6 +23,8 @@ const robotStepSchema = z.object({
   failedRequests: z.array(
     z.object({ method: z.string(), url: z.string(), status: z.number() }),
   ),
+  /** Deliberate sync pacing (503 with `retryAfterMs`); information only. */
+  throttledRequests: z.number().optional(),
 });
 
 export const robotResultsSchema = z.object({
@@ -42,6 +44,41 @@ export const robotResultsSchema = z.object({
 
 export type RobotResults = z.infer<typeof robotResultsSchema>;
 export type RobotStep = z.infer<typeof robotStepSchema>;
+
+/**
+ * A mail API 503 whose JSON body is the throttle envelope is sync pacing the
+ * client honours, not a failure.
+ */
+export function isThrottledMailResponse({
+  url,
+  status,
+  body,
+}: {
+  url: string;
+  status: number;
+  body: unknown;
+}) {
+  if (status !== 503) return false;
+  if (!safePathname(url).startsWith("/api/mail/v1/")) return false;
+  return hasRetryAfterMs(body);
+}
+
+function hasRetryAfterMs(value: unknown, depth = 0): boolean {
+  if (!value || typeof value !== "object" || depth > 2) return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.retryAfterMs === "number") return true;
+  return Object.values(record).some((child) =>
+    hasRetryAfterMs(child, depth + 1),
+  );
+}
+
+function safePathname(url: string) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
 
 /** Robot steps on the Outlook QA mailbox carry this prefix in their name. */
 export const OUTLOOK_STEP_PREFIX = "Outlook: ";
@@ -343,6 +380,10 @@ export function formatHumanSummary(report: HealthReport) {
         robot.timeToFirstRowMs === undefined
           ? ""
           : `, first inbox row ${robot.timeToFirstRowMs} ms`
+      }${
+        robot.throttledRequests
+          ? `, ${robot.throttledRequests} throttled (not failures)`
+          : ""
       })`,
     );
   }
@@ -444,12 +485,17 @@ function summarizeRobot(
     note: results.note ? redact(results.note) : undefined,
     timeToFirstRowMs: metric("timeToFirstRowMs"),
     signOutMs: metric("signOutMs"),
+    throttledRequests: results.steps.reduce(
+      (total, step) => total + (step.throttledRequests ?? 0),
+      0,
+    ),
     steps: results.steps.map((step) => ({
       name: step.name,
       status: step.status,
       durationMs: Math.round(step.durationMs),
       ...(step.metrics ? { metrics: step.metrics } : {}),
       ...(step.error ? { error: redact(step.error) } : {}),
+      throttledRequests: step.throttledRequests ?? 0,
       consoleErrors: step.consoleErrors.length,
       consoleErrorSamples: step.consoleErrors.slice(0, 3).map(redact),
       failedRequests: step.failedRequests
