@@ -921,6 +921,15 @@ export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
 }
 
 /**
+ * The most units work at `priority` can spend from a full bucket without
+ * waiting for it to refill. Work that costs more sleeps in the gate for the
+ * difference at the budget's refill rate.
+ */
+export function gmailBurstUnitsFor(priority: GmailQuotaPriority) {
+  return BUCKET_CAPACITY - FLOOR[priority];
+}
+
+/**
  * Holds sync and background back, as one large interactive request does for
  * two seconds, for as long as someone waits on a longer piece of work such as
  * an assistant turn, up to `maxMs` so a turn that never ends can't starve
