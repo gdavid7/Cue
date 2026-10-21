@@ -5,6 +5,7 @@ import {
   writeStoredMode,
   type WebNotificationMode,
 } from "@/utils/web-notifications/preference";
+import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import {
   isWebPushAvailable,
   syncWebPushSubscription,
@@ -15,6 +16,13 @@ export type WebNotificationPermission = NotificationPermission | "unsupported";
 export function getWebNotificationPermission(): WebNotificationPermission {
   if (typeof Notification === "undefined") return "unsupported";
   return Notification.permission;
+}
+
+/** The desktop app shows its own notifications. */
+export function isDesktopShell() {
+  return (
+    Boolean(getInboxZeroDesktopApp()) || /Electron/i.test(navigator.userAgent)
+  );
 }
 
 /**

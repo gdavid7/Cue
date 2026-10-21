@@ -258,6 +258,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/public-contact-context",
     // Pages and panels a person opened.
     "user/home",
+    // The newest inbox mail for the inbox a person came back to.
+    "user/inbox-catch-up",
     "user/contacts",
     "user/folders",
     "user/mail-splits",
@@ -296,6 +298,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     // What a person scheduled, due now.
     "scheduled-actions/execute",
     "snoozed-threads/execute",
+    // Summarizing mail a person's own digest rule picked.
+    "digest",
     // A durable send it delivers raises itself to interactive.
     "scheduled-emails/execute",
     // Push for an account just signed in or linked.
@@ -918,6 +922,15 @@ export function isGmailQuotaRefusal(error: unknown) {
  */
 export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
   return PACE_CAP[priority] / 2;
+}
+
+/**
+ * The most units work at `priority` can spend from a full bucket without
+ * waiting for it to refill. Work that costs more sleeps in the gate for the
+ * difference at the budget's refill rate.
+ */
+export function gmailBurstUnitsFor(priority: GmailQuotaPriority) {
+  return BUCKET_CAPACITY - FLOOR[priority];
 }
 
 /**

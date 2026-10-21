@@ -212,7 +212,7 @@ describe("files index migration", () => {
     await createSqliteMailStore(driver);
     await driver.write((tx) =>
       tx.exec(
-        "DROP INDEX effective_files_order; DELETE FROM schema_migrations WHERE id = 13;",
+        "DROP INDEX effective_files_order; DELETE FROM schema_migrations WHERE id = 15;",
       ),
     );
 

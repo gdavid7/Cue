@@ -7,6 +7,14 @@ import {
 import { readMessageSearch } from "./message-search";
 import { readFileSenders, readFiles } from "./files";
 import { readPersonCard } from "./person-card";
+import {
+  countMessageEmbeddings,
+  deleteAccountMessageEmbeddings,
+  pruneMessageEmbeddings,
+  readEmbeddingBacklog,
+  readSemanticMatches,
+  writeMessageEmbeddings,
+} from "./message-embeddings";
 import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
@@ -189,6 +197,21 @@ export async function createSqliteMailStore(
     indexContactBacklog() {
       return driver.write(indexContactBacklog);
     },
+    readEmbeddingBacklog(input) {
+      return driver.read((tx) => readEmbeddingBacklog(tx, bodyCodec, input));
+    },
+    writeMessageEmbeddings(input) {
+      return driver.write((tx) => writeMessageEmbeddings(tx, input));
+    },
+    pruneMessageEmbeddings(input) {
+      return driver.write((tx) => pruneMessageEmbeddings(tx, input));
+    },
+    countMessageEmbeddings(input) {
+      return driver.read((tx) => countMessageEmbeddings(tx, input));
+    },
+    readSemanticMatches(input) {
+      return driver.read((tx) => readSemanticMatches(tx, input));
+    },
     async ensureAccount(input) {
       return driver.write(async (tx) => {
         const existing = await tx.query(
@@ -258,6 +281,7 @@ export async function createSqliteMailStore(
       return driver.write(async (tx) => {
         await deleteAccountSearchIndex(tx, accountId);
         await deleteAccountContactSuggestions(tx, accountId);
+        await deleteAccountMessageEmbeddings(tx, accountId);
         const existing = await tx.query(
           "SELECT 1 AS n FROM accounts WHERE account_id = ?",
           [accountId],
@@ -345,13 +369,12 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
-        const read = await readOrder(tx, input.requestedAt, digest);
-        for (const change of input.page.changes) {
-          await applyChange(tx, change, read);
-        }
+        // Targets go in first so the messages this page finds show the
+        // change while later pages are still being read.
+        const newTargets: MessageKey[] = [];
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
-          await tx.execute(
+          const inserted = await tx.execute(
             `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
              VALUES (?, ?, ?, ?)`,
             [
@@ -361,7 +384,19 @@ export async function createSqliteMailStore(
               input.page.conversation.conversationId,
             ],
           );
+          if (inserted.changedRows > 0) newTargets.push(key);
         }
+        const read = await readOrder(tx, input.requestedAt, digest);
+        for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessagePatch(tx, change))
+          ) {
+            continue;
+          }
+          await applyChange(tx, change, read);
+        }
+        await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
            SET next_page = ?, complete = ?
@@ -380,7 +415,11 @@ export async function createSqliteMailStore(
             input.previousPage,
           ],
         );
-        if (updated.changedRows === 0) return { status: "stale" };
+        // Checked above in this transaction; throwing rolls back the targets
+        // and changes already written, which returning would commit.
+        if (updated.changedRows === 0) {
+          throw new Error("Preparation page changed during its transaction");
+        }
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
@@ -2589,6 +2628,7 @@ async function resetAccountForGeneration(
 ) {
   await deleteAccountSearchIndex(tx, input.accountId);
   await deleteAccountContactSuggestions(tx, input.accountId);
+  await deleteAccountMessageEmbeddings(tx, input.accountId);
   const derivedTables = [
     "message_content",
     "effective_messages",

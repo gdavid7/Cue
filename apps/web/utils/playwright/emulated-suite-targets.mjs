@@ -73,6 +73,7 @@ const featureGroups = [
       "mail/compose-and-reply.spec.ts",
       "mail/contact-autocomplete.spec.ts",
       "mail/calendar-invitation.spec.ts",
+      "mail/pre-send-check.spec.ts",
     ],
   },
   {
@@ -99,6 +100,13 @@ const featureGroups = [
     specs: [
       "mail/command-palette.spec.ts",
       "mail/navigation-and-views.spec.ts",
+    ],
+  },
+  {
+    name: "mail-notifications",
+    specs: [
+      "mail/web-notifications.spec.ts",
+      "mail/notifications-off-hint.spec.ts",
     ],
   },
   {

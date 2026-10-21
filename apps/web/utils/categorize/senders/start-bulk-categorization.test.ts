@@ -123,12 +123,18 @@ describe("startBulkCategorization", () => {
 
     mockGetUncategorizedSenders
       .mockResolvedValueOnce({
-        uncategorizedSenders: [{ email: "first@example.com", name: "First" }],
+        uncategorizedSenders: [
+          { email: "first@example.com", name: "First", sourceMessageId: "m1" },
+        ],
       })
       .mockResolvedValueOnce({
         uncategorizedSenders: [
-          { email: "first@example.com", name: "First" },
-          { email: "second@example.com", name: "Second" },
+          { email: "first@example.com", name: "First", sourceMessageId: "m1" },
+          {
+            email: "second@example.com",
+            name: "Second",
+            sourceMessageId: "m2",
+          },
         ],
       });
 
@@ -157,11 +163,11 @@ describe("startBulkCategorization", () => {
     expect(mockLoadEmails).toHaveBeenCalledTimes(2);
     expect(mockPublishToAiCategorizeSendersQueue).toHaveBeenNthCalledWith(1, {
       emailAccountId: "account-1",
-      senders: [{ email: "first@example.com", name: "First" }],
+      senderMessageIds: ["m1"],
     });
     expect(mockPublishToAiCategorizeSendersQueue).toHaveBeenNthCalledWith(2, {
       emailAccountId: "account-1",
-      senders: [{ email: "second@example.com", name: "Second" }],
+      senderMessageIds: ["m2"],
     });
     expect(result).toMatchObject({
       started: true,
@@ -249,12 +255,26 @@ describe("startBulkCategorization", () => {
 
     mockGetUncategorizedSenders
       .mockResolvedValueOnce({
-        uncategorizedSenders: [{ email: "Sender@example.com", name: "Sender" }],
+        uncategorizedSenders: [
+          {
+            email: "Sender@example.com",
+            name: "Sender",
+            sourceMessageId: "m1",
+          },
+        ],
       })
       .mockResolvedValueOnce({
         uncategorizedSenders: [
-          { email: " sender@example.com ", name: "Sender duplicate" },
-          { email: "second@example.com", name: "Second" },
+          {
+            email: " sender@example.com ",
+            name: "Sender duplicate",
+            sourceMessageId: "m3",
+          },
+          {
+            email: "second@example.com",
+            name: "Second",
+            sourceMessageId: "m2",
+          },
         ],
       });
 
@@ -282,11 +302,11 @@ describe("startBulkCategorization", () => {
 
     expect(mockPublishToAiCategorizeSendersQueue).toHaveBeenNthCalledWith(1, {
       emailAccountId: "account-1",
-      senders: [{ email: "Sender@example.com", name: "Sender" }],
+      senderMessageIds: ["m1"],
     });
     expect(mockPublishToAiCategorizeSendersQueue).toHaveBeenNthCalledWith(2, {
       emailAccountId: "account-1",
-      senders: [{ email: "second@example.com", name: "Second" }],
+      senderMessageIds: ["m2"],
     });
   });
 });

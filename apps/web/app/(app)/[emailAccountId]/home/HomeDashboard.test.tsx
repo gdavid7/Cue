@@ -16,6 +16,11 @@ import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
+import type {
+  ConversationSummary,
+  MailboxView,
+} from "@inboxzero/mail-core/queries";
+import type { useLocalInboxRows } from "./use-local-inbox-rows";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
 import { HomeDashboard } from "./HomeDashboard";
 
@@ -33,7 +38,11 @@ const mocks = vi.hoisted(() => ({
   markNoReplyNeeded: vi.fn(),
   toastUndo: vi.fn(),
   undoLatestToast: vi.fn(),
+  // The browser's own inbox, as the mail engine lists it.
+  localInbox: null as ConversationSummary[] | null,
+  localInboxArgs: [] as Parameters<typeof useLocalInboxRows>[0][],
   home: {
+    isLoading: false,
     data: undefined as GetHomeResponse | undefined,
     error: undefined as { error: string; status?: number } | undefined,
     gaveUp: false,
@@ -67,6 +76,7 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
   useAccount: () => ({
     emailAccountId: "account",
     emailAccount: { name: "Ada Lovelace" },
+    userEmail: "ada@example.com",
     accountIds: ["account", "account-b"],
   }),
 }));
@@ -104,7 +114,7 @@ vi.mock("@/hooks/useHome", () => ({
     );
     return {
       data,
-      isLoading: false,
+      isLoading: mocks.home.isLoading && !data,
       error: mocks.home.error,
       gaveUp: mocks.home.gaveUp,
       retry: mocks.home.retry,
@@ -127,6 +137,21 @@ vi.mock("@/utils/actions/rule-feedback", () => ({
 vi.mock("@/utils/actions/thread-assist", () => ({
   markNeedsReplyAction: mocks.markNeedsReply,
 }));
+vi.mock("./use-local-inbox-rows", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./use-local-inbox-rows")>();
+  return {
+    ...actual,
+    useLocalInboxRows: (args: Parameters<typeof useLocalInboxRows>[0]) => {
+      mocks.localInboxArgs.push(args);
+      if (!args.enabled || !mocks.localInbox) return null;
+      return actual.localInboxRows(
+        syncedView(mocks.localInbox, args.accounts),
+        args,
+      );
+    },
+  };
+});
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -334,7 +359,11 @@ describe("HomeDashboard states", () => {
         thread("c", "Contract"),
       ]),
       waiting: [thread("w", "Intro to Sam")],
-      calendar: { connected: true, next: nextEvent(false) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(false),
+      },
     };
 
     renderToday();
@@ -380,7 +409,11 @@ describe("HomeDashboard states", () => {
         filed: 12,
         filedLabel: { labelId: "Label_Newsletter", name: "Newsletter" },
       },
-      calendar: { connected: true, next: nextEvent(false) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(false),
+      },
       nextUp: [
         {
           id: "canvas:4",
@@ -423,7 +456,11 @@ describe("HomeDashboard states", () => {
   it("caught up after 5 pm: says how tomorrow starts", () => {
     mocks.home.data = {
       ...homeData([]),
-      calendar: { connected: true, next: nextEvent(true) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(true),
+      },
     };
 
     renderToday();
@@ -445,6 +482,26 @@ describe("HomeDashboard states", () => {
     expect(screen.queryByText(/^Next:|^Due |Waiting on|Connect/)).toBeNull();
   });
 
+  it("caught up with a calendar read in full and empty: says it's clear through tomorrow", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: true, clearThroughTomorrow: true, next: null },
+    };
+
+    renderToday();
+
+    expect(screen.getByText("Calendar clear through tomorrow.")).toBeTruthy();
+  });
+
+  it("caught up but the calendar couldn't be read: doesn't call it clear", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+
+    expect(screen.queryByText(/^Calendar clear/)).toBeNull();
+    expect(screen.queryByText(/Connect/)).toBeNull();
+  });
+
   it("quiet day: All clear still says how tomorrow starts and which replies Cue drafted", () => {
     mocks.home.data = {
       ...homeData([]),
@@ -459,7 +516,11 @@ describe("HomeDashboard states", () => {
           at: "2026-10-13T09:00:00.000Z",
         },
       ],
-      calendar: { connected: true, next: nextEvent(true) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(true),
+      },
     };
 
     renderToday();
@@ -497,7 +558,7 @@ describe("HomeDashboard states", () => {
   it("no integrations: offers the calendar and one app the user gets mail from", () => {
     mocks.home.data = {
       ...homeData([]),
-      calendar: { connected: false, next: null },
+      calendar: { connected: false, clearThroughTomorrow: false, next: null },
       suggestion: { app: "canvas", name: "Canvas" },
     };
 
@@ -523,7 +584,11 @@ describe("HomeDashboard states", () => {
   it("busy with deadlines: lists what's next, soonest first, each with its source", () => {
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
-      calendar: { connected: true, next: nextEvent(false) },
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: nextEvent(false),
+      },
       nextUp: [
         {
           id: "event:review",
@@ -644,6 +709,126 @@ describe("HomeDashboard states", () => {
   });
 });
 
+describe("HomeDashboard before the server answers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.isLoading = true;
+    mocks.home.data = undefined;
+    mocks.localInboxArgs = [];
+    mocks.localInbox = [
+      localConversation("local-1", "Dentist on Tuesday"),
+      localConversation("local-2", "Invoice for October"),
+    ];
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.home.isLoading = false;
+    mocks.localInbox = null;
+  });
+
+  it("first visit: shows the inbox from local mail while Cue's lanes load", () => {
+    renderToday();
+
+    expect(lanes()).toEqual(["Also in your inbox"]);
+    expect(
+      within(lane("Also in your inbox")).getByText("Dentist on Tuesday"),
+    ).toBeTruthy();
+    // Cue's own lanes still load; nothing claims all is clear.
+    expect(skeletons()).not.toEqual([]);
+    expect(screen.queryByText("All clear.")).toBeNull();
+    // Whether Cue is on isn't known yet, so it offers no Needs reply.
+    expect(screen.queryByRole("button", { name: "Needs reply" })).toBeNull();
+    expect(mocks.localInboxArgs.at(-1)).toMatchObject({
+      accounts: [{ id: "account", email: "ada@example.com" }],
+      named: false,
+      enabled: true,
+    });
+  });
+
+  it("first visit: archives a local row through the mail engine", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(
+        within(rowFor("local-1")).getAllByRole("button", {
+          name: "Archive conversation",
+        })[0],
+      );
+    });
+
+    expect(screen.queryByText("Dentist on Tuesday")).toBeNull();
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: [{ accountId: "account", conversationId: "local-1" }],
+        change: { kind: "archive" },
+      }),
+    );
+  });
+
+  it("server's inbox still loading: shows local rows, each conversation once", () => {
+    mocks.home.isLoading = false;
+    mocks.home.data = {
+      ...homeData([thread("local-1", "Dentist on Tuesday")]),
+      pending: ["alsoInInbox"],
+    };
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply", "Also in your inbox"]);
+    const inbox = lane("Also in your inbox");
+    expect(within(inbox).queryByText("Dentist on Tuesday")).toBeNull();
+    expect(within(inbox).getByText("Invoice for October")).toBeTruthy();
+    expect(skeletons()).toEqual([]);
+  });
+
+  it("server's inbox still loading: leaves out mail Cue filed, as the server does", () => {
+    mocks.home.isLoading = false;
+    mocks.home.data = {
+      ...homeData([]),
+      pending: ["alsoInInbox"],
+      handledLabelIds: ["Label_Newsletter"],
+    };
+    mocks.localInbox = [
+      localConversation("weekly", "This week in design", ["Label_Newsletter"]),
+      localConversation("local-2", "Invoice for October"),
+    ];
+
+    renderToday();
+
+    const inbox = lane("Also in your inbox");
+    expect(within(inbox).queryByText("This week in design")).toBeNull();
+    expect(within(inbox).getByText("Invoice for October")).toBeTruthy();
+  });
+
+  it("server's inbox loaded: shows its rows, not the local ones", () => {
+    mocks.home.isLoading = false;
+    mocks.home.data = {
+      ...homeData([]),
+      alsoInInbox: [thread("server-1", "Board minutes")],
+    };
+
+    renderToday();
+
+    const inbox = lane("Also in your inbox");
+    expect(within(inbox).getByText("Board minutes")).toBeTruthy();
+    expect(within(inbox).queryByText("Invoice for October")).toBeNull();
+    expect(mocks.localInboxArgs.at(-1)?.enabled).toBe(false);
+  });
+
+  it("no local mail yet: keeps the placeholders until the server answers", () => {
+    mocks.localInbox = null;
+
+    renderToday();
+
+    expect(lanes()).toEqual([]);
+    expect(skeletons()).not.toEqual([]);
+  });
+});
+
 describe("HomeDashboard on a copy from an earlier day", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -723,6 +908,19 @@ describe("HomeDashboard across accounts", () => {
     mocks.searchParams = new URLSearchParams();
     mocks.emailAccounts = [];
     mocks.homes = {};
+  });
+
+  it("reads every account's local inbox, each row naming its account", () => {
+    mocks.localInboxArgs = [];
+    renderToday();
+
+    expect(mocks.localInboxArgs.at(-1)).toMatchObject({
+      accounts: [
+        { id: "account", email: "a@example.com" },
+        { id: "account-b", email: "b@example.com" },
+      ],
+      named: true,
+    });
   });
 
   it("shows both accounts' rows in one lane, each naming its account", () => {
@@ -1006,6 +1204,7 @@ function savedYesterday() {
       today: { checked: 42, filed: 12, filedLabel: null },
       calendar: {
         connected: true,
+        clearThroughTomorrow: false,
         next: {
           title: "Design review",
           at: new Date(Date.now() + 3_600_000).toISOString(),
@@ -1056,17 +1255,64 @@ function thread(threadId: string, subject: string): HomeThread {
   };
 }
 
+function localConversation(
+  conversationId: string,
+  subject: string,
+  labelIds: string[] = [],
+): ConversationSummary {
+  return {
+    key: { accountId: "account", conversationId },
+    subject,
+    preview: "Can you take a look?",
+    from: "Grace Hopper <grace@example.com>",
+    to: "ada@example.com",
+    senders: ["Grace Hopper <grace@example.com>"],
+    latestMessageAtMs: Date.now() - 60 * 60 * 1000,
+    unread: true,
+    starred: false,
+    labelIds,
+    roles: ["inbox"],
+    pendingOperationIds: [],
+    latestMessageId: `${conversationId}-message`,
+  };
+}
+
+function syncedView(
+  conversations: ConversationSummary[],
+  accounts: { id: string }[],
+): MailboxView {
+  return {
+    conversations,
+    counts: {
+      matchingConversations: conversations.length,
+      unreadConversations: 0,
+      extent: "local_coverage",
+    },
+    nextPage: null,
+    coverage: accounts.map(({ id }) => ({
+      accountId: id,
+      scopeId: "primary",
+      metadata: "complete",
+      content: "not_requested",
+      indexedContent: "not_requested",
+      lastCompletedSyncAtMs: 1,
+    })),
+    connection: "ready",
+  };
+}
+
 function homeData(needsYou: HomeThread[]): GetHomeResponse {
   return {
     needsYou,
     waiting: [],
     alsoInInbox: [],
+    handledLabelIds: [],
     pending: [],
     failed: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: {

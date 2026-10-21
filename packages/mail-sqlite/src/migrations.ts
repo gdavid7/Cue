@@ -7,6 +7,7 @@ import {
   migrateMembershipIndex,
 } from "./conversation-index";
 import { migrateFilesIndex } from "./files";
+import { migrateMessageEmbeddings } from "./message-embeddings";
 import { migrateMessageSearchIndex } from "./message-search-index";
 
 export const MAILBOX_SCHEMA_SQL = `
@@ -437,6 +438,7 @@ export async function migrateMailbox(
   await migrateMessageSearchIndex(tx);
   await migrateEmptyMeetingInvitationBodies(tx);
   await migrateContactSuggestions(tx);
+  await migrateMessageEmbeddings(tx);
   await migrateFilesIndex(tx);
 }
 

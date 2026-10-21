@@ -14,7 +14,7 @@ import {
   trashMessagesWithSubject,
   waitForMessageFrom,
 } from "@/scripts/qa/qa-mailbox";
-import { findEscapedMarkup } from "@/scripts/qa/suggestion-text";
+import { findEscapedMarkup } from "@/utils/email/escaped-markup";
 import {
   findMailAccount,
   replyToGmailQa,

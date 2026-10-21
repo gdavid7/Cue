@@ -39,7 +39,8 @@ type QueueReaderEmailOptions = {
   emailAccountId: string;
   messageIds: string[];
   online: boolean;
-  onQueued?: () => Promise<void>;
+  /** Called with the id the send was queued under once it is admitted. */
+  onQueued?: (operationId: string) => Promise<void>;
   mutationId?: string;
   holdForUndo?: boolean;
   /** When the server brings the conversation back if nobody has replied. */
@@ -130,7 +131,7 @@ async function queueReaderEmailOnce(
     }
     throw new Error(copy ?? "Could not queue this email. Try again.");
   }
-  await onQueued?.();
+  await onQueued?.(commandId);
   if (undoHoldUntil !== undefined) {
     return {
       status: "held",

@@ -36,7 +36,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
 // so opening the mailbox never waits on a full rebuild.
 export async function migrateMessageSearchIndex(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 12",
+    "SELECT 1 FROM schema_migrations WHERE id = 13",
   );
   if (applied.length) return;
   const rebuilt = await withSearchIndex(tx, "rebuild_fts", async () => {
@@ -47,7 +47,7 @@ export async function migrateMessageSearchIndex(tx: SqlTransaction) {
   });
   if (!rebuilt) return;
   await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (12, '0012-stemmed-message-search')",
+    "INSERT INTO schema_migrations(id, name) VALUES (13, '0013-stemmed-message-search')",
   );
 }
 

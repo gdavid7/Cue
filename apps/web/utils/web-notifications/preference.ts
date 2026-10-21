@@ -10,6 +10,7 @@ export const DEFAULT_WEB_NOTIFICATION_MODE: WebNotificationMode = "important";
 
 const MODE_KEY = "cue:web-notifications:mode";
 const PROMPTED_KEY = "cue:web-notifications:prompted";
+const HINT_SHOWN_KEY = "cue:web-notifications:off-hint-shown";
 const CHANGE_EVENT = "cue:web-notifications:change";
 
 // Permission is per browser, so the choice lives next to it rather than in the
@@ -55,6 +56,23 @@ export function markAskedToEnable() {
     window.localStorage.setItem(PROMPTED_KEY, "1");
   } catch {
     // The prompt is also gated on the session by the caller.
+  }
+}
+
+export function readOffHintShownAtMs(): number | null {
+  try {
+    const value = Number(window.localStorage.getItem(HINT_SHOWN_KEY));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeOffHintShownAtMs(ms: number) {
+  try {
+    window.localStorage.setItem(HINT_SHOWN_KEY, String(ms));
+  } catch {
+    // Without storage the hint can only show once per page load.
   }
 }
 

@@ -105,6 +105,7 @@ describe("interpretSearch", () => {
       explanation: "Mail from Sarah with attachments last month",
       isQuestion: false,
       timeZone: "America/Los_Angeles",
+      parts: reading(),
     });
   });
 

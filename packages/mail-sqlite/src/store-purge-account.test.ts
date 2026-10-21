@@ -11,6 +11,7 @@ const ACCOUNT_TABLES = [
   "contact_interactions",
   "contact_stats",
   "contact_tokens",
+  "contact_name_tokens",
   "contact_indexed_messages",
   "message_content",
   "effective_messages",

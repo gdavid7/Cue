@@ -16,6 +16,7 @@ import {
   notifySessionExpired,
   SESSION_EXPIRED_MESSAGE,
 } from "@/utils/session-expired";
+import { fetchWithSessionRetry } from "@/utils/session-refresh";
 
 // Accounts already offered a reconnect on this page.
 const reconnectOffered = new Set<string>();
@@ -41,7 +42,7 @@ export const swrFetcher = async (
 
   const newInit = { ...init, headers };
 
-  const res = await fetch(url, newInit);
+  const res = await fetchWithSessionRetry(url, newInit);
 
   if (!res.ok) {
     // Try to parse JSON, but handle cases where response isn't JSON (e.g. HMR 404s)

@@ -11,7 +11,7 @@ import type { SqlTransaction, SqlValue } from "./driver";
 import type { SearchSupport } from "./queries";
 import { attachmentNameForms, searchMatchQuery } from "./search-text";
 
-const MIGRATION_ID = 13;
+const MIGRATION_ID = 15;
 const SENDER_LIMIT = 500;
 
 // The mail the Files view lists files from. SQLite only uses a partial index
@@ -37,7 +37,7 @@ export async function migrateFilesIndex(tx: SqlTransaction) {
       WHERE ${FILE_MESSAGES.replaceAll("e.", "")};
   `);
   await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (?, '0013-files-order-index')",
+    "INSERT INTO schema_migrations(id, name) VALUES (?, '0015-files-order-index')",
     [MIGRATION_ID],
   );
 }

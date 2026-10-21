@@ -30,7 +30,14 @@ export type TodayAgentTask = AgentTask & { account?: TodayAccount };
 /** What Today shows, for one account or merged across several. */
 export type TodayData = Omit<
   TodayHomeData,
-  "needsYou" | "waiting" | "alsoInInbox" | "agentTasks" | "cue" | "today"
+  | "needsYou"
+  | "waiting"
+  | "alsoInInbox"
+  | "agentTasks"
+  | "cue"
+  | "today"
+  // Label ids are each mailbox's own, so they aren't merged.
+  | "handledLabelIds"
 > & {
   needsYou: TodayThread[];
   waiting: TodayThread[];
@@ -192,6 +199,14 @@ export function mergeHomeData(accounts: AccountHome[]): {
       },
       calendar: {
         connected: loaded.some(({ data }) => data.calendar.connected),
+        // Every account reads the user's calendars: one that couldn't, or
+        // found a meeting, means the calendar isn't known to be clear.
+        clearThroughTomorrow:
+          loaded.some(({ data }) => data.calendar.connected) &&
+          loaded.every(
+            ({ data }) =>
+              !data.calendar.connected || data.calendar.clearThroughTomorrow,
+          ),
         next: nextEvents[0] ?? null,
       },
       nextUp: mergeNextUp(loaded.map(({ data }) => data.nextUp)),

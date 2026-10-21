@@ -589,12 +589,16 @@ function useElementWidth() {
 }
 
 // A draft that a pending send stands in for isn't shown, so it doesn't title
-// the thread either.
-function latestShownMessage<T extends { id: string }>(
-  messages: T[],
-  hiddenDraftMessageIds: string[],
-) {
+// the thread either. Only drafts are skipped: Gmail can send a draft under its
+// own id, and that sent message is shown.
+function latestShownMessage<
+  T extends { id: string; labelIds?: string[] | null },
+>(messages: T[], hiddenDraftMessageIds: string[]) {
   return messages.findLast(
-    (message) => !hiddenDraftMessageIds.includes(message.id),
+    (message) =>
+      !(
+        message.labelIds?.includes("DRAFT") &&
+        hiddenDraftMessageIds.includes(message.id)
+      ),
   );
 }

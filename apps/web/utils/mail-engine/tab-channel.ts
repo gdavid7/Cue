@@ -315,6 +315,7 @@ export function createTabFollowerClient(input: {
     queryFiles: (query) => call("queryFiles", [query]) as never,
     queryFileSenders: (accountIds) =>
       call("queryFileSenders", [accountIds]) as never,
+    searchSemantic: (query) => call("searchSemantic", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

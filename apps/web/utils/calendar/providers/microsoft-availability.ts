@@ -105,9 +105,9 @@ export function createMicrosoftAvailabilityProvider(
 
     async fetchBusyPeriods({
       accessToken,
+      connectionId,
       refreshToken,
       expiresAt,
-      emailAccountId,
       calendarIds,
       timeMin,
       timeMax,
@@ -117,7 +117,7 @@ export function createMicrosoftAvailabilityProvider(
         accessToken,
         refreshToken,
         expiresAt,
-        emailAccountId,
+        connectionId,
         logger,
       });
 

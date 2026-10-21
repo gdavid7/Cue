@@ -432,14 +432,14 @@ function MailSidebarContent({
               onIntentEnd={onTodayIntentEnd}
             />
           ) : null}
-          {unifiedViews.map(({ name, type, Icon }) => (
+          {unifiedViews.map(({ name, type, countId, Icon }) => (
             <NavRow
               key={type}
               href={hrefFor({ kind: "type", type })}
               active={isTypeActive(type)}
               icon={<Icon className="size-4 shrink-0" />}
               name={name}
-              count={null}
+              count={countId ? displayCount(countsById.get(countId)) : null}
               collapsed={collapsed}
             />
           ))}
@@ -731,6 +731,7 @@ export function MailboxGroups({
                 }}
                 typeName="folder"
                 editMode="name"
+                showOptionsButton={!collapsed}
               >
                 <NavRow
                   href={hrefFor({ kind: "folder", folderId: folder.id })}
@@ -923,6 +924,7 @@ function LabelBranch({
         editMode={props.labelEditMode}
         currentColor={label.color}
         colorOptions={props.editing?.labelColorOptions}
+        showOptionsButton={!collapsed}
         visibility={
           props.supportsLabelVisibility
             ? {

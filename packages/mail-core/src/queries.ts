@@ -223,6 +223,12 @@ export const mailboxViewSchema = z.object({
         ]),
         /** Whether the provider has answered any of the search yet. */
         answered: z.boolean(),
+        /**
+         * While searching: when the provider began reading the search, so a
+         * view can time it from there rather than from when it was queued.
+         * Left out while the search waits for its turn.
+         */
+        startedAtMs: z.number().int().optional(),
       }),
     )
     .max(50)
@@ -327,6 +333,23 @@ export type MessageSearchQuery = {
   fromAddress: string | null;
   pageSize: number;
   after: string | null;
+};
+
+/**
+ * A search by meaning: the messages of `accountId` whose on-device vectors
+ * are nearest to `text`, at most one per conversation.
+ */
+export type SemanticSearchQuery = {
+  accountId: string;
+  text: string;
+  limit: number;
+};
+
+export type SemanticMatch = {
+  messageId: string;
+  conversationId: string;
+  /** Cosine similarity to the search, from -1 to 1. */
+  similarity: number;
 };
 
 export type MessageSearchMatch = {

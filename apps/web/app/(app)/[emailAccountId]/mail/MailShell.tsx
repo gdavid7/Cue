@@ -18,8 +18,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { ListToolbar } from "@/app/(app)/[emailAccountId]/mail/ListToolbar";
 import { getMailSearchFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
-import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
-import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
+import {
+  MailMobileNav,
+  type MailMobileReaderActions,
+} from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import {
   ALL_INBOXES_MAILBOX_TYPES,
   ALL_INBOXES_VIEW_TYPES,
@@ -31,7 +33,7 @@ import {
 import { getMailSidebarFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { getEmailTerminology } from "@/utils/terminology";
-import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
+import { useMailScreenFrame } from "@/app/(app)/[emailAccountId]/mail/MailFrame";
 import { MailSplitTabs } from "@/app/(app)/[emailAccountId]/mail/MailSplitTabs";
 import { SelectAllCheckbox } from "@/app/(app)/[emailAccountId]/mail/SelectAllCheckbox";
 import chunk from "lodash/chunk";
@@ -52,6 +54,7 @@ import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { CueFoundSection } from "@/app/(app)/[emailAccountId]/mail/CueFoundSection";
 import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import { useAllInboxesCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-all-inboxes-cue-search";
 import {
   CUE_FOUND_VISIBLE_ROWS,
   withoutPlainDuplicates,
@@ -83,6 +86,7 @@ import { CueLabelsCard } from "@/components/CueLabelsCleanup";
 import { ReplyTrackingNotice } from "@/app/(app)/[emailAccountId]/mail/ReplyTrackingNotice";
 import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { noteGetStartedStep } from "@/utils/get-started/client-steps";
+import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -112,7 +116,6 @@ import { openSenderPersonCard } from "@/components/person-card/PersonCard";
 import { getActionAccountLabel } from "@/app/(app)/[emailAccountId]/mail/mail-command-palette";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { MailProductFrame } from "@inboxzero/mail-ui/MailProductFrame";
 import { MailEngineConnectionBanner } from "@/utils/mail-engine/MailEngineConnectionBanner";
 import { useThreadSelection } from "@/app/(app)/[emailAccountId]/mail/use-thread-selection";
 import { useWarmNeighbourThreads } from "@/app/(app)/[emailAccountId]/mail/use-warm-neighbour-threads";
@@ -178,6 +181,7 @@ import { getActionErrorMessage } from "@/utils/error";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
 import {
   InboxPreviewList,
+  useCatchUpOnWake,
   useFetchOpenedPreviewThreads,
   useIngestInboxPreview,
   useRetireInboxPreview,
@@ -380,7 +384,6 @@ export function MailShell() {
   const barMoreButtonRef = useRef<HTMLButtonElement>(null);
   const menuOpenedFromBarRef = useRef(false);
   const [isTourOpen, setIsTourOpen] = useState(false);
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const isLargeScreen = useIsLargeScreen();
   const [labelPicker, setLabelPicker] = useState<{
     mode: "label" | "move";
@@ -809,6 +812,7 @@ export function MailShell() {
   }, [hasLocalMail, emailAccountId, lastSyncedAtMs, serverClockOffsetMs]);
   useFetchOpenedPreviewThreads();
   useIngestInboxPreview();
+  useCatchUpOnWake({ lastSyncedAtMs, enabled: !isAllAccounts });
   const listPlaceholderMessage = getListPlaceholderMessage({
     engineStarting: !client,
     isAllAccounts,
@@ -821,11 +825,19 @@ export function MailShell() {
     isAllAccounts,
     searchQuery,
   ]);
-  const cueSearch = useCueSearch({
+  const accountCueSearch = useCueSearch({
     emailAccountId,
     query: searchParam,
     enabled: hasAiAccess && !isAllAccounts,
   });
+  const allInboxesCueSearch = useAllInboxesCueSearch({
+    emailAccountId,
+    accounts: combinedAccounts,
+    labelsByAccount,
+    query: searchParam,
+    enabled: hasAiAccess && isAllAccounts,
+  });
+  const cueSearch = isAllAccounts ? allInboxesCueSearch : accountCueSearch;
   // Like the answer card, it stays while the search is edited, so picking
   // one of its searches to edit doesn't pull it out from under the pointer.
   const showCueFound = cueSearch.stage !== "off";
@@ -2327,70 +2339,34 @@ export function MailShell() {
       </EmailAccountScopeProvider>
     ) : null;
 
-  return (
-    <MailProductFrame
-      accountSwitcher={
-        <MailMobileNav
-          onOpenMailboxes={() => setIsMobileSidebarOpen(true)}
-          readerActions={
-            openThreadSelection && !isLargeScreen
-              ? {
-                  onBack: closeReader,
-                  onArchive: targetsArchived ? undefined : archiveTargets,
-                  onMoveToInbox: targetsArchived
-                    ? moveToInboxTargets
-                    : undefined,
-                  onReply: () => openReply(false),
-                  onSnooze:
-                    targetsTrashed || targetsSpam ? undefined : snoozeTargets,
-                  onDelete: trashTargets,
-                  onMore: () => {
-                    menuOpenedFromBarRef.current = true;
-                    setIsMenuOpen(true);
-                  },
-                  isMoreOpen: isMenuOpen,
-                  moreButtonRef: barMoreButtonRef,
-                }
-              : null
-          }
-          accountSwitcher={
-            <MailAccountSwitcher
-              isDesktopApp={isDesktopApp}
-              isAllAccounts={isAllAccounts}
-              onSelectAccount={selectAccount}
-              onSelectAll={selectAllAccounts}
-              variant="bar"
-            />
-          }
-        />
-      }
-      floating={senderCommandsPanel}
-      dialogs={
-        <>
-          {labelPickerDialog}
-          <MatchingConfirmDialog
-            pending={bulkConfirm}
-            onConfirm={confirmBulkAction}
-            onCancel={() => setBulkConfirm(null)}
-          />
-        </>
-      }
-    >
-      <MailShellSidebar
-        activeType={
-          scopeLabelId || scopeFolderId ? null : (scopeType ?? "inbox")
+  const readerBarActions: MailMobileReaderActions | null =
+    openThreadSelection && !isLargeScreen
+      ? {
+          onBack: closeReader,
+          onArchive: targetsArchived ? undefined : archiveTargets,
+          onMoveToInbox: targetsArchived ? moveToInboxTargets : undefined,
+          onReply: () => openReply(false),
+          onSnooze: targetsTrashed || targetsSpam ? undefined : snoozeTargets,
+          onDelete: trashTargets,
+          onMore: () => {
+            menuOpenedFromBarRef.current = true;
+            setIsMenuOpen(true);
+          },
+          isMoreOpen: isMenuOpen,
+          moreButtonRef: barMoreButtonRef,
         }
-        activeLabelId={scopeLabelId}
-        activeFolderId={scopeFolderId}
-        isAllAccounts={isAllAccounts}
-        isDesktopApp={isDesktopApp}
-        onSelectAccount={selectAccount}
-        onSelectAllAccounts={selectAllAccounts}
-        onMailboxItemDeleted={onMailboxItemDeleted}
-        mobileOpen={isMobileSidebarOpen && !isLargeScreen}
-        onMobileOpenChange={setIsMobileSidebarOpen}
-      />
+      : null;
+  useMailScreenFrame({
+    activeType: scopeLabelId || scopeFolderId ? null : (scopeType ?? "inbox"),
+    activeLabelId: scopeLabelId,
+    activeFolderId: scopeFolderId,
+    ownsPhoneBar: Boolean(readerBarActions),
+    onSelectAllAccounts: selectAllAccounts,
+    onMailboxItemDeleted,
+  });
 
+  return (
+    <>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <MailEngineConnectionBanner />
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -2506,6 +2482,9 @@ export function MailShell() {
               {!isAllAccounts && (
                 <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
               )}
+              {!isAllAccounts && (
+                <NotificationsOffHint ready={!isTourOpen && !isFirstSync} />
+              )}
               {routeFailed ? (
                 <p
                   role="status"
@@ -2593,7 +2572,17 @@ export function MailShell() {
                   threads={cueRows}
                   totalCount={cueFoundThreads.length}
                   userEmail={userEmail}
-                  userLabels={userLabels}
+                  userLabels={isAllAccounts ? NO_LABELS : userLabels}
+                  labelsByAccount={labelsByAccount}
+                  accountColorIndexById={accountColorIndexById}
+                  stillSearching={
+                    isAllAccounts
+                      ? allInboxesCueSearch.stillSearching
+                      : undefined
+                  }
+                  timedOut={
+                    isAllAccounts ? allInboxesCueSearch.timedOut : undefined
+                  }
                   widening={cueSearch.widening}
                 />
               ) : null}
@@ -2641,6 +2630,9 @@ export function MailShell() {
                       userLabels={isAllAccounts ? NO_LABELS : userLabels}
                       labelsByAccount={labelsByAccount}
                       accountColorIndexById={accountColorIndexById}
+                      inInbox={
+                        isAllAccounts && !searchQuery && !allInboxesMailboxType
+                      }
                       focusedIndex={clampedIndex - cueRowCount}
                       isSelected={selection.isSelected}
                       selectedCount={selection.selectedCount}
@@ -2755,8 +2747,21 @@ export function MailShell() {
             </div>
           ) : null}
         </div>
+        {readerBarActions ? (
+          <MailMobileNav
+            accountSwitcher={null}
+            readerActions={readerBarActions}
+          />
+        ) : null}
       </div>
-    </MailProductFrame>
+      {senderCommandsPanel}
+      {labelPickerDialog}
+      <MatchingConfirmDialog
+        pending={bulkConfirm}
+        onConfirm={confirmBulkAction}
+        onCancel={() => setBulkConfirm(null)}
+      />
+    </>
   );
 }
 

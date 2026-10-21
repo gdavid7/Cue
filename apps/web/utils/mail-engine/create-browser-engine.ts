@@ -10,6 +10,8 @@ import {
   browserMailEngineCapabilities,
   pageConnectivityOnline,
   readPageMaxPendingOperations,
+  readPageSemanticIndexIntervalMs,
+  readPageTouchOnly,
   requestSyncUnlessOffline,
   type BrowserEngineStart,
   type WorkerObserveKind,
@@ -24,6 +26,7 @@ import {
 } from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
 import { notifySessionExpired } from "@/utils/session-expired";
+import { env } from "@/env";
 
 export { browserMailEngineCapabilities };
 
@@ -108,6 +111,14 @@ export async function createBrowserMailEngine(
     ...input,
     maxPendingOperations:
       input.maxPendingOperations ?? readPageMaxPendingOperations(),
+    // A test setting, which production builds honour only for browser QA.
+    semanticIndexIntervalMs:
+      input.semanticIndexIntervalMs ??
+      (process.env.NODE_ENV !== "production" ||
+      env.NEXT_PUBLIC_MAIL_ENGINE_TEST_INSPECT
+        ? readPageSemanticIndexIntervalMs()
+        : undefined),
+    touchOnly: input.touchOnly ?? readPageTouchOnly(),
   };
   const startedAt = Date.now();
   for (let attempt = 0; ; attempt++) {
@@ -336,6 +347,8 @@ async function createWorkerOwnedEngine(
     queryFiles: (query) => callWorker(worker, pending, "queryFiles", [query]),
     queryFileSenders: (accountIds) =>
       callWorker(worker, pending, "queryFileSenders", [accountIds]),
+    searchSemantic: (query) =>
+      callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),
     observeMailboxCounts: (query) => observe("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {

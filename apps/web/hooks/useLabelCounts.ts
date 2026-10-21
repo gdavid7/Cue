@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
 import {
+  useAllAccountsHiddenDraftMessageIds,
+  useHiddenDraftMessageIds,
+} from "@/hooks/useHiddenDraftMessageIds";
+import {
+  allInboxesDraftsCountTargets,
   mailboxCountTargets,
   type MailboxCountFolder,
   type MailboxLabelCount,
@@ -9,6 +13,7 @@ import {
 
 const NO_LABELS: Array<{ id: string; name: string }> = [];
 const NO_FOLDERS: MailboxCountFolder[] = [];
+const NO_COUNTS = new Map<string, MailboxLabelCount>();
 
 /**
  * Unread/total counts per label or folder, derived from the same effective
@@ -78,6 +83,73 @@ export function useLabelCounts({
   }, [client, emailAccountId]);
 
   return { countsById, mutate };
+}
+
+/**
+ * The counts All inboxes shows: Drafts, the sum of each included account's own
+ * Drafts count. No accounts reads nothing.
+ */
+export function useAllInboxesLabelCounts(
+  accounts: { id: string }[] | undefined,
+) {
+  const client = useOptionalMailClient();
+  const hiddenDrafts = useAllAccountsHiddenDraftMessageIds(accounts);
+  const accountKey = accounts?.map((account) => account.id).join("\n");
+  const targets = useMemo(() => {
+    if (!accountKey) return [];
+    return allInboxesDraftsCountTargets(
+      accountKey.split("\n").map((id) => ({
+        id,
+        hiddenDraftMessageIds:
+          hiddenDrafts.find((entry) => entry.emailAccountId === id)
+            ?.messageIds ?? [],
+      })),
+    );
+  }, [accountKey, hiddenDrafts]);
+  const [drafts, setDrafts] = useState(0);
+
+  useEffect(() => {
+    if (!client || !targets.length) {
+      setDrafts(0);
+      return;
+    }
+    const handle = client.observeMailboxCounts({
+      accountIds: targets.map((target) => target.id),
+      targets,
+    });
+    const apply = () =>
+      setDrafts(
+        (handle.getSnapshot().data?.counts ?? []).reduce(
+          (sum, count) => sum + count.matchingConversations,
+          0,
+        ),
+      );
+    const unsubscribe = handle.subscribe(apply);
+    apply();
+    return () => {
+      unsubscribe();
+      handle.close();
+    };
+  }, [client, targets]);
+
+  return useMemo(
+    () =>
+      drafts
+        ? new Map<string, MailboxLabelCount>([
+            [
+              "DRAFT",
+              {
+                id: "DRAFT",
+                name: "Drafts",
+                kind: "system",
+                total: drafts,
+                unread: 0,
+              },
+            ],
+          ])
+        : NO_COUNTS,
+    [drafts],
+  );
 }
 
 function sameCounts(

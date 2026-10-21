@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
+import type { SemanticMatch } from "@inboxzero/mail-core/queries";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   describeEvalMatrix,
@@ -23,7 +24,9 @@ import {
   type RetrievalQuery,
   type RetrievalQueryType,
 } from "@/__tests__/eval/search-retrieval.scenarios";
+import { createNodeTextEmbedder } from "@/__tests__/eval/semantic-embedder";
 import {
+  CUE_SEMANTIC_RESULTS,
   getWideningLadder,
   getWideningStep,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
@@ -38,10 +41,16 @@ import {
 } from "@/utils/ai/mail-search/interpret-search";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
 import { looksLikeNaturalLanguage } from "@/utils/mail-search/natural-language-search";
+import { SEMANTIC_MODEL } from "@/utils/mail-search/semantic-embedding";
+import { createSemanticIndex } from "@/utils/mail-engine/semantic-index";
 
 // Retrieval quality of Cue's search against Gmail-style keyword search, on a
 // synthetic mailbox in the SQLite store the browser runs. No provider: each
 // search returns what the local store answers.
+//
+// Cue's search runs twice on each reading: as the keyword search alone, and
+// blended with the on-device semantic index, which embeds the mailbox in
+// Node with the browser's model and runtime.
 //
 // pnpm --filter inbox-zero-ai test-ai eval/search-retrieval
 // Multi-model: EVAL_MODELS=all pnpm --filter inbox-zero-ai test-ai eval/search-retrieval
@@ -61,6 +70,11 @@ const SEARCH_CONTEXT = {
   timeZone: TIMEZONE,
   now: NOW,
 };
+
+const SEMANTIC_ONLY = "semantic only (on-device)";
+const WITH_SEMANTIC = " + semantic";
+// Embedding the whole mailbox in Node takes a while on a CI runner.
+const INDEX_TIMEOUT = 600_000;
 
 const RELEVANCE_CRITERION = {
   name: "The conversation is mail the user is searching for",
@@ -95,18 +109,38 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
   const judgments = new Map<string, Promise<boolean>>();
   let store: MailStore;
   let closeMailbox: (() => Promise<void>) | undefined;
+  let semanticIndex: ReturnType<typeof createSemanticIndex>;
+  let indexStats: IndexStats | undefined;
 
   beforeAll(async () => {
     const mailbox = await openFixtureMailbox();
     store = mailbox.store;
     closeMailbox = mailbox.close;
-  });
+    semanticIndex = createSemanticIndex({
+      store,
+      embedder: await createNodeTextEmbedder(),
+      nowMs: () => NOW.getTime(),
+      sleep: async () => undefined,
+    });
+    const startedAt = Date.now();
+    const messages = await semanticIndex.indexBacklog();
+    indexStats = { messages, ms: Date.now() - startedAt };
+  }, INDEX_TIMEOUT);
 
   afterAll(async () => {
+    semanticIndex?.stop();
     await closeMailbox?.();
-    printRetrievalReport(scores);
+    printRetrievalReport(scores, indexStats);
     evalReporter.printReport();
   });
+
+  function searchByMeaning(query: RetrievalQuery) {
+    return semanticIndex.search({
+      accountId: ACCOUNT_ID,
+      text: query.query,
+      limit: CUE_SEMANTIC_RESULTS,
+    });
+  }
 
   async function score(
     system: string,
@@ -149,6 +183,13 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
               widenedSearches: [],
             });
           }
+          const matches = await searchByMeaning(query);
+          await score(
+            SEMANTIC_ONLY,
+            query,
+            matches.map((match) => match.conversationId),
+            { searches: [], widenedSearches: [] },
+          );
         },
         TIMEOUT,
       );
@@ -180,9 +221,16 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
               })
             : null;
           const searches = intent?.searches ?? [];
-          const { ranked, widenedSearches, wideningTier, queries } =
-            await runCueSearch(store, searches);
-          const result = await score(model.label, query, ranked, {
+          // Only a search read as a sentence takes the AI path, semantic too.
+          const matches = natural ? await searchByMeaning(query) : [];
+          const {
+            ranked,
+            rankedWithSemantic,
+            widenedSearches,
+            wideningTier,
+            queries,
+          } = await runCueSearch(store, searches, matches);
+          const details = {
             searches,
             widenedSearches,
             wideningTier,
@@ -190,9 +238,16 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
             natural,
             latencyMs,
             isQuestion: intent?.isQuestion,
-          });
+          };
+          const result = await score(model.label, query, ranked, details);
+          const blended = await score(
+            `${model.label}${WITH_SEMANTIC}`,
+            query,
+            rankedWithSemantic,
+            details,
+          );
           console.debug(
-            `[${model.label}] ${query.id}: ${JSON.stringify(searches)}${widenedSearches.length ? ` widened ${JSON.stringify(widenedSearches)}` : ""} -> R@10 ${result.recall.toFixed(2)} MRR ${result.mrr.toFixed(2)}`,
+            `[${model.label}] ${query.id}: ${JSON.stringify(searches)}${widenedSearches.length ? ` widened ${JSON.stringify(widenedSearches)}` : ""} -> R@10 ${result.recall.toFixed(2)} MRR ${result.mrr.toFixed(2)}; + semantic R@10 ${blended.recall.toFixed(2)} MRR ${blended.mrr.toFixed(2)}`,
           );
           // Retrieval quality is the measurement, not a gate; only a reading
           // that yields no search at all fails here.
@@ -213,6 +268,8 @@ type Metrics = {
   judgedRelevant: string[];
   top: string[];
 };
+
+type IndexStats = { messages: number; ms: number };
 
 type QueryScore = Metrics & {
   system: string;
@@ -242,6 +299,10 @@ async function readSearches(store: MailStore, searches: string[]) {
   if (!predicates.length) return [];
   const predicate: MailPredicate =
     predicates.length === 1 ? predicates[0] : { kind: "any", predicates };
+  return readRows(store, predicate);
+}
+
+async function readRows(store: MailStore, predicate: MailPredicate) {
   const { view } = await store.readMailboxView({
     accountIds: [ACCOUNT_ID],
     predicate,
@@ -259,7 +320,11 @@ async function readSearches(store: MailStore, searches: string[]) {
  * little, up to the first tier that finds more, ranked together as on
  * screen. The provider is stubbed, so its last-resort search finds nothing.
  */
-async function runCueSearch(store: MailStore, searches: string[]) {
+async function runCueSearch(
+  store: MailStore,
+  searches: string[],
+  matches: SemanticMatch[],
+) {
   const ranking = {
     searches,
     labels: LABELS,
@@ -295,8 +360,25 @@ async function runCueSearch(store: MailStore, searches: string[]) {
     step = next;
   }
   const widening = step === null ? null : ladder[step];
+  // As the Cue found section reads the conversations the index found.
+  const bySimilarity = matches.length
+    ? await readRows(store, {
+        kind: "message",
+        ids: matches.map((match) => match.messageId),
+        accountId: ACCOUNT_ID,
+      })
+    : [];
+  const similarity = new Map(
+    matches.map((match) => [match.conversationId, match.similarity]),
+  );
   return {
     ranked: rankWithWidened(primary, wider, ranking).map((thread) => thread.id),
+    rankedWithSemantic: rankWithWidened(
+      primary,
+      wider,
+      { ...ranking, similarity },
+      bySimilarity,
+    ).map((thread) => thread.id),
     widenedSearches: widening?.searches ?? [],
     wideningTier: widening?.tier,
     queries,
@@ -391,18 +473,47 @@ const QUERY_TYPES: RetrievalQueryType[] = [
   "vague",
   "question",
   "multilingual",
+  "paraphrase",
 ];
 
-function printRetrievalReport(scores: QueryScore[]) {
+function printRetrievalReport(
+  scores: QueryScore[],
+  indexStats: IndexStats | undefined,
+) {
   if (!scores.length) return;
   const systems = [...new Set(scores.map((score) => score.system))];
   const cueSystems = systems.filter(
-    (system) => !BASELINES.some((baseline) => baseline.system === system),
+    (system) =>
+      system !== SEMANTIC_ONLY &&
+      !BASELINES.some((baseline) => baseline.system === system),
   );
   const lines: string[] = [
     "# Search retrieval: Cue vs keyword search",
     "",
     `Mailbox: ${FIXTURE_EMAILS.length} messages. Queries: ${RETRIEVAL_QUERIES.length}. Metrics at ${TOP_K}, over conversations.`,
+    "",
+    indexStats
+      ? `Semantic index: ${SEMANTIC_MODEL.id}, ${indexStats.messages} messages embedded in ${indexStats.ms} ms (${(indexStats.ms / Math.max(1, indexStats.messages)).toFixed(1)} ms per message, Node, one thread).`
+      : "Semantic index: not built.",
+    "",
+    "## Semantic blend: the existing queries and the paraphrases",
+    "",
+    "| System | Set | n | Recall@10 | MRR | Top-1 |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...systems.flatMap((system) =>
+      (["existing", "paraphrase"] as const).flatMap((set) => {
+        const rows = scores.filter(
+          (score) =>
+            score.system === system &&
+            (score.query.type === "paraphrase") === (set === "paraphrase"),
+        );
+        return rows.length
+          ? [
+              `| ${system} | ${set} | ${rows.length} | ${mean(rows, (r) => r.recall)} | ${mean(rows, (r) => r.mrr)} | ${mean(rows, (r) => (r.top1 ? 1 : 0))} |`,
+            ]
+          : [];
+      }),
+    ),
     "",
     "## By query type",
     "",

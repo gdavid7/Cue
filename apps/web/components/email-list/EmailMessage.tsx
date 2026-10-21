@@ -1147,6 +1147,14 @@ function ReplyPanel({
         cc: suggestedRecipients?.cc ?? reply.cc,
         bcc: suggestedRecipients?.bcc ?? reply.bcc,
         subject: suggestedRecipients?.subject ?? reply.subject,
+        // Only a rule's action sets these, so the user chose them.
+        ruleRecipients: [
+          suggestedRecipients?.to,
+          suggestedRecipients?.cc,
+          suggestedRecipients?.bcc,
+        ]
+          .filter(Boolean)
+          .join(","),
       };
     }
     return forwardSource
@@ -1431,6 +1439,14 @@ const prepareReplyingToEmail = ({
     cc: recipients.cc,
     bcc: recipients.bcc,
     references: threadOn.headers.references,
+    participants: [
+      message.headers.from,
+      message.headers.to,
+      message.headers.cc,
+      message.headers["reply-to"],
+    ]
+      .filter(Boolean)
+      .join(","),
     draftHtml: "",
     quotedContentHtml: html,
   };

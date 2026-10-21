@@ -1,6 +1,7 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { isSessionExpiredErrorBody } from "@/utils/session-expired";
+import { fetchWithSessionRetry } from "@/utils/session-refresh";
 
 /**
  * onSessionExpired runs where the request ran, which may be a worker with no
@@ -12,7 +13,7 @@ export function createMailHttpRequest(
 ): MailHttpRequestFn {
   return async ({ method, path, body, signal, accept }) => {
     const encoded = encodeRequestBody(body);
-    const response = await fetch(path, {
+    const response = await fetchWithSessionRetry(path, {
       method,
       signal,
       credentials: "include",

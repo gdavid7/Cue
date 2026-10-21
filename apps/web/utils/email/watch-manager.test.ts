@@ -10,8 +10,10 @@ import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
 import { publishToQstashAt } from "@/utils/upstash";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
+import { readFileSync } from "node:fs";
 import {
   ensureEmailAccountsWatched,
+  isEmailSyncDue,
   stopWatchingEmailAccount,
 } from "./watch-manager";
 
@@ -182,7 +184,7 @@ describe("ensureEmailAccountsWatched", () => {
     expect(clearWatchLapsedErrorIfResolved).not.toHaveBeenCalled();
   });
 
-  it("updates a renamed Google mailbox address once a day so webhooks keep matching", async () => {
+  it("updates a renamed Google mailbox address once a week so webhooks keep matching", async () => {
     vi.mocked(prisma.emailAccount.findMany).mockResolvedValue([
       getWatchedEmailAccount({
         watchEmailsExpirationDate: new Date(Date.now() + 3_600_000),
@@ -197,8 +199,8 @@ describe("ensureEmailAccountsWatched", () => {
     });
     prisma.$transaction.mockResolvedValue([]);
 
-    for (let hour = 0; hour < 24; hour++) {
-      vi.useFakeTimers({ now: Date.UTC(2026, 0, 1, hour), toFake: ["Date"] });
+    for (let day = 1; day <= 7; day++) {
+      vi.useFakeTimers({ now: Date.UTC(2026, 0, day, 6), toFake: ["Date"] });
       await ensureEmailAccountsWatched({ userIds: null, logger });
     }
 
@@ -347,8 +349,8 @@ describe("ensureEmailAccountsWatched", () => {
     );
 
     const results = [];
-    for (let hour = 0; hour < 24; hour++) {
-      vi.useFakeTimers({ now: Date.UTC(2026, 0, 1, hour), toFake: ["Date"] });
+    for (let day = 1; day <= 7; day++) {
+      vi.useFakeTimers({ now: Date.UTC(2026, 0, day, 6), toFake: ["Date"] });
       results.push(
         ...(await ensureEmailAccountsWatched({ userIds: null, logger }))
           .results,
@@ -356,7 +358,7 @@ describe("ensureEmailAccountsWatched", () => {
     }
 
     expect(fetchGoogleOpenIdProfile).toHaveBeenCalledTimes(1);
-    expect(results).toHaveLength(24);
+    expect(results).toHaveLength(7);
     expect(results.every((result) => result.status === "success")).toBe(true);
   });
 
@@ -485,5 +487,55 @@ describe("stopWatchingEmailAccount", () => {
       }),
     ).resolves.toBeUndefined();
     expect(prisma.emailAccount.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("isEmailSyncDue", () => {
+  const ids = Array.from({ length: 500 }, (_, i) => `email-account-${i}`);
+
+  it("selects every mailbox exactly once over seven consecutive daily runs", () => {
+    const counts = new Map(ids.map((id) => [id, 0]));
+    for (let day = 1; day <= 7; day++) {
+      const now = new Date(Date.UTC(2026, 0, day, 6));
+      for (const id of ids)
+        if (isEmailSyncDue(id, now)) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    expect([...counts.values()].every((count) => count === 1)).toBe(true);
+  });
+
+  it("spreads mailboxes across the week instead of one day", () => {
+    const dueByDay = [1, 2, 3, 4, 5, 6, 7].map(
+      (day) =>
+        ids.filter((id) =>
+          isEmailSyncDue(id, new Date(Date.UTC(2026, 0, day, 6))),
+        ).length,
+    );
+    expect(Math.min(...dueByDay)).toBeGreaterThan(ids.length / 14);
+  });
+
+  it("does not sync twice in a week if the cron moves to hourly", () => {
+    let runs = 0;
+    for (let hour = 0; hour < 24 * 7; hour++) {
+      if (isEmailSyncDue(ids[0], new Date(Date.UTC(2026, 0, 1, hour)))) runs++;
+    }
+    expect(runs).toBe(1);
+  });
+
+  it("stays aligned with the /api/watch/all cron hour", () => {
+    const { crons } = JSON.parse(
+      readFileSync(new URL("../../vercel.json", import.meta.url), "utf8"),
+    ) as { crons: { path: string; schedule: string }[] };
+    const watchAll = crons.filter((cron) => cron.path === "/api/watch/all");
+    expect(watchAll).toHaveLength(1);
+    const [minute, hour] = watchAll[0].schedule.split(" ");
+    const due = [1, 2, 3, 4, 5, 6, 7].flatMap((day) =>
+      ids.filter((id) =>
+        isEmailSyncDue(
+          id,
+          new Date(Date.UTC(2026, 0, day, Number(hour), Number(minute))),
+        ),
+      ),
+    );
+    expect(due).toHaveLength(ids.length);
   });
 });

@@ -24,6 +24,30 @@ export const DOCX_RENDER_OPTIONS = {
 };
 
 /**
+ * Word pages render at their printed width (816px for Letter), wider than a
+ * phone. Zooming the whole document down to the frame's width keeps every
+ * page in view without sideways scrolling; zoom lays the text out again at
+ * the smaller size, so it stays sharp where a transform would blur it. Pages
+ * that already fit stay at full size.
+ */
+export function fitDocxToFrame(doc: Document) {
+  const wrapper = doc.querySelector<HTMLElement>(".docx-wrapper");
+  if (!wrapper) return;
+  wrapper.style.zoom = "";
+  const pages = Array.from(
+    wrapper.querySelectorAll<HTMLElement>(":scope > section"),
+  );
+  const pageWidth = Math.max(0, ...pages.map((page) => page.offsetWidth));
+  if (!pageWidth) return;
+  const style = doc.defaultView?.getComputedStyle(wrapper);
+  const padding =
+    Number.parseFloat(style?.paddingLeft ?? "0") +
+    Number.parseFloat(style?.paddingRight ?? "0");
+  const zoom = doc.documentElement.clientWidth / (pageWidth + padding);
+  if (zoom < 1) wrapper.style.zoom = String(zoom);
+}
+
+/**
  * Elements a Word document has no business putting in the preview. Defence in
  * depth: the frame's sandbox and CSP already stop them running or loading.
  */

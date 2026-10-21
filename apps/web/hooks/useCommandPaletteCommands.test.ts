@@ -9,6 +9,11 @@ const router = vi.hoisted(() => ({ push: vi.fn() }));
 const account = vi.hoisted(() => ({ provider: "google", allAccounts: false }));
 const rules = vi.hoisted(() => ({ enabledArg: undefined as unknown }));
 const logOut = vi.hoisted(() => vi.fn());
+const toastError = vi.hoisted(() => vi.fn());
+const weather = vi.hoisted(() => ({
+  dismissed: false,
+  save: vi.fn(async () => true),
+}));
 
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 vi.mock("@/hooks/useSettingsDialog", () => ({
@@ -34,6 +39,10 @@ vi.mock("@/hooks/useTodayHref", () => ({
   useAllAccountsScope: () => account.allAccounts,
 }));
 vi.mock("@/utils/user", () => ({ logOut }));
+vi.mock("@/components/Toast", () => ({ toastError }));
+vi.mock("@/hooks/useTodayWeather", () => ({
+  useTodayWeather: () => ({ dismissed: weather.dismissed, save: weather.save }),
+}));
 vi.mock("@/components/SideNav", () => ({
   useNavigation: () => ({
     manageItems: [
@@ -56,6 +65,8 @@ describe("useCommandPaletteCommands", () => {
     vi.clearAllMocks();
     account.provider = "google";
     account.allAccounts = false;
+    weather.dismissed = false;
+    weather.save.mockResolvedValue(true);
   });
 
   it("opens rules settings on a page that exists", () => {
@@ -134,5 +145,34 @@ describe("useCommandPaletteCommands", () => {
     const { result } = renderHook(() => useCommandPaletteCommands());
 
     expect(result.current.commands.every((c) => !c.account)).toBe(true);
+  });
+
+  it("after Not now on Today's weather, offers to show it again and opens Today", async () => {
+    const offered = () =>
+      renderHook(() =>
+        useCommandPaletteCommands(),
+      ).result.current.commands.find(
+        (c) => c.label === "Show weather on Today",
+      );
+    expect(offered()).toBeUndefined();
+
+    weather.dismissed = true;
+    await offered()?.action();
+
+    // Clears the dismissal "Not now" stored, rather than a flag of its own.
+    expect(weather.save).toHaveBeenCalledWith(null);
+    expect(router.push).toHaveBeenCalledWith("/account-1/home");
+  });
+
+  it("says so when showing the weather again couldn't be saved", async () => {
+    weather.dismissed = true;
+    weather.save.mockResolvedValue(false);
+    const { result } = renderHook(() => useCommandPaletteCommands());
+
+    await result.current.commands
+      .find((c) => c.label === "Show weather on Today")
+      ?.action();
+
+    expect(toastError).toHaveBeenCalledTimes(1);
   });
 });

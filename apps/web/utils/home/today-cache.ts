@@ -169,6 +169,8 @@ function withoutPast(data: GetHomeResponse, now: number): GetHomeResponse {
     calendar: {
       ...data.calendar,
       next: next && Date.parse(next.at) > now ? next : null,
+      // A meeting may have been booked since: only a fresh read says clear.
+      clearThroughTomorrow: false,
     },
     nextUp: data.nextUp.filter(
       (item) => Date.parse(item.endAt ?? item.at) > now,

@@ -252,6 +252,7 @@ describe("mergeHomeData", () => {
       loaded(A, {
         calendar: {
           connected: true,
+          clearThroughTomorrow: false,
           next: {
             title: "Late",
             at: "2026-10-14T15:00:00Z",
@@ -273,6 +274,7 @@ describe("mergeHomeData", () => {
       loaded(B, {
         calendar: {
           connected: false,
+          clearThroughTomorrow: false,
           next: {
             title: "Early",
             at: "2026-10-14T10:00:00Z",
@@ -285,6 +287,7 @@ describe("mergeHomeData", () => {
 
     expect(data?.calendar).toEqual({
       connected: true,
+      clearThroughTomorrow: false,
       next: {
         title: "Early",
         at: "2026-10-14T10:00:00Z",
@@ -293,6 +296,22 @@ describe("mergeHomeData", () => {
       },
     });
     expect(data?.agentTasks.map((task) => task.account)).toEqual([A]);
+  });
+
+  it("calls the calendar clear only when every account that reads it found it clear", () => {
+    const calendar = (connected: boolean, clearThroughTomorrow: boolean) => ({
+      calendar: { connected, clearThroughTomorrow, next: null },
+    });
+    const clear = (...homes: Partial<GetHomeResponse>[]) =>
+      mergeHomeData([loaded(A, homes[0]), loaded(B, homes[1])]).data?.calendar
+        .clearThroughTomorrow;
+
+    expect(clear(calendar(true, true), calendar(true, true))).toBe(true);
+    // An account with no calendar has nothing to say about it.
+    expect(clear(calendar(true, true), calendar(false, false))).toBe(true);
+    // One account couldn't read it in time, or found a meeting.
+    expect(clear(calendar(true, true), calendar(true, false))).toBe(false);
+    expect(clear(calendar(false, false), calendar(false, false))).toBe(false);
   });
 });
 
@@ -372,7 +391,7 @@ function home(): GetHomeResponse {
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: stats(),

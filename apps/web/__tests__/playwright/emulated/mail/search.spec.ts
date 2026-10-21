@@ -62,6 +62,26 @@ for (const accountScope of ["single", "all"] as const) {
   });
 }
 
+test("typing a person's name finds mail you sent them", async ({ page }) => {
+  const { conversations } = await openMail(page);
+  const unrelated = conversationWithSubject(
+    page,
+    conversations,
+    "Archive Action Message",
+  );
+  await expect(unrelated).toBeVisible();
+
+  // Kai's name is only on the To line of mail you sent, which the text index
+  // doesn't hold; typing searches the local mail before the provider is asked.
+  await page.getByPlaceholder("Search mail").fill("Kai");
+
+  await expect(
+    conversationWithSubject(page, conversations, "Seeded Sent Message"),
+  ).toBeVisible();
+  await expect(unrelated).toHaveCount(0);
+  expect(new URL(page.url()).searchParams.get("q")).toBeNull();
+});
+
 test("advanced search composes Gmail operators and restores them", async ({
   page,
 }, testInfo) => {

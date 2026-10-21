@@ -99,8 +99,20 @@ export function useAllAccountsHome(accounts: AllInboxesAccount[] | null) {
     };
   }, [feeds, todayAccounts]);
 
+  const handledLabelIdsByAccount = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(feeds).flatMap(([accountId, feed]) =>
+          feed.data ? [[accountId, feed.data.handledLabelIds]] : [],
+        ),
+      ),
+    [feeds],
+  );
+
   return {
     merged,
+    /** Each loaded account's labels for mail Cue files without asking. */
+    handledLabelIdsByAccount,
     loaders: todayAccounts?.map((account) => (
       <HomeAccountFeed
         accountId={account.id}

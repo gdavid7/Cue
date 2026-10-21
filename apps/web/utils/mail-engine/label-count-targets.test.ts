@@ -4,6 +4,7 @@ import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { createWasmMemoryDriver } from "./wasm-sqlite";
 import {
+  allInboxesDraftsCountTargets,
   mailboxCountTargets,
   MAX_MAILBOX_COUNT_LABELS,
 } from "./label-count-targets";
@@ -140,13 +141,83 @@ describe("mailboxCountTargets", () => {
   });
 });
 
+describe("allInboxesDraftsCountTargets", () => {
+  it("counts each account's Drafts as that account counts them, hiding a draft only in its own account", async () => {
+    const store = await createSqliteMailStore(await createWasmMemoryDriver());
+    try {
+      for (const accountId of ["acc-1", "acc-2"]) {
+        await store.ensureAccount({
+          accountId,
+          provider: "google",
+          generation: "g1",
+        });
+        await store.applySyncPage({
+          ownerId: "owner",
+          page: {
+            session: { accountId, generation: "g1" },
+            requestId: "bootstrap",
+            from: { streamId: "primary", generation: "g1", checkpoint: null },
+            to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+            // The same message ids in both accounts, as two copies of one
+            // seeded mailbox would have.
+            changes: [
+              draftPatch("d-scheduled", "c-scheduled", accountId),
+              draftPatch("d-kept", "c-kept", accountId),
+            ],
+            requiredHydration: [],
+            roundComplete: true,
+          },
+        });
+      }
+      const accounts = [
+        { id: "acc-1", hiddenDraftMessageIds: ["d-scheduled"] },
+        { id: "acc-2", hiddenDraftMessageIds: [] },
+      ];
+
+      const merged = await store.readMailboxCounts({
+        accountIds: accounts.map((account) => account.id),
+        targets: allInboxesDraftsCountTargets(accounts),
+      });
+      const singleAccountCounts = await Promise.all(
+        accounts.map(async (account) => {
+          const drafts = mailboxCountTargets({
+            labels: [],
+            folders: [],
+            hiddenDraftMessageIds: account.hiddenDraftMessageIds,
+          }).find((target) => target.id === "DRAFT");
+          if (!drafts) throw new Error("Missing Drafts target");
+          const counts = await store.readMailboxCounts({
+            accountIds: [account.id],
+            targets: [{ id: drafts.id, predicate: drafts.predicate }],
+          });
+          return counts.view.counts[0]?.matchingConversations;
+        }),
+      );
+
+      expect(singleAccountCounts).toEqual([1, 2]);
+      expect(
+        merged.view.counts.map((count) => [
+          count.id,
+          count.matchingConversations,
+        ]),
+      ).toEqual([
+        ["acc-1", 1],
+        ["acc-2", 2],
+      ]);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
 function draftPatch(
   messageId: string,
   conversationId: string,
+  accountId = "acc-1",
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   return {
     kind: "message_patch",
-    key: { accountId: "acc-1", messageId },
+    key: { accountId, messageId },
     reference: {
       provider: "google",
       messageId,

@@ -17,6 +17,7 @@ interface TooltipProps {
   children: React.ReactElement<any>;
   content?: string;
   contentComponent?: React.ReactNode;
+  /** Keeps the tooltip closed. The trigger stays mounted, so focus on it survives. */
   hide?: boolean;
   /**
    * Opens on a tap, for touch. Off for a control whose click acts at once:
@@ -40,14 +41,15 @@ export const Tooltip = ({
   const [isOpen, setIsOpen] = useState(false);
   useEffect(trackLastInput, []);
 
-  if (hide) return children;
-
   return (
     <TooltipProvider delayDuration={200}>
-      <ShadcnTooltip open={isOpen} onOpenChange={setIsOpen}>
+      <ShadcnTooltip
+        open={isOpen && !hide}
+        onOpenChange={(open) => setIsOpen(open && !hide)}
+      >
         <TooltipTrigger
           asChild
-          onClick={openOnClick ? () => setIsOpen(!isOpen) : undefined}
+          onClick={openOnClick && !hide ? () => setIsOpen(!isOpen) : undefined}
           onFocus={(event) => {
             // Skips Radix's open-on-focus unless the user moved focus here.
             if (!movedFocusByKeyboard()) event.preventDefault();

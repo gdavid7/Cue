@@ -71,7 +71,7 @@ export function createMicrosoftCalendarProvider(
         accessToken,
         refreshToken,
         expiresAt: expiresAt?.getTime() ?? null,
-        emailAccountId,
+        connectionId,
         logger,
       });
 

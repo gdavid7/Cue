@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { env } from "@/env";
 import { hasCronSecret, hasPostCronSecret, runCronJob } from "@/utils/cron";
 import { captureException } from "@/utils/error";
+import { mailBulkJobListings } from "@/utils/mail-bulk/job-listing";
 import { type RequestWithLogger, withError } from "@/utils/middleware";
 import {
   enforceConfiguredReasoningRetention,
@@ -36,17 +37,23 @@ async function runReasoningRetention(request: RequestWithLogger) {
   const result = await runCronJob({
     logger: request.logger,
     run: async () => {
-      const [reasoning, draftSentText] = await Promise.all([
-        enforceConfiguredReasoningRetention({
-          days: env.REASONING_RETENTION_DAYS,
-          logger: request.logger,
-        }),
-        enforceDraftSentTextRetention({
-          days: env.DRAFT_SENT_TEXT_RETENTION_DAYS,
-          logger: request.logger,
-        }),
-      ]);
-      return { reasoning, draftSentText };
+      const [reasoning, draftSentText, mailBulkJobListingsDropped] =
+        await Promise.all([
+          enforceConfiguredReasoningRetention({
+            days: env.REASONING_RETENTION_DAYS,
+            logger: request.logger,
+          }),
+          enforceDraftSentTextRetention({
+            days: env.DRAFT_SENT_TEXT_RETENTION_DAYS,
+            logger: request.logger,
+          }),
+          mailBulkJobListings.deleteAbandoned(),
+        ]);
+      return {
+        reasoning,
+        draftSentText,
+        mailBulkJobListings: mailBulkJobListingsDropped,
+      };
     },
   });
 

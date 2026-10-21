@@ -4,14 +4,23 @@ import type { ParsedMessage } from "@/utils/types";
 import prisma from "@/utils/prisma";
 import { withPrismaRetry } from "@/utils/prisma-retry";
 import { calculateSimilarity } from "@/utils/similarity-score";
+import { isDuplicateError } from "@/utils/prisma-helpers";
+import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
 import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import {
+  getReplyMemoryRetentionCutoff,
   isMeaningfulDraftEdit,
+  isUsedStartingDraft,
   saveDraftSendLogReplyMemory,
   syncReplyMemoriesFromDraftSendLogs,
 } from "@/utils/ai/reply/reply-memory";
+import {
+  type ComposeAssistOutcome,
+  getAcceptedSuggestionsText,
+  parseComposeAssistOutcomes,
+} from "@/utils/actions/compose-assist.validation";
 import { stripProviderSignatureFromParsedMessage } from "@/utils/email/signature-normalization";
 import {
   replaceMessagingDraftNotificationsWithDraftSentState,
@@ -28,6 +37,12 @@ import { logReplyTrackerError } from "./error-logging";
 const DRAFT_SENT_SIMILARITY_THRESHOLD = 0.7;
 const SUGGESTION_EXACT_SIMILARITY = 0.85;
 const SUGGESTION_MIN_COMPARABLE_LENGTH = 40;
+// How long after the user last used Cue on a reply a send without threading
+// headers still counts as that reply.
+const UNTHREADED_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+// Replies in one thread the user used Cue on but hasn't sent yet.
+const MAX_COMPOSE_ASSIST_CANDIDATES = 3;
 /**
  * Checks if a sent message originated from an AI draft (a rule's draft or a
  * suggested reply the user saved) and logs its similarity.
@@ -50,6 +65,26 @@ export async function trackSentDraftStatus({
   if (!sentMessageId) {
     logger.warn("Sent message missing ID, cannot track draft status");
     return;
+  }
+
+  // Cue's help in the composer is its own source, alongside any rule draft
+  // or suggested reply the user started from. Each send learns once, and
+  // when Cue helped, always through Cue's log, with the draft the user used
+  // as its starting point: the draft's own comparison would count Cue's
+  // wording as the user's edits.
+  let composeAssistSend: ComposeAssistSend | null = null;
+  try {
+    composeAssistSend = await trackSentComposeAssistReply({
+      emailAccountId,
+      sentMessageId,
+      message,
+      provider,
+      logger,
+    });
+  } catch (error) {
+    logger.error("Failed to track Cue's suggestions in a sent reply", {
+      error,
+    });
   }
 
   const [executedAction, suggestedReplyDraft] = await Promise.all([
@@ -115,6 +150,7 @@ export async function trackSentDraftStatus({
       suggestedReplyDraft.updatedAt > executedAction.createdAt)
   ) {
     await trackSentSuggestedReplyDraft({
+      composeAssistSend,
       emailAccountId,
       sentMessageId,
       suggestedReplyDraft,
@@ -134,6 +170,7 @@ export async function trackSentDraftStatus({
 
   if (!executedAction.draftId) {
     await trackSentReplySuggestion({
+      composeAssistSend,
       emailAccountId,
       sentMessageId,
       executedAction,
@@ -208,6 +245,12 @@ export async function trackSentDraftStatus({
     });
     if (sentMessageRepliesToSource !== false) {
       queueReplyMemoryLearning({
+        composeAssistSend,
+        startingDraftUsed: isUsedStartingDraft({
+          source: "rule-draft",
+          draftStatus: DraftEmailStatus.REPLIED_WITHOUT_DRAFT,
+          similarityScore,
+        }),
         emailAccountId,
         draftSendLogId: draftSendLog.id,
         draftText: executedAction.content,
@@ -279,6 +322,12 @@ export async function trackSentDraftStatus({
   });
 
   queueReplyMemoryLearning({
+    composeAssistSend,
+    startingDraftUsed: isUsedStartingDraft({
+      source: "rule-draft",
+      draftStatus,
+      similarityScore,
+    }),
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: executedAction.content,
@@ -527,6 +576,8 @@ export async function cleanupThreadAIDrafts({
 }
 
 function queueReplyMemoryLearning({
+  composeAssistSend,
+  startingDraftUsed,
   emailAccountId,
   draftSendLogId,
   draftText,
@@ -535,6 +586,9 @@ function queueReplyMemoryLearning({
   provider,
   logger,
 }: {
+  composeAssistSend: ComposeAssistSend | null;
+  /** Whether this draft was where the reply began (isUsedStartingDraft). */
+  startingDraftUsed: boolean;
   emailAccountId: string;
   draftSendLogId: string;
   draftText?: string | null;
@@ -543,6 +597,11 @@ function queueReplyMemoryLearning({
   provider: EmailProvider;
   logger: Logger;
 }) {
+  // Cue's log already learns from this send.
+  if (composeAssistSend?.queued) return;
+  // Cue wrote this reply, not from this draft: comparing them would count
+  // Cue's wording as the user's edits.
+  if (composeAssistSend && !startingDraftUsed) return;
   if (!draftText || !sentText) return;
 
   const replyMemorySentText = sentText.slice(0, 4000);
@@ -557,6 +616,52 @@ function queueReplyMemoryLearning({
     return;
   }
 
+  // The user changed the draft, but with Cue's help: Cue's log learns, with
+  // this draft as where the reply started, so Cue's wording isn't taken for
+  // the user's.
+  learnReplyMemoriesAfterResponse(
+    composeAssistSend
+      ? {
+          emailAccountId,
+          draftSendLogId: composeAssistSend.draftSendLogId,
+          replyMemorySentText: composeAssistSend.replyMemorySentText,
+          provider,
+          logger,
+        }
+      : {
+          emailAccountId,
+          draftSendLogId,
+          replyMemorySentText,
+          provider,
+          logger,
+        },
+  );
+}
+
+/**
+ * A send logged against Cue's suggestions that can learn: it answers the
+ * message the suggestions were for and has text. `queued` says whether
+ * learning already started from Cue's outcomes alone.
+ */
+type ComposeAssistSend = {
+  draftSendLogId: string;
+  replyMemorySentText: string;
+  queued: boolean;
+};
+
+function learnReplyMemoriesAfterResponse({
+  emailAccountId,
+  draftSendLogId,
+  replyMemorySentText,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  draftSendLogId: string;
+  replyMemorySentText: string;
+  provider: EmailProvider;
+  logger: Logger;
+}) {
   after(async () => {
     try {
       await saveDraftSendLogReplyMemory({
@@ -577,7 +682,154 @@ function queueReplyMemoryLearning({
   });
 }
 
+/**
+ * A reply written with Cue's suggestions in the composer. What the user
+ * accepted, changed or discarded, set against what they sent, teaches reply
+ * memories. Returns the log when it can learn, so the draft the user started
+ * from learns through it rather than on its own.
+ */
+async function trackSentComposeAssistReply({
+  emailAccountId,
+  sentMessageId,
+  message,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  sentMessageId: string;
+  message: ParsedMessage;
+  provider: EmailProvider;
+  logger: Logger;
+}): Promise<ComposeAssistSend | null> {
+  const candidates = await prisma.composeAssistReply.findMany({
+    where: {
+      emailAccountId,
+      threadId: message.threadId,
+      draftSendLog: null,
+      updatedAt: { gt: getReplyMemoryRetentionCutoff() },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: MAX_COMPOSE_ASSIST_CANDIDATES,
+    select: {
+      id: true,
+      updatedAt: true,
+      messageId: true,
+      outcomes: true,
+      emailAccount: { select: { signature: true } },
+    },
+  });
+
+  // The thread may hold suggestions for other replies; the sent message
+  // belongs to the one whose message it answers.
+  let match:
+    | {
+        composeAssistReply: (typeof candidates)[number];
+        sourceMessage: ParsedMessage;
+      }
+    | undefined;
+  for (const composeAssistReply of candidates) {
+    const sourceMessage = await provider
+      .getMessage(composeAssistReply.messageId)
+      .catch((error) => {
+        logger.warn("Failed to load the message Cue's suggestions were for", {
+          error,
+        });
+        return null;
+      });
+    if (
+      sourceMessage &&
+      sentReplyAnswers({
+        sentMessage: message,
+        sourceMessage,
+        suggestionsUpdatedAt: composeAssistReply.updatedAt,
+      })
+    ) {
+      match = { composeAssistReply, sourceMessage };
+      break;
+    }
+  }
+  if (!match) return null;
+  const { composeAssistReply, sourceMessage } = match;
+  const outcomes = parseComposeAssistOutcomes(composeAssistReply.outcomes);
+  if (!outcomes.length) return null;
+
+  const { sentMessageRepliesToSource, sentText, draftSendLogData } =
+    await compareSentReplyWithDraft({
+      draftId: null,
+      draftText: getAcceptedSuggestionsText(outcomes),
+      sourceMessageId: composeAssistReply.messageId,
+      sourceMessage,
+      accountSignature: composeAssistReply.emailAccount.signature,
+      sentMessageId,
+      message,
+      provider,
+      logger,
+    });
+
+  const replyMemorySentText = sentText?.slice(0, 4000) ?? "";
+  const learnable =
+    sentMessageRepliesToSource !== false &&
+    !!replyMemorySentText &&
+    hasLearnableComposeAssistOutcome(outcomes, replyMemorySentText);
+
+  let draftSendLog: { id: string };
+  try {
+    draftSendLog = await withPrismaRetry(
+      () =>
+        prisma.draftSendLog.create({
+          data: {
+            composeAssistReplyId: composeAssistReply.id,
+            ...draftSendLogData,
+          },
+        }),
+      { logger },
+    );
+  } catch (error) {
+    // A repeated delivery of the same send: the first delivery already
+    // logged it and queued what it learns.
+    if (isDuplicateError(error)) {
+      logger.warn("Cue's suggestions in this reply were already logged", {
+        composeAssistReplyId: composeAssistReply.id,
+      });
+      const stored = await prisma.draftSendLog.findUnique({
+        where: { composeAssistReplyId: composeAssistReply.id },
+        select: { id: true, sentText: true },
+      });
+      if (!stored?.sentText || sentMessageRepliesToSource === false)
+        return null;
+      const storedSentText = stored.sentText.slice(0, 4000);
+      return {
+        draftSendLogId: stored.id,
+        replyMemorySentText: storedSentText,
+        queued: hasLearnableComposeAssistOutcome(outcomes, storedSentText),
+      };
+    }
+    throw error;
+  }
+  logger.info("Created draft send log for Cue's suggestions in a reply", {
+    composeAssistReplyId: composeAssistReply.id,
+    outcomeCount: outcomes.length,
+    sentMessageRepliesToSource,
+  });
+
+  if (sentMessageRepliesToSource === false || !replyMemorySentText) return null;
+  if (learnable)
+    learnReplyMemoriesAfterResponse({
+      emailAccountId,
+      draftSendLogId: draftSendLog.id,
+      replyMemorySentText,
+      provider,
+      logger,
+    });
+  return {
+    draftSendLogId: draftSendLog.id,
+    replyMemorySentText,
+    queued: learnable,
+  };
+}
+
 async function trackSentSuggestedReplyDraft({
+  composeAssistSend,
   emailAccountId,
   sentMessageId,
   suggestedReplyDraft,
@@ -585,6 +837,7 @@ async function trackSentSuggestedReplyDraft({
   provider,
   logger,
 }: {
+  composeAssistSend: ComposeAssistSend | null;
   emailAccountId: string;
   sentMessageId: string;
   suggestedReplyDraft: {
@@ -674,6 +927,12 @@ async function trackSentSuggestedReplyDraft({
   if (sentMessageRepliesToSource === false) return;
 
   queueReplyMemoryLearning({
+    composeAssistSend,
+    startingDraftUsed: isUsedStartingDraft({
+      source: "suggested-reply",
+      draftExists,
+      similarityScore,
+    }),
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: suggestedReplyDraft.content,
@@ -692,6 +951,7 @@ async function trackSentSuggestedReplyDraft({
  * memories, as a draft's does.
  */
 async function trackSentReplySuggestion({
+  composeAssistSend,
   emailAccountId,
   sentMessageId,
   executedAction,
@@ -699,6 +959,7 @@ async function trackSentReplySuggestion({
   provider,
   logger,
 }: {
+  composeAssistSend: ComposeAssistSend | null;
   emailAccountId: string;
   sentMessageId: string;
   executedAction: {
@@ -801,6 +1062,12 @@ async function trackSentReplySuggestion({
   if (!toSomeoneElse && sentMessageRepliesToSource === false) return;
 
   queueReplyMemoryLearning({
+    composeAssistSend,
+    startingDraftUsed: isUsedStartingDraft({
+      source: "rule-draft",
+      draftStatus,
+      similarityScore,
+    }),
     emailAccountId,
     draftSendLogId: draftSendLog.id,
     draftText: executedAction.content,
@@ -815,6 +1082,7 @@ async function compareSentReplyWithDraft({
   draftId,
   draftText,
   sourceMessageId,
+  sourceMessage: loadedSourceMessage,
   accountSignature,
   sentMessageId,
   message,
@@ -825,6 +1093,8 @@ async function compareSentReplyWithDraft({
   draftId: string | null;
   draftText: string | null;
   sourceMessageId: string;
+  /** Already loaded by the caller; otherwise fetched here. */
+  sourceMessage?: ParsedMessage;
   accountSignature: string | null | undefined;
   sentMessageId: string;
   message: ParsedMessage;
@@ -833,13 +1103,14 @@ async function compareSentReplyWithDraft({
 }) {
   const [draft, sourceMessage] = await Promise.all([
     draftId ? provider.getDraft(draftId) : null,
-    provider.getMessage(sourceMessageId).catch((error) => {
-      logger.warn("Failed to load source message for sent draft tracking", {
-        error,
-        draftId,
-      });
-      return null;
-    }),
+    loadedSourceMessage ??
+      provider.getMessage(sourceMessageId).catch((error) => {
+        logger.warn("Failed to load source message for sent draft tracking", {
+          error,
+          draftId,
+        });
+        return null;
+      }),
   ]);
 
   // Pass full message to properly handle Outlook HTML content
@@ -864,6 +1135,7 @@ async function compareSentReplyWithDraft({
 
   return {
     draftExists: !!draft,
+    sourceMessage,
     sentMessageRepliesToSource,
     similarityScore,
     sentText,
@@ -928,4 +1200,55 @@ function getDraftCleanupStatusData({
 
 function normalizedLength(text: string | null) {
   return (text ?? "").replace(/\s+/g, "").length;
+}
+
+/**
+ * Whether the user did anything with Cue's suggestions that a memory could
+ * learn from: asked for changes, turned one down, or changed accepted text
+ * before sending. Suggestions sent exactly as Cue wrote them teach nothing,
+ * and skip the model call.
+ */
+export function hasLearnableComposeAssistOutcome(
+  outcomes: ComposeAssistOutcome[],
+  sentText: string,
+) {
+  const sent = normalizeForContainment(sentText);
+  return outcomes.some(
+    (outcome) =>
+      outcome.outcome === "discarded" ||
+      outcome.refinements.length > 0 ||
+      !sent.includes(normalizeForContainment(outcome.suggestion)),
+  );
+}
+
+function normalizeForContainment(text: string) {
+  return text.toLowerCase().replace(/\s+/gu, " ").trim();
+}
+
+/**
+ * Whether the sent message is the reply Cue's suggestions were made for: it
+ * answers that message by its threading headers or, without them, was sent
+ * soon after the user last used Cue on it.
+ */
+export function sentReplyAnswers({
+  sentMessage,
+  sourceMessage,
+  suggestionsUpdatedAt,
+}: {
+  sentMessage: ParsedMessage;
+  sourceMessage: ParsedMessage;
+  suggestionsUpdatedAt: Date;
+}) {
+  if (sourceMessage.threadId !== sentMessage.threadId) return false;
+  const sourceHeaderId = sourceMessage.headers["message-id"]?.trim();
+  const threading = [
+    sentMessage.headers["in-reply-to"],
+    sentMessage.headers.references,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (sourceHeaderId && threading) return threading.includes(sourceHeaderId);
+  // The provider's clock and ours can disagree by a little.
+  const gap = getMessageTimestamp(sentMessage) - suggestionsUpdatedAt.getTime();
+  return gap >= -CLOCK_SKEW_MS && gap <= UNTHREADED_REPLY_WINDOW_MS;
 }
