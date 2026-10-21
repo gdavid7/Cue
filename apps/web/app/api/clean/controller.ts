@@ -15,6 +15,7 @@ import type { Logger } from "@/utils/logger";
 import { getCalendarEventStatus } from "@/utils/parse/calender-event";
 import { findUnsubscribeLink } from "@/utils/parse/parseHtml.server";
 import { isActivePremium } from "@/utils/premium";
+import prisma from "@/utils/prisma";
 import { saveThread, updateThread } from "@/utils/redis/clean";
 import type { ParsedMessage } from "@/utils/types";
 import { publishToQstash } from "@/utils/upstash";
@@ -30,7 +31,8 @@ export const cleanThreadBody = z.object({
   processedLabelId: z.string(),
   jobId: z.string(),
   action: z.enum([CleanAction.ARCHIVE, CleanAction.MARK_READ]),
-  instructions: z.string().optional(),
+  // The job's free-text instructions stay on its CleanupJob row, out of the
+  // queue (founder rule R-1).
   skips: z.object({
     reply: z.boolean().default(true).nullish(),
     starred: z.boolean().default(true).nullish(),
@@ -51,7 +53,6 @@ export async function cleanThread({
   processedLabelId,
   jobId,
   action,
-  instructions,
   skips,
   logger,
 }: CleanThreadBody & { logger: Logger }) {
@@ -195,11 +196,16 @@ export async function cleanThread({
     return;
   }
 
+  const cleanupJob = await prisma.cleanupJob.findFirst({
+    where: { id: jobId, emailAccountId },
+    select: { instructions: true },
+  });
+
   const aiResult = await aiClean({
     emailAccount,
     messageId: lastMessage.id,
     messages: messages.map((m) => getEmailForLLM(m)),
-    instructions,
+    instructions: cleanupJob?.instructions ?? undefined,
     skips,
   });
 
