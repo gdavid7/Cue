@@ -119,11 +119,13 @@ jobs:
 
       - name: Install Playwright Chromium
         if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 12
+        run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm exec playwright install --with-deps chromium
 
       - name: Install Chromium system dependencies
         if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm exec playwright install-deps chromium
+        timeout-minutes: 12
+        run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm exec playwright install-deps chromium
 
       - name: Run journeys
         if: steps.config.outputs.robot == 'true'
