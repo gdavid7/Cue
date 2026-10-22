@@ -76,6 +76,7 @@ const OPTIONAL_METHODS = {
   queryPersonCard: true,
   queryFiles: true,
   queryFileSenders: true,
+  queryFilesNotOnDevice: true,
   searchSemantic: true,
   observeMailboxWindow: true,
   ensureAccount: true,
