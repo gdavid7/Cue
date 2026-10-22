@@ -136,7 +136,7 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
   const subject = `Field Notes weekly ${Date.now()}`;
   const newsletter = await seedNewsletter(page, subject);
   try {
-    const { conversations, emailAccountId } = await openMail(page);
+    const { conversations } = await openMail(page);
     await waitForMetadataCoverage(page);
     const bundle = page.getByRole("button", {
       name: /^Reading, from .*Field Notes/,
@@ -209,16 +209,8 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
     await expect(page.getByText("Nothing left to read.")).toBeVisible();
     await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
     await expect
-      .poll(
-        () =>
-          readLatestMailMutation(page, {
-            emailAccountId,
-            kind: "archive",
-            threadId: newsletter.threadId,
-          }),
-        { timeout: 60_000 },
-      )
-      .toMatchObject({ status: "succeeded" });
+      .poll(() => newsletter.inInbox(), { timeout: 60_000 })
+      .toBe(false);
 
     // All inboxes has no lane: its Reading address goes back to the inbox.
     const allInboxesReading = new URL(page.url());
