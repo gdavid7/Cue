@@ -66,7 +66,7 @@ export const HANDLED_LABELS = [
   "Notification",
 ];
 /** Today's Reading lane bundles unread mail Cue filed under this label. */
-const READING_LABEL = "Newsletter";
+const READING_LABEL = getRuleLabel(SystemType.NEWSLETTER);
 const HIDDEN_TAGS = new Set([
   "inbox",
   "unread",

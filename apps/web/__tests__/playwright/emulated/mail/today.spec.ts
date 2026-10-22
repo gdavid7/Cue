@@ -129,6 +129,88 @@ test("bundles unread newsletters into one Reading row that opens in place and ma
   }
 });
 
+test("Mail bundles newsletters into one Reading row whose lane reads through them and archives them all with undo", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const subject = `Field Notes weekly ${Date.now()}`;
+  const newsletter = await seedNewsletter(page, subject);
+  try {
+    const { conversations, emailAccountId } = await openMail(page);
+    const bundle = page.getByRole("button", {
+      name: /^Reading, from .*Field Notes/,
+    });
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    // One row for the bundle; the newsletter isn't a row of its own.
+    const inboxRow = conversations.getByRole("option", { name: subject });
+    await expect(inboxRow).toHaveCount(0);
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await expect(bundle).toBeVisible();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `mail-reading-bundle-${theme}-${size.width}`,
+        );
+      }
+    }
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    await bundle.click();
+    await expect(page).toHaveURL(/\/type\/reading(\/|$|\?)/);
+    const laneRow = page
+      .getByRole("listbox", { name: "Conversations" })
+      .getByRole("option", { name: subject });
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-lane");
+
+    // Reading one marks it read, and it keeps its place in the lane.
+    await laneRow.click();
+    await expect(page.getByRole("heading", { name: subject })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.keyboard.press("Escape");
+    await expect(laneRow).toBeVisible();
+
+    await page.getByRole("button", { name: "Archive all" }).click();
+    await expect(laneRow).toHaveCount(0);
+    await expect(page.getByText("Nothing left to read.")).toBeVisible();
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
+    await expect
+      .poll(
+        () =>
+          readLatestMailMutation(page, {
+            emailAccountId,
+            kind: "archive",
+            threadId: newsletter.threadId,
+          }),
+        { timeout: 60_000 },
+      )
+      .toMatchObject({ status: "succeeded" });
+
+    // Archive all keeps a row's undo, which brings the bundle back.
+    await page
+      .getByRole("region", { name: "Notifications alt+T" })
+      .getByRole("button", { name: /^Undo/ })
+      .click();
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("button", { name: "Back to Inbox" }).click();
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+  } finally {
+    await newsletter.remove();
+  }
+});
+
 test("a first visit shows the inbox from local mail while Today loads", async ({
   page,
 }, testInfo) => {

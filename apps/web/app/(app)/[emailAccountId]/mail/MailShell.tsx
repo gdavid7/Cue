@@ -53,6 +53,17 @@ import type {
 import { deleteMessagesForeverAction } from "@/utils/actions/mail-bulk-action";
 import { MailReaderPane } from "@/app/(app)/[emailAccountId]/mail/MailReaderPane";
 import { CueFoundSection } from "@/app/(app)/[emailAccountId]/mail/CueFoundSection";
+import {
+  ReadingBundleRow,
+  ReadingLaneBar,
+} from "@/app/(app)/[emailAccountId]/mail/ReadingBundle";
+import {
+  findReadingLabelId,
+  getReadingSummary,
+  inboxWithoutReadingQuery,
+  MAIL_READING_TYPE,
+  readingLaneQuery,
+} from "@/app/(app)/[emailAccountId]/mail/reading-lane";
 import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 import { useAllInboxesCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-all-inboxes-cue-search";
 import {
@@ -324,6 +335,9 @@ export function MailShell() {
   };
   const routeLabelId = resolveRouteSlug("label", mailSlugs.labels);
   const routeFolderId = resolveRouteSlug("folder", mailSlugs.folders);
+  const isReadingView =
+    routeView.kind === "type" && routeView.type === MAIL_READING_TYPE;
+  const readingLabelId = findReadingLabelId(allLabels);
   // Until names load, a slug can't be told from an id, so nothing is fetched.
   // If they fail to load, the slug can't be resolved at all: the inbox shows
   // instead, with a note, rather than a placeholder that never fills.
@@ -346,7 +360,13 @@ export function MailShell() {
               loading: !settings,
               failed: Boolean(settingsError),
             })
-          : "ready";
+          : isReadingView
+            ? getRouteResolution({
+                resolved: Boolean(readingLabelId),
+                loading: labelsLoading,
+                failed: Boolean(labelsError),
+              })
+            : "ready";
   const isResolvingRoute = routeResolution === "resolving";
   const routeFailed = routeResolution === "failed";
   // A slug that never resolves is taken as a provider id, which is what links
@@ -526,10 +546,14 @@ export function MailShell() {
   const scopeQuery: ThreadsQuery | null = useMemo(() => {
     if (scopeLabelId) return { labelId: scopeLabelId };
     if (scopeFolderId) return { folderId: scopeFolderId };
+    // Without a Newsletter label there is nothing to read through; the list
+    // stays off (see `readingLaneEmpty`) and the lane says so.
+    if (scopeType === MAIL_READING_TYPE)
+      return readingLaneQuery(readingLabelId ?? "");
     if (scopeType && scopeType !== "inbox")
       return mailTypeToThreadsQuery(scopeType);
     return null;
-  }, [scopeFolderId, scopeLabelId, scopeType]);
+  }, [scopeFolderId, scopeLabelId, scopeType, readingLabelId]);
   // All inboxes merges only the views every account has, each in full.
   const isAllInboxesView =
     isAllAccounts && !!scopeType && ALL_INBOXES_VIEW_TYPES.has(scopeType);
@@ -677,17 +701,41 @@ export function MailShell() {
   const activeCombinedLabelNames = combinedLabelSplits.find(
     (split) => split.id === displayedActiveSplitId,
   )?.labelNames;
+  // The plain inbox bundles its newsletters into one Reading row. Tabs slice
+  // the inbox their own way, so they keep every row.
+  const bundlesReading =
+    !isAllAccounts &&
+    !searchQuery &&
+    !scopeQuery &&
+    !activeSplit?.filters.length &&
+    activeSplit?.id !== OTHER_SPLIT_ID &&
+    Boolean(readingLabelId);
   const query: ThreadsQuery = useMemo(() => {
     // Search overrides split/scope and covers the whole mailbox, matching
     // what Gmail's and Outlook's own search boxes do by default.
     if (searchQuery) return { q: searchQuery };
     if (scopeQuery) return scopeQuery;
+    if (bundlesReading && readingLabelId)
+      return inboxWithoutReadingQuery(readingLabelId);
 
     if (activeSplit?.id === OTHER_SPLIT_ID) return otherMailSplitQuery(splits);
     return activeSplit
       ? mailSplitToThreadsQuery(activeSplit)
       : { type: "inbox" };
-  }, [searchQuery, scopeQuery, activeSplit, splits]);
+  }, [
+    searchQuery,
+    scopeQuery,
+    activeSplit,
+    splits,
+    bundlesReading,
+    readingLabelId,
+  ]);
+  const readingQuery = useMemo(
+    () => readingLaneQuery(readingLabelId ?? ""),
+    [readingLabelId],
+  );
+  // An account without a Newsletter label has no lane to read through.
+  const readingLaneEmpty = isReadingView && !readingLabelId;
 
   // Typing searches local mail as you go; the provider is only asked once
   // the search is committed (Enter, or a search address), so a pause
@@ -699,8 +747,21 @@ export function MailShell() {
     query,
     providerSearch,
     enabled:
-      !isAllAccounts && searchSettled && !isDatabaseView && !isResolvingRoute,
+      !isAllAccounts &&
+      searchSettled &&
+      !isDatabaseView &&
+      !isResolvingRoute &&
+      !readingLaneEmpty,
   });
+  const readingThreadState = useMailThreads({
+    emailAccountId,
+    query: readingQuery,
+    enabled: bundlesReading && !isResolvingRoute,
+  });
+  const readingSummary = useMemo(
+    () => getReadingSummary(readingThreadState.threads, userEmail),
+    [readingThreadState.threads, userEmail],
+  );
   const combinedThreadState = useCombinedMailThreads({
     accounts: combinedAccounts,
     emailAccountId,
@@ -773,10 +834,11 @@ export function MailShell() {
   // whole inbox or for the tab the inbox opens on, whichever they were read
   // for; a search or any other view would show different mail.
   const showsWholeInbox =
-    !isAllAccounts &&
-    !searchQuery &&
-    query.type === "inbox" &&
-    Object.keys(query).length === 1;
+    bundlesReading ||
+    (!isAllAccounts &&
+      !searchQuery &&
+      query.type === "inbox" &&
+      Object.keys(query).length === 1);
   const showsLandingTab =
     !isAllAccounts &&
     !searchQuery &&
@@ -1181,11 +1243,17 @@ export function MailShell() {
         ? combinedAccounts.map((account) => ({ id: account.id, scope }))
         : null;
     }
-    const scope = getMatchingScope(query, provider);
+    // Every conversation in the inbox, the bundled newsletters among them,
+    // as the Reading row above the list says they are.
+    const scope = getMatchingScope(
+      bundlesReading ? { type: "inbox" } : query,
+      provider,
+    );
     return scope ? [{ id: emailAccountId, scope }] : null;
   }, [
     activeSplit?.filters.length,
     allInboxesMailboxType,
+    bundlesReading,
     combinedAccounts,
     emailAccountId,
     isAllAccounts,
@@ -1650,6 +1718,21 @@ export function MailShell() {
           return setReadState(ids, false);
         }, true),
   );
+  // The Reading lane's whole bundle at once, through the engine as a row's
+  // own actions go; archiving keeps its undo.
+  const readingUnreadKeys = isReadingView
+    ? navThreads
+        .filter((thread) => isThreadUnread(thread.messages))
+        .map(getListThreadKey)
+    : [];
+  const markAllReadingRead = useStableCallback(() =>
+    setReadState(readingUnreadKeys, true),
+  );
+  const archiveAllReading = useStableCallback(async () => {
+    const queued = await archive(orderedIds);
+    if (openThreadKey && queued.includes(openThreadKey)) setOpenThread(null);
+    selection.clear();
+  });
   const allStarred =
     actionTargets.length > 0 &&
     actionTargets.every((target) => isThreadStarred(target.messages));
@@ -2244,6 +2327,7 @@ export function MailShell() {
   const emptyViewMessage = getEmptyViewMessage({
     viewTitle,
     isInbox: !isScoped && !searchQuery && !activeSplitId,
+    isReading: isReadingView && !searchQuery,
   });
   const threadCount = threads.length;
   let matchingSelectionLabel: string | undefined;
@@ -2591,6 +2675,23 @@ export function MailShell() {
                   Matching words
                 </p>
               ) : null}
+              {bundlesReading && readingThreadState.threads.length ? (
+                <ReadingBundleRow
+                  layout={layout}
+                  onOpen={() => goToMailbox(MAIL_READING_TYPE)}
+                  senders={readingSummary.senders}
+                  unreadCount={readingSummary.unreadCount}
+                />
+              ) : null}
+              {isReadingView && !isAllAccounts && !searchQuery ? (
+                <ReadingLaneBar
+                  canArchive={threads.length > 0}
+                  canMarkRead={readingUnreadKeys.length > 0}
+                  onArchiveAll={archiveAllReading}
+                  onBack={() => goToMailbox("inbox")}
+                  onMarkAllRead={markAllReadingRead}
+                />
+              ) : null}
               <MailPanelErrorBoundary
                 resetKey={JSON.stringify([
                   emailAccountId,
@@ -2816,6 +2917,7 @@ function getMailViewTitle({
       : null;
   if (labelName) return `${labelTerm}: ${labelName}`;
   if (folderName) return folderName;
+  if (scopeType === MAIL_READING_TYPE) return "Reading";
   if (scopeType && scopeType !== "inbox")
     return getMailboxName(scopeType) ?? null;
   return null;
@@ -2824,12 +2926,15 @@ function getMailViewTitle({
 function getEmptyViewMessage({
   viewTitle,
   isInbox,
+  isReading,
 }: {
   viewTitle: string | null;
   isInbox: boolean;
+  isReading: boolean;
 }) {
   // An empty inbox is the goal, not a gap.
   if (isInbox) return "You're all caught up.";
+  if (isReading) return "Nothing left to read.";
   if (viewTitle) return `Nothing in ${viewTitle}.`;
   return "Nothing here right now.";
 }
