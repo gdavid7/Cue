@@ -300,7 +300,7 @@ jobs:
       # The apt mirror occasionally stalls to a few kB/s for minutes. Fail a
       # stalled fetch fast and retry instead of spending the job budget on it.
       - name: Install Playwright browser
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm -F inbox-zero-ai exec playwright install --with-deps chromium
 
       - name: Download browser app

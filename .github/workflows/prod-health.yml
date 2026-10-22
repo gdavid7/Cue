@@ -113,12 +113,12 @@ jobs:
 
       - name: Install Playwright Chromium
         if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm exec playwright install --with-deps chromium
 
       - name: Install Chromium system dependencies
         if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm exec playwright install-deps chromium
 
       - name: Seed QA inbox
