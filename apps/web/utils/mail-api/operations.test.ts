@@ -353,6 +353,48 @@ describe("createEmailProviderOperationExecutor", () => {
     expect(markNotSpam).toHaveBeenCalledWith("thread-spam");
   });
 
+  it("moves only the targeted messages, so undo can return one message without its conversation", async () => {
+    const moveMessagesToFolder = vi.fn();
+    const moveThreadToFolder = vi.fn();
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        moveMessagesToFolder,
+        moveThreadToFolder,
+        getMessagesBatch: vi.fn(async (ids: string[]) =>
+          ids.map((id) => ({
+            id,
+            threadId: "conversation-1",
+            headers: { from: "ada@example.com", to: "me@example.com" },
+            labelIds: [],
+            parentFolderId: "sent-folder",
+            snippet: id,
+          })),
+        ),
+      } as unknown as EmailProvider,
+    });
+    const result = await executor.execute({
+      operation: {
+        ...metadataOperation([{ accountId: "acc-1", messageId: "reply" }]),
+        intent: {
+          kind: "metadata",
+          targets: [{ accountId: "acc-1", messageId: "reply" }],
+          change: { kind: "move", folderId: "sent-folder" },
+        },
+      },
+      attemptId: "a-move",
+      signal: new AbortController().signal,
+    });
+    expect(moveMessagesToFolder).toHaveBeenCalledExactlyOnceWith(
+      ["reply"],
+      "sent-folder",
+    );
+    expect(moveThreadToFolder).not.toHaveBeenCalled();
+    if (result.status !== "confirmed") throw new Error("expected confirmed");
+    expect(result.targets.map((target) => target.outcome)).toEqual(["applied"]);
+  });
+
   it("executes sends through the existing durable receipt ledger", async () => {
     vi.mocked(executeDurableEmailSend).mockResolvedValue({
       status: "applied",

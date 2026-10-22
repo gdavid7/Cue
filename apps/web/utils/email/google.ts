@@ -2291,6 +2291,13 @@ export class GmailProvider implements EmailProvider {
     this.logger.warn("Moving thread to folder is not supported for Gmail");
   }
 
+  async moveMessagesToFolder(
+    _messageIds: string[],
+    _folderId: string,
+  ): Promise<void> {
+    throw new Error("Moving messages to a folder is not supported for Gmail");
+  }
+
   async getOrCreateFolderIdByName(_folderName: string): Promise<string> {
     this.logger.warn("Moving to folder is not supported for Gmail");
     return "";

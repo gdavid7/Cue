@@ -358,14 +358,9 @@ async function applyChange(
     }
     case "move": {
       if (!change.folderId) return;
-      for (const messageId of messageIds) {
-        const message = await provider.getMessage(messageId);
-        await provider.moveThreadToFolder(
-          message.threadId,
-          message.headers.to || "",
-          change.folderId,
-        );
-      }
+      // The targets already name every message of a moved conversation, and
+      // an undo returns its messages to different folders one by one.
+      await provider.moveMessagesToFolder(messageIds, change.folderId);
       return;
     }
     case "set_membership": {

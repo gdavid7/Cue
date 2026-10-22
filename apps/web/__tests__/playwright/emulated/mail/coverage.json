@@ -416,6 +416,7 @@
   ],
   "drag-to-sidebar.spec.ts": [
     "app/(app)/[emailAccountId]/mail/sidebar-drop.ts",
-    "app/(app)/[emailAccountId]/mail/mail-drag.tsx"
+    "app/(app)/[emailAccountId]/mail/mail-drag.tsx",
+    "utils/mail-engine/message-folders.ts"
   ]
 }

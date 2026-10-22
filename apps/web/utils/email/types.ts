@@ -481,6 +481,8 @@ export interface EmailProvider {
   markRead(threadId: string): Promise<void>;
   markReadThread(threadId: string, read: boolean): Promise<void>;
   markSpam(threadId: string): Promise<void>;
+  /** Moves just these messages, not their conversations. Outlook only. */
+  moveMessagesToFolder(messageIds: string[], folderId: string): Promise<void>;
   moveThreadToFolder(
     threadId: string,
     ownerEmail: string,
