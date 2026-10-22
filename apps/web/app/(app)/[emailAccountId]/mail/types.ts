@@ -36,7 +36,8 @@ export type ActionableThread = {
   id: string;
   account?: { id: string };
   messageIds?: string[];
-  messages?: Array<{ id: string }>;
+  /** Engine rows' labels carry INBOX while a message is in the inbox. */
+  messages?: Array<{ id: string; labelIds?: string[] }>;
 };
 
 export function getListThreadKey(thread: ActionableThread) {
