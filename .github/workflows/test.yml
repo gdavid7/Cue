@@ -193,6 +193,7 @@ jobs:
         working-directory: apps/desktop
         run: node node_modules/electron/install.js
       - name: Install runtime libraries
-        run: pnpm -F inbox-zero-ai exec playwright install-deps chromium
+        timeout-minutes: 15
+        run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm -F inbox-zero-ai exec playwright install-deps chromium
       - name: Test actual Electron processes and SQLite
         run: xvfb-run -a pnpm -F @inboxzero/desktop test
