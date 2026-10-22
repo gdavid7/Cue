@@ -155,8 +155,12 @@ export async function captureAssistantChatTrace({
   }
 
   const finalText = await Promise.resolve(result.text);
-  // What the next turn of a multi-turn case sends back as history.
-  const responseMessages = (await Promise.resolve(result.response)).messages;
+  // What the next turn of a multi-turn case sends back as history, as the
+  // app stores it: every step's tool calls and results, not only the last
+  // step's reply.
+  const responseMessages = (await Promise.resolve(result.steps)).flatMap(
+    (step) => step.response.messages,
+  );
 
   const debugArtifactPath = writeEvalDebugArtifact({
     kind: "assistant-chat-trace",

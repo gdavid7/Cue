@@ -1,4 +1,4 @@
-import type { ModelMessage } from "ai";
+import { convertToModelMessages, type ModelMessage, type UIMessage } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import type { EmailProvider } from "@/utils/email/types";
@@ -45,6 +45,38 @@ describe("findConfirmedPreview", () => {
         ],
         archive,
       ),
+    ).toEqual({ conversations: 1204 });
+  });
+
+  // Production rebuilds each turn's history from the stored chat messages.
+  it("finds the preview in history rebuilt from stored chat messages", async () => {
+    const stored: UIMessage[] = [
+      {
+        id: "1",
+        role: "user",
+        parts: [
+          { type: "text", text: "Archive all newsletters from last year" },
+        ],
+      },
+      {
+        id: "2",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-manageInbox",
+            toolCallId: "call-stored",
+            state: "output-available",
+            input: { action: "archive_threads", query: QUERY },
+            output: { status: "needs_confirmation", conversations: 1204 },
+          },
+          { type: "text", text: "That's 1,204 conversations. Archive them?" },
+        ],
+      },
+      { id: "3", role: "user", parts: [{ type: "text", text: "yes" }] },
+    ];
+
+    expect(
+      findConfirmedPreview(await convertToModelMessages(stored), archive),
     ).toEqual({ conversations: 1204 });
   });
 
