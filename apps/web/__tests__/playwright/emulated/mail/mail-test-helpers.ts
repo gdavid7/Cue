@@ -522,6 +522,49 @@ async function insertOutlookInboxReply(
   return message.id;
 }
 
+/** Whether the provider has any of the conversation's messages in the inbox. */
+export async function providerConversationInInbox(threadId: string) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  if (isMicrosoftPlaywright()) {
+    const response = await fetch(
+      `${process.env.MICROSOFT_BASE_URL}/v1.0/me/mailFolders/inbox/messages?$top=100`,
+      { headers },
+    );
+    expect(response.ok, await response.clone().text()).toBe(true);
+    const { value } = (await response.json()) as {
+      value: Array<{ conversationId: string }>;
+    };
+    return value.some((message) => message.conversationId === threadId);
+  }
+  const response = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/threads/${threadId}`,
+    { headers },
+  );
+  expect(response.ok, await response.clone().text()).toBe(true);
+  const { messages } = (await response.json()) as {
+    messages: Array<{ labelIds?: string[] }>;
+  };
+  return messages.some((message) => message.labelIds?.includes("INBOX"));
+}
+
+/** The conversation's snoozes our database still means to act on. */
+export async function activeSnoozeCount(
+  emailAccountId: string,
+  threadId: string,
+) {
+  return withClient(async (client) => {
+    const result = await client.query(
+      `SELECT 1 FROM "SnoozedThread"
+       WHERE "emailAccountId" = $1 AND "threadId" = $2
+         AND status IN ('PREPARING', 'PENDING', 'EXECUTING')`,
+      [emailAccountId, threadId],
+    );
+    return result.rowCount ?? 0;
+  });
+}
+
 export async function readProviderAccessToken() {
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");

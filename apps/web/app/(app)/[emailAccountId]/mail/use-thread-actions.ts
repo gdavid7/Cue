@@ -6,7 +6,6 @@ import groupBy from "lodash/groupBy";
 import { toast } from "sonner";
 import { toastUndo } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
-import { randomUuid } from "@/utils/uuid";
 import {
   type ActionableThread,
   getListThreadEmailAccountId,
@@ -21,6 +20,7 @@ import {
   type ThreadMutationPayload,
 } from "@/utils/mail-engine/mutation-change";
 import { submitConversationChanges } from "@/utils/mail-engine/submit-conversations";
+import { undoConversationChange } from "@/utils/mail-engine/undo-change";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 import {
   observeRumConfirmation,
@@ -38,10 +38,12 @@ const RUM_TRIAGE_ACTIONS: Partial<
   set_read_state: "mark_read",
 };
 
-type UndoableAction = "archive" | "unarchive" | "trash";
+type UndoableAction = "archive" | "unarchive" | "trash" | "snooze";
 
 type ThreadSnapshot = {
   emailAccountId: string;
+  /** False when the row showed it outside the inbox; unknown counts as in. */
+  inInbox?: boolean;
   key: string;
   messageIds: string[];
   mutationId: string;
@@ -238,37 +240,30 @@ export function useThreadActions({
     const snapshots = await batch.snapshots;
     if (!snapshots.length) return [];
 
-    const compensation = mutationPayloadToChange({
-      kind: UNDOABLE_COPY[batch.action].compensation,
-    });
-    if (!compensation) return [];
     const results = await Promise.allSettled(
       Object.values(groupBy(snapshots, (snapshot) => snapshot.mutationId)).map(
         async (snapshots) => {
           const { emailAccountId, mutationId } = snapshots[0];
-          const cancelled =
-            (
-              await client.cancelOperation({
-                accountId: emailAccountId,
-                operationId: mutationId,
-              })
-            ).status === "cancelled";
-          if (!cancelled) {
-            const diagnostics = await client.getDiagnostics(emailAccountId);
-            const admission = await client.submitConversations({
-              accountId: emailAccountId,
-              commandId: randomUuid(),
-              conversations: snapshots.map((snapshot) => ({
-                accountId: emailAccountId,
-                conversationId: snapshot.threadId,
-              })),
-              change: compensation,
-              observedRevision: diagnostics.revision,
+          const compensations = Object.values(
+            groupBy(snapshots, (snapshot) =>
+              UNDOABLE_COPY[batch.action].compensation(snapshot),
+            ),
+          ).map((group) => {
+            const change = mutationPayloadToChange({
+              kind: UNDOABLE_COPY[batch.action].compensation(group[0]),
             });
-            if (admission.status === "rejected") {
-              throw new Error(admission.code);
-            }
-          }
+            if (!change) throw new Error("no_compensation");
+            return {
+              conversationIds: group.map((snapshot) => snapshot.threadId),
+              change,
+            };
+          });
+          await undoConversationChange({
+            client,
+            accountId: emailAccountId,
+            operationId: mutationId,
+            compensations,
+          });
           return snapshots;
         },
       ),
@@ -306,9 +301,13 @@ export function useThreadActions({
   }, [undoBatch]);
 
   const runUndoable = useCallback(
-    async (action: UndoableAction, threadKeys: string[]) => {
+    async (
+      payload: Extract<ThreadMutationPayload, { kind: UndoableAction }>,
+      threadKeys: string[],
+    ) => {
+      const action = payload.kind;
       const targets = resolveTargets(threadKeys);
-      const enqueued = enqueueTargets(targets, { kind: action });
+      const enqueued = enqueueTargets(targets, payload);
       // The row leaves on the keypress, before the engine admits the command,
       // so the batch is the one to undo from that moment on.
       const previous = lastAction.current;
@@ -344,7 +343,7 @@ export function useThreadActions({
 
       const failedCount = threadKeys.length - rows.length;
       toastUndo({
-        message: UNDOABLE_COPY[action].done(rows.length),
+        message: UNDOABLE_COPY[action].done(rows.length, payload),
         shortcut: getShortcutHint("undo"),
         onUndo: () => {
           undoBatch(batch);
@@ -416,35 +415,12 @@ export function useThreadActions({
   );
 
   const snooze = useCallback(
-    async (threadKeys: string[], snoozedUntil: Date) => {
-      const targets = resolveTargets(threadKeys);
-      const { snapshots, rejectionCodes } = await enqueueTargets(targets, {
-        kind: "snooze",
-        scheduledFor: snoozedUntil.toISOString(),
-      });
-      const failedCount = threadKeys.length - snapshots.length;
-      if (snapshots.length) {
-        toast.success(
-          snapshots.length === 1
-            ? `Snoozed until ${format(snoozedUntil, "EEE, MMM d 'at' p")}`
-            : `Snoozed ${snapshots.length} conversations`,
-        );
-      }
-      if (failedCount) {
-        toast.error(
-          enqueueFailureCopy(
-            failedCount === threadKeys.length
-              ? threadKeys.length === 1
-                ? "Couldn't queue snoozing"
-                : "Couldn't queue snoozing conversations"
-              : `Couldn't queue ${failedCount} of ${threadKeys.length} for snoozing`,
-            rejectionCodes,
-          ),
-        );
-      }
-      return snapshots.map((snapshot) => snapshot.key);
-    },
-    [enqueueTargets, resolveTargets],
+    (threadKeys: string[], snoozedUntil: Date) =>
+      runUndoable(
+        { kind: "snooze", scheduledFor: snoozedUntil.toISOString() },
+        threadKeys,
+      ),
+    [runUndoable],
   );
 
   const markSpam = useCallback(
@@ -542,15 +518,15 @@ export function useThreadActions({
     addTargets,
     subscribeRestored,
     archive: useCallback(
-      (threadKeys: string[]) => runUndoable("archive", threadKeys),
+      (threadKeys: string[]) => runUndoable({ kind: "archive" }, threadKeys),
       [runUndoable],
     ),
     moveToInbox: useCallback(
-      (threadKeys: string[]) => runUndoable("unarchive", threadKeys),
+      (threadKeys: string[]) => runUndoable({ kind: "unarchive" }, threadKeys),
       [runUndoable],
     ),
     trash: useCallback(
-      (threadKeys: string[]) => runUndoable("trash", threadKeys),
+      (threadKeys: string[]) => runUndoable({ kind: "trash" }, threadKeys),
       [runUndoable],
     ),
     markRead: useCallback(
@@ -571,26 +547,38 @@ export function useThreadActions({
 const UNDOABLE_COPY: Record<
   UndoableAction,
   {
-    compensation: "archive" | "unarchive" | "untrash";
-    done: (count: number) => string;
+    compensation: (
+      snapshot: ThreadSnapshot,
+    ) => "archive" | "unarchive" | "untrash";
+    done: (count: number, payload: ThreadMutationPayload) => string;
     noun: string;
   }
 > = {
   archive: {
-    compensation: "unarchive",
+    compensation: () => "unarchive",
     done: (count) => summarise("Archived", count),
     noun: "archiving",
   },
   unarchive: {
-    compensation: "archive",
+    compensation: () => "archive",
     done: (count) =>
       count === 1 ? "Moved to inbox" : `Moved ${count} conversations to inbox`,
     noun: "moving to inbox",
   },
   trash: {
-    compensation: "untrash",
+    compensation: () => "untrash",
     done: (count) => summarise("Deleted", count),
     noun: "deletion",
+  },
+  // Both end the snooze on the server, so it is put back where it was.
+  snooze: {
+    compensation: (snapshot) =>
+      snapshot.inInbox === false ? "archive" : "unarchive",
+    done: (count, payload) =>
+      count === 1 && payload.kind === "snooze"
+        ? `Snoozed until ${format(new Date(payload.scheduledFor), "EEE, MMM d 'at' p")}`
+        : `Snoozed ${count} conversations`,
+    noun: "snoozing",
   },
 };
 
@@ -637,8 +625,12 @@ function rememberTargets(
     const messageIds = [...new Set(getListThreadMessageIds(thread))];
     if (!messageIds.length) continue;
     const key = getListThreadKey(thread);
+    const labelled = thread.messages?.filter((message) => message.labelIds);
     targets.set(key, {
       emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
+      inInbox: labelled?.length
+        ? labelled.some((message) => message.labelIds?.includes("INBOX"))
+        : undefined,
       key,
       messageIds,
       threadId: thread.id,
