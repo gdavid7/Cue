@@ -284,7 +284,11 @@ test("in All inboxes, lists every account's files, each naming its account", asy
     await expect(row(files, pdf)).toHaveCount(2, { timeout: 180_000 });
     await expect(
       row(files, pdf).filter({
-        has: page.getByRole("img", { name: new RegExp(second.email) }),
+        // Its address has a "+", so it is matched as text, not a pattern.
+        has: page.getByRole("img", {
+          name: `Account: ${second.email}`,
+          exact: true,
+        }),
       }),
     ).toHaveCount(1);
     await capturePlaywrightCheckpoint(page, testInfo, "files-view-all-inboxes");
