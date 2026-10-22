@@ -36,7 +36,7 @@ import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-pro
 import type { Logger } from "@/utils/logger";
 import { randomUUID } from "node:crypto";
 import { getAuditContext } from "@/utils/audit/context";
-import { noteRequestPause } from "@/utils/request-metrics";
+import { noteEnumerationPage, noteRequestPause } from "@/utils/request-metrics";
 import {
   getFastRequestSampleRate,
   isFastRequestSampled,
@@ -269,6 +269,13 @@ export function createEmailProviderMailboxSource(input: {
           (token.synced ?? 0) < GMAIL_FIRST_INBOX_SYNC_MESSAGES;
         const priority: GmailQuotaPriority =
           isBackfill && !inboxFirst ? "background" : "sync";
+        noteEnumerationPage({
+          scope:
+            token.scopeId === GMAIL_HISTORY_SCOPE_ID ? "history" : "primary",
+          phase: token.phase ?? "none",
+          gatePriority: priority,
+          promoted: inboxFirst,
+        });
         const maxResults = Math.min(
           pageSize,
           maxPageSize,

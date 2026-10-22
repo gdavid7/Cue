@@ -1729,6 +1729,106 @@ describe("createEmailProviderMailboxSource", () => {
     });
   });
 
+  describe("enumeration log fields", () => {
+    async function enumerationFields(page: Record<string, unknown>) {
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        provider: {
+          name: "google",
+          getMessagesWithPagination: vi.fn(async () => ({ messages: [] })),
+        } as unknown as EmailProvider,
+      });
+      const metrics = createRequestMetrics();
+      await runWithRequestMetrics(metrics, () =>
+        source.enumerate({
+          session: { accountId: "acc-1", generation: "g1" },
+          requestId: "r1",
+          signal: new AbortController().signal,
+          bootstrapId: "mailbox",
+          page: JSON.stringify(page),
+          pageSize: 50,
+        }),
+      );
+      return getRequestMetricsFields(metrics);
+    }
+
+    it.each([
+      [
+        "a primary page",
+        { scopeId: "primary", pageToken: "secret-token" },
+        {
+          scope: "primary",
+          phase: "none",
+          gatePriority: "sync",
+          promoted: false,
+        },
+      ],
+      [
+        "a history page with no phase",
+        { scopeId: "history", windowStartMs: 1 },
+        {
+          scope: "history",
+          phase: "none",
+          gatePriority: "background",
+          promoted: false,
+        },
+      ],
+      [
+        "a history inbox page inside the first inbox allowance",
+        { scopeId: "history", windowStartMs: 1, phase: "inbox", synced: 0 },
+        {
+          scope: "history",
+          phase: "inbox",
+          gatePriority: "sync",
+          promoted: true,
+        },
+      ],
+      [
+        "a history inbox page past the first inbox allowance",
+        { scopeId: "history", windowStartMs: 1, phase: "inbox", synced: 5000 },
+        {
+          scope: "history",
+          phase: "inbox",
+          gatePriority: "background",
+          promoted: false,
+        },
+      ],
+      [
+        "a history rest page",
+        { scopeId: "history", windowStartMs: 1, phase: "rest" },
+        {
+          scope: "history",
+          phase: "rest",
+          gatePriority: "background",
+          promoted: false,
+        },
+      ],
+    ])("is on %s", async (_name, page, expected) => {
+      expect(await enumerationFields(page)).toMatchObject(expected);
+    });
+
+    it("carries no query, token or id text", async () => {
+      const fields = await enumerationFields({
+        scopeId: "history",
+        windowStartMs: 1_700_000_000_000,
+        phase: "inbox",
+        phasePageToken: "secret-token",
+        folderId: "folder-secret",
+      });
+      const logged = JSON.stringify(fields);
+      expect(logged).not.toContain("secret");
+      expect(logged).not.toContain("in:inbox");
+      expect(logged).not.toContain("1700000000000");
+    });
+
+    it("is absent on requests that are not enumeration pages", () => {
+      const fields = getRequestMetricsFields(createRequestMetrics());
+      expect(fields.scope).toBeUndefined();
+      expect(fields.gatePriority).toBeUndefined();
+    });
+  });
+
   it("logs a mailbox's local-budget pause at most once a minute", () => {
     expect(shouldLogLocalBudgetPause("rate-a", 1000)).toBe(true);
     expect(shouldLogLocalBudgetPause("rate-a", 30_000)).toBe(false);
