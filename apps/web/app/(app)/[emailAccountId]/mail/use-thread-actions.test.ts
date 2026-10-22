@@ -214,6 +214,30 @@ describe("useThreadActions", () => {
       expect(notifications.error).toHaveBeenCalled();
     });
 
+    it("keeps what one account changed undoable when another's submit throws", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) => {
+          if (command.accountId === "two") throw new Error("engine gone");
+          return { status: "queued" };
+        },
+      );
+      const { result } = renderActions({ threads: [row] });
+
+      let archived: string[] = ["unset"];
+      await act(async () => {
+        archived = await result.current.archive(["one:shown"]);
+      });
+      expect(archived).toEqual([]);
+      expect(notifications.error).toHaveBeenCalled();
+
+      mail.client.submitConversations.mockResolvedValue({ status: "queued" });
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual(["one:shown"]);
+    });
+
     it("says it couldn't restore when a copy's undo fails", async () => {
       const { result } = renderActions({ threads: [row] });
       await act(() => result.current.archive(["one:shown"]));

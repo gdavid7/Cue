@@ -507,7 +507,11 @@ async function readConversationSummaries(
         const byTime =
           Number(left.received_at_ms) - Number(right.received_at_ms);
         if (byTime !== 0) return byTime;
-        return String(left.message_id).localeCompare(String(right.message_id));
+        // Binary, as SQLite orders message_id in the conversation key rule.
+        const leftId = String(left.message_id);
+        const rightId = String(right.message_id);
+        if (leftId === rightId) return 0;
+        return leftId < rightId ? -1 : 1;
       },
     );
     const message = conversationMembers.at(-1);

@@ -179,6 +179,64 @@ describe("counts across accounts", () => {
     });
   });
 
+  // A sync or a mark-read rewrites a message through an upsert, whose
+  // conflict policy reaches into the triggers it fires; a message in three
+  // accounts once made every such write fail and roll back.
+  it.each([
+    // a's and c's copies stay one row; b's, now another message, its own.
+    [
+      "three accounts",
+      ["a", "b", "c"],
+      [
+        ["a", "c1"],
+        ["b", "c1"],
+        ["c", "c1"],
+      ],
+      2,
+    ],
+    // a's two conversations stay apart; b's is another message now.
+    [
+      "two conversations in one account and one in another",
+      ["a", "b"],
+      [
+        ["a", "c1"],
+        ["a", "c2"],
+        ["b", "c1"],
+      ],
+      3,
+    ],
+  ] as const)("rewrite a message whose copies are in %s", async (_, accountIds, copies, rows) => {
+    const store = await open(createNodeSqliteDriver(), [...accountIds]);
+    for (const [index, [account, conversation]] of copies.entries())
+      await write(store, account, [
+        patch(account, `m${index}`, {
+          conversation,
+          internetMessageId: "<many@x>",
+        }),
+      ]);
+
+    // Read on one copy, then the message leaves one conversation's inbox.
+    await write(store, "a", [
+      patch("a", "m0", {
+        conversation: "c1",
+        internetMessageId: "<many@x>",
+        read: true,
+        version: "2",
+      }),
+    ]);
+    await write(store, "b", [
+      patch("b", `m${copies.length - 1}`, {
+        conversation: "c1",
+        internetMessageId: "<other@x>",
+        version: "2",
+      }),
+    ]);
+
+    expect(await counts(store, [...accountIds], INBOX)).toMatchObject({
+      matching: rows,
+    });
+  });
+
   it("count each account's drafts, as Drafts lists each", async () => {
     const store = await open();
     for (const account of ["a", "b"])
@@ -200,10 +258,13 @@ describe("counts across accounts", () => {
   });
 });
 
-async function open(driver = createNodeSqliteDriver()) {
+async function open(
+  driver = createNodeSqliteDriver(),
+  accountIds = ["a", "b"],
+) {
   const store = await createSqliteMailStore(driver);
   cleanups.push(() => store.close());
-  for (const accountId of ["a", "b"])
+  for (const accountId of accountIds)
     await store.ensureAccount({
       accountId,
       provider: "google",
@@ -270,12 +331,14 @@ function patch(
     read = false,
     roles = ["inbox"],
     internetMessageId,
+    version = "1",
   }: {
     conversation: string;
     at?: number;
     read?: boolean;
     roles?: Array<"inbox" | "draft">;
     internetMessageId?: string;
+    version?: string;
   },
 ): ProviderChange {
   return {
@@ -285,7 +348,7 @@ function patch(
       provider: "google",
       messageId: id,
       conversationId: conversation,
-      version: "1",
+      version,
     },
     fields: {
       subject: "Plan",

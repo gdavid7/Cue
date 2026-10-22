@@ -158,10 +158,12 @@ export function useThreadActions({
       if (rumAction) recordRumAfterPaint(`${rumAction}_optimistic`, startedAt);
       const snapshots: ThreadSnapshot[] = [];
       const rejectionCodes: string[] = [];
-      // Every account's command starts in this task, each registering its
-      // optimistic change before its first await, so a row's hidden copies
-      // change with it rather than one account at a time.
-      await Promise.all(
+      // Each account's submit runs synchronously up to its first await, and
+      // submitConversationChanges registers its optimistic change before
+      // that, so every account's change shows in this same task and a row's
+      // hidden copies change with it. One account failing leaves the others'
+      // changes recorded: their rows read as failed, yet stay undoable.
+      await Promise.allSettled(
         Object.entries(groupBy(targets, (target) => target.emailAccountId)).map(
           async ([accountId, accountTargets]) => {
             const result = await submitConversationChanges({
