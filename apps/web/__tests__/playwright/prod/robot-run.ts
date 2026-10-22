@@ -7,7 +7,11 @@ import type {
   Response,
   TestInfo,
 } from "@playwright/test";
-import type { RobotResults, RobotStep } from "@/scripts/qa/health-report";
+import {
+  isThrottledMailResponse,
+  type RobotResults,
+  type RobotStep,
+} from "@/scripts/qa/health-report";
 import { sanitizeBrowserDiagnosticText } from "@/utils/playwright/browser-diagnostics";
 
 const MAX_DIAGNOSTICS_PER_STEP = 20;
@@ -54,11 +58,16 @@ export class RobotRun {
         `Uncaught: ${sanitizeBrowserDiagnosticText(error.message)}`,
       );
     });
-    page.on("response", (response: Response) => {
-      if (response.status() < 400 || !this.current) return;
-      if (this.current.failedRequests.length >= MAX_DIAGNOSTICS_PER_STEP)
+    page.on("response", async (response: Response) => {
+      const step = this.current;
+      if (response.status() < 400 || !step) return;
+      const throttled = await isThrottled(response);
+      if (throttled) {
+        step.throttledRequests = (step.throttledRequests ?? 0) + 1;
         return;
-      this.current.failedRequests.push({
+      }
+      if (step.failedRequests.length >= MAX_DIAGNOSTICS_PER_STEP) return;
+      step.failedRequests.push({
         method: response.request().method(),
         url: sanitizeUrl(response.url()),
         status: response.status(),
@@ -211,4 +220,14 @@ function slug(value: string) {
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, "-")
     .replaceAll(/^-|-$/g, "");
+}
+
+async function isThrottled(response: Response) {
+  if (response.status() !== 503) return false;
+  const body = await response.json().catch(() => null);
+  return isThrottledMailResponse({
+    url: response.url(),
+    status: response.status(),
+    body,
+  });
 }
