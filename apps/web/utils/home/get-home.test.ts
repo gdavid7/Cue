@@ -15,7 +15,13 @@ import { getHomeData, priorityOf } from "./get-home";
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => "OK"),
+    incr: vi.fn(async () => 1),
+    expire: vi.fn(async () => 1),
+    del: vi.fn(async () => 1),
+  },
 }));
 const mocks = vi.hoisted(() => ({
   fetchEvents: vi.fn(),
@@ -878,7 +884,7 @@ describe("getHomeData: what's next", () => {
       expect(
         lines.filter((line) => line.includes("Connected app timed out")),
       ).toEqual([
-        `[test]: Connected app timed out ${JSON.stringify({ app: "asana" }, null, 2)}`,
+        `[test]: Connected app timed out ${JSON.stringify({ app: "asana", attempts: 1, pauseMinutes: 5 }, null, 2)}`,
       ]);
       const failed = lines.filter((line) =>
         line.includes("Connected app deadlines failed"),

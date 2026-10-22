@@ -32,6 +32,9 @@ const SOURCE_TIMEOUT_MS = 2500;
 // Comfortably longer than connecting a calendar after sign-in takes.
 const SIGN_IN_CALENDAR_GRACE_MS = 2 * 60 * 1000;
 const DEADLINE_PAUSE_SECONDS = 5 * 60;
+// An app that keeps timing out is asked about less and less often.
+const TIMEOUT_PAUSE_MINUTES = [5, 15, 60];
+const TIMEOUT_COUNT_SECONDS = 24 * 60 * 60;
 const TASK_LIST_CACHE_SECONDS = 7 * 24 * 60 * 60;
 const EVENING_HOUR = 17;
 const SUGGESTION_WINDOW_DAYS = 30;
@@ -308,10 +311,11 @@ async function getDeadlines({
       const pausedKey = `home-deadlines-paused:${app}:${accountId}`;
       if (await redis.get(pausedKey).catch(() => null)) return [];
 
-      const skipForAWhile = () =>
-        redis
-          .set(pausedKey, "1", { ex: DEADLINE_PAUSE_SECONDS })
-          .catch(() => null);
+      const skipForAWhile = (seconds = DEADLINE_PAUSE_SECONDS) =>
+        redis.set(pausedKey, "1", { ex: seconds }).catch(() => null);
+
+      // Counts only, no content (R-1): timeouts in a row for this app.
+      const timeoutsKey = `home-deadlines-timeouts:${app}:${accountId}`;
 
       const fetching = source
         .fetch(execute, {
@@ -328,12 +332,30 @@ async function getDeadlines({
           throw error;
         });
       try {
-        return inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
+        const items = inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
+        await redis.del(timeoutsKey).catch(() => null);
+        return items;
       } catch (error) {
         if (error instanceof TimeoutError) {
-          logger.warn("Connected app timed out", { app });
-          // A slow app is as slow on the next visit.
-          await skipForAWhile();
+          // A slow app is as slow on the next visit, and stays slow longer
+          // each time it times out.
+          const attempts = await redis
+            .incr(timeoutsKey)
+            .then(async (count) => {
+              await redis.expire(timeoutsKey, TIMEOUT_COUNT_SECONDS);
+              return count;
+            })
+            .catch(() => 1);
+          const pauseMinutes =
+            TIMEOUT_PAUSE_MINUTES[
+              Math.min(attempts, TIMEOUT_PAUSE_MINUTES.length) - 1
+            ];
+          logger.warn("Connected app timed out", {
+            app,
+            attempts,
+            pauseMinutes,
+          });
+          await skipForAWhile(pauseMinutes * 60);
         } else if (isAppServerError(error)) {
           logger.trace("Connected app down for deadlines", { app });
         } else {
