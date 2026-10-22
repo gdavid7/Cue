@@ -6,6 +6,8 @@ import type { ListThread } from "./types";
 import { useThreadActions } from "./use-thread-actions";
 import { toastUndo } from "@/components/Toast";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
+import { readOptimisticTriage } from "@/utils/mail-engine/optimistic-triage";
+import type { MailClient } from "@inboxzero/mail-core/engine";
 
 const notifications = vi.hoisted(() => ({
   error: vi.fn(),
@@ -131,6 +133,166 @@ describe("useThreadActions", () => {
     expect(notifications.success).toHaveBeenLastCalledWith(
       "Marked as important",
     );
+  });
+
+  describe("a row standing for one message in two accounts", () => {
+    // All inboxes shows the message once; reading, archiving and starring it
+    // reach every copy, each in its own account, while the rest of the
+    // actions stay with the copy shown.
+    const row = {
+      ...createThread(["INBOX", "UNREAD"], "shown"),
+      account: { id: "one", email: "one@example.com", name: null, image: null },
+      copies: [{ accountId: "two", threadId: "hidden" }],
+    } as ListThread;
+
+    function submitted() {
+      return mail.client.submitConversations.mock.calls.map(([call]) => [
+        call.accountId,
+        call.conversations.map(
+          (conversation: { conversationId: string }) =>
+            conversation.conversationId,
+        ),
+        call.change.kind,
+      ]);
+    }
+
+    it.each([
+      ["archive", (actions: Actions) => actions.archive(["one:shown"])],
+      ["read", (actions: Actions) => actions.setReadState(["one:shown"], true)],
+      [
+        "star",
+        (actions: Actions) => actions.setStarredState(["one:shown"], true),
+      ],
+    ])("%s changes every copy, counted as one conversation", async (_, act_) => {
+      const { result } = renderActions({ threads: [row] });
+      let changed: string[] = [];
+      await act(async () => {
+        changed = await act_(result.current);
+      });
+
+      expect(submitted().map(([accountId, ids]) => [accountId, ids])).toEqual([
+        ["one", ["shown"]],
+        ["two", ["hidden"]],
+      ]);
+      expect(changed).toEqual(["one:shown"]);
+      expect(notifications.error).not.toHaveBeenCalled();
+    });
+
+    it("says one conversation was archived, and its undo restores every copy", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.archive(["one:shown"]));
+      expect(toastUndo).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Archived" }),
+      );
+
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+
+      expect(restored).toEqual(["one:shown"]);
+      expect(
+        mail.client.cancelOperation.mock.calls.map(([call]) => call.accountId),
+      ).toEqual(["one", "two"]);
+      expect(notifications.success).toHaveBeenLastCalledWith("Restored");
+    });
+
+    // Each account's command registers its optimistic change before its
+    // first await; were they sent one after another, the hidden copy would
+    // show as its own row until the first account answered.
+    it("hides every copy at once, so the other never shows alone", async () => {
+      let admit = () => {};
+      mail.client.submitConversations.mockReturnValue(
+        new Promise((resolve) => {
+          admit = () => resolve({ status: "queued" });
+        }),
+      );
+      const { result } = renderActions({ threads: [row] });
+
+      let archived: Promise<string[]> | undefined;
+      act(() => {
+        archived = result.current.archive(["one:shown"]);
+      });
+
+      expect(
+        readOptimisticTriage(mail.client as unknown as MailClient)
+          .map((entry) => entry.accountId)
+          .sort(),
+      ).toEqual(["one", "two"]);
+      await act(async () => {
+        admit();
+        await archived;
+      });
+    });
+
+    it("counts the row as failed when a copy's account refuses", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) =>
+          command.accountId === "two"
+            ? { status: "rejected", code: "stale_selection" }
+            : { status: "queued" },
+      );
+      const { result } = renderActions({ threads: [row] });
+
+      let archived: string[] = ["unset"];
+      await act(async () => {
+        archived = await result.current.archive(["one:shown"]);
+      });
+
+      expect(archived).toEqual([]);
+      expect(toastUndo).not.toHaveBeenCalled();
+      expect(notifications.error).toHaveBeenCalled();
+    });
+
+    it("keeps what one account changed undoable when another's submit throws", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) => {
+          if (command.accountId === "two") throw new Error("engine gone");
+          return { status: "queued" };
+        },
+      );
+      const { result } = renderActions({ threads: [row] });
+
+      let archived: string[] = ["unset"];
+      await act(async () => {
+        archived = await result.current.archive(["one:shown"]);
+      });
+      expect(archived).toEqual([]);
+      expect(notifications.error).toHaveBeenCalled();
+
+      mail.client.submitConversations.mockResolvedValue({ status: "queued" });
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual(["one:shown"]);
+    });
+
+    it("says it couldn't restore when a copy's undo fails", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.archive(["one:shown"]));
+      mail.client.cancelOperation.mockImplementation(
+        async (call: { accountId: string }) => {
+          if (call.accountId === "two") throw new Error("offline");
+          return { status: "cancelled" };
+        },
+      );
+
+      let restored: string[] = ["unset"];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+
+      expect(restored).toEqual([]);
+      expect(notifications.error).toHaveBeenLastCalledWith("Couldn't restore");
+    });
+
+    it("deletes only the copy shown", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.trash(["one:shown"]));
+
+      expect(submitted()).toEqual([["one", ["shown"], "trash"]]);
+    });
   });
 
   it("archives a multi-thread selection as one engine command", async () => {
@@ -437,6 +599,8 @@ describe("useThreadActions", () => {
     expect(onRestored).toHaveBeenCalledWith(["today-thread"]);
   });
 });
+
+type Actions = ReturnType<typeof useThreadActions>;
 
 function renderActions({
   threads = [createThread(["INBOX", "UNREAD"])],

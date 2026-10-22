@@ -402,6 +402,81 @@ export async function insertInboxMailInConversation(
   return message.id;
 }
 
+/**
+ * Puts a new conversation in the inbox, for a test that writes to its thread
+ * and must not share one with other tests or with its own earlier attempts.
+ */
+export async function insertInboxThread(
+  page: Page,
+  input: {
+    subject: string;
+    body: string;
+    from: { name: string; address: string };
+  },
+): Promise<{ threadId: string; messageId: string }> {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const baseUrl = process.env.MICROSOFT_BASE_URL;
+    if (!baseUrl) throw new Error("MICROSOFT_BASE_URL is missing");
+    const created = await page.request.post(`${baseUrl}/v1.0/me/messages`, {
+      headers,
+      data: {
+        subject: input.subject,
+        body: { contentType: "text", content: input.body },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    const patched = await page.request.patch(
+      `${baseUrl}/v1.0/me/messages/${id}`,
+      {
+        headers,
+        data: {
+          from: { emailAddress: input.from },
+          isRead: false,
+        },
+      },
+    );
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(
+      `${baseUrl}/v1.0/me/messages/${id}/move`,
+      { headers, data: { destinationId: "inbox" } },
+    );
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return { threadId: message.conversationId, messageId: message.id };
+  }
+  const baseUrl = process.env.GOOGLE_BASE_URL;
+  if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  const inserted = await page.request.post(
+    `${baseUrl}/gmail/v1/users/me/messages`,
+    {
+      headers,
+      data: {
+        from: `${input.from.name} <${input.from.address}>`,
+        to: email,
+        subject: input.subject,
+        body_text: input.body,
+        labelIds: ["INBOX", "UNREAD"],
+        internalDate: String(Date.now()),
+      },
+    },
+  );
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string; threadId: string };
+  return { threadId: message.threadId, messageId: message.id };
+}
+
 async function insertOutlookInboxReply(
   page: Page,
   token: string,

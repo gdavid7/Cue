@@ -12,6 +12,11 @@ import type {
 } from "@inboxzero/mail-core/queries";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { beginOptimisticTriage } from "@/utils/mail-engine/optimistic-triage";
+import {
+  getListThreadKey,
+  isCombinedListThread,
+  type ListThread,
+} from "@/app/(app)/[emailAccountId]/mail/types";
 import { useEngineMailThreads } from "./use-engine-mail-threads";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -412,6 +417,197 @@ describe("useEngineMailThreads", () => {
     ]);
   });
 });
+
+describe("useEngineMailThreads in All inboxes", () => {
+  it("shows a message delivered to two accounts once, saying where else it is", async () => {
+    const { result } = renderAllInboxes([
+      copy("acc-2", "c-new", "<Shared@Example.com>", 3),
+      copy("acc-1", "c-old", "shared@example.com", 2),
+      copy("acc-1", "c-other", "<other@example.com>", 1),
+    ]);
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    // The newest copy stands for both, so the row keeps one key and one account.
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-2:c-new", alsoIn: ["one@example.com"] },
+      { key: "acc-1:c-other", alsoIn: [] },
+    ]);
+  });
+
+  // The account the user is in stands for a message that reached several at
+  // once, whichever the store happens to list first.
+  it("shows the routed account's copy when the copies arrived together", async () => {
+    const { result } = renderAllInboxes(
+      [
+        copy("acc-1", "c-1", "<same@example.com>", 2),
+        copy("acc-2", "c-2", "<same@example.com>", 2),
+      ],
+      INBOX_QUERY,
+      "acc-2",
+    );
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-2:c-2", alsoIn: ["one@example.com"] },
+    ]);
+  });
+
+  it("keeps the newer copy over the routed account's older one", async () => {
+    const { result } = renderAllInboxes(
+      [
+        copy("acc-1", "c-1", "<same@example.com>", 3),
+        copy("acc-2", "c-2", "<same@example.com>", 2),
+      ],
+      INBOX_QUERY,
+      "acc-2",
+    );
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-1:c-1", alsoIn: ["two@example.com"] },
+    ]);
+  });
+
+  it("keeps rows of one account apart, even when they share a Message-ID", async () => {
+    const { result } = renderAllInboxes([
+      copy("acc-1", "c-1", "<dup@example.com>", 3),
+      copy("acc-1", "c-2", "<dup@example.com>", 2),
+      copy("acc-2", "c-3", "<dup@example.com>", 1),
+      copy("acc-2", "c-4", "<dup@example.com>", 0),
+    ]);
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    // Two conversations in one mailbox stay two rows; each takes in one copy
+    // from the other account.
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-1:c-1", alsoIn: ["two@example.com"] },
+      { key: "acc-1:c-2", alsoIn: ["two@example.com"] },
+    ]);
+  });
+
+  it("collapses only rows whose newest message has a Message-ID", async () => {
+    const { result } = renderAllInboxes([
+      copy("acc-1", "c-1", undefined, 2),
+      copy("acc-2", "c-2", undefined, 1),
+    ]);
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+    expect(rows(result.current.threads)).toEqual([
+      { key: "acc-1:c-1", alsoIn: [] },
+      { key: "acc-2:c-2", alsoIn: [] },
+    ]);
+  });
+
+  // A row in Drafts is the user's own draft in that account; two drafts
+  // replying to one message are still two drafts.
+  it("keeps each account's drafts apart in Drafts", async () => {
+    const { result } = renderAllInboxes(
+      [
+        copy("acc-1", "c-1", "<asked@example.com>", 2),
+        copy("acc-2", "c-2", "<asked@example.com>", 1),
+      ],
+      { type: "draft" },
+    );
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(2));
+  });
+
+  // The row's actions archive every copy (useThreadActions), each in its own
+  // account, so the message doesn't come back from the other account.
+  it("stays gone once every copy is archived", async () => {
+    const { client, result } = renderAllInboxes([
+      copy("acc-2", "c-new", "<shared@example.com>", 2),
+      copy("acc-1", "c-old", "<shared@example.com>", 1),
+    ]);
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(
+      isCombinedListThread(result.current.threads[0]) &&
+        result.current.threads[0].copies,
+    ).toEqual([{ accountId: "acc-1", threadId: "c-old" }]);
+
+    act(() => {
+      for (const [accountId, conversationId] of [
+        ["acc-2", "c-new"],
+        ["acc-1", "c-old"],
+      ])
+        beginOptimisticTriage(client, {
+          accountId,
+          conversationIds: [conversationId],
+          change: { kind: "archive" },
+        });
+    });
+
+    expect(result.current.threads).toEqual([]);
+  });
+
+  it("reads as unread while any copy is unread", async () => {
+    const { result } = renderAllInboxes([
+      { ...copy("acc-2", "c-new", "<shared@example.com>", 2), unread: false },
+      { ...copy("acc-1", "c-old", "<shared@example.com>", 1), unread: true },
+    ]);
+
+    await waitFor(() => expect(result.current.threads).toHaveLength(1));
+    expect(result.current.threads[0].messages[0].labelIds).toContain("UNREAD");
+  });
+});
+
+const ALL_INBOXES_ACCOUNTS = {
+  "acc-1": { id: "acc-1", email: "one@example.com", name: null, image: null },
+  "acc-2": { id: "acc-2", email: "two@example.com", name: null, image: null },
+};
+
+function renderAllInboxes(
+  conversations: MailboxView["conversations"],
+  query: ThreadsQuery = INBOX_QUERY,
+  emailAccountId = "acc-1",
+) {
+  const snapshot = mailboxSnapshot(conversations);
+  const client = {
+    observeMailbox: vi.fn(() => staticMailboxHandle(snapshot)),
+    requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
+  } as unknown as MailClient;
+  const { result } = renderHook(
+    () =>
+      useEngineMailThreads({
+        emailAccountId,
+        accountIds: ACCOUNT_IDS,
+        accounts: ALL_INBOXES_ACCOUNTS,
+        query,
+      }),
+    {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <MailEngineProvider client={client}>{children}</MailEngineProvider>
+      ),
+    },
+  );
+  return { client, result };
+}
+
+const ACCOUNT_IDS = ["acc-1", "acc-2"];
+const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
+
+function copy(
+  accountId: string,
+  conversationId: string,
+  latestInternetMessageId: string | undefined,
+  latestMessageAtMs: number,
+): MailboxView["conversations"][number] {
+  return {
+    ...conversation(conversationId),
+    key: { accountId, conversationId },
+    latestMessageAtMs,
+    ...(latestInternetMessageId ? { latestInternetMessageId } : {}),
+  };
+}
+
+function rows(threads: ListThread[]) {
+  return threads.map((thread) => ({
+    key: getListThreadKey(thread),
+    alsoIn: isCombinedListThread(thread)
+      ? (thread.alsoIn ?? []).map((account) => account.email)
+      : [],
+  }));
+}
 
 function renderPushedInbox(initial: MailboxView["conversations"]) {
   let snapshot = mailboxSnapshot(initial);

@@ -66,6 +66,36 @@ describe("ThreadRow", () => {
     );
   });
 
+  // One message delivered to two of the user's accounts shows as one row in
+  // All inboxes, marked as Today marks it.
+  it("says which other accounts a combined row's message is also in", () => {
+    render(
+      <ThreadRow
+        hasAnySelection={false}
+        index={0}
+        isFocused={false}
+        isSelected={false}
+        layout="list"
+        onOpen={vi.fn()}
+        onSelectRangeTo={vi.fn()}
+        onToggleSelect={vi.fn()}
+        thread={
+          {
+            ...thread(),
+            account: inbox("one@example.com"),
+            alsoIn: [inbox("two@example.com"), inbox("three@example.com")],
+          } as ListThread
+        }
+        userEmail="david@example.com"
+        userLabels={{}}
+      />,
+    );
+
+    expect(
+      screen.getByText("Also in two@example.com, three@example.com"),
+    ).toBeTruthy();
+  });
+
   it("keeps the select checkbox out of the tab order", () => {
     renderRow();
 
@@ -296,6 +326,10 @@ describe("ThreadRow swipe", () => {
     expect(rowActions.archive).not.toHaveBeenCalled();
   });
 });
+
+function inbox(email: string) {
+  return { id: email, email, name: null, image: null };
+}
 
 function swipe(row: HTMLElement, pointerType: string, xs: number[]) {
   const at = (dx: number) => ({

@@ -43,6 +43,9 @@ export function conversationSummaryToListThread(
   const thread = {
     id: conversation.key.conversationId,
     latestMessageId: conversation.latestMessageId,
+    ...(conversation.latestInternetMessageId
+      ? { latestInternetMessageId: conversation.latestInternetMessageId }
+      : {}),
     hasAttachments: conversation.hasAttachments,
     messageIds: messages.map((message) => message.id),
     snippet: conversation.preview,

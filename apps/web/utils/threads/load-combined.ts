@@ -6,6 +6,8 @@ import {
   type PageBuffer,
 } from "@/utils/threads/merge-paginated-sources";
 import { getThreadTimestamp } from "@/utils/threads/sort";
+import { showCopiesOnce } from "@/utils/threads/cross-account-copies";
+import { GmailLabel } from "@/utils/gmail/label";
 
 const ACCOUNT_CONCURRENCY = 4;
 
@@ -17,8 +19,21 @@ export type CombinedThreadsAccount = {
   provider: string;
 };
 
+type CombinedAccount = Pick<
+  CombinedThreadsAccount,
+  "id" | "email" | "name" | "image"
+>;
+
 export type CombinedListThread = ThreadListItem & {
-  account: Pick<CombinedThreadsAccount, "id" | "email" | "name" | "image">;
+  account: CombinedAccount;
+  /** The user's other accounts this row's newest message was delivered to. */
+  alsoIn?: CombinedAccount[];
+  /**
+   * The conversations this row stands for in those accounts, on rows of the
+   * local list. Reading, archiving and starring the row change them too;
+   * other actions don't.
+   */
+  copies?: Array<{ accountId: string; threadId: string }>;
 };
 
 export async function loadCombinedThreads({
@@ -83,10 +98,51 @@ export async function loadCombinedThreads({
     );
   }
 
+  // Within the page only: a copy past it shows on a later page as its own
+  // row, as remembering it would put its Message-ID in the cursor.
+  const accountsById = new Map(
+    items.map((item) => [item.account.id, item.account]),
+  );
+  // No client calls this route today, so it knows no account the user is in;
+  // the user's first connected account stands for copies that tie.
+  const threads = showCopiesOnce(
+    items,
+    (thread) => ({
+      accountId: thread.account.id,
+      messageId: newestReceivedMessage(thread)?.headers["message-id"],
+      at: getThreadTimestamp(thread),
+    }),
+    accounts[0]?.id,
+  ).map(({ row, copies }) =>
+    copies.length
+      ? {
+          ...row,
+          alsoIn: copies.flatMap(
+            (copy) => accountsById.get(copy.account.id) ?? [],
+          ),
+        }
+      : row,
+  );
+
   return {
-    threads: items,
+    threads,
     labelsByAccount,
     nextPageToken,
     failedAccountIds: failedSourceIds,
   };
+}
+
+/** The newest message that isn't a draft, by date, not by list position. */
+function newestReceivedMessage(thread: CombinedListThread) {
+  let newest: CombinedListThread["messages"][number] | undefined;
+  for (const message of thread.messages) {
+    if (message.labelIds?.includes(GmailLabel.DRAFT)) continue;
+    if (
+      !newest ||
+      getThreadTimestamp({ messages: [message] }) >
+        getThreadTimestamp({ messages: [newest] })
+    )
+      newest = message;
+  }
+  return newest;
 }

@@ -18,6 +18,7 @@ import {
 } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
+import { showCopiesOnce } from "@/utils/threads/cross-account-copies";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
 import {
   applyOptimisticTriage,
@@ -134,6 +135,8 @@ export function useEngineMailThreads({
     rows: new Map(),
     threads: EMPTY_THREADS,
   });
+  // A row in Drafts is the user's own draft in that account, so each stays.
+  const showsCopiesOnce = Boolean(accounts) && query.type !== "draft";
   const threads = useMemo(() => {
     if (!client || !enabled) return EMPTY_THREADS;
     if (!conversations.length) return EMPTY_THREADS;
@@ -141,8 +144,17 @@ export function useEngineMailThreads({
       previousThreads.current,
       conversations,
       accounts,
+      showsCopiesOnce,
+      emailAccountId,
     );
-  }, [accounts, client, enabled, conversations]);
+  }, [
+    accounts,
+    client,
+    enabled,
+    conversations,
+    showsCopiesOnce,
+    emailAccountId,
+  ]);
 
   // The mail screen shows while the engine starts, and has no answer yet.
   const engineStarting = enabled && !client;
@@ -235,17 +247,33 @@ function reuseUnchangedThreads(
   previous: PreviousThreads,
   conversations: ConversationSummary[],
   accounts: Record<string, CombinedListThread["account"]> | undefined,
+  showsCopiesOnce: boolean,
+  routedAccountId: string,
 ): ListThread[] {
   const rows: PreviousThreads["rows"] = new Map();
-  const threads = conversations.map((conversation) => {
+  // All inboxes shows a message delivered to several accounts once. The row
+  // carries the copies it hides, which reading, archiving and starring it
+  // also change (useThreadActions), and reads unread while any copy is.
+  const shown = showsCopiesOnce
+    ? showCopiesOnce(
+        conversations,
+        (conversation) => ({
+          accountId: conversation.key.accountId,
+          messageId: conversation.latestInternetMessageId,
+          at: conversation.latestMessageAtMs,
+        }),
+        routedAccountId,
+      )
+    : conversations.map((row) => ({ row, copies: [] }));
+  const threads = shown.map(({ row: conversation, copies }) => {
     const key = `${conversation.key.accountId}:${conversation.key.conversationId}`;
     const account = accounts?.[conversation.key.accountId];
-    const summary = JSON.stringify(conversation);
+    const summary = JSON.stringify([conversation, copies]);
     const cached = previous.rows.get(key);
     const thread =
       cached?.summary === summary && cached.account === account
         ? cached.thread
-        : conversationSummaryToListThread(conversation, account);
+        : collapsedThread(conversation, copies, account, accounts);
     rows.set(key, { summary, account, thread });
     return thread;
   });
@@ -255,6 +283,31 @@ function reuseUnchangedThreads(
   previous.rows = rows;
   if (!unchanged) previous.threads = threads;
   return previous.threads;
+}
+
+function collapsedThread(
+  conversation: ConversationSummary,
+  copies: ConversationSummary[],
+  account: CombinedListThread["account"] | undefined,
+  accounts: Record<string, CombinedListThread["account"]> | undefined,
+): ListThread {
+  if (!copies.length)
+    return conversationSummaryToListThread(conversation, account);
+  const thread = conversationSummaryToListThread(
+    {
+      ...conversation,
+      unread: conversation.unread || copies.some((copy) => copy.unread),
+    },
+    account,
+  );
+  return {
+    ...thread,
+    alsoIn: copies.flatMap((copy) => accounts?.[copy.key.accountId] ?? []),
+    copies: copies.map((copy) => ({
+      accountId: copy.key.accountId,
+      threadId: copy.key.conversationId,
+    })),
+  };
 }
 
 async function readFailedAccountIds(

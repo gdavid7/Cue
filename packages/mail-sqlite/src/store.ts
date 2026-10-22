@@ -38,7 +38,10 @@ import type {
   LocalRevision,
   MessageKey,
 } from "@inboxzero/mail-core/identities";
-import type { MessageMetadata } from "@inboxzero/mail-core/messages";
+import {
+  type MessageMetadata,
+  normalizeInternetMessageId,
+} from "@inboxzero/mail-core/messages";
 import {
   DEFERRED_DISPATCH_MIN_HOLD_MS,
   EXECUTABLE_OPERATION_STATUSES,
@@ -2637,6 +2640,8 @@ async function resetAccountForGeneration(
     "effective_messages",
     "effective_role_conversations",
     "effective_message_memberships",
+    "conversation_message_keys",
+    "shared_message_copies",
     "sync_streams",
     "bootstrap_seen_messages",
     "bootstrap_existing_messages",
@@ -3211,8 +3216,9 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
       `INSERT INTO effective_messages(
          account_id, message_id, conversation_id, subject, preview, external_url, from_address, to_json, cc_json, bcc_json,
          received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json, roles_json,
-         in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, pending_operation_ids_json
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, pending_operation_ids_json,
+         message_key
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(account_id, message_id) DO UPDATE SET
          conversation_id = excluded.conversation_id,
          subject = excluded.subject,
@@ -3237,7 +3243,8 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
          in_spam = excluded.in_spam,
          has_attachments = excluded.has_attachments,
          snoozed_until_ms = excluded.snoozed_until_ms,
-         pending_operation_ids_json = excluded.pending_operation_ids_json`,
+         pending_operation_ids_json = excluded.pending_operation_ids_json,
+         message_key = excluded.message_key`,
       [
         effective.accountId,
         effective.messageId,
@@ -3265,6 +3272,7 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
         effective.hasAttachments ? 1 : 0,
         effective.snoozedUntilMs ?? null,
         JSON.stringify(effective.pendingOperationIds),
+        normalizeInternetMessageId(confirmed.internetMessageId),
       ],
     );
   }

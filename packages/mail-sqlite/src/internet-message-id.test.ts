@@ -27,7 +27,8 @@ describe("Message-ID headers", () => {
     const [conversation] = await inbox(store);
 
     expect(conversation.latestMessageId).toBe("m2");
-    expect(conversation.latestInternetMessageId).toBe("<second@mail>");
+    // Normalised, as copies in other accounts are compared by it.
+    expect(conversation.latestInternetMessageId).toBe("second@mail");
   });
 
   it("keeps the Message-ID through a later change that doesn't carry it", async () => {
@@ -37,7 +38,7 @@ describe("Message-ID headers", () => {
 
     const [conversation] = await inbox(store);
 
-    expect(conversation.latestInternetMessageId).toBe("<first@mail>");
+    expect(conversation.latestInternetMessageId).toBe("first@mail");
   });
 
   it("adds the column to a mailbox stored before it, and fills it as messages are read again", async () => {
@@ -82,7 +83,7 @@ describe("Message-ID headers", () => {
       ]),
     ).toEqual([
       ["m2", undefined],
-      ["m1", "<first@mail>"],
+      ["m1", "first@mail"],
     ]);
   });
 

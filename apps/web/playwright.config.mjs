@@ -89,11 +89,19 @@ const authStatePath = path.join(
   runId,
   "auth.json",
 );
+// Mailboxes a spec's second account of the user can read, each its own, as
+// a real second account is. createSecondEmailAccount hands them out.
+const extraMailboxes = [1, 2, 3].map((index) => ({
+  email: playwrightTestEmail.replace(/^[^@+]+/, `playwright-mailbox-${index}`),
+  token: `playwright_${mailProvider}_mailbox_${index}_token`,
+  idSuffix: `__mailbox_${index}`,
+}));
 const emulateSeedPath = writeEmulateSeed({
   baseURL,
   mailProvider,
   playwrightTestEmail,
   runId,
+  extraMailboxes,
 });
 // Keep in sync with mixed-provider-accounts.spec.ts.
 const LINKED_OUTLOOK_CALENDAR_ID = "cal_playwright_linked_design";
@@ -123,6 +131,7 @@ process.env.NODE_OPTIONS = nodeOptions;
 process.env.PLAYWRIGHT_AUTH_FILE = authStatePath;
 process.env.PLAYWRIGHT_RUN_ID = runId;
 process.env.PLAYWRIGHT_TEST_EMAIL = playwrightTestEmail;
+process.env.PLAYWRIGHT_EXTRA_MAILBOXES = JSON.stringify(extraMailboxes);
 process.env.PLAYWRIGHT_MAIL_PROVIDER = mailProvider;
 process.env.PLAYWRIGHT_STRIPE_BASE_URL = stripeBaseUrl;
 process.env.PLAYWRIGHT_LLM_BASE_URL = llmBaseUrl;
@@ -366,6 +375,7 @@ function writeEmulateSeed({
   mailProvider,
   playwrightTestEmail,
   runId,
+  extraMailboxes,
 }) {
   const isMicrosoft = mailProvider === "microsoft";
   const templatePath = path.join(
@@ -450,6 +460,12 @@ function writeEmulateSeed({
       JSON.stringify(createDarkModeReceiptHtml()).slice(1, -1),
     );
 
+  seed = withExtraMailboxes(seed, {
+    isMicrosoft,
+    primaryEmail: playwrightTestEmail,
+    extraMailboxes,
+  });
+
   // Mailbox synchronization only covers recent mail. Preserve the fixture's
   // ordering without letting fixed seed dates age out of that window.
   seed = isMicrosoft
@@ -525,6 +541,74 @@ function writeLinkedMicrosoftSeed({ baseURL, linkedOutlookEmail, runId }) {
 // Keep in sync with teammateEmail in team-comments-test-helpers.ts. The role
 // goes at the end of the local part so the publisher's address is never a
 // substring of a teammate's, which the OAuth account picker matches on.
+/**
+ * Gives each extra mailbox its own user, token and copy of the primary
+ * mailbox's mail. Copies get their own message ids, and so their own
+ * Message-IDs: two accounts share a message only where a spec makes them.
+ * Threads keep their ids, which the emulator keeps apart per user.
+ */
+function withExtraMailboxes(
+  seed,
+  { isMicrosoft, primaryEmail, extraMailboxes },
+) {
+  const lines = seed.split("\n");
+  for (const block of isMicrosoft
+    ? ["categories", "messages"]
+    : ["labels", "messages"]) {
+    const start = lines.indexOf(`  ${block}:`);
+    if (start < 0) throw new Error(`The emulator seed has no ${block}`);
+    let end = start + 1;
+    while (end < lines.length && !/^ {0,2}\S/.test(lines[end])) end++;
+    const items = lines.slice(start + 1, end);
+    const copies = extraMailboxes.flatMap((mailbox) =>
+      items.flatMap((line) => {
+        if (/^\s+message_id: /.test(line)) return [];
+        const copy = line.replaceAll(primaryEmail, mailbox.email);
+        // Gmail labels are each user's own; Outlook category ids are not.
+        if (block === "labels") return [copy];
+        return [
+          copy.replace(
+            /^( {4}- id: )("?)([^"]+)("?)$/,
+            `$1$2$3${mailbox.idSuffix}$4`,
+          ),
+        ];
+      }),
+    );
+    lines.splice(end, 0, ...copies);
+  }
+
+  // After the primary user: the emulator answers a token it doesn't know as
+  // its first user, which the primary's stored token relies on.
+  let usersEnd = lines.indexOf("  users:") + 1;
+  while (/^ {4}/.test(lines[usersEnd] ?? "")) usersEnd++;
+  lines.splice(
+    usersEnd,
+    0,
+    ...extraMailboxes.flatMap((mailbox, index) => [
+      `    - email: ${mailbox.email}`,
+      `      name: Playwright Mailbox ${index + 1}`,
+    ]),
+  );
+
+  const scopes = isMicrosoft
+    ? ["openid", "email", "profile", "User.Read", "Mail.ReadWrite"]
+    : [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/gmail.modify",
+      ];
+  const tokens = extraMailboxes.flatMap((mailbox) => [
+    `  ${mailbox.token}:`,
+    `    login: ${mailbox.email}`,
+    "    scopes:",
+    ...scopes.map((scope) => `      - ${scope}`),
+  ]);
+  if (lines[0] === "tokens:") lines.splice(1, 0, ...tokens);
+  else lines.unshift("tokens:", ...tokens);
+  return lines.join("\n");
+}
+
 function teammateEmail(publisherEmail, role) {
   const at = publisherEmail.lastIndexOf("@");
   return `${publisherEmail.slice(0, at)}+team-${role}${publisherEmail.slice(at)}`;
