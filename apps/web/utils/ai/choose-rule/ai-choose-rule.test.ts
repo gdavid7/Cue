@@ -113,6 +113,29 @@ describe("aiChooseRule model tier", () => {
   });
 });
 
+describe("aiChooseRule no usable rule", () => {
+  it("logs it at info, not warn, since it's an expected outcome", async () => {
+    vi.clearAllMocks();
+    generateObjectSpy.mockResolvedValue({
+      object: { reasoning: "r", matchedRules: [], noMatchFound: true },
+    });
+    const { aiChooseRule } = await import("./ai-choose-rule");
+
+    await aiChooseRule({
+      email: getEmail(),
+      rules,
+      emailAccount: getEmailAccount(),
+      logger: noopLogger,
+    });
+
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "AI choose rule returned no usable rule",
+      expect.objectContaining({ resolvedRuleCount: 0 }),
+    );
+    expect(noopLogger.warn).not.toHaveBeenCalled();
+  });
+});
+
 const noopLogger = {
   info: vi.fn(),
   warn: vi.fn(),

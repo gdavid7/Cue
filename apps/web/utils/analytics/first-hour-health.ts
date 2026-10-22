@@ -165,6 +165,12 @@ async function getFirstHourHealth(mailbox: Mailbox, now: Date) {
     null,
   );
   const watchExpiresAt = mailbox.watchEmailsExpirationDate;
+  // Mail Cue handled with no rule (expected, e.g. promos matching nothing)
+  // against all mail it handled without failing. Rows, not messages, so mail
+  // matching several rules weighs more in the total.
+  const handledCount = executedByStatus
+    .filter((row) => row.status !== ExecutedRuleStatus.ERROR)
+    .reduce((sum, row) => sum + row._count._all, 0);
 
   return {
     emailAccountId,
@@ -182,6 +188,7 @@ async function getFirstHourHealth(mailbox: Mailbox, now: Date) {
     rulesApplying: executedCount(ExecutedRuleStatus.APPLYING),
     rulesSkipped: executedCount(ExecutedRuleStatus.SKIPPED),
     rulesSkippedNoMatch: skippedNoMatch,
+    noRuleShare: { noRule: skippedNoMatch, total: handledCount },
     rulesErrored: executedCount(ExecutedRuleStatus.ERROR),
     minutesSinceLastRuleRun: lastRuleRunAt
       ? minutesBetween(lastRuleRunAt, now)
