@@ -227,7 +227,7 @@ function NeverReadRow({
 
   return (
     <li
-      className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-0"
+      className="flex flex-col gap-2 px-4 py-3 sm:px-0"
       data-never-read-sender={sender.email}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
