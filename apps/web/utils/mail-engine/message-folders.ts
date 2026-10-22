@@ -1,3 +1,4 @@
+import maxBy from "lodash/maxBy";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { ConversationKey } from "@inboxzero/mail-core/identities";
@@ -13,11 +14,24 @@ export type MessageFolder = {
 const PAGE_SIZE = 200;
 
 /**
- * Where each of a conversation's stored messages is now, as the engine has
- * it. The engine keeps no record of where a moved message came from, so a
- * move reads this first for its undo.
+ * Where each of a conversation's messages is now, as the engine has it. The
+ * engine keeps no record of where a moved message came from, so a move reads
+ * this first for its undo. Messages not stored yet would be moved without a
+ * record, so the whole conversation is fetched first, or this fails.
  */
 export async function readMessageFolders(
+  client: MailClient,
+  key: ConversationKey,
+): Promise<MessageFolder[]> {
+  const completion = await client.ensureConversationMessages(key);
+  if (completion.status !== "complete") {
+    throw new Error("conversation_incomplete");
+  }
+  return readStoredMessageFolders(client, key);
+}
+
+/** Where each of a conversation's stored messages is now. */
+export async function readStoredMessageFolders(
   client: MailClient,
   key: ConversationKey,
 ): Promise<MessageFolder[]> {
@@ -40,11 +54,14 @@ export async function readMessageFolders(
 /**
  * The changes that return moved messages to where they were, one per place.
  * Inbox mail goes back with `unarchive`, so the inbox shows it again at once
- * rather than once the provider confirms which folder is the inbox.
+ * rather than once the provider confirms which folder is the inbox. Messages
+ * now in the folder that the move's read never saw go where most of the
+ * conversation came from.
  */
 export function moveBackChanges(
   messages: readonly MessageFolder[],
   movedToFolderId: string,
+  current: readonly MessageFolder[] = [],
 ) {
   const groups = new Map<
     string,
@@ -64,6 +81,17 @@ export function moveBackChanges(
         { kind: "move", folderId: message.folderId },
         message.messageId,
       );
+    }
+  }
+  const dominant = maxBy(
+    [...groups.values()],
+    (group) => group.messageIds.length,
+  );
+  if (dominant) {
+    const seen = new Set(messages.map((message) => message.messageId));
+    for (const message of current) {
+      if (message.folderId === movedToFolderId && !seen.has(message.messageId))
+        dominant.messageIds.push(message.messageId);
     }
   }
   return [...groups.values()];

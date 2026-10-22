@@ -14,6 +14,7 @@ import {
   holdEmailForUndo,
 } from "@/utils/scheduled-email/service";
 import type { ScheduledEmail } from "@/generated/prisma/client";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
@@ -393,6 +394,40 @@ describe("createEmailProviderOperationExecutor", () => {
     expect(moveThreadToFolder).not.toHaveBeenCalled();
     if (result.status !== "confirmed") throw new Error("expected confirmed");
     expect(result.targets.map((target) => target.outcome)).toEqual(["applied"]);
+  });
+
+  it.each([
+    "folder_not_found",
+    "unsupported",
+  ])("rejects a move the provider refuses (%s) for good, without retrying each message", async (code) => {
+    const moveMessagesToFolder = vi
+      .fn()
+      .mockRejectedValue(new ProviderChangeRejectedError(code));
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        moveMessagesToFolder,
+      } as unknown as EmailProvider,
+    });
+    const targets = [
+      { accountId: "acc-1", messageId: "m1" },
+      { accountId: "acc-1", messageId: "m2" },
+    ];
+    const result = await executor.execute({
+      operation: {
+        ...metadataOperation(targets),
+        intent: {
+          kind: "metadata",
+          targets,
+          change: { kind: "move", folderId: "deleted-folder" },
+        },
+      },
+      attemptId: "a-move-missing",
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ status: "rejected", code, targets: [] });
+    expect(moveMessagesToFolder).toHaveBeenCalledTimes(1);
   });
 
   it("executes sends through the existing durable receipt ledger", async () => {

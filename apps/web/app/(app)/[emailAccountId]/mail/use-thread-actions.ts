@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { format } from "date-fns";
+import chunk from "lodash/chunk";
 import groupBy from "lodash/groupBy";
 import { toast } from "sonner";
 import { toastUndo } from "@/components/Toast";
@@ -25,7 +26,9 @@ import {
   type MessageFolder,
   moveBackChanges,
   readMessageFolders,
+  readStoredMessageFolders,
 } from "@/utils/mail-engine/message-folders";
+import { mapWithConcurrency } from "@/utils/async";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 import {
@@ -35,6 +38,9 @@ import {
 } from "@/utils/analytics/rum-actions";
 
 const ENGINE_STARTING = "engine_starting";
+const FOLDER_READ_CONCURRENCY = 4;
+// Well under the engine's 10,000-target cap for one command.
+const MOVE_BACK_TARGETS_PER_COMMAND = 1000;
 
 const RUM_TRIAGE_ACTIONS: Partial<
   Record<ThreadMutationPayload["kind"], "archive" | "star" | "mark_read">
@@ -211,24 +217,47 @@ export function useThreadActions({
           } else if (restore.kind === "move_back") {
             // Each message goes back where it was, which may differ within
             // one conversation (a reply in Sent, a message filed elsewhere).
-            const changes = moveBackChanges(
+            // Read again now for any message the move took that its own
+            // read never saw.
+            const current = await mapWithConcurrency(
+              snapshots,
+              FOLDER_READ_CONCURRENCY,
+              (snapshot) =>
+                readStoredMessageFolders(client, {
+                  accountId: emailAccountId,
+                  conversationId: snapshot.threadId,
+                }).catch(() => []),
+            );
+            const commands = moveBackChanges(
               snapshots.flatMap((snapshot) => snapshot.sourceFolders ?? []),
               restore.movedToFolderId,
-            );
-            for (const { change, messageIds } of changes) {
-              const admission = await client.submitMetadata({
-                accountId: emailAccountId,
-                commandId: randomUuid(),
-                targets: messageIds.map((messageId) => ({
-                  accountId: emailAccountId,
-                  messageId,
-                })),
+              current.flat(),
+            ).flatMap(({ change, messageIds }) =>
+              chunk(messageIds, MOVE_BACK_TARGETS_PER_COMMAND).map((ids) => ({
                 change,
-              });
-              if (admission.status === "rejected") {
-                throw new Error(admission.code);
-              }
-            }
+                ids,
+              })),
+            );
+            const admissions = await Promise.allSettled(
+              commands.map(({ change, ids }) =>
+                client.submitMetadata({
+                  accountId: emailAccountId,
+                  commandId: randomUuid(),
+                  targets: ids.map((messageId) => ({
+                    accountId: emailAccountId,
+                    messageId,
+                  })),
+                  change,
+                }),
+              ),
+            );
+            // Restored only once every place it came from has its mail back.
+            const failed = admissions.find(
+              (admission) =>
+                admission.status === "rejected" ||
+                admission.value.status === "rejected",
+            );
+            if (failed) throw new Error("move_back_incomplete");
           } else {
             const diagnostics = await client.getDiagnostics(emailAccountId);
             const admission = await client.submitConversations({
@@ -252,6 +281,10 @@ export function useThreadActions({
     const restoredKeys = results.flatMap((result) =>
       result.status === "fulfilled" ? result.value : [],
     );
+    const restored = new Set(restoredKeys);
+    const failedSnapshots = snapshots.filter(
+      (snapshot) => !restored.has(snapshot.key),
+    );
     const failedCount = snapshots.length - restoredKeys.length;
 
     if (restoredKeys.length) {
@@ -265,7 +298,10 @@ export function useThreadActions({
           : `Couldn't restore ${failedCount} of ${snapshots.length}`,
       );
     }
-    if (!restoredKeys.length) {
+    if (failedSnapshots.length) {
+      // What didn't come back can be undone again, from the toast or the
+      // shortcut, without repeating what did.
+      batch.snapshots = Promise.resolve(failedSnapshots);
       batch.undone = false;
       // An action taken while this undo ran is now the one to undo.
       if (lastAction.current === null) lastAction.current = batch;
@@ -397,22 +433,21 @@ export function useThreadActions({
               )
             : [];
           try {
-            const read = await Promise.allSettled(
-              targets.map((target) =>
+            const read = await mapWithConcurrency(
+              targets,
+              FOLDER_READ_CONCURRENCY,
+              (target) =>
                 readMessageFolders(client, {
                   accountId: target.emailAccountId,
                   conversationId: target.threadId,
-                }),
-              ),
+                }).catch(() => null),
             );
             // Mail whose folders can't be read stays put: undo couldn't
             // return it.
             return await enqueue(
               targets.flatMap((target, index) => {
-                const result = read[index];
-                return result.status === "fulfilled"
-                  ? [{ ...target, sourceFolders: result.value }]
-                  : [];
+                const sourceFolders = read[index];
+                return sourceFolders ? [{ ...target, sourceFolders }] : [];
               }),
             );
           } finally {

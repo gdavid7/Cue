@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
 import {
@@ -2615,6 +2616,20 @@ export class OutlookProvider implements EmailProvider {
     messageIds: string[],
     folderId: string,
   ): Promise<void> {
+    // A move to a missing folder fails with the same 404 as a missing
+    // message, which the move skips, so the folder is checked once up front.
+    try {
+      await this.client
+        .getClient()
+        .api(`/me/mailFolders/${folderId}`)
+        .select("id")
+        .get();
+    } catch (error) {
+      if (extractErrorInfo(error).status === 404) {
+        throw new ProviderChangeRejectedError("folder_not_found");
+      }
+      throw error;
+    }
     await this.moveMessageSnapshots(messageIds, folderId);
   }
 

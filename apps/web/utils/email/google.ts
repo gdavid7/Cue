@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import { getCompleteGmailThread } from "@/utils/gmail/thread";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
@@ -2295,7 +2296,8 @@ export class GmailProvider implements EmailProvider {
     _messageIds: string[],
     _folderId: string,
   ): Promise<void> {
-    throw new Error("Moving messages to a folder is not supported for Gmail");
+    // Gmail has labels, not folders, so a move can never succeed.
+    throw new ProviderChangeRejectedError("unsupported");
   }
 
   async getOrCreateFolderIdByName(_folderName: string): Promise<string> {
