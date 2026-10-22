@@ -28,6 +28,7 @@ import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -59,6 +60,7 @@ import { getActionErrorMessage } from "@/utils/error";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import type { HomeLane, HomeThread } from "@/utils/home/get-home";
+import type { ThreadsQuery } from "@/utils/threads/validation";
 import {
   type TodayAccount,
   type TodayAgentTask,
@@ -89,6 +91,7 @@ import { YourDay } from "./YourDay";
 import { useWaitingOnYou } from "./use-waiting-on-you";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
+const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
 
@@ -337,6 +340,12 @@ export function HomeDashboard() {
       return next;
     });
   }, []);
+  // One undo stack for Today: Catch up acts through these too.
+  const threadActions = useThreadActions({
+    emailAccountId,
+    threads: actionable,
+    onRestored: showThreads,
+  });
   const {
     archive,
     moveToInbox,
@@ -345,11 +354,17 @@ export function HomeDashboard() {
     snooze,
     trash,
     undo,
-  } = useThreadActions({
-    emailAccountId,
-    threads: actionable,
-    onRestored: showThreads,
-  });
+  } = threadActions;
+
+  // Catch up acts in the routed account only, where keys are thread ids, and
+  // reports a conversation once its archive or snooze has been queued.
+  const hideCaughtUp = useCallback(
+    (threadIds: string[]) => {
+      setHidden((current) => new Set([...current, ...threadIds]));
+      removeFromCachedToday(emailAccountId, threadIds);
+    },
+    [emailAccountId],
+  );
 
   const threadHref = useCallback(
     (thread: { threadId: string; account?: { id: string } }, reply = false) => {
@@ -633,6 +648,18 @@ export function HomeDashboard() {
       </header>
 
       <GetStartedChecklist />
+
+      {allInboxesAccounts ? null : (
+        <CatchUpEntry
+          actions={threadActions}
+          emailAccountId={emailAccountId}
+          onRemoved={hideCaughtUp}
+          onReply={(item) =>
+            router.push(threadHref({ threadId: item.threadId }, true))
+          }
+          query={INBOX_QUERY}
+        />
+      )}
 
       <LoadingContent
         hasData={Boolean(data)}

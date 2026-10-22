@@ -89,8 +89,21 @@ export function useThreadActions({
   onRestored?: (threadKeys: string[]) => void;
 }) {
   const lastAction = useRef<UndoableBatch | null>(null);
-  const notifyRestored = useStableCallback((threadKeys: string[]) =>
-    onRestored?.(threadKeys),
+  const restoredListeners = useRef(new Set<(threadKeys: string[]) => void>());
+  const notifyRestored = useStableCallback((threadKeys: string[]) => {
+    onRestored?.(threadKeys);
+    for (const listener of restoredListeners.current) listener(threadKeys);
+  });
+  // For a part of the view that tracks what it acted on, such as Catch up,
+  // to hear an undo from anywhere: its own button, the toast or Z.
+  const subscribeRestored = useCallback(
+    (listener: (threadKeys: string[]) => void) => {
+      restoredListeners.current.add(listener);
+      return () => {
+        restoredListeners.current.delete(listener);
+      };
+    },
+    [],
   );
   const retainedEmailAccountId = useRef(emailAccountId);
   const listTargetsByKey = useRef(new Map<string, ThreadActionTarget>());
@@ -104,19 +117,16 @@ export function useThreadActions({
     activeReaderTarget.current = readerTarget?.messageIds.length
       ? readerTarget
       : undefined;
-    for (const thread of threads) {
-      const messageIds = [...new Set(getListThreadMessageIds(thread))];
-      if (!messageIds.length) continue;
-      const key = getListThreadKey(thread);
-      listTargetsByKey.current.set(key, {
-        emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
-        key,
-        messageIds,
-        threadId: thread.id,
-        copies: thread.copies,
-      });
-    }
+    rememberTargets(listTargetsByKey.current, threads, emailAccountId);
   }, [emailAccountId, readerTarget, threads]);
+
+  // For conversations acted on from outside the list, such as Catch up's
+  // cards, which the list may not have loaded.
+  const addTargets = useCallback(
+    (extra: ActionableThread[]) =>
+      rememberTargets(listTargetsByKey.current, extra, emailAccountId),
+    [emailAccountId],
+  );
 
   const resolveTargets = useCallback(
     (threadKeys: string[]) =>
@@ -529,6 +539,8 @@ export function useThreadActions({
   );
 
   return {
+    addTargets,
+    subscribeRestored,
     archive: useCallback(
       (threadKeys: string[]) => runUndoable("archive", threadKeys),
       [runUndoable],
@@ -614,6 +626,25 @@ function rowKeys(snapshots: Pick<ThreadSnapshot, "key" | "rowKey">[]) {
   return [
     ...new Set(snapshots.map((snapshot) => snapshot.rowKey ?? snapshot.key)),
   ];
+}
+
+function rememberTargets(
+  targets: Map<string, ThreadActionTarget>,
+  threads: ActionableThread[],
+  emailAccountId: string,
+) {
+  for (const thread of threads) {
+    const messageIds = [...new Set(getListThreadMessageIds(thread))];
+    if (!messageIds.length) continue;
+    const key = getListThreadKey(thread);
+    targets.set(key, {
+      emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
+      key,
+      messageIds,
+      threadId: thread.id,
+      copies: thread.copies,
+    });
+  }
 }
 
 function summarise(verb: string, count: number) {

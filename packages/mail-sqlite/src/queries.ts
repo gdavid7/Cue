@@ -138,6 +138,15 @@ export function compilePredicate(
         bindings: [predicate.accountId, ...predicate.ids],
       };
     }
+    case "conversation": {
+      if (predicate.ids.length === 0) return { sql: "0=1", bindings: [] };
+      const ids = `${alias}.conversation_id IN (${predicate.ids.map(() => "?").join(",")})`;
+      if (!predicate.accountId) return { sql: ids, bindings: predicate.ids };
+      return {
+        sql: `(${alias}.account_id = ? AND ${ids})`,
+        bindings: [predicate.accountId, ...predicate.ids],
+      };
+    }
     case "text":
       return compileTextPredicate(predicate, search, alias);
     // The engine adds the provider's matches before a view reads; anything

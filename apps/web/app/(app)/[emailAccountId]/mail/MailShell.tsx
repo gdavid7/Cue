@@ -88,6 +88,8 @@ import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
+import { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
@@ -1160,6 +1162,12 @@ export function MailShell() {
     selection.selectedIds,
     navThreads,
   ]);
+  // One undo stack for the view: Catch up acts through these too.
+  const threadActions = useThreadActions({
+    emailAccountId,
+    readerTarget,
+    threads: navThreads,
+  });
   const {
     archive,
     moveToInbox,
@@ -1172,11 +1180,7 @@ export function MailShell() {
     setStarredState,
     snooze,
     undo,
-  } = useThreadActions({
-    emailAccountId,
-    readerTarget,
-    threads: navThreads,
-  });
+  } = threadActions;
   const markRead = useCallback(
     (threadKeys: string[]) => setReadState(threadKeys, true, false),
     [setReadState],
@@ -1290,6 +1294,13 @@ export function MailShell() {
     forgetPageParam(OPEN_REPLY_PARAM);
     requestReaderReply();
   }, [replyRequested, openReaderThreadKey, requestReaderReply]);
+
+  // Catch up's Reply opens the conversation the way Today's does, asking for
+  // a reply through the address.
+  const replyFromCatchUp = useStableCallback((item: CatchUpItem) => {
+    setPageParam(OPEN_REPLY_PARAM, "1");
+    setOpenThread({ emailAccountId: item.accountId, threadId: item.threadId });
+  });
 
   const requestReaderForward = useCallback(() => {
     const messageId = composeTargetMessageId;
@@ -2506,6 +2517,15 @@ export function MailShell() {
               {!isAllAccounts && (
                 <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
               )}
+              {showSplitTabs && !isAllAccounts && !isTourOpen && (
+                <CatchUpEntry
+                  actions={threadActions}
+                  className="mx-3 my-2"
+                  emailAccountId={emailAccountId}
+                  onReply={replyFromCatchUp}
+                  query={query}
+                />
+              )}
               {!isAllAccounts && (
                 <NotificationsOffHint ready={!isTourOpen && !isFirstSync} />
               )}
@@ -2881,6 +2901,12 @@ const OPEN_REPLY_PARAM = "reply";
 
 function forgetOpenedFrom() {
   forgetPageParam(OPENED_FROM_PARAM);
+}
+
+function setPageParam(name: string, value: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(name, value);
+  window.history.replaceState(null, "", url);
 }
 
 function forgetPageParam(name: string) {

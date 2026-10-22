@@ -26,6 +26,12 @@ describe("noteShortcutForGetStarted", () => {
     expect(listener).toHaveBeenCalledWith("keyboard");
   });
 
+  it("counts Catch up's Keep as triage", () => {
+    localStorage.setItem("cue:get-started:keyboard-triage", "4");
+    noteShortcutForGetStarted("catchUpKeep");
+    expect(listener).toHaveBeenCalledWith("keyboard");
+  });
+
   it("does not count moving around the list", () => {
     for (let i = 0; i < 10; i++) {
       noteShortcutForGetStarted("next");

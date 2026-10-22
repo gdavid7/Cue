@@ -165,6 +165,7 @@ const featureGroups = [
       "mail/today-all-accounts.spec.ts",
       "mail/today-inbox-switch.spec.ts",
       "mail/today-quiet.spec.ts",
+      "mail/catch-up.spec.ts",
       "mail/all-inboxes-context.spec.ts",
     ],
   },
