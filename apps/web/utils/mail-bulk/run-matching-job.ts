@@ -5,6 +5,7 @@ import {
   matchingScopeSchema,
 } from "@/utils/actions/mail-bulk-matching.validation";
 import { mapWithConcurrency } from "@/utils/async";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import type { EmailProvider } from "@/utils/email/types";
 import { isInvalidGrantError } from "@/utils/error";
 import { resumeAfterGmailDeferral } from "@/utils/gmail/deferred-resume";
@@ -503,18 +504,33 @@ export function filterForAction(action: MailBulkJobAction): MatchingFilter {
 
 function singleDeliveryTargetCap(
   action: MailBulkJobAction,
-  provider: EmailProvider,
+  provider: Pick<EmailProvider, "name">,
 ) {
   return isBatchedAction(action, provider)
     ? SINGLE_DELIVERY_BATCH_TARGETS
     : SINGLE_DELIVERY_PER_ITEM_TARGETS;
 }
 
+/** The most messages one job over a view lists before it stops as capped. */
+export function getMailBulkJobTargetCap(
+  action: MailBulkJobAction,
+  providerName: string,
+  durable = hasDurableQstash(),
+) {
+  if (durable) return MAX_JOB_TARGETS;
+  return singleDeliveryTargetCap(action, {
+    name: isMicrosoftProvider(providerName) ? "microsoft" : "google",
+  });
+}
+
 /**
  * Gmail's batch calls change many messages in one request; conversation
  * trash and spam, deleting forever, and every Outlook call go one by one.
  */
-function isBatchedAction(action: MailBulkJobAction, provider: EmailProvider) {
+function isBatchedAction(
+  action: MailBulkJobAction,
+  provider: Pick<EmailProvider, "name">,
+) {
   return (
     provider.name === "google" &&
     action !== "trash" &&

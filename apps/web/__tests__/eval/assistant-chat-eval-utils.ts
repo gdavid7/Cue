@@ -85,10 +85,12 @@ export async function captureAssistantChatTrace({
   chatHasHistory,
   chatLastSeenRulesRevision,
   localMailSearch,
+  chatId,
 }: {
   emailAccount: ReturnType<typeof getEmailAccount>;
   messages: ModelMessage[];
   logger: Logger;
+  chatId?: string;
   /** Stands in for the chat's browser and its local mail store. */
   localMailSearch?: LocalMailSearch;
   inboxStats?: { total: number; unread: number } | null;
@@ -114,6 +116,7 @@ export async function captureAssistantChatTrace({
     chatHasHistory,
     chatLastSeenRulesRevision,
     localMailSearch,
+    chatId,
     logger,
     onStepEnd: async (step) => {
       steps.push(step);

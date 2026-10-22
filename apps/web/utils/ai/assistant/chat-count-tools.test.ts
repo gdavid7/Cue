@@ -268,6 +268,90 @@ describe("countEmails", () => {
   });
 });
 
+describe("countEmails across accounts and groups", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads an Outlook search as searchInbox does when the provider counts it", async () => {
+    const provider = listingProvider(3, 500);
+    vi.mocked(createEmailProvider).mockResolvedValue(provider);
+
+    await countEmails({
+      options: { ...options(), provider: "microsoft" },
+      input: { query: "unread from:ada@example.com" },
+    });
+
+    expect(provider.listMatchingMessages).toHaveBeenCalledWith({
+      scope: { q: "from:ada@example.com" },
+      only: { unread: true },
+      pageToken: undefined,
+    });
+  });
+
+  it("isn't exact when some of the user's accounts were left out", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      account(ACCOUNT, "me@example.com", "google"),
+      account(OTHER, "me@work.example", "google"),
+      {
+        ...account("account-3", "old@example.com", "google"),
+        includeInAllAccounts: false,
+      },
+    ] as never);
+    vi.mocked(createEmailProvider).mockResolvedValue(headersProvider());
+    const local = localCount({
+      status: "counted",
+      accounts: [
+        { accountId: ACCOUNT, total: 2 },
+        { accountId: OTHER, total: 1 },
+      ],
+      groups: [],
+      groupCount: 0,
+      newest: [],
+    });
+
+    const result = await countEmails({
+      options: options(local),
+      input: { query: "", allAccounts: true },
+    });
+
+    expect(result).toMatchObject({
+      total: 3,
+      exact: false,
+      accountsNotSearched: 1,
+    });
+  });
+
+  it("lists only groups it could name and says when the largest could not be", async () => {
+    const provider = headersProvider();
+    provider.getLabels = vi.fn(async () => [
+      { id: "Label_1", name: "Receipts" },
+    ]) as never;
+    vi.mocked(createEmailProvider).mockResolvedValue(provider);
+    const local = localCount({
+      status: "counted",
+      accounts: [{ accountId: ACCOUNT, total: 30 }],
+      groups: [
+        { key: "Label_gone", count: 20, messageId: "g1", accountId: ACCOUNT },
+        { key: "Label_1", count: 10, messageId: "g2", accountId: ACCOUNT },
+      ],
+      groupCount: 2,
+      newest: [],
+    });
+
+    const result = await countEmails({
+      options: options(local),
+      input: { query: "", groupBy: "label" },
+    });
+
+    expect(result).toMatchObject({
+      groups: [{ label: "Receipts", count: 10 }],
+      moreGroups: 1,
+      groupsIncomplete: expect.any(String),
+    });
+  });
+});
+
 function options(localMailSearch?: LocalMailSearch) {
   return {
     email: "me@example.com",

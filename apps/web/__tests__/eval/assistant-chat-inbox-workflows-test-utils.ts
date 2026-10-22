@@ -281,11 +281,14 @@ export async function runAssistantChat({
   messages,
   inboxStats,
   localMailSearch,
+  chatId,
 }: {
   emailAccount: ReturnType<typeof getEmailAccount>;
   messages: ModelMessage[];
   inboxStats?: { total: number; unread: number } | null;
   localMailSearch?: LocalMailSearch;
+  /** The web chat's id, which a manageInbox preview's Confirm needs. */
+  chatId?: string;
 }) {
   const trace = await captureAssistantChatTrace({
     messages,
@@ -293,6 +296,7 @@ export async function runAssistantChat({
     inboxStats,
     logger,
     localMailSearch,
+    chatId,
   });
 
   return {

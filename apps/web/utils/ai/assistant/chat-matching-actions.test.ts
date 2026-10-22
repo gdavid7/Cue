@@ -1,155 +1,52 @@
-import { convertToModelMessages, type ModelMessage, type UIMessage } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import type { EmailProvider } from "@/utils/email/types";
 import {
-  findConfirmedPreview,
-  runMatchingQueryAction,
-  toMatchingBulkAction,
+  cancelMatchingQueryAction,
+  confirmMatchingQueryAction,
+  MATCHING_CONFIRM_EXPIRED,
+  previewMatchingQueryAction,
 } from "./chat-matching-actions";
 
-const { mockStartMatchingBulkJob } = vi.hoisted(() => ({
+const { mockStartMatchingBulkJob, store } = vi.hoisted(() => ({
   mockStartMatchingBulkJob: vi.fn(async () => "job-1"),
+  store: new Map<string, string>(),
 }));
 vi.mock("@/utils/mail-bulk/start-matching-job", () => ({
   startMatchingBulkJob: mockStartMatchingBulkJob,
 }));
+// GETDEL reads and deletes in one step, as Redis does.
+vi.mock("@/utils/redis", () => ({
+  redis: {
+    set: vi.fn(async (key: string, value: string) => {
+      store.set(key, value);
+      return "OK";
+    }),
+    getdel: vi.fn(async (key: string) => {
+      const value = store.get(key) ?? null;
+      store.delete(key);
+      return value;
+    }),
+    del: vi.fn(async (key: string) => (store.delete(key) ? 1 : 0)),
+  },
+}));
 
 const ACCOUNT = "account-1";
+const CHAT = "chat-1";
+const CALL = "call-1";
 const QUERY = "category:promotions after:2025/01/01 before:2026/01/01";
-const archive = { originalAction: "archive_threads", query: QUERY };
 const logger = createTestLogger();
 
-describe("toMatchingBulkAction", () => {
-  it("runs archive, read state and labels as the inbox's select-all actions", () => {
-    expect(toMatchingBulkAction("archive_threads", undefined)).toBe("archive");
-    expect(toMatchingBulkAction("mark_read_threads", true)).toBe("mark_read");
-    expect(toMatchingBulkAction("mark_read_threads", false)).toBe(
-      "mark_unread",
-    );
-    expect(toMatchingBulkAction("label_threads", undefined)).toBe("label");
-    // Trash has no confirm-and-undo flow here, so it never runs over a search.
-    expect(toMatchingBulkAction("trash_threads", undefined)).toBeNull();
-  });
-});
-
-describe("findConfirmedPreview", () => {
-  it("finds a preview of the same request that the user has answered since", () => {
-    expect(
-      findConfirmedPreview(
-        [
-          user("Archive all newsletters from last year"),
-          ...preview({ action: "archive_threads", query: QUERY }),
-          assistant("That's 1,204 conversations. Archive them?"),
-          user("yes"),
-        ],
-        archive,
-      ),
-    ).toEqual({ conversations: 1204 });
-  });
-
-  // Production rebuilds each turn's history from the stored chat messages.
-  it("finds the preview in history rebuilt from stored chat messages", async () => {
-    const stored: UIMessage[] = [
-      {
-        id: "1",
-        role: "user",
-        parts: [
-          { type: "text", text: "Archive all newsletters from last year" },
-        ],
-      },
-      {
-        id: "2",
-        role: "assistant",
-        parts: [
-          {
-            type: "tool-manageInbox",
-            toolCallId: "call-stored",
-            state: "output-available",
-            input: { action: "archive_threads", query: QUERY },
-            output: { status: "needs_confirmation", conversations: 1204 },
-          },
-          { type: "text", text: "That's 1,204 conversations. Archive them?" },
-        ],
-      },
-      { id: "3", role: "user", parts: [{ type: "text", text: "yes" }] },
-    ];
-
-    expect(
-      findConfirmedPreview(await convertToModelMessages(stored), archive),
-    ).toEqual({ conversations: 1204 });
-  });
-
-  it("doesn't count a preview from this turn, which the user hasn't seen", () => {
-    expect(
-      findConfirmedPreview(
-        [
-          user("Archive all newsletters from last year"),
-          ...preview({ action: "archive_threads", query: QUERY }),
-        ],
-        archive,
-      ),
-    ).toBeNull();
-  });
-
-  it("doesn't count a preview of a different search, action or label", () => {
-    const answered = (input: Record<string, unknown>) => [
-      user("Archive all newsletters from last year"),
-      ...preview(input),
-      user("yes"),
-    ];
-    expect(
-      findConfirmedPreview(
-        answered({ action: "archive_threads", query: "category:promotions" }),
-        archive,
-      ),
-    ).toBeNull();
-    expect(
-      findConfirmedPreview(
-        answered({ action: "mark_read_threads", query: QUERY, read: true }),
-        archive,
-      ),
-    ).toBeNull();
-    expect(
-      findConfirmedPreview(
-        answered({ action: "label_threads", query: QUERY, labelName: "Old" }),
-        { originalAction: "label_threads", query: QUERY, labelName: "Older" },
-      ),
-    ).toBeNull();
-  });
-
-  it("doesn't count a call that found nothing to change", () => {
-    expect(
-      findConfirmedPreview(
-        [
-          ...preview(
-            { action: "archive_threads", query: QUERY },
-            { status: "nothing_to_change", conversations: 0 },
-          ),
-          user("archive them anyway"),
-        ],
-        archive,
-      ),
-    ).toBeNull();
-  });
-});
-
-describe("runMatchingQueryAction", () => {
+describe("previewMatchingQueryAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    store.clear();
   });
 
-  it("only counts what archiving would change until the user confirms", async () => {
+  it("counts only what archiving would change and starts nothing", async () => {
     const provider = listingProvider(30);
 
-    const result = await runMatchingQueryAction({
-      request: archive,
-      bulkAction: "archive",
-      emailProvider: provider,
-      emailAccountId: ACCOUNT,
-      messages: [user("Archive all newsletters from last year")],
-      logger,
-    });
+    const result = await preview({ emailProvider: provider });
 
     // Archiving lists only what is still in the inbox, as the job will.
     expect(provider.listMatchingMessages).toHaveBeenCalledWith({
@@ -160,30 +57,87 @@ describe("runMatchingQueryAction", () => {
     expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       status: "needs_confirmation",
-      action: "archive_threads",
-      query: QUERY,
       conversations: 15,
       messages: 30,
+      confirmToken: expect.any(String),
     });
   });
 
-  it("starts the select-all job in the chat's account once the user confirmed the count", async () => {
-    const provider = listingProvider(30);
+  it("stores ids and a keyed hash for the token, never the search (R-1)", async () => {
+    await preview({});
 
-    const result = await runMatchingQueryAction({
-      request: archive,
-      bulkAction: "archive",
-      emailProvider: provider,
-      emailAccountId: ACCOUNT,
-      messages: [
-        user("Archive all newsletters from last year"),
-        ...preview({ action: "archive_threads", query: QUERY }),
-        user("yes, do it"),
-      ],
-      logger,
+    const [stored] = [...store.values()];
+    expect(stored).toBeDefined();
+    expect(stored).not.toContain("promotions");
+    expect(JSON.parse(stored ?? "")).toEqual({
+      chatId: CHAT,
+      toolCallId: CALL,
+      action: "archive",
+      queryHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
+  });
 
-    expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+  it("only counts, with no token to confirm, outside the web chat", async () => {
+    const result = await preview({ confirmation: undefined });
+
+    expect(result).toMatchObject({ status: "needs_confirmation" });
+    expect(result).not.toHaveProperty("confirmToken");
+    expect(store.size).toBe(0);
+  });
+
+  // Calling again, after a "yes", a "no", or an injected message, only
+  // counts again: the model has no way to start the job.
+  it("never starts a job however often it is called", async () => {
+    const first = await preview({});
+    const second = await preview({});
+
+    expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
+    expect(first).toMatchObject({ status: "needs_confirmation" });
+    expect(second).toMatchObject({ status: "needs_confirmation" });
+  });
+
+  it("says there is nothing to change rather than offering to confirm zero", async () => {
+    const result = await preview({ emailProvider: listingProvider(0) });
+    expect(result).toMatchObject({ status: "nothing_to_change" });
+    expect(store.size).toBe(0);
+  });
+
+  it("reads an Outlook search as searchInbox does before listing it", async () => {
+    const provider = listingProvider(4);
+    await preview({
+      emailProvider: provider,
+      provider: "microsoft",
+      query: "from:billing@vendor.example",
+      bulkAction: "mark_read",
+    });
+    expect(provider.listMatchingMessages).toHaveBeenCalledWith({
+      scope: { q: "from:billing@vendor.example" },
+      only: { unread: true },
+      pageToken: undefined,
+    });
+  });
+
+  it("refuses an Outlook read state the job's view can't hold", async () => {
+    const result = await preview({
+      provider: "microsoft",
+      query: "unread",
+      bulkAction: "archive",
+    });
+    expect(result).toEqual({ error: expect.any(String) });
+  });
+});
+
+describe("confirmMatchingQueryAction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store.clear();
+  });
+
+  it("starts the select-all job for the previewed search in the chat's account", async () => {
+    const token = await previewToken();
+
+    const started = await confirm({ confirmToken: token });
+
     expect(mockStartMatchingBulkJob).toHaveBeenCalledWith({
       emailAccountId: ACCOUNT,
       scope: { q: QUERY },
@@ -191,66 +145,99 @@ describe("runMatchingQueryAction", () => {
       labelId: undefined,
       logger,
     });
-    expect(result).toEqual({
-      status: "started",
-      action: "archive_threads",
-      query: QUERY,
+    expect(started).toEqual({
       jobId: "job-1",
-      conversations: 1204,
+      action: "archive",
+      messageCap: expect.any(Number),
     });
   });
 
-  it("says there is nothing to change rather than asking about zero conversations", async () => {
-    const result = await runMatchingQueryAction({
-      request: archive,
-      bulkAction: "archive",
-      emailProvider: listingProvider(0),
+  it("can't start a second job from a token already used", async () => {
+    const token = await previewToken();
+    await confirm({ confirmToken: token });
+
+    await expect(confirm({ confirmToken: token })).rejects.toThrow(
+      MATCHING_CONFIRM_EXPIRED,
+    );
+    expect(mockStartMatchingBulkJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts one job when Confirm is pressed twice at once", async () => {
+    const token = await previewToken();
+
+    const results = await Promise.allSettled([
+      confirm({ confirmToken: token }),
+      confirm({ confirmToken: token }),
+    ]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(mockStartMatchingBulkJob).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["another chat", { chatId: "chat-2" }],
+    ["another tool call", { toolCallId: "call-2" }],
+    ["a different search", { query: "category:social" }],
+    ["another account", { emailAccountId: "account-2" }],
+  ])("refuses a token presented for %s", async (_name, override) => {
+    const token = await previewToken();
+
+    await expect(confirm({ confirmToken: token, ...override })).rejects.toThrow(
+      MATCHING_CONFIRM_EXPIRED,
+    );
+    expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
+  });
+
+  it("can't be confirmed once cancelled", async () => {
+    const token = await previewToken();
+    await cancelMatchingQueryAction({
       emailAccountId: ACCOUNT,
-      messages: [user("Archive all newsletters from last year")],
-      logger,
+      confirmToken: token,
     });
-    expect(result).toMatchObject({ status: "nothing_to_change" });
+
+    await expect(confirm({ confirmToken: token })).rejects.toThrow(
+      MATCHING_CONFIRM_EXPIRED,
+    );
+    expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
   });
 });
 
-function user(content: string): ModelMessage {
-  return { role: "user", content };
-}
-
-function assistant(text: string): ModelMessage {
-  return { role: "assistant", content: [{ type: "text", text }] };
-}
-
-let callCount = 0;
-
 function preview(
-  input: Record<string, unknown>,
-  output: Record<string, unknown> = {
-    status: "needs_confirmation",
-    conversations: 1204,
-    messages: 2210,
+  overrides: Partial<Parameters<typeof previewMatchingQueryAction>[0]>,
+) {
+  return previewMatchingQueryAction({
+    originalAction: "archive_threads",
+    query: QUERY,
+    bulkAction: "archive",
+    emailProvider: listingProvider(30),
+    emailAccountId: ACCOUNT,
+    provider: "google",
+    confirmation: { chatId: CHAT, toolCallId: CALL },
+    ...overrides,
+  });
+}
+
+async function previewToken() {
+  const result = await preview({});
+  if (!("confirmToken" in result) || !result.confirmToken)
+    throw new Error("no token");
+  return result.confirmToken;
+}
+
+function confirm(
+  overrides: Partial<Parameters<typeof confirmMatchingQueryAction>[0]> & {
+    confirmToken: string;
   },
-): ModelMessage[] {
-  const toolCallId = `call-${callCount++}`;
-  return [
-    {
-      role: "assistant",
-      content: [
-        { type: "tool-call", toolCallId, toolName: "manageInbox", input },
-      ],
-    },
-    {
-      role: "tool",
-      content: [
-        {
-          type: "tool-result",
-          toolCallId,
-          toolName: "manageInbox",
-          output: { type: "json", value: output as never },
-        },
-      ],
-    },
-  ];
+) {
+  return confirmMatchingQueryAction({
+    emailAccountId: ACCOUNT,
+    provider: "google",
+    chatId: CHAT,
+    toolCallId: CALL,
+    query: QUERY,
+    logger,
+    ...overrides,
+  });
 }
 
 /** A provider listing `total` messages, two per conversation. */

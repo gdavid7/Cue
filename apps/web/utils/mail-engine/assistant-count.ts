@@ -105,7 +105,6 @@ export async function countLocalMail({
   const searchMessages = client.searchMessages?.bind(client);
   if (!searchMessages) return { status: "unavailable", reason: "no_engine" };
   const deadline = Date.now() + budgetMs;
-  const groupKeys = groupBy ? groupKeyReader(groupBy, timeZone) : null;
 
   const accounts: LocalMailCountResult["accounts"] = [];
   const groups = new Map<string, Group>();
@@ -125,7 +124,9 @@ export async function countLocalMail({
       searchMessages,
       accountId: search.accountId,
       local,
-      groupKeys,
+      groupKeys: groupBy
+        ? groupKeyReader(groupBy, timeZone, search.syntax ?? "gmail")
+        : null,
       deadline,
     });
     if ("unavailable" in counted) {
@@ -272,18 +273,22 @@ function localSearchFor(
 function groupKeyReader(
   groupBy: CountGroupBy,
   timeZone: string,
+  syntax: "gmail" | "outlook",
 ): (message: MessageSearchMatch) => string[] {
   switch (groupBy) {
     case "sender":
       // Mail the user sent isn't mail someone sent them.
       return (message) =>
         message.roles.includes("sent") ? [] : [senderAddress(message.from)];
+    // Only ids the server can name from the provider's label list: Gmail's
+    // labels and categories, Outlook's categories (its label ids are folders).
     case "label":
       return (message) => [
         ...new Set(
-          [...message.categoryIds, ...message.labelIds].filter(
-            (id) => id.length <= LOCAL_COUNT_LIMITS.groupKey,
-          ),
+          [
+            ...message.categoryIds,
+            ...(syntax === "outlook" ? [] : message.labelIds),
+          ].filter((id) => id.length <= LOCAL_COUNT_LIMITS.groupKey),
         ),
       ];
     case "month":

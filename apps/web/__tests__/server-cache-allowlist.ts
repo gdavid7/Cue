@@ -31,6 +31,17 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/ai/assistant/chat-matching-actions.ts": {
+    writes: 1,
+    keys: [
+      {
+        key: "assistant-matching-confirm:{emailAccountId}:{confirmToken}",
+        holds:
+          "a chat id, tool call id, bulk-action enum, optional label id and an HMAC (server secret) of the search; never the search itself",
+        ttl: "15m, taken once on Confirm or dropped on Cancel",
+      },
+    ],
+  },
   "utils/ai/assistant/local-mail-search.ts": {
     writes: 3,
     keys: [

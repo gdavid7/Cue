@@ -2,6 +2,8 @@
 
 import { actionClient } from "@/utils/actions/safe-action";
 import {
+  cancelAssistantMatchingActionBody,
+  confirmAssistantMatchingActionBody,
   confirmAssistantCreateRuleBody,
   confirmAssistantEmailActionBody,
   confirmAssistantSaveMemoryBody,
@@ -14,7 +16,12 @@ import {
   confirmAssistantSaveMemoryForAccount,
   confirmAssistantLearnedPatternsForAccount,
   confirmAssistantUpdateRuleForAccount,
+  persistAssistantMatchingActionOutcome,
 } from "./assistant-chat-confirmation";
+import {
+  cancelMatchingQueryAction,
+  confirmMatchingQueryAction,
+} from "@/utils/ai/assistant/chat-matching-actions";
 import { submitLocalMailSearchResultBody } from "./assistant-local-search.validation";
 import { acceptLocalMailSearchResult } from "@/utils/ai/assistant/local-mail-search";
 
@@ -136,4 +143,64 @@ export const confirmAssistantSaveMemory = actionClient
         emailAccountId,
         logger,
       }),
+  );
+
+// The user's Confirm on a manageInbox preview over a whole search. The token
+// is spent before anything starts, so one preview starts one job.
+export const confirmAssistantMatchingAction = actionClient
+  .metadata({ name: "confirmAssistantMatchingAction" })
+  .inputSchema(confirmAssistantMatchingActionBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { chatId, chatMessageId, toolCallId, confirmToken, query },
+    }) => {
+      const started = await confirmMatchingQueryAction({
+        emailAccountId,
+        provider,
+        chatId,
+        toolCallId,
+        confirmToken,
+        query,
+        logger,
+      });
+      // The job has started either way; the card only loses its record.
+      await persistAssistantMatchingActionOutcome({
+        chatId,
+        chatMessageId,
+        toolCallId,
+        emailAccountId,
+        outcome: {
+          status: "started",
+          jobId: started.jobId,
+          messageCap: started.messageCap,
+        },
+        logger,
+      }).catch((error) => {
+        logger.warn("Could not record a started matching action", { error });
+      });
+      return started;
+    },
+  );
+
+export const cancelAssistantMatchingAction = actionClient
+  .metadata({ name: "cancelAssistantMatchingAction" })
+  .inputSchema(cancelAssistantMatchingActionBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, logger },
+      parsedInput: { chatId, chatMessageId, toolCallId, confirmToken },
+    }) => {
+      await cancelMatchingQueryAction({ emailAccountId, confirmToken });
+      await persistAssistantMatchingActionOutcome({
+        chatId,
+        chatMessageId,
+        toolCallId,
+        emailAccountId,
+        outcome: { status: "cancelled" },
+        logger,
+      }).catch((error) => {
+        logger.warn("Could not record a cancelled matching action", { error });
+      });
+    },
   );

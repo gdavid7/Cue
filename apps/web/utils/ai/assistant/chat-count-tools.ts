@@ -10,7 +10,6 @@ import type {
   MatchingFilter,
   MatchingScope,
 } from "@/utils/actions/mail-bulk-matching.validation";
-import { mapWithConcurrency } from "@/utils/async";
 import {
   type AccountSearch,
   translateAccountSearch,
@@ -20,7 +19,10 @@ import type {
   LocalMailSearch,
 } from "@/utils/ai/assistant/local-mail-search";
 import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
-import { getConnectedEmailAccounts } from "@/utils/email/connected-accounts";
+import {
+  runOnOtherAccounts,
+  selectOtherAccounts,
+} from "@/utils/ai/assistant/chat-other-accounts";
 import { createEmailProvider } from "@/utils/email/provider";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { describeProviderRateLimitError } from "@/utils/email/rate-limit";
@@ -34,8 +36,8 @@ import {
 // Without a local count, the provider lists matching ids, 500 a page (one
 // Gmail messages.list, 5 quota units). Past this the total is a lower bound.
 export const PROVIDER_COUNT_MAX_MESSAGES = 5000;
-const MAX_OTHER_ACCOUNTS = 10;
-const ACCOUNT_CONCURRENCY = 3;
+const FOLDER_OR_CATEGORY_SEARCH =
+  "Folder and category searches can't be counted here; use searchInbox.";
 
 type CountAccount = { id: string; email: string; provider: string };
 
@@ -128,30 +130,37 @@ export async function countEmails({
   const chatAccount: CountAccount = { id: emailAccountId, email, provider };
   const chatSearch: AccountSearch = { query: input.query };
 
-  const accounts = [
-    { account: chatAccount, search: chatSearch, keywordsOnly: false },
-  ];
+  type AccountToCount = {
+    account: CountAccount;
+    search: AccountSearch;
+    keywordsOnly: boolean;
+  };
+  const chatEntry: AccountToCount = {
+    account: chatAccount,
+    search: chatSearch,
+    keywordsOnly: false,
+  };
+  const others: AccountToCount[] = [];
   const notSearched: Array<{ account: string; error: string }> = [];
-  if (input.allAccounts) {
-    for (const account of await getIncludedOtherAccounts({
-      userId,
-      emailAccountId,
-    })) {
-      const translated = translateAccountSearch({
-        search: chatSearch,
-        from: provider,
-        to: account.provider,
+  const selection = input.allAccounts
+    ? await selectOtherAccounts({ userId, emailAccountId })
+    : null;
+  for (const account of selection?.accounts ?? []) {
+    const translated = translateAccountSearch({
+      search: chatSearch,
+      from: provider,
+      to: account.provider,
+    });
+    if (!translated) {
+      notSearched.push({
+        account: account.email,
+        error: "Nothing in this search applies to this account.",
       });
-      if (!translated) {
-        notSearched.push({
-          account: account.email,
-          error: "Nothing in this search applies to this account.",
-        });
-        continue;
-      }
-      accounts.push({ account, ...translated });
+      continue;
     }
+    others.push({ account, ...translated });
   }
+  const accounts = [chatEntry, ...others];
 
   const local = localMailSearch?.count
     ? await localMailSearch.count({
@@ -163,58 +172,109 @@ export async function countEmails({
       })
     : null;
 
-  const perAccount = await mapWithConcurrency(
-    accounts,
-    ACCOUNT_CONCURRENCY,
-    async ({ account, search, keywordsOnly }) => {
-      const counted = local?.accounts.find(
-        (item) => item.accountId === account.id && item.total !== undefined,
-      );
-      if (counted?.total !== undefined) {
-        return {
-          account,
-          keywordsOnly,
-          total: counted.total,
-          exact: true,
-          grouped: true,
-          newestIds: [] as Array<{ id: string; threadId: string }>,
-        };
-      }
-      abortSignal?.throwIfAborted();
-      try {
-        const emailProvider = await createEmailProvider({
-          emailAccountId: account.id,
-          provider: account.provider,
-          logger,
-        });
-        const listed = await countWithProvider({
-          emailProvider,
-          ...toMatchingScope(search),
-          abortSignal,
-        });
-        return {
-          account,
-          keywordsOnly,
-          total: listed.total,
-          exact: !listed.capped,
-          grouped: false,
-          newestIds: listed.newestIds,
-        };
-      } catch (error) {
-        logger.warn("Could not count an account's matching mail", {
-          countEmailAccountId: account.id,
-          error,
-        });
-        return {
-          account,
-          keywordsOnly,
-          error:
-            describeProviderRateLimitError(error, account.provider) ??
-            "Could not count this account's mail.",
-        };
-      }
-    },
-  );
+  const countOne = async (
+    { account, search, keywordsOnly }: AccountToCount,
+    signal?: AbortSignal,
+  ) => {
+    const counted = local?.accounts.find(
+      (item) => item.accountId === account.id && item.total !== undefined,
+    );
+    if (counted?.total !== undefined) {
+      return {
+        account,
+        keywordsOnly,
+        total: counted.total,
+        exact: true,
+        grouped: true,
+        newestIds: [] as Array<{ id: string; threadId: string }>,
+      };
+    }
+    const matching = toChatMatchingScope(search, account.provider);
+    if (!matching) throw new Error(FOLDER_OR_CATEGORY_SEARCH);
+    signal?.throwIfAborted();
+    const emailProvider = await createEmailProvider({
+      emailAccountId: account.id,
+      provider: account.provider,
+      logger,
+    });
+    const listed = await countWithProvider({
+      emailProvider,
+      ...matching,
+      abortSignal: signal,
+    });
+    return {
+      account,
+      keywordsOnly,
+      total: listed.total,
+      exact: !listed.capped,
+      grouped: false,
+      newestIds: listed.newestIds,
+    };
+  };
+  const describeFailure = (account: CountAccount, error: unknown) => {
+    if (error instanceof Error && error.message === FOLDER_OR_CATEGORY_SEARCH)
+      return FOLDER_OR_CATEGORY_SEARCH;
+    logger.warn("Could not count an account's matching mail", {
+      countEmailAccountId: account.id,
+      error,
+    });
+    return (
+      describeProviderRateLimitError(error, account.provider) ??
+      "Could not count this account's mail."
+    );
+  };
+
+  const chatResult = await countOne(chatEntry, abortSignal).catch((error) => ({
+    account: chatAccount,
+    keywordsOnly: false,
+    error: describeFailure(chatAccount, error),
+  }));
+  // The other accounts share searchInbox's concurrency and deadline.
+  const otherResults = selection
+    ? await runOnOtherAccounts({
+        userId,
+        emailAccountId,
+        logger,
+        abortSignal,
+        selection: {
+          accounts: (selection.accounts ?? []).filter((account) =>
+            others.some((entry) => entry.account.id === account.id),
+          ),
+          notSearchedCount: selection.notSearchedCount,
+        },
+        run: async (account, signal) => {
+          const entry = others.find((item) => item.account.id === account.id);
+          if (!entry) throw new Error("Account not prepared for counting");
+          try {
+            return await countOne(entry, signal);
+          } catch (error) {
+            return {
+              account: entry.account,
+              keywordsOnly: entry.keywordsOnly,
+              error: describeFailure(entry.account, error),
+            };
+          }
+        },
+      })
+    : null;
+  const perAccount = [
+    chatResult,
+    ...(otherResults?.results ?? []).map((entry) =>
+      "error" in entry
+        ? {
+            account: others.find((item) => item.account.id === entry.account.id)
+              ?.account ?? {
+              id: entry.account.id,
+              email: entry.account.email,
+              provider: entry.account.provider,
+            },
+            keywordsOnly: false,
+            error: entry.error,
+          }
+        : entry.result,
+    ),
+  ];
+  const accountsNotSearched = otherResults?.notSearchedCount ?? 0;
 
   const counted = perAccount.filter(
     (item): item is Extract<typeof item, { total: number }> => "total" in item,
@@ -223,8 +283,9 @@ export async function countEmails({
     return {
       queryUsed: input.query,
       error:
-        perAccount.find((item) => "error" in item && item.error)?.error ??
-        "Could not count matching emails.",
+        perAccount.flatMap((item) =>
+          "error" in item ? [item.error] : [],
+        )[0] ?? "Could not count matching emails.",
     };
   }
 
@@ -318,16 +379,18 @@ export async function countEmails({
     exact:
       counted.every((entry) => entry.exact) &&
       failed.length === 0 &&
-      notSearched.length === 0,
+      notSearched.length === 0 &&
+      accountsNotSearched === 0,
     ...(groupBy && groups
       ? {
           groupBy,
           groups: groups.items,
           ...(groups.more > 0 ? { moreGroups: groups.more } : {}),
-          ...(ungrouped.length
+          ...(ungrouped.length || groups.unnamed
             ? {
-                groupsIncomplete:
-                  "Some matching mail could only be counted, not grouped, because this device has not finished syncing it.",
+                groupsIncomplete: ungrouped.length
+                  ? "Some matching mail could only be counted, not grouped, because this device has not finished syncing it."
+                  : "Some of the largest groups could not be named, so they are left out.",
               }
             : {}),
         }
@@ -348,9 +411,39 @@ export async function countEmails({
             ),
             ...notSearched,
           ],
+          ...(accountsNotSearched ? { accountsNotSearched } : {}),
         }
       : {}),
   };
+}
+
+/**
+ * The bulk-action scope for a chat search in an account of `provider`, read
+ * the way searchInbox reads it, so the provider lists the same mail the local
+ * store counts. Null for an Outlook folder or category search, which only
+ * searchInbox can scope.
+ */
+export function toChatMatchingScope(
+  search: AccountSearch,
+  provider: string,
+): ReturnType<typeof toMatchingScope> | null {
+  if (!isMicrosoftProvider(provider)) return toMatchingScope(search);
+  let normalized: ReturnType<typeof normalizeOutlookSearchInput>;
+  try {
+    normalized = normalizeOutlookSearchInput({
+      query: search.query,
+      fromEmail: search.fromEmail,
+      readState: search.readState,
+    });
+  } catch {
+    return null;
+  }
+  if (normalized.categoryName || normalized.folderName) return null;
+  return toMatchingScope({
+    query: normalized.query,
+    fromEmail: normalized.fromEmail,
+    readState: normalized.readState,
+  });
 }
 
 /**
@@ -416,27 +509,6 @@ export async function countWithProvider({
     capped: Boolean(pageToken),
     newestIds,
   };
-}
-
-async function getIncludedOtherAccounts({
-  userId,
-  emailAccountId,
-}: {
-  userId: string;
-  emailAccountId: string;
-}): Promise<CountAccount[]> {
-  const accounts = await getConnectedEmailAccounts({
-    userId,
-    includeInAllAccounts: true,
-  });
-  return accounts
-    .filter((account) => account.id !== emailAccountId)
-    .slice(0, MAX_OTHER_ACCOUNTS)
-    .map((account) => ({
-      id: account.id,
-      email: account.email,
-      provider: account.provider,
-    }));
 }
 
 function toLocalCountSearch(
@@ -566,8 +638,10 @@ async function describeGroups({
         return group.key ? [{ weekOf: group.key, count: group.count }] : [];
     }
   });
+  // Only named groups are listed; "more" counts every other group.
   return {
     items,
+    unnamed: groups.length - items.length,
     more: Math.max(0, (local?.groupCount ?? 0) - items.length),
   };
 }

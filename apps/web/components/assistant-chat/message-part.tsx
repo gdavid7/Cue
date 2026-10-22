@@ -352,7 +352,9 @@ export function MessagePart({
           key={toolCallId}
           input={part.input}
           output={part.output}
-          isPersistedMessage={isPersistedMessage}
+          chatMessageId={messageId}
+          toolCallId={toolCallId}
+          disableConfirm={disableConfirm || !isPersistedMessage}
         />
       );
     }

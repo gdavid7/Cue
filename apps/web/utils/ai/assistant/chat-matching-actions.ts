@@ -1,196 +1,224 @@
-import type { ModelMessage } from "ai";
-import type { MatchingBulkAction } from "@/utils/actions/mail-bulk-matching.validation";
+import { createHmac, randomUUID } from "node:crypto";
+import { z } from "zod";
+import { env } from "@/env";
+import {
+  type MatchingBulkAction,
+  MATCHING_BULK_ACTIONS,
+} from "@/utils/actions/mail-bulk-matching.validation";
 import {
   countWithProvider,
-  toMatchingScope,
+  toChatMatchingScope,
 } from "@/utils/ai/assistant/chat-count-tools";
-import type { ManageInboxAction } from "@/utils/ai/assistant/manage-inbox-actions";
 import type { EmailProvider } from "@/utils/email/types";
+import { SafeError } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
-import { filterForAction } from "@/utils/mail-bulk/run-matching-job";
+import {
+  filterForAction,
+  getMailBulkJobTargetCap,
+} from "@/utils/mail-bulk/run-matching-job";
 import { startMatchingBulkJob } from "@/utils/mail-bulk/start-matching-job";
+import { redis } from "@/utils/redis";
 
 // The preview counts what the job would change, at one provider listing call
 // per 500 messages; past this it says "at least".
 const PREVIEW_MAX_MESSAGES = 10_000;
+// Long enough to read the card and press Confirm, short enough that a stale
+// count isn't acted on.
+const CONFIRM_TTL_SECONDS = 15 * 60;
 
-/** manageInbox actions that can run over every email a search matches. */
-export const MATCHING_QUERY_ACTIONS = [
-  "archive_threads",
-  "mark_read_threads",
-  "label_threads",
-] as const satisfies readonly ManageInboxAction[];
+export const MATCHING_CONFIRM_EXPIRED =
+  "This confirmation has expired or was already used. Ask the assistant again.";
 
-export function supportsMatchingQuery(action: ManageInboxAction) {
-  return (MATCHING_QUERY_ACTIONS as readonly string[]).includes(action);
-}
+const FOLDER_OR_CATEGORY_SEARCH =
+  "Folder and category searches can't be acted on over every match; use threadIds from searchInbox.";
+const READ_STATE_SEARCH =
+  "This search's read state can't be applied to every match; leave it out of the query or use threadIds from searchInbox.";
 
-/** The inbox job that runs a manageInbox action over a whole search. */
-export function toMatchingBulkAction(
-  action: ManageInboxAction,
-  read: boolean | null | undefined,
-): MatchingBulkAction | null {
-  switch (action) {
-    case "archive_threads":
-      return "archive";
-    case "mark_read_threads":
-      return read === false ? "mark_unread" : "mark_read";
-    case "label_threads":
-      return "label";
-    default:
-      return null;
-  }
-}
-
-type MatchingRequest = {
-  /** The action as the model named it, which the preview echoes. */
-  originalAction: string;
-  query: string;
-  labelName?: string | null;
-  read?: boolean | null;
-};
+// Founder rule R-1: the token holds ids, an enum and a keyed hash of the
+// search; the search itself stays in the chat's Postgres history.
+const storedConfirmationSchema = z.object({
+  chatId: z.string().min(1),
+  toolCallId: z.string().min(1),
+  action: z.enum(MATCHING_BULK_ACTIONS),
+  labelId: z.string().optional(),
+  queryHash: z.string().min(1),
+});
 
 /**
- * Runs a manageInbox action over every email a search matches in the chat's
- * own account. The first call only counts what would change. The job starts
- * only when an earlier turn previewed this same action and search and the
- * user has written since, so the count was shown before anything changes,
- * whatever the model does. The job, its progress and its undo are the
- * inbox's own select-all job.
+ * Counts what a manageInbox action over every email a search matches would
+ * change, in the chat's own account. Nothing changes here: on the web chat
+ * the result carries a single-use token that only the user's Confirm button
+ * can spend, so the model can never start the job, however it is asked.
+ * Other surfaces get the count alone.
  */
-export async function runMatchingQueryAction({
-  request,
+export async function previewMatchingQueryAction({
+  originalAction,
+  query,
   bulkAction,
   labelId,
   emailProvider,
   emailAccountId,
-  messages,
-  logger,
+  provider,
+  confirmation,
   abortSignal,
 }: {
-  request: MatchingRequest;
+  /** The action as the model named it, which the preview echoes. */
+  originalAction: string;
+  query: string;
   bulkAction: MatchingBulkAction;
   labelId?: string;
   emailProvider: EmailProvider;
   emailAccountId: string;
-  /** The conversation so far, as the tool call received it. */
-  messages: ModelMessage[];
-  logger: Logger;
+  provider: string;
+  /** Set on the web chat, where the card can be confirmed. */
+  confirmation?: { chatId: string; toolCallId: string };
   abortSignal?: AbortSignal;
 }) {
-  const { scope } = toMatchingScope({ query: request.query });
-  const preview = findConfirmedPreview(messages, request);
+  const matching = toChatMatchingScope({ query }, provider);
+  if (!matching) return { error: FOLDER_OR_CATEGORY_SEARCH };
+  const actionFilter = filterForAction(bulkAction);
+  // The job lists by the action's own filter; a read state the search names
+  // (Outlook) has no place in the view it lists.
+  if (
+    matching.only.unread !== undefined &&
+    matching.only.unread !== actionFilter.unread
+  )
+    return { error: READ_STATE_SEARCH };
 
-  if (!preview) {
-    const counted = await countWithProvider({
-      emailProvider,
-      scope,
-      only: filterForAction(bulkAction),
-      maxMessages: PREVIEW_MAX_MESSAGES,
-      abortSignal,
-    });
-    if (counted.total === 0) {
-      return {
-        status: "nothing_to_change" as const,
-        action: request.originalAction,
-        query: request.query,
-        conversations: 0,
-      };
-    }
+  const counted = await countWithProvider({
+    emailProvider,
+    scope: matching.scope,
+    only: { ...matching.only, ...actionFilter },
+    maxMessages: PREVIEW_MAX_MESSAGES,
+    abortSignal,
+  });
+  if (counted.total === 0) {
     return {
-      status: "needs_confirmation" as const,
-      action: request.originalAction,
-      query: request.query,
-      conversations: counted.conversations,
-      messages: counted.total,
-      ...(counted.capped ? { atLeast: true } : {}),
-      nextStep:
-        "Nothing has changed yet. Tell the user how many conversations this would change and ask them to confirm. Only after they confirm, call manageInbox again with the same action, query and label.",
+      status: "nothing_to_change" as const,
+      action: originalAction,
+      query,
+      conversations: 0,
     };
   }
 
-  const jobId = await startMatchingBulkJob({
-    emailAccountId,
-    scope,
-    action: bulkAction,
-    labelId,
-    logger,
-  });
+  const preview = {
+    status: "needs_confirmation" as const,
+    action: originalAction,
+    query,
+    conversations: counted.conversations,
+    messages: counted.total,
+    ...(counted.capped ? { atLeast: true } : {}),
+  };
+  if (!confirmation) {
+    return {
+      ...preview,
+      nextStep:
+        "Nothing has changed. Tell the user how many conversations this would change. A change over every match can only be started from the Cue web app.",
+    };
+  }
+
+  const confirmToken = randomUUID();
+  await redis.set(
+    confirmationKey(emailAccountId, confirmToken),
+    JSON.stringify({
+      chatId: confirmation.chatId,
+      toolCallId: confirmation.toolCallId,
+      action: bulkAction,
+      ...(labelId ? { labelId } : {}),
+      queryHash: hashQuery(emailAccountId, query),
+    } satisfies z.infer<typeof storedConfirmationSchema>),
+    { ex: CONFIRM_TTL_SECONDS },
+  );
   return {
-    status: "started" as const,
-    action: request.originalAction,
-    query: request.query,
-    jobId,
-    ...(preview.conversations !== undefined
-      ? { conversations: preview.conversations }
-      : {}),
+    ...preview,
+    confirmToken,
+    nextStep:
+      "Nothing has changed. Tell the user how many conversations this would change and that it starts only when they press Confirm on this result. Calling manageInbox again does not start it.",
   };
 }
 
 /**
- * The preview of this same request from an earlier turn, if the user has
- * written since it was shown. A preview from this turn doesn't count: the
- * user hasn't seen it yet.
+ * Spends a preview's token and starts the inbox's select-all job for it. The
+ * token is taken from Redis in one step, so a double press or a second call
+ * finds nothing and starts nothing. It must name the same chat, tool call
+ * and search the preview counted.
  */
-export function findConfirmedPreview(
-  messages: ModelMessage[],
-  request: MatchingRequest,
-): { conversations?: number } | null {
-  const lastUserIndex = messages.findLastIndex(
-    (message) => message.role === "user",
+export async function confirmMatchingQueryAction({
+  emailAccountId,
+  provider,
+  chatId,
+  toolCallId,
+  confirmToken,
+  query,
+  logger,
+}: {
+  emailAccountId: string;
+  provider: string;
+  chatId: string;
+  toolCallId: string;
+  confirmToken: string;
+  query: string;
+  logger: Logger;
+}) {
+  const stored = storedConfirmationSchema.safeParse(
+    parseStored(
+      await redis.getdel(confirmationKey(emailAccountId, confirmToken)),
+    ),
   );
-  const previewCalls = new Set<string>();
+  if (
+    !stored.success ||
+    stored.data.chatId !== chatId ||
+    stored.data.toolCallId !== toolCallId ||
+    stored.data.queryHash !== hashQuery(emailAccountId, query)
+  )
+    throw new SafeError(MATCHING_CONFIRM_EXPIRED);
 
-  for (let index = 0; index < lastUserIndex; index++) {
-    const message = messages[index];
-    if (message.role === "assistant" && Array.isArray(message.content)) {
-      for (const part of message.content) {
-        if (
-          part.type === "tool-call" &&
-          part.toolName === "manageInbox" &&
-          isSameRequest(part.input, request)
-        )
-          previewCalls.add(part.toolCallId);
-      }
-    }
+  const matching = toChatMatchingScope({ query }, provider);
+  if (!matching) throw new SafeError(FOLDER_OR_CATEGORY_SEARCH);
+  const { action, labelId } = stored.data;
+  const jobId = await startMatchingBulkJob({
+    emailAccountId,
+    scope: matching.scope,
+    action,
+    labelId,
+    logger,
+  });
+  return {
+    jobId,
+    action,
+    messageCap: getMailBulkJobTargetCap(action, provider),
+  };
+}
+
+/** Drops a preview's token, so it can't be confirmed any more. */
+export async function cancelMatchingQueryAction({
+  emailAccountId,
+  confirmToken,
+}: {
+  emailAccountId: string;
+  confirmToken: string;
+}) {
+  await redis.del(confirmationKey(emailAccountId, confirmToken));
+}
+
+function confirmationKey(emailAccountId: string, confirmToken: string) {
+  return `assistant-matching-confirm:${emailAccountId}:${confirmToken}`;
+}
+
+// Keyed by a server secret, so a stored hash can't be checked against
+// guessed searches.
+function hashQuery(emailAccountId: string, query: string) {
+  return createHmac("sha256", env.EMAIL_ENCRYPT_SECRET)
+    .update(`${emailAccountId}\u0000${query.trim()}`)
+    .digest("hex");
+}
+
+// The client returns JSON as a string, or already parsed.
+function parseStored(stored: unknown): unknown {
+  if (typeof stored !== "string") return stored;
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return null;
   }
-
-  let found: { conversations?: number } | null = null;
-  for (let index = 0; index < lastUserIndex; index++) {
-    const message = messages[index];
-    if (message.role !== "tool") continue;
-    for (const part of message.content) {
-      if (part.type !== "tool-result" || !previewCalls.has(part.toolCallId))
-        continue;
-      const value =
-        part.output.type === "json" ? (part.output.value as unknown) : null;
-      if (!isRecord(value) || value.status !== "needs_confirmation") continue;
-      found = {
-        conversations:
-          typeof value.conversations === "number"
-            ? value.conversations
-            : undefined,
-      };
-    }
-  }
-  return found;
-}
-
-function isSameRequest(input: unknown, request: MatchingRequest) {
-  if (!isRecord(input)) return false;
-  const labelName = input.labelName ?? input.categoryName;
-  return (
-    input.action === request.originalAction &&
-    normalizeText(input.query) === normalizeText(request.query) &&
-    normalizeText(labelName) === normalizeText(request.labelName) &&
-    (input.read ?? null) === (request.read ?? null)
-  );
-}
-
-function normalizeText(value: unknown) {
-  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

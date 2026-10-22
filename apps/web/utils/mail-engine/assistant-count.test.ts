@@ -126,6 +126,22 @@ describe("countLocalMail", () => {
     ]);
   });
 
+  it("groups Outlook mail by category only, since its label ids are folders", async () => {
+    const client = pagedClient({
+      [ACCOUNT]: [msg({ labelIds: ["folder-1"], categoryIds: ["cat-1"] })],
+    });
+
+    const result = await countLocalMail({
+      client,
+      searches: [{ accountId: ACCOUNT, query: "", syntax: "outlook" }],
+      groupBy: "label",
+      now: NOW,
+    });
+
+    if (result.status !== "counted") throw new Error("not counted");
+    expect(result.groups.map((group) => group.key)).toEqual(["cat-1"]);
+  });
+
   it("lists an account it can't count exactly as unavailable and still counts the rest", async () => {
     const client = pagedClient(
       { [ACCOUNT]: [msg({})], [OTHER]: [msg({}), msg({})] },

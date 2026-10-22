@@ -1,4 +1,3 @@
-import type { ModelMessage } from "ai";
 import {
   afterAll,
   beforeAll,
@@ -134,6 +133,7 @@ describe.runIf(shouldRunEval)("Eval: assistant chat all matching mail", () => {
           emailAccount,
           messages: [{ role: "user", content: prompt }],
           localMailSearch: local.search,
+          chatId: "eval-chat",
         });
 
         const counted = calls(toolCalls, "countEmails");
@@ -167,6 +167,7 @@ describe.runIf(shouldRunEval)("Eval: assistant chat all matching mail", () => {
           emailAccount,
           messages: [{ role: "user", content: prompt }],
           localMailSearch: local.search,
+          chatId: "eval-chat",
         });
 
         const grouped = calls(toolCalls, "countEmails").filter(
@@ -196,13 +197,14 @@ describe.runIf(shouldRunEval)("Eval: assistant chat all matching mail", () => {
     );
 
     test(
-      "shows the count and asks before archiving everything matching, then starts the job once confirmed",
+      "shows the count of everything matching and leaves starting it to the user's Confirm",
       async () => {
         const prompt = "Archive all newsletters from last year.";
         const first = await runAssistantChat({
           emailAccount,
           messages: [{ role: "user", content: prompt }],
           localMailSearch: local.search,
+          chatId: "eval-chat",
         });
         const startedBeforeConfirming =
           mockEnqueueMailBulkJob.mock.calls.length;
@@ -218,11 +220,11 @@ describe.runIf(shouldRunEval)("Eval: assistant chat all matching mail", () => {
           judgeEvalOutput({
             input: prompt,
             output: first.finalText,
-            expected: `About ${NEWSLETTER_THREADS.toLocaleString("en-US")} conversations would be archived; asks the user to confirm`,
+            expected: `About ${NEWSLETTER_THREADS.toLocaleString("en-US")} conversations would be archived once the user confirms`,
             criterion: {
-              name: "Shows the count and asks first",
+              name: "Shows the count and waits for the user",
               description:
-                "Before anything is archived, the reply tells the user how many conversations (or emails) would be archived, using the counted number, and asks them to confirm. It does not say anything was archived yet.",
+                "The reply tells the user how many conversations (or emails) would be archived, using the counted number, and that nothing changes until they confirm. It does not say anything was archived yet.",
             },
           }),
           judgeEvalOutput({
@@ -237,57 +239,29 @@ describe.runIf(shouldRunEval)("Eval: assistant chat all matching mail", () => {
           }),
         ]);
 
-        const second = await runAssistantChat({
-          emailAccount,
-          messages: [
-            { role: "user", content: prompt },
-            ...first.responseMessages,
-            { role: "user", content: "Yes, go ahead." } as ModelMessage,
-          ],
-          localMailSearch: local.search,
-        });
-        const started = calls(second.toolCalls, "manageInbox").some(
-          (call) =>
-            (call.output as { status?: unknown } | undefined)?.status ===
-            "started",
-        );
-        const startedJudge = await judgeEvalOutput({
-          input: `${prompt}\n(assistant asked to confirm)\nYes, go ahead.`,
-          output: second.finalText,
-          criterion: {
-            name: "Reports the started job honestly",
-            description:
-              "The reply says archiving has started for the matching conversations. It does not claim every conversation is already archived or invent a different count.",
-          },
-        });
-
+        // Only the card's Confirm button starts the job; the model can't.
         const pass =
           startedBeforeConfirming === 0 &&
           previews.length > 0 &&
           askedJudge.pass &&
-          queryJudge.pass &&
-          started &&
-          mockEnqueueMailBulkJob.mock.calls.length === 1 &&
-          startedJudge.pass;
+          queryJudge.pass;
 
         const detail = [
           `turn1=${first.actual}`,
           `query=${previewQuery}`,
           `ask=${askedJudge.pass ? "PASS" : `FAIL (${askedJudge.reasoning})`}`,
           `scope=${queryJudge.pass ? "PASS" : `FAIL (${queryJudge.reasoning})`}`,
-          `turn2=${second.actual}`,
           `jobs=${mockEnqueueMailBulkJob.mock.calls.length}`,
-          `report=${startedJudge.pass ? "PASS" : `FAIL (${startedJudge.reasoning})`}`,
         ].join(" | ");
         evalReporter.record({
-          testName: "archive all matching: count, confirm, start",
+          testName: "archive all matching: count, then the user confirms",
           model: model.label,
           pass,
           actual: detail,
         });
         expect(pass, detail).toBe(true);
       },
-      TIMEOUT * 2,
+      TIMEOUT,
     );
 
     test(
@@ -298,6 +272,7 @@ describe.runIf(shouldRunEval)("Eval: assistant chat all matching mail", () => {
           emailAccount,
           messages: [{ role: "user", content: prompt }],
           localMailSearch: local.search,
+          chatId: "eval-chat",
         });
 
         const judged = await judgeEvalOutput({

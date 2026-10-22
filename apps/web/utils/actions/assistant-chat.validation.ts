@@ -260,6 +260,20 @@ export type PendingSaveMemoryToolOutput = z.infer<
 >;
 
 export const confirmAssistantSaveMemoryBody = confirmAssistantActionBaseBody;
+
+// The card's answer to a manageInbox preview over a whole search. The search
+// is sent back so the server can check it against the token's hash; the
+// token itself never holds it.
+export const confirmAssistantMatchingActionBody =
+  confirmAssistantActionBaseBody.extend({
+    confirmToken: z.string().uuid(),
+    query: z.string().max(500),
+  });
+
+export const cancelAssistantMatchingActionBody =
+  confirmAssistantActionBaseBody.extend({
+    confirmToken: z.string().uuid(),
+  });
 export type ConfirmAssistantSaveMemoryBody = z.infer<
   typeof confirmAssistantSaveMemoryBody
 >;
