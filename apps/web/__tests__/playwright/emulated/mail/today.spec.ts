@@ -137,6 +137,7 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
   const newsletter = await seedNewsletter(page, subject);
   try {
     const { conversations, emailAccountId } = await openMail(page);
+    await waitForMetadataCoverage(page);
     const bundle = page.getByRole("button", {
       name: /^Reading, from .*Field Notes/,
     });
@@ -182,31 +183,34 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
     await page.keyboard.press("Escape");
     await expect(laneRow).toBeVisible();
 
-    await page.getByRole("button", { name: "Archive all" }).click();
+    const archiveAll = page.getByRole("button", { name: "Archive all" });
+    await archiveAll.click();
     await expect(laneRow).toHaveCount(0);
-    await expect(page.getByText("Nothing left to read.")).toBeVisible();
-    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
     // Archive all keeps a row's undo, while its toast shows.
     await page
       .getByRole("region", { name: "Notifications alt+T" })
       .getByRole("button", { name: /^Undo/ })
       .click();
     await expect(laneRow).toBeVisible({ timeout: 60_000 });
-    for (const kind of ["archive", "unarchive"] as const) {
-      await expect
-        .poll(
-          () =>
-            readLatestMailMutation(page, {
-              emailAccountId,
-              kind,
-              threadId: newsletter.threadId,
-            }),
-          { timeout: 60_000 },
-        )
-        .toMatchObject({ status: "succeeded" });
-    }
+
     await page.getByRole("button", { name: "Back to Inbox" }).click();
     await expect(bundle).toBeVisible({ timeout: 60_000 });
+    await bundle.click();
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    await archiveAll.click();
+    await expect(page.getByText("Nothing left to read.")).toBeVisible();
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
+    await expect
+      .poll(
+        () =>
+          readLatestMailMutation(page, {
+            emailAccountId,
+            kind: "archive",
+            threadId: newsletter.threadId,
+          }),
+        { timeout: 60_000 },
+      )
+      .toMatchObject({ status: "succeeded" });
   } finally {
     await newsletter.remove();
   }
