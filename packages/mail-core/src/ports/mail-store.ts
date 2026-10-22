@@ -349,7 +349,8 @@ export interface MailStore {
     bootstrapId: string;
     page: string;
     nextAttemptAtMs: number;
-    errorCode: string;
+    /** Null when the scan is only paced, not failing. */
+    errorCode: string | null;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
@@ -479,6 +480,7 @@ export interface MailStore {
   }): Promise<EmbeddingSource[]>;
   readFileSenders(accountIds: string[]): Promise<FileSender[]>;
   readFiles(query: FilesQuery): Promise<FilesPage>;
+  readFilesNotOnDevice(accountIds: string[]): Promise<number>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
    * only the server can still stop.

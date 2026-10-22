@@ -1,3 +1,4 @@
+import { parseMailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import type { MailEngine, WorkAdmission } from "@inboxzero/mail-core/engine";
 import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
@@ -18,6 +19,7 @@ import {
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerStarted,
 } from "@/utils/mail-engine/worker-protocol";
 import { MAIL_ENGINE_OWNER_LOCK } from "@/utils/mail-engine/tab-channel";
 import {
@@ -282,8 +284,9 @@ async function createWorkerOwnedEngine(
     pending.clear();
   });
 
+  let started: unknown;
   try {
-    await request(worker, pending, {
+    started = await request(worker, pending, {
       id: crypto.randomUUID(),
       type: "start",
       input,
@@ -338,6 +341,9 @@ async function createWorkerOwnedEngine(
   }
 
   return {
+    capabilities: parseMailEngineCapabilities(
+      (started as WorkerStarted | undefined)?.capabilities,
+    ),
     queryContactSuggestions: (query) =>
       callWorker(worker, pending, "queryContactSuggestions", [query]),
     searchMessages: (query) =>
@@ -347,6 +353,8 @@ async function createWorkerOwnedEngine(
     queryFiles: (query) => callWorker(worker, pending, "queryFiles", [query]),
     queryFileSenders: (accountIds) =>
       callWorker(worker, pending, "queryFileSenders", [accountIds]),
+    queryFilesNotOnDevice: (accountIds) =>
+      callWorker(worker, pending, "queryFilesNotOnDevice", [accountIds]),
     searchSemantic: (query) =>
       callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),

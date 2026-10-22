@@ -36,6 +36,35 @@ const draft = (overrides: Partial<PreSendDraft> = {}): PreSendDraft => {
 const ids = (draftValue: PreSendDraft, context: PreSendContext = reply) =>
   getPreSendWarnings(draftValue, context).map((warning) => warning.id);
 
+describe("getPreSendWarnings with send-as aliases", () => {
+  const ALIAS = "alias@example.com";
+  const withAlias: PreSendContext = {
+    ...reply,
+    ownEmails: [OWN, ALIAS],
+  };
+  const crowd = Array.from(
+    { length: LARGE_REPLY_RECIPIENT_COUNT - 1 },
+    (_, index) => `p${index}@example.com`,
+  );
+
+  it("does not count an alias toward a large reply", () => {
+    const context = { ...withAlias, repliedToAddresses: [...crowd, ALIAS] };
+    const message = draft({ to: crowd.join(","), cc: ALIAS });
+
+    expect(ids(message, context)).not.toContain("large-reply");
+    expect(ids(message, { ...context, ownEmails: [OWN] })).toContain(
+      "large-reply",
+    );
+  });
+
+  it("does not call an alias a new recipient", () => {
+    const message = draft({ cc: `sam@example.com, ${ALIAS}` });
+
+    expect(ids(message, withAlias)).toEqual([]);
+    expect(ids(message, reply)).toContain("new-recipients");
+  });
+});
+
 describe("getPreSendWarnings", () => {
   it("flags nothing on an ordinary reply to the thread", () => {
     expect(ids(draft())).toEqual([]);

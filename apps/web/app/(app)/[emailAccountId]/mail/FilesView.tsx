@@ -7,15 +7,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronsUpDownIcon,
   DownloadIcon,
-  FileBadgeIcon,
-  FileIcon,
-  FileSpreadsheetIcon,
-  FileTextIcon,
-  ImageIcon,
-  type LucideIcon,
   MessageSquareTextIcon,
   PaperclipIcon,
-  PresentationIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -31,6 +24,14 @@ import { AccountRowMarker } from "@/app/(app)/[emailAccountId]/mail/all-accounts
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AttachmentPreviewDialogContent } from "@/components/email-list/EmailAttachments";
 import { LoadingContent } from "@/components/LoadingContent";
+import {
+  FILE_KIND_FILTERS,
+  FILE_KIND_ICON_COLORS,
+  FILE_KIND_ICONS,
+  fileAttachmentUrl,
+  fileKey,
+  formatFileSize,
+} from "@/components/mail-files";
 import { toastError } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -51,44 +52,12 @@ import {
 import { useInboxUnreadCount } from "@/hooks/useInboxUnreadCount";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { cn } from "@/utils";
-import {
-  fetchAttachment,
-  getAttachmentUrl,
-  saveBlob,
-} from "@/utils/attachments/download";
+import { fetchAttachment, saveBlob } from "@/utils/attachments/download";
 import { formatShortDate } from "@/utils/date";
 import { extractNameFromEmail } from "@/utils/email";
 
 const PAGE_SIZE = 100;
 const ROW_HEIGHT = 60;
-
-const KIND_FILTERS: Array<{ kind: FileKind | null; label: string }> = [
-  { kind: null, label: "All" },
-  { kind: "document", label: "Documents" },
-  { kind: "spreadsheet", label: "Spreadsheets" },
-  { kind: "presentation", label: "Presentations" },
-  { kind: "pdf", label: "PDFs" },
-  { kind: "image", label: "Images" },
-  { kind: "other", label: "Other" },
-];
-
-const KIND_ICONS: Record<FileKind, LucideIcon> = {
-  document: FileTextIcon,
-  spreadsheet: FileSpreadsheetIcon,
-  presentation: PresentationIcon,
-  pdf: FileBadgeIcon,
-  image: ImageIcon,
-  other: FileIcon,
-};
-
-const KIND_ICON_COLORS: Record<FileKind, string> = {
-  document: "text-blue-600 dark:text-blue-400",
-  spreadsheet: "text-emerald-600 dark:text-emerald-400",
-  presentation: "text-orange-600 dark:text-orange-400",
-  pdf: "text-red-600 dark:text-red-400",
-  image: "text-violet-600 dark:text-violet-400",
-  other: "text-muted-foreground",
-};
 
 /**
  * Every attachment on the mail stored on this device, newest first, read
@@ -149,18 +118,31 @@ export function FilesView({
     readSenders ? ["mail-file-senders", JSON.stringify(accountIds)] : null,
     () => readSenders?.(accountIds) ?? [],
   );
-  // Both are read once; new mail reaching the inbox moves its unread count,
+  const readNotOnDevice = client?.queryFilesNotOnDevice?.bind(client);
+  const notOnDevice = useSWR(
+    readNotOnDevice
+      ? ["mail-files-not-on-device", JSON.stringify(accountIds)]
+      : null,
+    () => readNotOnDevice?.(accountIds) ?? 0,
+    // An older build's owner tab answers "unsupported method"; retrying can't fix that.
+    { shouldRetryOnError: false },
+  );
+  // All are read once; new mail reaching the inbox moves its unread count,
   // which is already watched cheaply, so that refreshes them.
   const inboxUnread = useInboxUnreadCount(accountIds);
   const { mutate } = pages;
   const { mutate: mutateSenders } = senders;
+  const { mutate: mutateNotOnDevice } = notOnDevice;
   const refreshedAtUnread = useRef(inboxUnread);
   useEffect(() => {
     if (refreshedAtUnread.current === inboxUnread) return;
     refreshedAtUnread.current = inboxUnread;
+    // No cheaper signal exists for bodies being stored, so the count refreshes
+    // with the list on new mail and otherwise only when the view opens.
     mutate().catch(() => undefined);
     mutateSenders().catch(() => undefined);
-  }, [inboxUnread, mutate, mutateSenders]);
+    mutateNotOnDevice().catch(() => undefined);
+  }, [inboxUnread, mutate, mutateSenders, mutateNotOnDevice]);
 
   const files = useMemo(
     () => pages.data?.flatMap((page) => page.files) ?? [],
@@ -170,6 +152,8 @@ export function FilesView({
   const loadingMore =
     pages.isValidating && pages.size > (pages.data?.length ?? 0);
   const filtered = Boolean(kind || sender || deferredName);
+  // The count covers all files, so a filtered list would misstate it.
+  const olderMessages = filtered ? 0 : (notOnDevice.data ?? 0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -193,7 +177,7 @@ export function FilesView({
     setDownloading(id);
     try {
       const blob = await fetchAttachment({
-        url: attachmentUrl(file),
+        url: fileAttachmentUrl(file),
         emailAccountId: file.accountId,
       });
       saveBlob(blob, file.attachment.filename);
@@ -280,7 +264,7 @@ export function FilesView({
           className="-mx-3 flex gap-1.5 overflow-x-auto px-3 pb-1 scrollbar-none"
           role="group"
         >
-          {KIND_FILTERS.map((filter) => (
+          {FILE_KIND_FILTERS.map((filter) => (
             <button
               aria-pressed={kind === filter.kind}
               className={cn(
@@ -341,6 +325,18 @@ export function FilesView({
           ) : null}
         </LoadingContent>
       </div>
+      <p
+        className={cn(
+          "shrink-0 text-muted-foreground text-xs",
+          olderMessages > 0 && "border-border border-t px-4 py-2",
+        )}
+        role="status"
+      >
+        {olderMessages === 1 &&
+          "1 older message with an attachment isn't on this device yet"}
+        {olderMessages > 1 &&
+          `${olderMessages} older messages with attachments aren't on this device yet`}
+      </p>
       <Dialog
         onOpenChange={(open) => !open && setPreviewing(undefined)}
         open={Boolean(previewing)}
@@ -352,7 +348,7 @@ export function FilesView({
             key={fileKey(previewing)}
             mimeType={previewing.attachment.mimeType}
             size={previewing.attachment.size}
-            url={attachmentUrl(previewing)}
+            url={fileAttachmentUrl(previewing)}
           />
         ) : null}
       </Dialog>
@@ -377,7 +373,7 @@ function FileRow({
   onOpenThread: () => void;
   onDownload: () => void;
 }) {
-  const Icon = KIND_ICONS[file.kind];
+  const Icon = FILE_KIND_ICONS[file.kind];
   const { filename } = file.attachment;
   const sender = extractNameFromEmail(file.from) || file.from;
   return (
@@ -403,7 +399,7 @@ function FileRow({
       >
         <Icon
           aria-hidden="true"
-          className={cn("size-5 shrink-0", KIND_ICON_COLORS[file.kind])}
+          className={cn("size-5 shrink-0", FILE_KIND_ICON_COLORS[file.kind])}
         />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
@@ -424,6 +420,11 @@ function FileRow({
                 file.subject.trim() || "(no subject)",
               ].join(" · ")}
             </span>
+            {file.copies > 1 ? (
+              <span className="shrink-0 tabular-nums">
+                In {file.copies} messages
+              </span>
+            ) : null}
           </span>
         </span>
       </button>
@@ -545,28 +546,4 @@ function SenderFilter({
 
 function senderLabel(sender: FileSender) {
   return sender.name || sender.email;
-}
-
-function fileKey(file: FileEntry) {
-  return `${file.accountId}:${file.messageId}:${file.attachment.attachmentId}`;
-}
-
-function attachmentUrl(file: FileEntry) {
-  return getAttachmentUrl({
-    accountId: file.accountId,
-    messageId: file.messageId,
-    attachmentId: file.attachment.attachmentId,
-  });
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }

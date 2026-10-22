@@ -138,6 +138,43 @@ jobs:
           INTERNAL_API_KEY: "secret"
           NEXT_PUBLIC_BASE_URL: "http://localhost:3000"
 
+  # The local mail quota Lua runs against a real redis-server here; the suite
+  # starts its own (docker run redis:7, or /usr/bin/redis-server), so it needs
+  # no service container. Its own job keeps shard 1 inside its timeout.
+  redis-lua:
+    name: Redis Lua
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Run Redis Lua tests
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends redis-server
+          pnpm -F inbox-zero-ai exec vitest run --dir __tests__/redis
+        env:
+          RUN_INTEGRATION_TESTS: true
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
+          AUTH_SECRET: "secret"
+          GOOGLE_CLIENT_ID: "client_id"
+          GOOGLE_CLIENT_SECRET: "client_secret"
+          MICROSOFT_CLIENT_ID: "client_id"
+          MICROSOFT_CLIENT_SECRET: "client_secret"
+          GOOGLE_PUBSUB_TOPIC_NAME: "topic"
+          EMAIL_ENCRYPT_SECRET: "secret"
+          EMAIL_ENCRYPT_SALT: "salt"
+          INTERNAL_API_KEY: "secret"
+          NEXT_PUBLIC_BASE_URL: "http://localhost:3000"
+
   electron:
     name: Electron mail runtime
     runs-on: ubuntu-latest

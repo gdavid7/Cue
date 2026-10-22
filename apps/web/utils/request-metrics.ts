@@ -4,11 +4,19 @@ type Dependency = "auth" | "db" | "redis" | "gmail" | "gmailBatch" | "wait";
 
 type Pause = { source: string; reason: string; retryAfterMs: number };
 
+type EnumerationPage = {
+  scope: "primary" | "history";
+  phase: "inbox" | "rest" | "none";
+  gatePriority: "sync" | "background";
+  promoted: boolean;
+};
+
 export type RequestMetrics = Record<
   Dependency,
   { ms: number; calls: number }
 > & {
   pause?: Pause;
+  enumeration?: EnumerationPage;
 };
 
 const metricsContext = new AsyncLocalStorage<RequestMetrics>();
@@ -62,6 +70,12 @@ export function noteRequestPause(pause: Pause) {
   if (metrics) metrics.pause = pause;
 }
 
+/** Tells the "Request completed" line which kind of enumeration page this was. */
+export function noteEnumerationPage(page: EnumerationPage) {
+  const metrics = metricsContext.getStore();
+  if (metrics) metrics.enumeration = page;
+}
+
 export function getRequestMetricsFields(metrics: RequestMetrics) {
   return {
     authMs: Math.round(metrics.auth.ms),
@@ -77,5 +91,9 @@ export function getRequestMetricsFields(metrics: RequestMetrics) {
     pausedSource: metrics.pause?.source,
     pausedReason: metrics.pause?.reason,
     pausedRetryAfterMs: metrics.pause?.retryAfterMs,
+    scope: metrics.enumeration?.scope,
+    phase: metrics.enumeration?.phase,
+    gatePriority: metrics.enumeration?.gatePriority,
+    promoted: metrics.enumeration?.promoted,
   };
 }

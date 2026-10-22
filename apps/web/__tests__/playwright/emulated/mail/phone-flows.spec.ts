@@ -130,12 +130,13 @@ test("reaches the last Settings control on a phone", async ({
   ).toBeVisible({ timeout: 60_000 });
   await expectWithinPhone(dialog);
 
-  // The last group depends on which features are on; its last control is the
-  // bottom of the dialog either way.
+  // The last group depends on which features are on, and its controls may be
+  // links (Billing) as well as buttons; its last one is the bottom of the
+  // dialog either way.
   const lastControl = dialog
     .locator("section")
     .last()
-    .getByRole("button")
+    .locator("a[href], button, input, select, textarea")
     .last();
   await lastControl.scrollIntoViewIfNeeded();
   await expect(lastControl).toBeInViewport({ ratio: 1 });

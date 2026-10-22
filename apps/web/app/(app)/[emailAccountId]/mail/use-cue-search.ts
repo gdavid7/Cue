@@ -14,6 +14,7 @@ import {
   CUE_SEMANTIC_RESULTS,
   type CueSearchIntent,
   type CueWidening,
+  fuseSemanticMatches,
   getCueSearchStage,
   getNextWidening,
   getSearchAnswerRequest,
@@ -25,6 +26,7 @@ import {
   type CueRankingContext,
   rankCueFoundThreads,
   rankWithWidened,
+  searchedWords,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import {
   getListThreadKey,
@@ -77,12 +79,6 @@ export function useCueSearch({
   enabled: boolean;
 }) {
   const natural = Boolean(enabled && query && looksLikeNaturalLanguage(query));
-  // Runs from commit, beside the model's reading, on the words as typed.
-  const semantic = useSemanticThreads({
-    emailAccountId,
-    query,
-    enabled: natural,
-  });
   // The browser already holds the labels, so they go with the search rather
   // than the route asking the provider for them on every search. They stay
   // out of the key: a label added later doesn't read the search again.
@@ -150,6 +146,15 @@ export function useCueSearch({
   if (answered && !current?.readingLate) intent = data ?? null;
 
   const searches = intent?.searches ?? NO_SEARCHES;
+  // Runs from commit, beside the model's reading, on the words as typed, and
+  // once the reading lands on its words too.
+  const readingWords = useMemo(() => searchedWords(searches), [searches]);
+  const semantic = useSemanticThreads({
+    emailAccountId,
+    query,
+    readingWords,
+    enabled: natural,
+  });
   const timeZone = intent?.timeZone;
   const { provider } = useAccount();
   // Once per reading, so a wider window's searches, and recency, hold still.
@@ -338,32 +343,65 @@ function useCueFoundThreads({
 
 /**
  * Mail close in meaning to the search, from this device's vectors of recent
- * mail, with each conversation's similarity. Empty, and settled, where the
- * engine has no semantic index or the account no vectors yet.
+ * mail, with each conversation's similarity: the closest that the words as
+ * typed, or the words of Cue's reading, find it. Empty, and settled, where
+ * the engine has no semantic index or the account no vectors yet.
  */
 function useSemanticThreads({
   emailAccountId,
   query,
+  readingWords,
   enabled,
 }: {
   emailAccountId: string;
   query: string | null;
+  /** The words of Cue's reading of the search; empty before it lands. */
+  readingWords: string;
   enabled: boolean;
 }) {
   const client = useOptionalMailClient();
   const searchSemantic = client?.searchSemantic;
   const active = Boolean(enabled && query && searchSemantic);
-  const { data } = useSWR(
+  const readsWords = active && Boolean(readingWords) && readingWords !== query;
+  // The reading's words are searched only once the reading lands; both
+  // searches give up at the same budget from commit.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new search is a new commit
+  const committedAtMs = useMemo(() => Date.now(), [query]);
+  const fetchMatches = ([, accountId, text]: readonly [
+    string,
+    string,
+    string,
+  ]) =>
+    searchByMeaning(
+      searchSemantic,
+      { accountId, text, limit: CUE_SEMANTIC_RESULTS },
+      committedAtMs,
+    );
+  const swrOptions = { revalidateOnFocus: false, shouldRetryOnError: false };
+  const { data: typedMatches } = useSWR(
     active ? (["cue-semantic", emailAccountId, query] as const) : null,
-    ([, accountId, text]: readonly [string, string, string]) =>
-      searchByMeaning(searchSemantic, {
-        accountId,
-        text,
-        limit: CUE_SEMANTIC_RESULTS,
-      }),
-    { revalidateOnFocus: false, shouldRetryOnError: false },
+    fetchMatches,
+    swrOptions,
   );
-  const matches = data ?? NO_MATCHES;
+  const { data: wordsMatches } = useSWR(
+    readsWords
+      ? (["cue-semantic", emailAccountId, readingWords] as const)
+      : null,
+    fetchMatches,
+    swrOptions,
+  );
+  const answered =
+    typedMatches !== undefined && (!readsWords || wordsMatches !== undefined);
+  const matches = useMemo(
+    () =>
+      typedMatches || wordsMatches
+        ? fuseSemanticMatches(
+            [typedMatches ?? NO_MATCHES, wordsMatches ?? NO_MATCHES],
+            CUE_SEMANTIC_RESULTS,
+          )
+        : NO_MATCHES,
+    [typedMatches, wordsMatches],
+  );
   const predicate = useMemo<MailPredicate | undefined>(
     () =>
       matches.length
@@ -393,26 +431,30 @@ function useSemanticThreads({
     () => ({
       threads,
       similarity,
-      settled: !active || (data !== undefined && read),
+      settled: !active || (answered && read),
     }),
-    [threads, similarity, active, data, read],
+    [threads, similarity, active, answered, read],
   );
 }
 
 /**
- * The search by meaning, within the search's budget: a model still
- * downloading, or no vectors, leaves the search as it was.
+ * The search by meaning, within the search's budget from `committedAtMs`: a
+ * model still downloading, or no vectors, leaves the search as it was.
  */
 export function searchByMeaning(
   searchSemantic: MailClient["searchSemantic"],
   query: SemanticSearchQuery,
+  committedAtMs = Date.now(),
 ): Promise<SemanticMatch[]> {
   if (!searchSemantic) return Promise.resolve(NO_MATCHES);
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     searchSemantic(query).catch(() => NO_MATCHES),
     new Promise<SemanticMatch[]>((resolve) => {
-      timer = setTimeout(() => resolve(NO_MATCHES), CUE_SEARCH_BUDGET_MS);
+      timer = setTimeout(
+        () => resolve(NO_MATCHES),
+        Math.max(0, committedAtMs + CUE_SEARCH_BUDGET_MS - Date.now()),
+      );
     }),
   ]).finally(() => clearTimeout(timer));
 }

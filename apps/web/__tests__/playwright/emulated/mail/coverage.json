@@ -373,6 +373,9 @@
   ],
   "files-view.spec.ts": [
     "app/(app)/[emailAccountId]/mail/FilesView.tsx",
+    "app/(app)/[emailAccountId]/compose/AttachFromMailDialog.tsx",
+    "app/(app)/[emailAccountId]/compose/attach-from-mail.ts",
+    "components/mail-files.ts",
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "components/email-list/EmailAttachments.tsx",
     "utils/attachments/download.ts",
@@ -382,6 +385,9 @@
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
     "app/(app)/[emailAccountId]/compose/PreSendConfirmation.tsx",
     "app/(app)/[emailAccountId]/compose/pre-send-warnings.ts",
+    "app/(app)/[emailAccountId]/compose/thread-addresses.ts",
+    "components/email-list/EmailMessage.tsx",
+    "components/email-list/EmailThread.tsx",
     "app/(app)/settings/PreSendCheckSetting.tsx",
     "hooks/usePreSendCheck.ts",
     "utils/email/escaped-markup.ts"

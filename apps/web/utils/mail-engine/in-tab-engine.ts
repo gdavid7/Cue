@@ -1,3 +1,4 @@
+import { describeMailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import {
   createMailEngine,
   createHostRuntime,
@@ -63,7 +64,7 @@ export async function createInTabEngine(
   const loop = startEngineLoop(engine);
   const originalClose = engine.close.bind(engine);
   const originalRequestSync = engine.requestSync.bind(engine);
-  return {
+  const client: BrowserMailEngine = {
     ...engine,
     // Local autocomplete, the person card, the Files view and the assistant's
     // message search stay off the UI thread if dedicated workers fail; before
@@ -74,6 +75,7 @@ export async function createInTabEngine(
     queryPersonCard: undefined,
     queryFiles: undefined,
     queryFileSenders: undefined,
+    queryFilesNotOnDevice: undefined,
     ensureAccount,
     requestSync: (accountIds) =>
       requestSyncUnlessOffline(pageConnectivityOnline(), () =>
@@ -86,4 +88,6 @@ export async function createInTabEngine(
       await originalClose();
     },
   };
+  // Reported after the methods this host leaves out are gone.
+  return { ...client, capabilities: describeMailEngineCapabilities(client) };
 }

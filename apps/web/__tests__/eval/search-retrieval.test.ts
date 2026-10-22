@@ -27,10 +27,14 @@ import {
 import { createNodeTextEmbedder } from "@/__tests__/eval/semantic-embedder";
 import {
   CUE_SEMANTIC_RESULTS,
+  fuseSemanticMatches,
   getWideningLadder,
   getWideningStep,
 } from "@/app/(app)/[emailAccountId]/mail/cue-search";
-import { rankWithWidened } from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
+import {
+  rankWithWidened,
+  searchedWords,
+} from "@/app/(app)/[emailAccountId]/mail/cue-search-ranking";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
 import {
@@ -134,12 +138,24 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
     evalReporter.printReport();
   });
 
-  function searchByMeaning(query: RetrievalQuery) {
+  function searchByMeaning(text: string) {
     return semanticIndex.search({
       accountId: ACCOUNT_ID,
-      text: query.query,
+      text,
       limit: CUE_SEMANTIC_RESULTS,
     });
+  }
+
+  // As the Cue found section searches by meaning: the words as typed, and
+  // the words of Cue's reading, at the closest either finds.
+  async function cueSearchByMeaning(query: RetrievalQuery, searches: string[]) {
+    const words = searchedWords(searches);
+    const lists = await Promise.all(
+      [query.query, ...(words && words !== query.query ? [words] : [])].map(
+        searchByMeaning,
+      ),
+    );
+    return fuseSemanticMatches(lists, CUE_SEMANTIC_RESULTS);
   }
 
   async function score(
@@ -183,7 +199,7 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
               widenedSearches: [],
             });
           }
-          const matches = await searchByMeaning(query);
+          const matches = await searchByMeaning(query.query);
           await score(
             SEMANTIC_ONLY,
             query,
@@ -222,7 +238,9 @@ describe.runIf(shouldRunEval)("search-retrieval eval", () => {
             : null;
           const searches = intent?.searches ?? [];
           // Only a search read as a sentence takes the AI path, semantic too.
-          const matches = natural ? await searchByMeaning(query) : [];
+          const matches = natural
+            ? await cueSearchByMeaning(query, searches)
+            : [];
           const {
             ranked,
             rankedWithSemantic,

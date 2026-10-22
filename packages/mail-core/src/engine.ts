@@ -19,6 +19,7 @@ import type {
 import type { OperationState } from "./operations";
 import {
   MAX_CHANGES_BATCH_READS,
+  MAX_ENUMERATION_RETRY_AFTER_MS,
   type MailboxSource,
   type SyncReadResult,
 } from "./ports/mailbox-source";
@@ -35,6 +36,7 @@ import type { AssistantStateSource } from "./ports/assistant-source";
 import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
 import { webCryptoSha256 } from "./canonical";
+import type { MailEngineCapabilities } from "./capabilities";
 import {
   extractProviderSearches,
   resolveSearchPredicates,
@@ -143,6 +145,12 @@ export type MailboxWindowOptions = {
 };
 
 export type MailClient = {
+  /**
+   * The query shapes and optional methods the engine behind this client
+   * reported when it connected. Read it with `mailClientSupports`, which
+   * treats a client without it as an engine that predates reporting.
+   */
+  readonly capabilities?: MailEngineCapabilities;
   queryContactSuggestions?(
     query: ContactSuggestionQuery,
   ): Promise<ContactSuggestion[]>;
@@ -163,6 +171,11 @@ export type MailClient = {
   queryFiles?(query: FilesQuery): Promise<FilesPage>;
   /** The Files view's senders, read once from the local store. */
   queryFileSenders?(accountIds: string[]): Promise<FileSender[]>;
+  /**
+   * How many listed messages with attachments have no stored body yet, so
+   * the Files view can't show their files.
+   */
+  queryFilesNotOnDevice?(accountIds: string[]): Promise<number>;
   /**
    * Finds mail by meaning, from vectors this device made of recent mail.
    * Resolves no matches while the account has none. Only hosts that run
@@ -350,6 +363,9 @@ export function createMailEngine(input: {
     },
     queryFileSenders(accountIds) {
       return store.readFileSenders(accountIds);
+    },
+    queryFilesNotOnDevice(accountIds) {
+      return store.readFilesNotOnDevice(accountIds);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
@@ -1591,6 +1607,24 @@ export function createMailEngine(input: {
           errorCode: "non_advancing_cursor",
         });
         await noteConnection(input.session.accountId, "paused");
+        break;
+      }
+      // The source says its budget would refuse the next page before then,
+      // so the scan waits instead of spending a refused request. Only this
+      // scan waits, primary or backfill; commands and reads run apart.
+      const page = enumerated.value;
+      if (page.nextPage !== null && page.retryAfterMs) {
+        await store.deferBootstrapScan({
+          session: input.session,
+          scopeId: page.scopeId,
+          bootstrapId: scan.bootstrapId,
+          page: page.nextPage,
+          // Sources other than the HTTP one skip its schema's bound.
+          nextAttemptAtMs:
+            runtime.nowMs() +
+            Math.min(page.retryAfterMs, MAX_ENUMERATION_RETRY_AFTER_MS),
+          errorCode: null,
+        });
         break;
       }
       scan = {
