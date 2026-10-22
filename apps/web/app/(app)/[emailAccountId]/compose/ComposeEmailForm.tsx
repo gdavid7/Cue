@@ -59,7 +59,7 @@ import {
 } from "@/hooks/useHiddenDraftMessageIds";
 import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { VoiceInput } from "@/components/voice/VoiceInput";
-import { toastError, toastSuccess } from "@/components/Toast";
+import { toastDismiss, toastError, toastSuccess } from "@/components/Toast";
 import {
   holdSessionExpiredRedirect,
   SESSION_EXPIRED_MESSAGE,
@@ -746,6 +746,7 @@ function ComposeEmailFormContent({
     () =>
       holdSessionExpiredRedirect({
         beforeRedirect: flushDraft,
+        dismiss: () => toastDismiss(SESSION_EXPIRED_TOAST_ID),
         prompt: (signIn) => {
           toastError({
             id: SESSION_EXPIRED_TOAST_ID,

@@ -26,7 +26,10 @@ import {
   isLocalMailboxWipePending,
 } from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
-import { markSessionGone, onSessionGoneReset } from "@/utils/session-refresh";
+import {
+  onSessionGoneReset,
+  workerFoundSessionGone,
+} from "@/utils/session-refresh";
 import { env } from "@/env";
 
 export { browserMailEngineCapabilities };
@@ -243,11 +246,12 @@ async function createWorkerOwnedEngine(
   let closing: Promise<void> | undefined;
   // The worker keeps its own copy of the session-gone stop; only the page
   // sees the tab come back and can tell it the session is back.
-  const stopForwardingSessionReset = onSessionGoneReset(() => {
+  const postSessionReset = () => {
     worker.postMessage({
       type: "session_reset",
     } satisfies WorkerSessionResetRequest);
-  });
+  };
+  const stopForwardingSessionReset = onSessionGoneReset(postSessionReset);
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
@@ -260,7 +264,9 @@ async function createWorkerOwnedEngine(
       return;
     }
     if (message.type === "session_expired") {
-      markSessionGone();
+      workerFoundSessionGone().then((sendAgain) => {
+        if (sendAgain) postSessionReset();
+      });
       return;
     }
     if (message.type === "snapshots") {

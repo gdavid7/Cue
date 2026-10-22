@@ -49,20 +49,37 @@ describe("createBrowserMailEngine", () => {
   });
 
   it("stops the page when its worker finds the session gone, and wakes the worker when it is back", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(null)),
+    );
     FakeWorker.startMessages = [{ type: "session_expired" }];
     const engine = await startEngine();
     const worker = FakeWorker.instances[0];
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
 
-    const pageRequest = await fetchWithSessionRetry("/api/user/rules");
+    await vi.waitFor(async () =>
+      expect((await fetchWithSessionRetry("/api/user/rules")).status).toBe(401),
+    );
     resetSessionGone();
     await engine.close();
-    resetSessionGone();
 
-    expect(pageRequest.status).toBe(401);
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(worker.received("session_reset")).toBe(1);
+  });
+
+  it("wakes the worker again when its report lost a race with the session coming back", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ user: { id: "u1" }, session: {} })),
+    );
+    FakeWorker.startMessages = [{ type: "session_expired" }];
+    const engine = await startEngine();
+    const worker = FakeWorker.instances[0];
+
+    await vi.waitFor(() => expect(worker.received("session_reset")).toBe(1));
+    const pageRequest = await fetchWithSessionRetry("/api/user/rules");
+    await engine.close();
+
+    expect(pageRequest.status).toBe(200);
   });
 
   it("finishes an interrupted sign-out wipe before opening the mailbox", async () => {

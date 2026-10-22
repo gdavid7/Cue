@@ -5,7 +5,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { guardRestoredPage } from "./restored-page";
 import { resetSigningOut, startSigningOut } from "./signing-out";
-import { armSessionExpiredRedirect } from "./session-expired";
+import {
+  armSessionExpiredRedirect,
+  notifySessionExpired,
+} from "./session-expired";
 
 const mocks = vi.hoisted(() => ({ redirect: vi.fn() }));
 vi.mock("@/utils/redirect", async (importOriginal) => ({
@@ -56,6 +59,28 @@ describe("guardRestoredPage", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     expect(mocks.redirect).not.toHaveBeenCalled();
+    stop();
+    disarm();
+  });
+
+  it("sends a restored page to log in again though it was sent once before", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(null)),
+    );
+    const disarm = armSessionExpiredRedirect();
+    const stop = guardRestoredPage();
+    // Already sent to log in once (by this test or an earlier one).
+    notifySessionExpired();
+    mocks.redirect.mockReset();
+    // Back from the login page, past the redirect loop guard.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+
+    restore();
+
+    await vi.waitFor(() => expect(mocks.redirect).toHaveBeenCalledTimes(1));
+    vi.useRealTimers();
     stop();
     disarm();
   });

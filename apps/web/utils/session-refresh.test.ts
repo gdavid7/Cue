@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const REFRESH_PATH = "/api/auth/get-session?disableCookieCache=true";
+const SESSION_CHANNEL = "cue-session";
 
 beforeEach(() => {
   vi.resetModules();
+  vi.stubGlobal("BroadcastChannel", FakeBroadcastChannel);
+  FakeBroadcastChannel.open.clear();
 });
 
 afterEach(() => {
@@ -198,8 +201,8 @@ describe("fetchWithSessionRetry on a signed-in page", () => {
     await fetchWithSessionRetry("/api/panel");
     page.pageshow({ persisted: false });
     await fetchWithSessionRetry("/api/panel");
-    page.pageshow({ persisted: true });
     server.signIn();
+    page.pageshow({ persisted: true });
     const restored = await fetchWithSessionRetry("/api/panel");
 
     expect(restored.status).toBe(200);
@@ -216,8 +219,8 @@ describe("fetchWithSessionRetry on a signed-in page", () => {
 
     await fetchWithSessionRetry("/api/a");
     await fetchWithSessionRetry("/api/a");
-    page.show();
     server.signIn();
+    page.show();
     const responses = await Promise.all([
       fetchWithSessionRetry("/api/a"),
       fetchWithSessionRetry("/api/b"),
@@ -258,6 +261,154 @@ describe("fetchWithSessionRetry on a signed-in page", () => {
 
     expect(server.callsTo("/api/user/me")).toBe(2);
   });
+
+  it("checks as soon as the tab is shown, with no request to wait for", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, onSessionGoneReset, page } =
+      await openPage();
+    const reset = vi.fn();
+    onSessionGoneReset(reset);
+
+    await fetchWithSessionRetry("/api/a");
+    server.signIn();
+    page.show();
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    expect(server.refreshCalls()).toBe(2);
+  });
+
+  it("runs one check at a time however often the tab comes back", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, page } = await openPage();
+
+    await fetchWithSessionRetry("/api/a");
+    page.show();
+    page.focus();
+    page.show();
+    await fetchWithSessionRetry("/api/a");
+
+    expect(server.refreshCalls()).toBe(2);
+  });
+
+  it("checks again on the next request after a check that could not reach the server", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, page } = await openPage();
+
+    await fetchWithSessionRetry("/api/a");
+    server.setRefresh("unreachable");
+    page.show();
+    await vi.waitFor(() => expect(server.refreshCalls()).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    server.signIn();
+    const next = await fetchWithSessionRetry("/api/a");
+
+    expect(next.status).toBe(200);
+    expect(server.refreshCalls()).toBe(3);
+  });
+
+  it("checks when the browser is back online", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, onSessionGoneReset, page } =
+      await openPage();
+    const reset = vi.fn();
+    onSessionGoneReset(reset);
+
+    await fetchWithSessionRetry("/api/a");
+    server.signIn();
+    page.online();
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+  });
+
+  it("checks when another tab opens signed in, so a hidden tab's mail sync wakes", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, onSessionGoneReset } = await openPage();
+    const reset = vi.fn();
+    onSessionGoneReset(reset);
+    await fetchWithSessionRetry("/api/a");
+    server.signIn();
+
+    const otherTab = new BroadcastChannel(SESSION_CHANNEL);
+    otherTab.postMessage("signed-in");
+    otherTab.close();
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    expect(server.refreshCalls()).toBe(2);
+  });
+
+  it("tells other tabs when a page opens signed in", async () => {
+    stubServer({ refresh: "ok" });
+    const heard = vi.fn();
+    const otherTab = new BroadcastChannel(SESSION_CHANNEL);
+    otherTab.onmessage = (event) => heard(event.data);
+
+    await openPage();
+
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledWith("signed-in"));
+    otherTab.close();
+  });
+
+  it("checks when the page is armed again for a signed-in user", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, onSessionGoneReset, expired } =
+      await openPage();
+    const reset = vi.fn();
+    onSessionGoneReset(reset);
+    await fetchWithSessionRetry("/api/a");
+    server.signIn();
+
+    expired.disarm();
+    expired.armSessionExpiredRedirect();
+
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets a request waiting on the check give up when its signal aborts", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, page } = await openPage();
+    await fetchWithSessionRetry("/api/a");
+    page.show();
+
+    const controller = new AbortController();
+    const waiting = fetchWithSessionRetry("/api/a", {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(waiting).rejects.toThrow();
+    expect(server.callsTo("/api/a")).toBe(1);
+  });
+
+  it("gives the session check a deadline", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry } = await import("./session-refresh");
+
+    await fetchWithSessionRetry("/api/a");
+
+    expect(server.refreshSignals()[0]).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("a mail worker reporting the session gone", () => {
+  it("lets the worker send again when the page finds the session live", async () => {
+    stubServer({ refresh: "ok" });
+    const { workerFoundSessionGone, fetchWithSessionRetry } = await openPage();
+
+    await expect(workerFoundSessionGone()).resolves.toBe(true);
+    const response = await fetchWithSessionRetry("/api/a");
+
+    expect(response.status).toBe(200);
+  });
+
+  it("stops the page too when the session is really gone", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { workerFoundSessionGone, fetchWithSessionRetry } = await openPage();
+
+    await expect(workerFoundSessionGone()).resolves.toBe(false);
+    await fetchWithSessionRetry("/api/a");
+
+    expect(server.callsTo("/api/a")).toBe(0);
+  });
 });
 
 // A browser page: modules load first (they read server env when they see a
@@ -278,14 +429,15 @@ async function openPage({ signedIn = true } = {}) {
   const document = { visibilityState: "visible" };
   vi.stubGlobal("window", window);
   vi.stubGlobal("document", document);
-  if (signedIn) expired.armSessionExpiredRedirect();
+  const disarm = signedIn ? expired.armSessionExpiredRedirect() : () => {};
   const page = {
+    online: () => window.dispatchEvent(new Event("online")),
     show: () => window.dispatchEvent(new Event("visibilitychange")),
     focus: () => window.dispatchEvent(new Event("focus")),
     pageshow: ({ persisted }: { persisted: boolean }) =>
       window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted })),
   };
-  return { ...refresh, page };
+  return { ...refresh, page, expired: { ...expired, disarm } };
 }
 
 // Past the window in which a burst's stragglers reuse a settled refresh.
@@ -308,12 +460,14 @@ function stubServer({
   const calls: { url: string; body: unknown }[] = [];
   let refreshed = false;
   let mode = refresh;
+  const refreshSignals: (AbortSignal | null | undefined)[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url === REFRESH_PATH) {
         calls.push({ url, body: undefined });
+        refreshSignals.push(init?.signal);
         // Let the rest of a burst reach the refresh while it is in flight.
         await new Promise((resolve) => setTimeout(resolve, 5));
         if (mode === "signed-out") return Response.json(null);
@@ -342,10 +496,40 @@ function stubServer({
     signIn: () => {
       mode = "ok";
     },
+    setRefresh: (next: typeof refresh) => {
+      mode = next;
+    },
+    refreshSignals: () => refreshSignals,
     refreshCalls: () =>
       calls.filter((call) => call.url === REFRESH_PATH).length,
     callsTo: (url: string) => calls.filter((call) => call.url === url).length,
     bodiesTo: (url: string) =>
       calls.filter((call) => call.url === url).map((call) => call.body),
   };
+}
+
+// Other tabs of this browser. Each test gets its own, and a message reaches
+// every other open channel of the name on a later task, as in a browser.
+class FakeBroadcastChannel {
+  static open = new Set<FakeBroadcastChannel>();
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  readonly name: string;
+  constructor(name: string) {
+    this.name = name;
+    FakeBroadcastChannel.open.add(this);
+  }
+  postMessage(data: unknown) {
+    const receivers = [...FakeBroadcastChannel.open].filter(
+      (channel) => channel !== this && channel.name === this.name,
+    );
+    setTimeout(() => {
+      for (const channel of receivers) {
+        if (FakeBroadcastChannel.open.has(channel))
+          channel.onmessage?.({ data });
+      }
+    }, 0);
+  }
+  close() {
+    FakeBroadcastChannel.open.delete(this);
+  }
 }

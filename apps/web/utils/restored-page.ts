@@ -1,5 +1,8 @@
 import { isSigningOut } from "@/utils/signing-out";
-import { notifySessionExpired } from "@/utils/session-expired";
+import {
+  clearSessionExpired,
+  notifySessionExpired,
+} from "@/utils/session-expired";
 import { redirectToSafeUrl } from "@/utils/redirect";
 
 /**
@@ -15,6 +18,9 @@ export function guardRestoredPage() {
       redirectToSafeUrl("/login");
       return;
     }
+    // A redirect that left this page is over; whether to send it to log in
+    // again rests on the session it has now.
+    clearSessionExpired();
     fetch("/api/auth/get-session", { credentials: "include" })
       .then((response) => response.json())
       .then((session: unknown) => {

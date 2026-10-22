@@ -17,11 +17,14 @@ type SessionExpiredHold = {
   prompt: (signIn: () => void) => void;
   /** Saves what the user typed before the page leaves. */
   beforeRedirect: () => Promise<unknown>;
+  /** Takes the prompt back when the session turns out to be live again. */
+  dismiss?: () => void;
 };
 
 let state: "active" | "held" | "redirected" = "active";
 let armedBy = 0;
 const holds = new Set<SessionExpiredHold>();
+const armedListeners = new Set<() => void>();
 
 export function isSessionExpiredErrorBody(body: unknown) {
   return (
@@ -39,6 +42,7 @@ export function isSessionExpiredErrorBody(body: unknown) {
  */
 export function armSessionExpiredRedirect() {
   armedBy += 1;
+  if (armedBy === 1) for (const listener of armedListeners) listener();
   return () => {
     armedBy -= 1;
   };
@@ -46,6 +50,24 @@ export function armSessionExpiredRedirect() {
 
 export function isSessionExpiredRedirectArmed() {
   return armedBy > 0;
+}
+
+/** A page for a signed-in user has just rendered. */
+export function onSessionExpiredRedirectArmed(listener: () => void) {
+  armedListeners.add(listener);
+  return () => {
+    armedListeners.delete(listener);
+  };
+}
+
+/**
+ * The session is live again: take back a sign-in prompt still waiting, so a
+ * composer closing later does not send a signed-in user to log in, and let a
+ * later expiry be noticed.
+ */
+export function clearSessionExpired() {
+  if (state === "held") for (const hold of holds) hold.dismiss?.();
+  state = "active";
 }
 
 /**
