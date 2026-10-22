@@ -15,7 +15,13 @@ import {
 import { useSetAtom } from "jotai";
 import type { KeyedMutator } from "swr";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { CheckIcon, FlagIcon, MailSearchIcon, PauseIcon } from "lucide-react";
+import {
+  CheckIcon,
+  FlagIcon,
+  MailSearchIcon,
+  PauseIcon,
+  XIcon,
+} from "lucide-react";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import type { GetCalendarTodayEventsResponse } from "@/app/api/user/calendar/upcoming-events/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
@@ -80,6 +86,7 @@ import {
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
+import { useWaitingOnYou } from "./use-waiting-on-you";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
@@ -193,18 +200,45 @@ export function HomeDashboard() {
     handledLabelIds,
     enabled: !data || data.pending.includes("alsoInInbox"),
   });
+  const waitingOnYou = useWaitingOnYou({
+    accounts: localAccounts,
+    named: Boolean(allInboxesAccounts),
+    handledLabelIds,
+    // Only for a mailbox Cue hasn't read yet; after that Needs reply is
+    // Cue's answer, and this would second-guess it.
+    enabled: !data || (!data.cue.hasReadMail && !data.needsYou.length),
+  });
+  // Only beside a Needs reply that is known to be empty, and never a
+  // conversation Today already lists as waiting on someone else.
+  const waitingOnYouShown = useMemo(() => {
+    if (
+      !data ||
+      data.cue.hasReadMail ||
+      data.pending.includes("needsYou") ||
+      data.needsYou.length
+    )
+      return [];
+    const waiting = new Set(data.waiting.map(rowKey));
+    return waitingOnYou.threads.filter(
+      (thread) => !waiting.has(rowKey(thread)),
+    );
+  }, [data, waitingOnYou.threads]);
   const alsoInInbox = useMemo(() => {
-    if (!localInbox) return data?.alsoInInbox ?? [];
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
-    const needsYou = new Set(data?.needsYou.map(rowKey));
+    const shown = new Set(waitingOnYouShown.map(rowKey));
+    if (!localInbox)
+      return (data?.alsoInInbox ?? []).filter(
+        (thread) => !shown.has(rowKey(thread)),
+      );
+    for (const thread of data?.needsYou ?? []) shown.add(rowKey(thread));
     const needsYouMessages = new Set(data?.needsYou.map(todayConversationKey));
     return localInbox.filter(
       (thread) =>
-        !needsYou.has(rowKey(thread)) &&
+        !shown.has(rowKey(thread)) &&
         !needsYouMessages.has(todayConversationKey(thread)),
     );
-  }, [data, localInbox]);
+  }, [data, localInbox, waitingOnYouShown]);
   const visibleAlsoInInbox = useMemo(
     () =>
       alsoInInbox
@@ -218,10 +252,11 @@ export function HomeDashboard() {
       threads.filter((thread) => !hidden.has(rowKey(thread)));
     return {
       needsYou: visible(data.needsYou),
+      waitingOnYou: visible(waitingOnYouShown),
       waiting: visible(data.waiting),
       alsoInInbox: visibleAlsoInInbox,
     };
-  }, [data, hidden, visibleAlsoInInbox]);
+  }, [data, hidden, waitingOnYouShown, visibleAlsoInInbox]);
   const notice =
     data && lanes && !earlierDay
       ? cueNotice(data.cue, emailAccountId, {
@@ -255,21 +290,23 @@ export function HomeDashboard() {
     [data, refreshFailed],
   );
   // Keyboard order, top to bottom, as the lanes render.
-  const rows = useMemo(
-    () =>
-      lanes
-        ? [
-            ...lanes.needsYou,
-            ...(allClear && !waitingShown ? [] : lanes.waiting),
-            ...lanes.alsoInInbox,
-          ]
-        : visibleAlsoInInbox,
-    [lanes, allClear, waitingShown, visibleAlsoInInbox],
-  );
+  const rows = useMemo(() => {
+    if (!lanes) return visibleAlsoInInbox;
+    // The All clear holds who you're waiting on, above Waiting on you.
+    const middle = allClear
+      ? [...(waitingShown ? lanes.waiting : []), ...lanes.waitingOnYou]
+      : [...lanes.waitingOnYou, ...lanes.waiting];
+    return [...lanes.needsYou, ...middle, ...lanes.alsoInInbox];
+  }, [lanes, allClear, waitingShown, visibleAlsoInInbox]);
   const focused = rows.find((thread) => rowKey(thread) === focusedId);
   const allRows = useMemo(
-    () => [...(data?.needsYou ?? []), ...(data?.waiting ?? []), ...alsoInInbox],
-    [data, alsoInInbox],
+    () => [
+      ...(data?.needsYou ?? []),
+      ...waitingOnYouShown,
+      ...(data?.waiting ?? []),
+      ...alsoInInbox,
+    ],
+    [data, waitingOnYouShown, alsoInInbox],
   );
   const actionable = useMemo<ActionableThread[]>(
     () =>
@@ -399,6 +436,15 @@ export function HomeDashboard() {
       }
     },
   );
+  // Kept in this browser only; focus moves on as when a row is archived.
+  const dismissWaitingOnYou = useStableCallback((thread: TodayThread) => {
+    const key = rowKey(thread);
+    const index = rows.findIndex((row) => rowKey(row) === key);
+    const neighbour = rows[index + 1] ?? rows[index - 1];
+    if (focusedId === key) focusRow(neighbour ? rowKey(neighbour) : null);
+    waitingOnYou.dismiss(thread);
+  });
+
   const openRow = useStableCallback((key: string, reply?: boolean) => {
     const thread = rowByKey.get(key);
     if (thread) router.push(threadHref(thread, reply));
@@ -620,6 +666,7 @@ export function HomeDashboard() {
             rowContext={rowContext}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
+            onDismissWaitingOnYou={dismissWaitingOnYou}
             // Past the last refresh a pending lane would load forever.
             pending={gaveUp ? NO_LANES : pending}
             outdated={outdated}
@@ -667,6 +714,7 @@ function HomeLanes({
   layout,
   threadHref,
   onCorrect,
+  onDismissWaitingOnYou,
   pending,
   outdated,
 }: {
@@ -677,6 +725,8 @@ function HomeLanes({
   dayMeetings: DayMeetings;
   lanes: {
     needsYou: TodayThread[];
+    /** From local mail, while Needs reply has nothing of its own. */
+    waitingOnYou: TodayThread[];
     waiting: TodayThread[];
     alsoInInbox: TodayThread[];
   };
@@ -696,6 +746,7 @@ function HomeLanes({
     account?: { id: string };
   }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
+  onDismissWaitingOnYou: (thread: TodayThread) => void;
   pending: ReadonlySet<HomeLane>;
   /** Lanes showing rows from an earlier answer that a refresh couldn't replace. */
   outdated: ReadonlySet<HomeLane>;
@@ -706,7 +757,11 @@ function HomeLanes({
   const otherTasks = data.agentTasks.filter((task) => task.kind !== "draft");
   const row = (
     thread: TodayThread,
-    options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
+    options: {
+      waiting?: boolean;
+      note?: string;
+      correction?: TodayRowCorrection;
+    } = {},
   ) => renderTodayRow(thread, rowContext, options);
   const hasFocus = (threads: TodayThread[]) =>
     threads.some((thread) => rowKey(thread) === rowContext.focusedId);
@@ -725,6 +780,7 @@ function HomeLanes({
       />
     </Section>
   ) : null;
+  const waitingOnYouDetailId = useId();
 
   return (
     <>
@@ -750,6 +806,31 @@ function HomeLanes({
           </ThreadList>
         </AllClear>
       ) : null}
+      {lanes.waitingOnYou.length > 0 ? (
+        <Section
+          title="Waiting on you"
+          detail="From your mail, not checked by AI"
+          detailId={waitingOnYouDetailId}
+        >
+          <ThreadList
+            describedBy={waitingOnYouDetailId}
+            hasFocusedRow={hasFocus(lanes.waitingOnYou)}
+            label="Waiting on you"
+          >
+            {lanes.waitingOnYou.map((thread) =>
+              row(thread, {
+                note: "May need a reply",
+                correction: {
+                  label: "Dismiss",
+                  icon: XIcon,
+                  onClick: () => onDismissWaitingOnYou(thread),
+                },
+              }),
+            )}
+          </ThreadList>
+        </Section>
+      ) : null}
+
       {/* What needs the user comes first; meeting news sits with what's next. */}
       {allClear ? yourDay : null}
       {allClear ? (
@@ -930,7 +1011,11 @@ type TodayRowContext = {
 function renderTodayRow(
   thread: TodayThread,
   context: TodayRowContext,
-  options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
+  options: {
+    waiting?: boolean;
+    note?: string;
+    correction?: TodayRowCorrection;
+  } = {},
 ) {
   const key = rowKey(thread);
   return (
@@ -948,6 +1033,7 @@ function renderTodayRow(
       isFocused={key === context.focusedId}
       key={key}
       layout={context.layout}
+      note={options.note}
       rowKey={key}
       thread={thread}
       waiting={options.waiting}
@@ -994,12 +1080,18 @@ function cueNotice(
 
 function Section({
   title,
+  detail,
+  detailId,
   count,
   outdated,
   action,
   children,
 }: {
   title: string;
+  /** A quiet line under the title, such as where its rows come from. */
+  detail?: string;
+  /** For a list that the detail line describes. */
+  detailId?: string;
   count?: string;
   /** Its rows are from an earlier answer that a refresh couldn't replace. */
   outdated?: boolean;
@@ -1023,6 +1115,11 @@ function Section({
         ) : null}
         {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
+      {detail ? (
+        <p className="-mt-1 mb-2 text-muted-foreground text-sm" id={detailId}>
+          {detail}
+        </p>
+      ) : null}
       {children}
     </section>
   );
@@ -1035,15 +1132,18 @@ function Section({
  */
 function ThreadList({
   label,
+  describedBy,
   hasFocusedRow,
   children,
 }: {
   label: string;
+  describedBy?: string;
   hasFocusedRow: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div
+      aria-describedby={describedBy}
       aria-label={label}
       className="-mx-4 sm:mx-0 border-border/60 border-t outline-none"
       onFocus={(event) => {

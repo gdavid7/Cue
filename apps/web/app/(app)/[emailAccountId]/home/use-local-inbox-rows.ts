@@ -85,9 +85,7 @@ export function localInboxRows(
     now?: number;
   },
 ): TodayThread[] | null {
-  const accountIds = accounts.map((account) => account.id);
-  if (view.connection && view.connection !== "ready") return null;
-  if (getFirstSyncAccountIds(accountIds, view.coverage).length) return null;
+  if (!isLocalMailReady(view, accounts)) return null;
   const byId = new Map(accounts.map((account) => [account.id, account]));
   const handledSince = now - HANDLED_WINDOW_DAYS * 86_400_000;
   const rows = view.conversations.flatMap((conversation) => {
@@ -128,6 +126,16 @@ function showCopiesOnce(rows: TodayThread[]) {
   });
 }
 
+/**
+ * Whether the local store can answer for every account: the engine reaches
+ * the provider and each account's first sync has finished.
+ */
+export function isLocalMailReady(view: MailboxView, accounts: TodayAccount[]) {
+  if (view.connection && view.connection !== "ready") return false;
+  const accountIds = accounts.map((account) => account.id);
+  return getFirstSyncAccountIds(accountIds, view.coverage).length === 0;
+}
+
 function toTodayThread(
   conversation: ConversationSummary,
   ownEmail: string,
@@ -145,24 +153,50 @@ function toTodayThread(
     splitRecipientList(conversation.to)[0] ||
     conversation.to ||
     conversation.from;
+  return localTodayThread({
+    conversationId: conversation.key.conversationId,
+    messageId: conversation.latestMessageId,
+    counterpart,
+    subject: conversation.subject,
+    preview: conversation.preview,
+    atMs: conversation.latestMessageAtMs,
+    unread: conversation.unread,
+    starred: conversation.starred,
+    rfcMessageId: conversation.latestInternetMessageId,
+  });
+}
+
+/** A conversation in local inbox mail as Today's row, named for who it is with. */
+export function localTodayThread(input: {
+  conversationId: string;
+  messageId: string;
+  /** The address the row names, as "Name <address>" or a bare address. */
+  counterpart: string;
+  subject: string;
+  preview: string;
+  atMs: number;
+  unread: boolean;
+  starred: boolean;
+  /** The message's Internet Message-ID, which finds its copy in another mailbox. */
+  rfcMessageId?: string | null;
+}): TodayThread {
   return {
-    threadId: conversation.key.conversationId,
+    threadId: input.conversationId,
     fromName:
-      extractNameFromEmail(counterpart) || extractEmailAddress(counterpart),
-    fromEmail: extractEmailAddress(counterpart),
-    subject: (conversation.subject || "(no subject)").replace(
+      extractNameFromEmail(input.counterpart) ||
+      extractEmailAddress(input.counterpart),
+    fromEmail: extractEmailAddress(input.counterpart),
+    subject: (input.subject || "(no subject)").replace(
       /^((re|fwd?):\s*)+/i,
       "",
     ),
-    preview: conversation.preview,
-    at: new Date(conversation.latestMessageAtMs).toISOString(),
-    priority: conversation.unread ? "medium" : "low",
-    unread: conversation.unread,
-    messageId: conversation.latestMessageId,
-    ...(conversation.latestInternetMessageId
-      ? { rfcMessageId: conversation.latestInternetMessageId }
-      : {}),
-    starred: conversation.starred,
+    preview: input.preview,
+    at: new Date(input.atMs).toISOString(),
+    priority: input.unread ? "medium" : "low",
+    unread: input.unread,
+    messageId: input.messageId,
+    ...(input.rfcMessageId ? { rfcMessageId: input.rfcMessageId } : {}),
+    starred: input.starred,
     inInbox: true,
   };
 }

@@ -497,3 +497,34 @@ export type FilesPage = { files: FileEntry[]; nextPage: string | null };
 
 /** Who sent the files a Files view can list, most files first. */
 export type FileSender = { email: string; name: string | null; files: number };
+
+/**
+ * Conversations that may wait on the user's reply, read from the local store
+ * alone, with no model: the newest message is someone else's, it is in the
+ * inbox's main tab, and nothing the user sent follows it. The sender must be
+ * someone the user has written to, or the user must have written in the
+ * conversation, so mailing lists and strangers stay out.
+ */
+export type WaitingOnYouQuery = {
+  accountIds: string[];
+  /** The user's own addresses: their mail is never waiting on them. */
+  ownAddresses: string[];
+  /** Mail received before this is left out. */
+  receivedSinceMs: number;
+  /** Per account, labels or categories whose mail is left out. */
+  excludedLabelIds?: Record<string, string[]>;
+  limit: number;
+};
+
+/** Newest first; the message is the conversation's newest. */
+export type WaitingOnYouConversation = {
+  accountId: string;
+  conversationId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  preview: string;
+  receivedAtMs: number;
+  unread: boolean;
+  starred: boolean;
+};

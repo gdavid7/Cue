@@ -6,6 +6,7 @@ import { test } from "../playwright-test";
 import {
   openMail,
   readLatestMailMutation,
+  readProviderAccessToken,
   waitForMetadataCoverage,
   withClient,
 } from "./mail-test-helpers";
@@ -101,6 +102,101 @@ test("a first visit shows the inbox from local mail while Today loads", async ({
     inbox.locator(`[data-today-thread="${ARCHIVE_THREAD}"]`),
   ).toHaveCount(0);
   await expect(inbox.getByRole("option").first()).toBeVisible();
+});
+
+test("Waiting on you lists local mail from someone you write to until Needs reply has its own", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(480_000);
+  const subject = `Dinner plans ${Date.now()}`;
+  const seeded = await seedMailFromContact(page, subject);
+  const other = await seedMailFromContact(page, `Book club ${Date.now()}`);
+  // A new mailbox: Cue hasn't read its mail, so Needs reply has nothing yet.
+  let cueHasRead = false;
+  await page.route("**/api/user/home*", async (route) => {
+    const response = await route.fetch();
+    const home = await response.json();
+    if (!cueHasRead) {
+      home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+      home.needsYou = [];
+    }
+    await route.fulfill({ response, json: home });
+  });
+  const waitingOnYou = page.getByRole("listbox", {
+    name: "Waiting on you",
+    exact: true,
+  });
+  const row = waitingOnYou.locator(`[data-today-thread="${seeded.threadId}"]`);
+  try {
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.addInitScript((value) => {
+        localStorage.setItem("theme", value);
+      }, theme);
+      const emailAccountId = await getEmailAccountId(page);
+      await page.goto(`/${emailAccountId}/home`, {
+        waitUntil: "domcontentloaded",
+      });
+      await expect(row).toBeVisible({ timeout: 90_000 });
+      await expect(row).toContainText("May need a reply");
+      await expect(
+        page.getByText("From your mail, not checked by AI"),
+      ).toBeVisible();
+      // Each conversation shows once on Today.
+      await expect(
+        page
+          .getByRole("listbox", { name: "Also in your inbox" })
+          .locator(`[data-today-thread="${seeded.threadId}"]`),
+      ).toHaveCount(0);
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await expect(row).toBeVisible();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-waiting-on-you-${theme}-${size.width}`,
+        );
+      }
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
+
+    // A row opens in the reader, which comes back to Today.
+    await row.getByRole("option").click();
+    await expect(page).toHaveURL(/[?&]from=today/);
+    await expect(page.getByRole("heading", { name: subject })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByRole("button", { name: "Back to inbox" }).click();
+    await expect(page).toHaveURL(/\/home(\?|$)/);
+
+    // Dismissed stays dismissed in this browser.
+    await expect(row).toBeVisible({ timeout: 60_000 });
+    await row.getByRole("option").hover();
+    await row.getByRole("button", { name: "Dismiss" }).first().click();
+    await expect(row).toHaveCount(0);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    // The other conversation shows, so local mail has been read.
+    await expect(
+      waitingOnYou.locator(`[data-today-thread="${other.threadId}"]`),
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(row).toHaveCount(0);
+
+    // Once Needs reply has its own conversations, the group steps aside.
+    cueHasRead = true;
+    const { needsReply } = await openToday(page);
+    await expect(needsReply).toBeVisible();
+    await expect(waitingOnYou).toHaveCount(0);
+  } finally {
+    await seeded.remove();
+    await other.remove();
+  }
 });
 
 test("replies to a conversation from Today in the reader", async ({ page }) => {
@@ -391,6 +487,115 @@ async function seedNeedsReply(emailAccountId: string, threadIds: string[]) {
     }
   });
 }
+
+/**
+ * A conversation the user started with Kai, who answered an hour later: an
+ * inbox reply from someone the user writes to, with nothing sent after it.
+ * Returns its thread and what takes it out again.
+ */
+async function seedMailFromContact(page: Page, subject: string) {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  const body = "Are we still on for Thursday?";
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    const draft = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Dinner Thursday?" },
+        toRecipients: [
+          { emailAddress: { address: KAI.address, name: KAI.name } },
+        ],
+      },
+    });
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const sent = await page.request.post(`${base}/messages/${draftId}/move`, {
+      headers,
+      data: { destinationId: "sentitems" },
+    });
+    expect(sent.ok(), await sent.text()).toBe(true);
+    const sentId = ((await sent.json()) as { id: string }).id;
+    const reply = await page.request.post(
+      `${base}/messages/${sentId}/createReply`,
+      { headers },
+    );
+    expect(reply.ok(), await reply.text()).toBe(true);
+    const replyId = ((await reply.json()) as { id: string }).id;
+    const patched = await page.request.patch(`${base}/messages/${replyId}`, {
+      headers,
+      data: {
+        from: { emailAddress: KAI },
+        toRecipients: [{ emailAddress: { address: email } }],
+        body: { contentType: "text", content: body },
+        isRead: false,
+      },
+    });
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(`${base}/messages/${replyId}/move`, {
+      headers,
+      data: { destinationId: "inbox" },
+    });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return {
+      threadId: message.conversationId,
+      remove: async () => {
+        for (const id of [message.id, sentId])
+          await page.request.post(`${base}/messages/${id}/permanentDelete`, {
+            headers,
+          });
+      },
+    };
+  }
+
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const sent = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      from: email,
+      to: `${KAI.name} <${KAI.address}>`,
+      subject,
+      body_text: "Dinner Thursday?",
+      labelIds: ["SENT"],
+      internalDate: String(Date.now() - 2 * 3_600_000),
+    },
+  });
+  expect(sent.ok(), await sent.text()).toBe(true);
+  const first = (await sent.json()) as { id: string; threadId: string };
+  const inserted = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      threadId: first.threadId,
+      from: `${KAI.name} <${KAI.address}>`,
+      to: email,
+      subject,
+      body_text: body,
+      labelIds: ["INBOX", "UNREAD"],
+      internalDate: String(Date.now() - 3_600_000),
+    },
+  });
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string };
+  return {
+    threadId: first.threadId,
+    remove: async () => {
+      for (const id of [message.id, first.id])
+        await page.request.delete(`${base}/messages/${id}`, { headers });
+    },
+  };
+}
+
+const KAI = { address: "kai@example.com", name: "Kai Example" };
 
 async function expectEngineMutation(
   page: Page,

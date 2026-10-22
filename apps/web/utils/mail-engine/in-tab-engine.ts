@@ -65,16 +65,17 @@ export async function createInTabEngine(
   const originalRequestSync = engine.requestSync.bind(engine);
   return {
     ...engine,
-    // Local autocomplete, the person card, the Files view and the assistant's
-    // message search stay off the UI thread if dedicated workers fail; before
-    // indexing completes a search can scan the mailbox, so the assistant
-    // searches Gmail instead.
+    // Local autocomplete, the person card, the Files view, Today's Waiting on
+    // you and the assistant's message search stay off the UI thread if
+    // dedicated workers fail; before indexing completes a search can scan the
+    // mailbox, so the assistant searches Gmail instead.
     queryContactSuggestions: undefined,
     searchMessages: undefined,
     queryPersonCard: undefined,
     queryFiles: undefined,
     queryFileSenders: undefined,
     queryFilesNotOnDevice: undefined,
+    queryWaitingOnYou: undefined,
     ensureAccount,
     requestSync: (accountIds) =>
       requestSyncUnlessOffline(pageConnectivityOnline(), () =>

@@ -371,6 +371,8 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "queryFileSenders", [accountIds]),
     queryFilesNotOnDevice: (accountIds) =>
       callWorker(worker, pending, "queryFilesNotOnDevice", [accountIds]),
+    queryWaitingOnYou: (query) =>
+      callWorker(worker, pending, "queryWaitingOnYou", [query]),
     searchSemantic: (query) =>
       callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),

@@ -48,6 +48,9 @@ const mocks = vi.hoisted(() => ({
   // Today's meetings, as the calendar answers for the Your day strip.
   // `undefined` while the calendar is still being read.
   day: { events: [], more: 0 } as GetCalendarTodayEventsResponse | undefined,
+  // What Waiting on you reads from local mail.
+  waitingOnYou: [] as HomeThread[],
+  dismissWaitingOnYou: vi.fn(),
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -162,6 +165,13 @@ vi.mock("./use-local-inbox-rows", async (importOriginal) => {
 });
 vi.mock("@/hooks/useCalendarUpcomingEvents", () => ({
   useCalendarTodayEvents: () => ({ data: mocks.day }),
+}));
+vi.mock("./use-waiting-on-you", () => ({
+  // What the hook found, whether or not Today still wants it.
+  useWaitingOnYou: () => ({
+    threads: mocks.waitingOnYou,
+    dismiss: mocks.dismissWaitingOnYou,
+  }),
 }));
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
@@ -910,6 +920,80 @@ describe("HomeDashboard Your day", () => {
   });
 });
 
+describe("HomeDashboard Waiting on you", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.waitingOnYou = [thread("asked", "Lunch on Friday?")];
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.waitingOnYou = [];
+  });
+
+  it("new mailbox: lists local mail that may need a reply while Cue reads, each conversation once", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+      alsoInInbox: [
+        thread("asked", "Lunch on Friday?"),
+        thread("b", "Dentist"),
+      ],
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("Cue is reading");
+    expect(lanes()).toEqual(["Waiting on you", "Also in your inbox"]);
+    expect(screen.getByText("From your mail, not checked by AI")).toBeTruthy();
+    expect(optionFor("asked").textContent).toContain("May need a reply");
+    expect(
+      within(lane("Also in your inbox")).queryByText("Lunch on Friday?"),
+    ).toBeNull();
+  });
+
+  it("leaves a mailbox Cue has read to Cue, even when nothing needs a reply", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(lanes()).not.toContain("Waiting on you");
+  });
+
+  it("hides once Needs reply has conversations of its own", () => {
+    mocks.home.data = unread(homeData([thread("a", "Quarterly numbers")]));
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply"]);
+  });
+
+  it("waits for Needs reply to load rather than showing beside its placeholder", () => {
+    mocks.home.data = { ...unread(homeData([])), pending: ["needsYou"] };
+
+    renderToday();
+
+    expect(lanes()).not.toContain("Waiting on you");
+  });
+
+  it("dismisses a conversation", () => {
+    mocks.home.data = unread(homeData([]));
+
+    renderToday();
+    fireEvent.click(
+      within(rowFor("asked")).getAllByRole("button", { name: "Dismiss" })[0],
+    );
+
+    expect(mocks.dismissWaitingOnYou).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "asked" }),
+    );
+  });
+});
+
 describe("HomeDashboard before the server answers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1550,6 +1634,13 @@ function dayMeeting(
     startTime,
     endTime: new Date(new Date(startTime).getTime() + 1_800_000).toISOString(),
     attendees: [],
+  };
+}
+
+function unread(home: GetHomeResponse): GetHomeResponse {
+  return {
+    ...home,
+    cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
   };
 }
 

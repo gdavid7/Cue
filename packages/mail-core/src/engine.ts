@@ -58,6 +58,8 @@ import type {
   QueryHandle,
   SemanticMatch,
   SemanticSearchQuery,
+  WaitingOnYouConversation,
+  WaitingOnYouQuery,
 } from "./queries";
 import {
   createQueryRegistry,
@@ -173,6 +175,13 @@ export type MailClient = {
    * the Files view can't show their files.
    */
   queryFilesNotOnDevice?(accountIds: string[]): Promise<number>;
+  /**
+   * What Today's Waiting on you lists, read once from the local store.
+   * Hosts that can't answer off the UI thread leave it out.
+   */
+  queryWaitingOnYou?(
+    query: WaitingOnYouQuery,
+  ): Promise<WaitingOnYouConversation[]>;
   /**
    * Finds mail by meaning, from vectors this device made of recent mail.
    * Resolves no matches while the account has none. Only hosts that run
@@ -363,6 +372,9 @@ export function createMailEngine(input: {
     },
     queryFilesNotOnDevice(accountIds) {
       return store.readFilesNotOnDevice(accountIds);
+    },
+    queryWaitingOnYou(query) {
+      return store.readWaitingOnYou(query);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
