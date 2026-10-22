@@ -1,6 +1,7 @@
 "use client";
 
 import { useOpenedConversationAttachments } from "./OpenedConversationAttachments";
+import { DownloadAllButton } from "./DownloadAllButton";
 import { SaveToDriveMenu } from "./SaveToDriveMenu";
 import dynamic from "next/dynamic";
 import Image from "next/image";
@@ -107,6 +108,7 @@ export function EmailAttachments({ message }: { message: ThreadMessage }) {
 
   return (
     <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      <DownloadAllButton key={message.id} message={message} />
       {message.attachments?.map((attachment) => {
         const url = emailAccountId
           ? getAttachmentUrl({

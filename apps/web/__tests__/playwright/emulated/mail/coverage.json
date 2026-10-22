@@ -123,7 +123,16 @@
     "utils/mail-api/assistant-state.ts",
     "app/api/mail/v1/accounts/[accountId]/assistant-state/route.ts"
   ],
-  "attachment-previews.spec.ts": ["components/email-list/EmailAttachments.tsx"],
+  "attachment-previews.spec.ts": [
+    "components/email-list/EmailAttachments.tsx",
+    "components/email-list/DownloadAllButton.tsx"
+  ],
+  "download-all-attachments.spec.ts": [
+    "components/email-list/DownloadAllButton.tsx",
+    "components/email-list/EmailAttachments.tsx",
+    "utils/attachments/download.ts",
+    "utils/attachments/download-all.ts"
+  ],
   "cached-settings.spec.ts": ["hooks/useMailSettings.ts"],
   "calendar-invitation.spec.ts": [
     "components/email-list/CalendarInvitation.tsx"

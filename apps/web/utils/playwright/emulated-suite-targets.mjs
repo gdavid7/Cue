@@ -84,6 +84,7 @@ const featureGroups = [
       "mail/draft-deletion.spec.ts",
       "mail/attachment-previews.spec.ts",
       "mail/office-attachment-previews.spec.ts",
+      "mail/download-all-attachments.spec.ts",
     ],
   },
   {
