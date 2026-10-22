@@ -107,6 +107,57 @@ describe("useEngineMailThreads", () => {
     expect(observeMailbox).toHaveBeenCalledTimes(1);
   });
 
+  it("counts a first sync as complete by the primary stream, like the last-synced time", async () => {
+    const scope = (scopeId: string, lastCompletedSyncAtMs: number | null) => ({
+      accountId: "acc-1",
+      scopeId,
+      metadata: "partial" as const,
+      content: "not_requested" as const,
+      indexedContent: "not_requested" as const,
+      lastCompletedSyncAtMs,
+    });
+    const snapshot = (coverage: ReturnType<typeof scope>[]) => {
+      const base = mailboxSnapshot();
+      return { ...base, data: { ...base.data!, coverage } };
+    };
+    const render = (coverage: ReturnType<typeof scope>[]) =>
+      renderHook(
+        () =>
+          useEngineMailThreads({
+            emailAccountId: "acc-1",
+            query: { type: "inbox" } as ThreadsQuery,
+          }),
+        {
+          wrapper: ({ children }: { children: ReactNode }) => (
+            <MailEngineProvider
+              client={
+                {
+                  observeMailbox: () => staticMailboxHandle(snapshot(coverage)),
+                  getDiagnostics: vi.fn(async () => ({ coverage: [] })),
+                  requestSync: vi.fn(async () => ({ status: "scheduled" })),
+                } as unknown as MailClient
+              }
+            >
+              {children}
+            </MailEngineProvider>
+          ),
+        },
+      );
+
+    const otherScopeOnly = render([scope("primary", null), scope("other", 5)]);
+    await waitFor(() =>
+      expect(otherScopeOnly.result.current.threads).toHaveLength(1),
+    );
+    expect(otherScopeOnly.result.current.hasCompletedSync).toBe(false);
+    expect(otherScopeOnly.result.current.lastSyncedAtMs).toBeNull();
+
+    const primaryDone = render([scope("primary", 9), scope("other", null)]);
+    await waitFor(() =>
+      expect(primaryDone.result.current.threads).toHaveLength(1),
+    );
+    expect(primaryDone.result.current.hasCompletedSync).toBe(true);
+  });
+
   type AccountSearch = NonNullable<MailboxView["providerSearch"]>[number];
   function renderSearch(q: string, providerSearch: AccountSearch[]) {
     const snapshot = mailboxSnapshot([]);

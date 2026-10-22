@@ -104,6 +104,7 @@ import {
 import {
   getListThreadKey,
   getListThreadSelection,
+  getRepliedThreadEmailAccountId,
   getThreadSelectionKey,
   type MailLayoutMode,
   type ThreadSelection,
@@ -139,6 +140,10 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useChat } from "@/providers/ChatProvider";
 import { useAtomValue, useSetAtom } from "jotai";
 import { openThreadAtom } from "@/store/open-thread";
+import {
+  reportActivationSignal,
+  useActivationSignal,
+} from "@/hooks/useActivationSignal";
 import {
   commandPaletteOpenAtom,
   mailCommandContextAtom,
@@ -787,6 +792,11 @@ export function MailShell() {
   // there, so the server stops fetching the inbox for them, and the rows it
   // fetched at sign-in are put away for good.
   const hasLocalMail = !isAllAccounts && accountThreadState.threads.length > 0;
+  useActivationSignal(
+    emailAccountId,
+    "first_sync_ready",
+    !isAllAccounts && accountThreadState.hasCompletedSync,
+  );
   const lastSyncedAtMs = isAllAccounts
     ? null
     : accountThreadState.lastSyncedAtMs;
@@ -1018,6 +1028,11 @@ export function MailShell() {
   // The assistant chat lives outside this screen; it reads the open thread
   // from here so a question about "this email" names it.
   const setReaderOpenThread = useSetAtom(openThreadAtom);
+  useActivationSignal(
+    openThreadSelection?.emailAccountId,
+    "first_thread_opened",
+    openMessages.length > 0,
+  );
   const latestOpenMessageId = openMessages
     .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
     .at(-1)?.id;
@@ -2177,6 +2192,15 @@ export function MailShell() {
   });
   const onSendSuccess = useStableCallback(
     (_messageId: string, sentThreadId: string, repliedThreadId: string) => {
+      reportActivationSignal(
+        getRepliedThreadEmailAccountId({
+          repliedThreadId,
+          openSelection: openThreadSelection,
+          threads: navThreads,
+          currentEmailAccountId: emailAccountId,
+        }),
+        "first_triage_action",
+      );
       // A held send settles after the undo window, by which time the user may
       // have moved on; only follow the reply if they are still on its thread.
       if (

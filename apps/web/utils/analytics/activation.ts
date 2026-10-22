@@ -1,3 +1,4 @@
+import type { ActivationSignal } from "@/utils/actions/activation.validation";
 import { createScopedLogger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
@@ -17,6 +18,9 @@ export const ACTIVATION_EVENTS = {
   firstSignIn: "activation.first_sign_in",
   needsReplyFirstItem: "activation.needs_reply_first_item",
   firstSuggestedReplySent: "activation.first_suggested_reply_sent",
+  firstSyncReady: "activation.first_sync_ready",
+  firstThreadOpened: "activation.first_thread_opened",
+  firstTriageAction: "activation.first_triage_action",
   activeDay: "activation.active_day",
   firstHourHealth: "activation.first_hour_health",
 } as const;
@@ -99,6 +103,31 @@ export async function recordFirstSuggestedReplySent(emailAccountId: string) {
   }
 }
 
+/** The mail engine finished a first sync of the mailbox, reported by the client. */
+export async function recordFirstSyncReady(emailAccountId: string) {
+  try {
+    if (!(await claimOnce(`activation:first-sync-ready:${emailAccountId}`)))
+      return;
+    const emailAccount = await prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { createdAt: true },
+    });
+    if (!emailAccount) return;
+    const now = new Date();
+    logger.info(ACTIVATION_EVENTS.firstSyncReady, {
+      emailAccountId,
+      at: now.toISOString(),
+      firstSignInAt: emailAccount.createdAt.toISOString(),
+      msSinceFirstSignIn: now.getTime() - emailAccount.createdAt.getTime(),
+    });
+  } catch (error) {
+    logger.warn("Failed to record activation event", {
+      event: ACTIVATION_EVENTS.firstSyncReady,
+      error,
+    });
+  }
+}
+
 /** At most once per mailbox per UTC day. */
 export async function recordActiveDay(emailAccountId: string) {
   try {
@@ -124,6 +153,17 @@ export async function recordActiveDay(emailAccountId: string) {
   }
 }
 
+function recordFirstOnce(event: string, claim: string) {
+  return async (emailAccountId: string) => {
+    try {
+      if (!(await claimOnce(`activation:${claim}:${emailAccountId}`))) return;
+      logger.info(event, { emailAccountId, at: new Date().toISOString() });
+    } catch (error) {
+      logger.warn("Failed to record activation event", { event, error });
+    }
+  };
+}
+
 /** Whether this call is the first to claim the key across all instances. */
 async function claimOnce(key: string, ttlSeconds = FIRST_EVENT_TTL_SECONDS) {
   if (claimedKeys.has(key)) return false;
@@ -135,3 +175,19 @@ async function claimOnce(key: string, ttlSeconds = FIRST_EVENT_TTL_SECONDS) {
   }
   return claimed === "OK";
 }
+
+/** What the signed-in client may report, each claimed once per mailbox. */
+export const ACTIVATION_SIGNAL_RECORDERS: Record<
+  ActivationSignal,
+  (emailAccountId: string) => Promise<void>
+> = {
+  first_sync_ready: recordFirstSyncReady,
+  first_thread_opened: recordFirstOnce(
+    ACTIVATION_EVENTS.firstThreadOpened,
+    "first-thread-opened",
+  ),
+  first_triage_action: recordFirstOnce(
+    ACTIVATION_EVENTS.firstTriageAction,
+    "first-triage-action",
+  ),
+};
