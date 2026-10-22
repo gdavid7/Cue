@@ -134,6 +134,11 @@ async function dragOver(page: Page, row: Locator, target: Locator) {
 }
 
 async function moveOver(page: Page, target: Locator) {
+  // The sidebar scrolls, and a row past its edge can't be hovered; a real
+  // drag would scroll it by holding the pointer near that edge.
+  await target.evaluate((element) =>
+    element.scrollIntoView({ block: "center" }),
+  );
   const box = await target.boundingBox();
   if (!box) throw new Error("The drop target has no box");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, {

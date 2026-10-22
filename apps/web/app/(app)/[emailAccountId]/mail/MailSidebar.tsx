@@ -11,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -368,11 +369,34 @@ function MailSidebarContent({
   const [storedShowMailboxes, setShowMailboxes] = useStoredDisclosure(
     "cue.mail-sidebar.more-open",
   );
-  // Dragging mail over More opens it for that drag, as Gmail does, so Trash
-  // and Spam can be reached without letting go.
+  // Mail held over More opens it for that drag, as Gmail does, so Trash and
+  // Spam can be reached without letting go. Only after a pause: opening as
+  // the pointer passes would push the labels below out from under it.
   const drag = useMailDrag();
   const [moreRevealedFor, setMoreRevealedFor] = useState<MailDrag | null>(null);
   const dragRevealsMore = drag !== null && moreRevealedFor === drag;
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelReveal = () => {
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  };
+  const holdOverMore = drag
+    ? {
+        onDragEnter: () => {
+          if (revealTimer.current) return;
+          revealTimer.current = setTimeout(() => {
+            revealTimer.current = null;
+            setMoreRevealedFor(drag);
+          }, MORE_REVEAL_DELAY_MS);
+        },
+        onDragLeave: cancelReveal,
+      }
+    : {};
+  useEffect(() => {
+    if (drag || !revealTimer.current) return;
+    clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  }, [drag]);
   // The open view's own row is never hidden behind a closed group.
   const showMailboxes = storedShowMailboxes || isMoreActive || dragRevealsMore;
   const showMailboxRows = collapsed ? isMoreActive : showMailboxes;
@@ -514,7 +538,7 @@ function MailSidebarContent({
               collapsed={collapsed}
               expanded={showMailboxes}
               onToggle={() => setShowMailboxes(!showMailboxes)}
-              onDragEnter={drag ? () => setMoreRevealedFor(drag) : undefined}
+              {...holdOverMore}
             >
               More
             </GroupHeading>
@@ -1081,6 +1105,7 @@ function GroupHeading({
   expanded,
   onToggle,
   onDragEnter,
+  onDragLeave,
   collapsed,
 }: {
   children: ReactNode;
@@ -1089,6 +1114,7 @@ function GroupHeading({
   onToggle?: () => void;
   /** Mail dragged over the heading, which may open the group. */
   onDragEnter?: () => void;
+  onDragLeave?: () => void;
   collapsed?: boolean;
 }) {
   // A heading can't fit in the rail, so groups are separated by a rule instead.
@@ -1098,6 +1124,14 @@ function GroupHeading({
     <div
       className="flex items-center gap-1 px-2.5 pt-4 pb-1.5"
       onDragEnter={onDragEnter}
+      onDragLeave={(event) => {
+        if (
+          event.relatedTarget instanceof Node &&
+          event.currentTarget.contains(event.relatedTarget)
+        )
+          return;
+        onDragLeave?.();
+      }}
     >
       {onToggle ? (
         <button
@@ -1272,6 +1306,7 @@ function NavRow({
 }
 
 const INBOX_DROP_TARGET: SidebarDropTarget = { kind: "inbox" };
+const MORE_REVEAL_DELAY_MS = 600;
 
 /**
  * Lets mail dragged from the list drop on a row. A row that can take the drop
