@@ -28,9 +28,9 @@ export type CatchUpWatch = {
 };
 
 /**
- * Reads Catch up's batch, then watches it. With `threadIds` null it reads
- * the tab's oldest unread conversations; once the batch is fixed it watches
- * those conversations.
+ * Reads Catch up's batch, then watches it. With `watched` null it reads the
+ * tab's oldest unread conversations across `accountIds`, in one order; once
+ * the batch is fixed it watches those conversations, each in its account.
  *
  * A desktop app built before `oldest_first` and the `conversation` predicate
  * refuses both as invalid, which reads as an errored snapshot. From then on
@@ -39,32 +39,39 @@ export type CatchUpWatch = {
  */
 export function useCatchUpMailbox({
   client,
-  emailAccountId,
+  accountIds,
   tabPredicate,
   tabReady,
   batchRead,
-  threadIds,
+  watched,
 }: {
   client: MailClient | null;
-  emailAccountId: string;
+  /** The accounts whose mail is read; none reads nothing. */
+  accountIds: string[];
   tabPredicate: MailPredicate;
   tabReady: boolean;
   /** How many to read for the batch: a batch, plus any to skip. */
   batchRead: number;
-  threadIds: string[] | null;
+  watched: Array<{ accountId: string; threadId: string }> | null;
 }): { batch: CatchUpRead; watch: CatchUpWatch | null } {
   const [legacy, setLegacy] = useState(false);
-  const watching = threadIds !== null;
-  const threadKey = threadIds?.join("\n") ?? "";
+  const watching = watched !== null;
+  // Strings, so a new array with the same contents reads the same query.
+  const accountKey = accountIds.join("\n");
+  const watchKey =
+    watched
+      ?.map(({ accountId, threadId }) => `${accountId}\t${threadId}`)
+      .join("\n") ?? "";
 
   const query = useMemo<ConversationQuery>(() => {
+    const queried = accountKey ? accountKey.split("\n") : [];
     const unread: MailPredicate = {
       kind: "all",
       predicates: [tabPredicate, { kind: "read", value: false }],
     };
     if (legacy)
       return {
-        accountIds: [emailAccountId],
+        accountIds: queried,
         predicate: unread,
         order: "newest_first",
         pageSize: LEGACY_PAGE_SIZE,
@@ -72,32 +79,25 @@ export function useCatchUpMailbox({
       };
     if (!watching)
       return {
-        accountIds: [emailAccountId],
+        accountIds: queried,
         predicate: unread,
         order: "oldest_first",
         pageSize: batchRead,
         after: null,
       };
     return {
-      accountIds: [emailAccountId],
+      accountIds: queried,
       predicate: {
         kind: "all",
-        predicates: [
-          unread,
-          {
-            kind: "conversation",
-            ids: threadKey ? threadKey.split("\n") : [],
-            accountId: emailAccountId,
-          },
-        ],
+        predicates: [unread, watchedPredicate(watchKey)],
       },
       order: "oldest_first",
-      pageSize: Math.max(1, threadKey ? threadKey.split("\n").length : 1),
+      pageSize: Math.max(1, watchKey ? watchKey.split("\n").length : 1),
       after: null,
     };
-  }, [legacy, watching, emailAccountId, tabPredicate, batchRead, threadKey]);
+  }, [legacy, watching, accountKey, tabPredicate, batchRead, watchKey]);
 
-  const enabled = tabReady && Boolean(client);
+  const enabled = tabReady && Boolean(client) && accountIds.length > 0;
   const mailbox = useMailboxWindow(query, { client, enabled });
   const errored =
     enabled && (mailbox.status === "error" || mailbox.status === "unavailable");
@@ -116,7 +116,7 @@ export function useCatchUpMailbox({
   }, [wantsMore, isLoadingMore, loadMore]);
 
   const synced =
-    view && !getFirstSyncAccountIds([emailAccountId], view.coverage).length;
+    view && !getFirstSyncAccountIds(accountIds, view.coverage).length;
 
   let batch: CatchUpRead = { status: "loading" };
   if (errored && legacy) batch = { status: "unavailable" };
@@ -134,4 +134,21 @@ export function useCatchUpMailbox({
       : null;
 
   return { batch, watch };
+}
+
+/** The watched conversations, each matched within its own account. */
+function watchedPredicate(watchKey: string): MailPredicate {
+  const byAccount = new Map<string, string[]>();
+  for (const entry of watchKey ? watchKey.split("\n") : []) {
+    const [accountId, threadId] = entry.split("\t");
+    byAccount.set(accountId, [...(byAccount.get(accountId) ?? []), threadId]);
+  }
+  const predicates: MailPredicate[] = [...byAccount].map(
+    ([accountId, ids]) => ({ kind: "conversation", ids, accountId }),
+  );
+  if (predicates.length === 1) return predicates[0];
+  // A batch is ten cards, so never past the engine's 32 children.
+  return predicates.length
+    ? { kind: "any", predicates }
+    : { kind: "conversation", ids: [] };
 }

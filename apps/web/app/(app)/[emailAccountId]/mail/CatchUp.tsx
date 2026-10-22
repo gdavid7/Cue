@@ -24,17 +24,20 @@ import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider"
 import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
 import { useCatchUpMailbox } from "@/app/(app)/[emailAccountId]/mail/use-catch-up-mailbox";
 import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
+import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import {
   actOnCatchUp,
   CATCH_UP_BATCH_SIZE,
   type CatchUpAction,
   type CatchUpItem,
   type CatchUpLive,
+  type CatchUpScope,
   type CatchUpState,
   catchUpLeft,
   currentCatchUpItem,
   reconcileCatchUp,
   revertCatchUp,
+  setAsideCatchUpAccounts,
   startCatchUp,
   toCatchUpItem,
   toCatchUpItems,
@@ -88,11 +91,27 @@ type CatchUpActions = Pick<
   | "undo"
 >;
 
+/**
+ * All inboxes: the included accounts, walked in one order, and the list's
+ * own predicate for the tab shown, as its label tabs match each account's
+ * labels by name.
+ */
+export type CatchUpAllInboxes = {
+  accounts: Array<{ id: string; email: string }>;
+  predicate: MailPredicate;
+  /** Included accounts whose first sync in this browser is still running. */
+  waitingAccountIds: string[];
+  /** Included accounts the mail engine can't reach. */
+  failedAccountIds: string[];
+};
+
 type CatchUpProps = {
   actions: CatchUpActions;
+  /** The routed account: the one walked, or All inboxes' preferred copy. */
   emailAccountId: string;
   /** The inbox tab being shown; the batch is its unread mail. */
   query: ThreadsQuery;
+  allInboxes?: CatchUpAllInboxes;
   /** Starts the existing reply flow for the conversation, after the overlay closes. */
   onReply: (item: CatchUpItem) => void;
   /** Conversations whose archive or snooze was queued, for a view that hides rows itself. */
@@ -114,7 +133,6 @@ export function CatchUpEntry({
   className,
   ...props
 }: CatchUpProps & { className?: string }) {
-  const { emailAccountId, query } = props;
   const { data: user } = useUser();
   const windowOpen = Boolean(user && isGetStartedWindowOpen(user, new Date()));
   const [open, setOpen] = useState(false);
@@ -132,21 +150,20 @@ export function CatchUpEntry({
     [subscribeRestored],
   );
   const client = useOptionalMailClient();
-  const tab = useTabPredicate(query, windowOpen);
+  const scope = useCatchUpScope(props, windowOpen);
   const counterQuery = useMemo(
-    () => unreadQuery(emailAccountId, tab.predicate, 1),
-    [emailAccountId, tab.predicate],
+    () => unreadQuery(scope.accountIds, scope.predicate, 1),
+    [scope.accountIds, scope.predicate],
   );
+  const counted =
+    windowOpen && scope.ready && Boolean(client) && scope.accountIds.length > 0;
   const counter = useMailboxWindow(counterQuery, {
     client,
-    enabled: windowOpen && tab.ready && Boolean(client),
+    enabled: counted,
   });
-  const view =
-    windowOpen && tab.ready && client && counter.status === "ready"
-      ? counter.data
-      : null;
+  const view = counted && counter.status === "ready" ? counter.data : null;
   const unread =
-    view && !getFirstSyncAccountIds([emailAccountId], view.coverage).length
+    view && !getFirstSyncAccountIds(scope.accountIds, view.coverage).length
       ? view.counts.matchingConversations
       : 0;
 
@@ -214,43 +231,51 @@ function CatchUpDialog({
 }
 
 function CatchUpBody({
-  actions,
-  emailAccountId,
-  query,
   actedKeys,
-  onReply,
-  onRemoved,
   onClose,
   onCloseAutoFocus,
+  ...props
 }: CatchUpProps & {
   actedKeys: Set<string>;
   onClose: () => void;
   onCloseAutoFocus: (event: Event) => void;
 }) {
+  const { actions, allInboxes, onReply, onRemoved } = props;
   const contentRef = useRef<HTMLDivElement>(null);
   const snoozeTriggerRef = useRef<HTMLButtonElement>(null);
   // Whether the open snooze picker came from H, for the checklist's count.
   const snoozeFromKey = useRef(false);
   const undoing = useRef(false);
-  const { userEmail } = useAccount();
   const client = useOptionalMailClient();
   const [batch, setBatch] = useState<CatchUpState | null>(null);
   const [lastAction, setLastAction] = useState<LastAction | null>(null);
-  const tab = useTabPredicate(query, true);
+  const scope = useCatchUpScope(props, true);
 
   const { batch: read, watch } = useCatchUpMailbox({
     client,
-    emailAccountId,
-    tabPredicate: tab.predicate,
-    tabReady: tab.ready,
+    // A batch, once fixed, stays with the accounts it was read from.
+    accountIds: batch ? batchAccountIds(batch) : scope.accountIds,
+    tabPredicate: scope.predicate,
+    tabReady: scope.ready,
     batchRead: Math.min(MAX_BATCH_READ, CATCH_UP_BATCH_SIZE + actedKeys.size),
-    threadIds: batch ? batch.items.map((item) => item.threadId) : null,
+    watched: batch
+      ? batch.items.map(({ accountId, threadId }) => ({ accountId, threadId }))
+      : null,
   });
   // The batch is fixed from the first full answer for the tab.
   if (!batch && read.status === "ready") {
     setBatch(
-      startCatchUp(toCatchUpItems(read.conversations, userEmail), actedKeys),
+      startCatchUp(toCatchUpItems(read.conversations, scope.items), actedKeys),
     );
+  }
+  // An account the engine stops reaching mid-batch has its cards set aside,
+  // so the other accounts' cards carry on.
+  if (batch && allInboxes) {
+    const setAside = setAsideCatchUpAccounts(
+      batch,
+      allInboxes.failedAccountIds,
+    );
+    if (setAside !== batch) setBatch(setAside);
   }
 
   // Watches the batch's conversations, so a card read or gone elsewhere is
@@ -259,11 +284,11 @@ function CatchUpBody({
     if (!watch) return null;
     const items = new Map<string, CatchUpItem>();
     for (const conversation of watch.conversations) {
-      const item = toCatchUpItem(conversation, userEmail);
+      const item = toCatchUpItem(conversation, scope.items);
       if (item) items.set(item.key, item);
     }
     return { items, complete: watch.complete };
-  }, [watch, userEmail]);
+  }, [watch, scope.items]);
   if (batch) {
     const reconciled = reconcileCatchUp(batch, live);
     if (reconciled !== batch) setBatch(reconciled);
@@ -314,8 +339,15 @@ function CatchUpBody({
     setBatch(actOnCatchUp(fresh, key, action));
     setLastAction({ key, action, subject: item.subject });
 
+    // In All inboxes the target names its account, so the command goes to
+    // that account's mail, and its copies in other accounts go with it.
     actions.addTargets([
-      { id: item.threadId, messageIds: [item.latestMessageId] },
+      {
+        id: item.threadId,
+        account: allInboxes ? { id: item.accountId } : undefined,
+        messageIds: [item.latestMessageId],
+        copies: item.copies,
+      },
     ]);
     let done: string[] = [];
     try {
@@ -337,9 +369,16 @@ function CatchUpBody({
       return;
     }
     // The engine refused it (its toast says why), or it threw: the card
-    // comes back.
+    // comes back. In All inboxes its account's cards are set aside instead,
+    // so the other accounts' cards carry on.
     actedKeys.delete(key);
-    setBatch((state) => state && revertCatchUp(state, key));
+    setBatch((state) => {
+      if (!state) return state;
+      const reverted = revertCatchUp(state, key);
+      return allInboxes
+        ? setAsideCatchUpAccounts(reverted, [item.accountId])
+        : reverted;
+    });
     setLastAction((last) => (last?.key === key ? null : last));
   };
 
@@ -425,12 +464,21 @@ function CatchUpBody({
           : ""}
       </p>
 
+      {allInboxes ? (
+        <AccountNotes
+          accounts={allInboxes.accounts}
+          failedAccountIds={allInboxes.failedAccountIds}
+          setAsideAccountIds={batch ? Object.keys(batch.setAside) : []}
+          waitingAccountIds={allInboxes.waitingAccountIds}
+        />
+      ) : null}
+
       {!batch ? (
         <p
           className="py-10 text-center text-muted-foreground text-sm"
           role="status"
         >
-          {read.status === "unavailable"
+          {read.status === "unavailable" || scope.unreachable
             ? "Catch up can't read your mail right now. Try again in a moment."
             : "Finding your oldest unread mail…"}
         </p>
@@ -462,6 +510,12 @@ function CatchUpBody({
             <p className="mt-2 line-clamp-3 text-muted-foreground text-sm leading-relaxed">
               {current.preview}
             </p>
+            {allInboxes ? (
+              <CardAccount
+                accountId={current.accountId}
+                accounts={allInboxes.accounts}
+              />
+            ) : null}
           </article>
 
           <div className="grid grid-cols-2 gap-2">
@@ -506,13 +560,7 @@ function CatchUpBody({
         </>
       ) : (
         <div className="flex flex-col items-center gap-4 py-8 text-center">
-          <p className="text-sm">
-            {batch.history.length === 0
-              ? "Nothing unread here."
-              : batch.history.length === 1
-                ? "You cleared 1 conversation."
-                : `You cleared ${batch.history.length} conversations.`}
-          </p>
+          <p className="text-sm">{doneLine(batch)}</p>
           <Button autoFocus onClick={onClose} variant="outline">
             Done
           </Button>
@@ -545,6 +593,85 @@ function CatchUpBody({
         ) : null}
       </div>
     </DialogContent>
+  );
+}
+
+/** Which inbox the card is in, as All inboxes' rows mark it. */
+function CardAccount({
+  accountId,
+  accounts,
+}: {
+  accountId: string;
+  accounts: CatchUpAllInboxes["accounts"];
+}) {
+  const index = accounts.findIndex((account) => account.id === accountId);
+  const email = accounts[index]?.email;
+  if (!email) return null;
+  return (
+    <p
+      className="mt-3 flex min-w-0 items-center gap-1.5 text-muted-foreground text-xs"
+      data-catch-up-account={accountId}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 shrink-0 rounded-full",
+          getAccountColorClassName(index),
+        )}
+      />
+      <span className="truncate">{email}</span>
+    </p>
+  );
+}
+
+/**
+ * Names the included inboxes Catch up is leaving out and why, so a missing
+ * account reads as a state rather than as mail that isn't there.
+ */
+function AccountNotes({
+  accounts,
+  waitingAccountIds,
+  failedAccountIds,
+  setAsideAccountIds,
+}: {
+  accounts: CatchUpAllInboxes["accounts"];
+  waitingAccountIds: string[];
+  failedAccountIds: string[];
+  setAsideAccountIds: string[];
+}) {
+  const emailsOf = (ids: string[]) =>
+    accounts.filter((account) => ids.includes(account.id)).map((a) => a.email);
+  const failed = emailsOf(failedAccountIds);
+  const waiting = emailsOf(
+    waitingAccountIds.filter((id) => !failedAccountIds.includes(id)),
+  );
+  const refused = emailsOf(
+    setAsideAccountIds.filter((id) => !failedAccountIds.includes(id)),
+  );
+  if (!failed.length && !waiting.length && !refused.length) return null;
+
+  return (
+    <div className="flex flex-col gap-1.5 text-xs" role="status">
+      {failed.length ? (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          {failed.join(", ")} couldn&apos;t be loaded, so{" "}
+          {failed.length === 1 ? "its" : "their"} mail isn&apos;t in Catch up.
+        </p>
+      ) : null}
+      {refused.length ? (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          Couldn&apos;t update {refused.join(", ")}, so{" "}
+          {refused.length === 1 ? "its" : "their"} conversations are set aside
+          for now.
+        </p>
+      ) : null}
+      {waiting.length ? (
+        <p className="px-1 text-muted-foreground">
+          Mail from {waiting.join(", ")} is still loading, so it isn&apos;t in
+          Catch up yet.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -601,26 +728,84 @@ const TRACKED_ACTIONS: Record<CatchUpAction, string> = {
 };
 
 /**
- * The tab's predicate, once Cue's sorting is known if the tab uses it. Until
- * then the predicate matches nothing and `ready` is false.
+ * What Catch up reads: the routed account's tab, or in All inboxes each
+ * included account the engine has synced and can reach, by the list's own
+ * predicate. Until a tab's Cue sorting is known its predicate matches
+ * nothing and `ready` is false.
  */
-function useTabPredicate(query: ThreadsQuery, enabled: boolean) {
-  const usesCue = threadsQueryUsesCue(query);
+function useCatchUpScope(
+  { emailAccountId, query, allInboxes }: CatchUpProps,
+  enabled: boolean,
+) {
+  const { userEmail } = useAccount();
+  const usesCue = !allInboxes && threadsQueryUsesCue(query);
   const { membership } = useCueMembership(enabled && usesCue);
-  const predicate = useMemo(
+  const tabPredicate = useMemo(
     () => threadsQueryToPredicate(query, membership),
     [query, membership],
   );
-  return { predicate, ready: !usesCue || Boolean(membership) };
+  const accountKey = allInboxes
+    ? allInboxes.accounts
+        .filter(
+          (account) =>
+            !allInboxes.waitingAccountIds.includes(account.id) &&
+            !allInboxes.failedAccountIds.includes(account.id),
+        )
+        .map((account) => account.id)
+        .join("\n")
+    : emailAccountId;
+  const accountIds = useMemo(
+    () => (accountKey ? accountKey.split("\n") : []),
+    [accountKey],
+  );
+  const accounts = allInboxes?.accounts;
+  const items = useMemo<CatchUpScope>(
+    () => ({
+      ownEmail: (accountId) =>
+        accounts?.find((account) => account.id === accountId)?.email ??
+        userEmail,
+      combined: accounts ? { routedAccountId: emailAccountId } : null,
+    }),
+    [accounts, emailAccountId, userEmail],
+  );
+  return {
+    accountIds,
+    predicate: allInboxes?.predicate ?? tabPredicate,
+    ready: !usesCue || Boolean(membership),
+    items,
+    /** Every included account failed, rather than any still loading. */
+    unreachable: Boolean(
+      allInboxes &&
+        !accountIds.length &&
+        allInboxes.accounts.every((account) =>
+          allInboxes.failedAccountIds.includes(account.id),
+        ),
+    ),
+  };
+}
+
+function doneLine(batch: CatchUpState) {
+  const cleared = batch.history.length;
+  if (cleared === 1) return "You cleared 1 conversation.";
+  if (cleared > 1) return `You cleared ${cleared} conversations.`;
+  // Cards set aside are unread mail still waiting, just not now.
+  return Object.keys(batch.setAside).length
+    ? "Nothing left to clear for now."
+    : "Nothing unread here.";
+}
+
+/** The accounts a fixed batch was read from. */
+function batchAccountIds(batch: CatchUpState) {
+  return [...new Set(batch.items.map((item) => item.accountId))];
 }
 
 function unreadQuery(
-  emailAccountId: string,
+  accountIds: string[],
   tabPredicate: MailPredicate,
   pageSize: number,
 ): ConversationQuery {
   return {
-    accountIds: [emailAccountId],
+    accountIds,
     predicate: {
       kind: "all",
       predicates: [tabPredicate, { kind: "read", value: false }],

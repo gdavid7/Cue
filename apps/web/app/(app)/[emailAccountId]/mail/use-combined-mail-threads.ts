@@ -113,6 +113,12 @@ export function useCombinedMailThreads({
     if (isUnread) return { type: "unread" };
     return { type: "inbox" };
   }, [isUnread, labelNames, mailboxType, searchQuery]);
+  // Outside a search, the predicate the list reads with, for parts of the
+  // view that read the same mail, such as Catch up.
+  const viewPredicate = useMemo(
+    () => predicate ?? threadsQueryToPredicate(query),
+    [predicate, query],
+  );
   const state = useEngineMailThreads({
     emailAccountId,
     accountIds: accountIds.length ? accountIds : [emailAccountId],
@@ -153,6 +159,7 @@ export function useCombinedMailThreads({
     /** Included accounts whose first sync in this browser is still running. */
     firstSyncAccounts,
     labelsByAccount,
+    viewPredicate,
   };
 }
 

@@ -41,13 +41,85 @@ describe("useCatchUpMailbox", () => {
   it("watches the batch on an engine that refuses conversation queries", async () => {
     const engine = fakeEngine(unreadMail(5), { legacy: true });
     const { result } = renderHook(() =>
-      useCatchUpMailbox(props(engine.client, ["c0", "c1"])),
+      useCatchUpMailbox(props(engine.client, watching("a", ["c0", "c1"]))),
     );
     await waitFor(() => expect(result.current.watch).not.toBeNull());
     expect(result.current.watch?.complete).toBe(true);
     expect(
       result.current.watch?.conversations.map((row) => row.key.conversationId),
     ).toContain("c0");
+  });
+
+  it("reads every included account's oldest unread in one order", async () => {
+    const engine = fakeEngine(
+      [
+        ...unreadMail(3, "work", [10, 40, 50]),
+        ...unreadMail(3, "home", [20, 30, 60]),
+      ],
+      { legacy: false },
+    );
+    const { result } = renderHook(() =>
+      useCatchUpMailbox({
+        ...props(engine.client, null),
+        accountIds: ["work", "home"],
+        batchRead: 4,
+      }),
+    );
+    await waitFor(() => expect(result.current.batch.status).toBe("ready"));
+    expect(keys(result.current.batch)).toEqual([
+      "work:c0",
+      "home:c0",
+      "home:c1",
+      "work:c1",
+    ]);
+  });
+
+  it("watches each card's conversation within its own account", async () => {
+    // Both accounts have a c0; only work's is in the batch.
+    const engine = fakeEngine(
+      [...unreadMail(2, "work", [1, 2]), ...unreadMail(2, "home", [3, 4])],
+      { legacy: false },
+    );
+    const { result } = renderHook(() =>
+      useCatchUpMailbox({
+        ...props(engine.client, [
+          { accountId: "work", threadId: "c0" },
+          { accountId: "home", threadId: "c1" },
+        ]),
+        accountIds: ["work", "home"],
+      }),
+    );
+    await waitFor(() => expect(result.current.watch).not.toBeNull());
+    expect(
+      result.current.watch?.conversations.map(
+        (row) => `${row.key.accountId}:${row.key.conversationId}`,
+      ),
+    ).toEqual(["work:c0", "home:c1"]);
+    expect(result.current.watch?.complete).toBe(true);
+  });
+
+  it("waits for an included account's first sync before fixing a batch", async () => {
+    const engine = fakeEngine(
+      [...unreadMail(2, "work", [1, 2]), ...unreadMail(2, "home", [3, 4])],
+      { legacy: false, unsynced: ["home"] },
+    );
+    const { result } = renderHook(() =>
+      useCatchUpMailbox({
+        ...props(engine.client, null),
+        accountIds: ["work", "home"],
+      }),
+    );
+    await waitFor(() => expect(engine.reads()).toBeGreaterThan(0));
+    expect(result.current.batch.status).toBe("loading");
+  });
+
+  it("reads nothing without an account to read", () => {
+    const engine = fakeEngine(unreadMail(2), { legacy: false });
+    const { result } = renderHook(() =>
+      useCatchUpMailbox({ ...props(engine.client, null), accountIds: [] }),
+    );
+    expect(result.current.batch.status).toBe("loading");
+    expect(engine.reads()).toBe(0);
   });
 
   it("says the batch is unavailable, rather than loading for ever, when nothing answers", async () => {
@@ -61,15 +133,30 @@ describe("useCatchUpMailbox", () => {
   });
 });
 
-function props(client: MailClient, threadIds: string[] | null) {
+function props(
+  client: MailClient,
+  watched: Array<{ accountId: string; threadId: string }> | null,
+) {
   return {
     client,
-    emailAccountId: "a",
+    accountIds: ["a"],
     tabPredicate: INBOX,
     tabReady: true,
     batchRead: 3,
-    threadIds,
+    watched,
   };
+}
+
+function watching(accountId: string, threadIds: string[]) {
+  return threadIds.map((threadId) => ({ accountId, threadId }));
+}
+
+function keys(read: ReturnType<typeof useCatchUpMailbox>["batch"]) {
+  return read.status === "ready"
+    ? read.conversations.map(
+        (row) => `${row.key.accountId}:${row.key.conversationId}`,
+      )
+    : [];
 }
 
 function ids(read: ReturnType<typeof useCatchUpMailbox>["batch"]) {
@@ -78,15 +165,19 @@ function ids(read: ReturnType<typeof useCatchUpMailbox>["batch"]) {
     : [];
 }
 
-function unreadMail(count: number): ConversationSummary[] {
+function unreadMail(
+  count: number,
+  accountId = "a",
+  times?: number[],
+): ConversationSummary[] {
   return Array.from({ length: count }, (_, index) => ({
-    key: { accountId: "a", conversationId: `c${index}` },
+    key: { accountId, conversationId: `c${index}` },
     subject: `Subject ${index}`,
     preview: "",
     from: "dana@example.com",
     to: "me@example.com",
     senders: ["dana@example.com"],
-    latestMessageAtMs: index,
+    latestMessageAtMs: times?.[index] ?? index,
     unread: true,
     starred: false,
     labelIds: [],
@@ -97,17 +188,35 @@ function unreadMail(count: number): ConversationSummary[] {
 }
 
 /**
- * A mail engine over fixed mail. `legacy` refuses the query shapes a desktop
- * build from before Catch up doesn't know, as its IPC validation does;
- * `broken` refuses everything.
+ * A mail engine over fixed mail, read from the queried accounts in time
+ * order. `legacy` refuses the query shapes a desktop build from before Catch
+ * up doesn't know, as its IPC validation does; `broken` refuses everything;
+ * `unsynced` accounts have no finished sync.
  */
 function fakeEngine(
-  mail: ConversationSummary[],
-  { legacy, broken = false }: { legacy: boolean; broken?: boolean },
+  allMail: ConversationSummary[],
+  {
+    legacy,
+    broken = false,
+    unsynced = [],
+  }: { legacy: boolean; broken?: boolean; unsynced?: string[] },
 ) {
   const seen: ConversationQuery[] = [];
   const observeMailboxWindow = (query: ConversationQuery) => {
     seen.push(query);
+    const watched = conversationPredicates(query.predicate);
+    const mail = allMail
+      .filter(
+        (row) =>
+          query.accountIds.includes(row.key.accountId) &&
+          (!watched ||
+            watched.some(
+              (predicate) =>
+                predicate.accountId === row.key.accountId &&
+                predicate.ids.includes(row.key.conversationId),
+            )),
+      )
+      .sort((a, b) => a.latestMessageAtMs - b.latestMessageAtMs);
     let pages = 1;
     const refused =
       broken ||
@@ -139,16 +248,14 @@ function fakeEngine(
             extent: "complete_scope",
           },
           nextPage: ordered.length > limit ? String(limit) : null,
-          coverage: [
-            {
-              accountId: "a",
-              scopeId: "account",
-              metadata: "complete",
-              content: "not_requested",
-              indexedContent: "not_requested",
-              lastCompletedSyncAtMs: 1,
-            },
-          ],
+          coverage: query.accountIds.map((accountId) => ({
+            accountId,
+            scopeId: "account",
+            metadata: "complete",
+            content: "not_requested",
+            indexedContent: "not_requested",
+            lastCompletedSyncAtMs: unsynced.includes(accountId) ? null : 1,
+          })),
           connection: "ready",
         },
       };
@@ -175,5 +282,18 @@ function fakeEngine(
       observeMailbox: observeMailboxWindow,
     } as unknown as MailClient,
     orders: () => [...new Set(seen.map((query) => query.order))],
+    reads: () => seen.length,
   };
+}
+
+/** The conversation predicates a query names, or null for none. */
+function conversationPredicates(
+  predicate: MailPredicate,
+): Array<{ ids: string[]; accountId?: string }> | null {
+  if (predicate.kind === "conversation") return [predicate];
+  if (predicate.kind !== "all" && predicate.kind !== "any") return null;
+  const found = predicate.predicates.flatMap(
+    (child) => conversationPredicates(child) ?? [],
+  );
+  return found.length ? found : null;
 }
