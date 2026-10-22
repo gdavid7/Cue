@@ -349,7 +349,8 @@ export interface MailStore {
     bootstrapId: string;
     page: string;
     nextAttemptAtMs: number;
-    errorCode: string;
+    /** Null when the scan is only paced, not failing. */
+    errorCode: string | null;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;

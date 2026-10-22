@@ -12,7 +12,7 @@ export async function passThroughLocalMailSyncBudget(
   return {
     ...(await importActual()),
     withLocalMailSyncBudget: (_input, operation) =>
-      operation(new AbortController().signal),
+      operation(new AbortController().signal, { nextAdmitAfterMs: null }),
     debitLocalMailSyncBudget: async () => undefined,
   };
 }

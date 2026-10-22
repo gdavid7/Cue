@@ -71,6 +71,10 @@ export const POST = withEmailProvider(
           result.value.nextPage === null
             ? result.value.windowStartMs
             : undefined,
+        retryAfterMs:
+          result.value.nextPage === null
+            ? undefined
+            : result.value.retryAfterMs,
       }),
     );
   },

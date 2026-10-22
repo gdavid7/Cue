@@ -1,8 +1,9 @@
 import { messageMatchesPredicate } from "@inboxzero/mail-core/query-semantics";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
-import type {
-  MailboxSource,
-  ScopeDescriptor,
+import {
+  MAX_ENUMERATION_RETRY_AFTER_MS,
+  type MailboxSource,
+  type ScopeDescriptor,
 } from "@inboxzero/mail-core/ports/mailbox-source";
 import type { BodyObservation, SyncPosition } from "@inboxzero/mail-core/sync";
 import type { MessageKey } from "@inboxzero/mail-core/identities";
@@ -260,6 +261,13 @@ export function createEmailProviderMailboxSource(input: {
               before: new Date(token.receivedBeforeMs),
             }),
           });
+        // Pages after the first are all one size, so the next one costs this.
+        const nextPageSize = Math.min(
+          pageSize,
+          maxPageSize,
+          isGmail ? gmailScanPageSize(priority) : maxPageSize,
+        );
+        let nextPageAtMs: number | null = null;
         const syncPage = isGmail
           ? await runWithGmailQuota({ priority }, () =>
               withGmailSyncBudget(
@@ -267,8 +275,13 @@ export function createEmailProviderMailboxSource(input: {
                   emailAccountId: accountId,
                   priority: isBackfill ? "backfill" : "current",
                   cost: gmailPageCost(maxResults),
+                  nextCost: gmailPageCost(nextPageSize),
                 },
-                listPage,
+                ({ nextAdmitAfterMs }) => {
+                  if (nextAdmitAfterMs !== null)
+                    nextPageAtMs = Date.now() + nextAdmitAfterMs;
+                  return listPage();
+                },
               ),
             )
           : await listPage();
@@ -301,6 +314,7 @@ export function createEmailProviderMailboxSource(input: {
                 windowStartMs: token.windowStartMs,
               }),
               catchUpFrom: null,
+              ...waitForNextPage(nextPageAtMs),
             },
           };
         }
@@ -994,10 +1008,12 @@ function withGmailSyncBudget<T>(
     emailAccountId: string;
     priority: "backfill" | "current";
     cost: number;
+    nextCost?: number;
   },
-  operation: () => Promise<T>,
+  operation: (admission: { nextAdmitAfterMs: number | null }) => Promise<T>,
 ) {
-  if (!isEmailProviderRateLimitRedisConfigured()) return operation();
+  if (!isEmailProviderRateLimitRedisConfigured())
+    return operation({ nextAdmitAfterMs: null });
   // A page reaches Gmail one admission at a time (the list, each batch and
   // their retries). When the gate turns one away, what it had already let
   // through stays spent and the rest of the reservation is returned.
@@ -1014,9 +1030,20 @@ function withGmailSyncBudget<T>(
               ? Math.max(0, input.cost - page.admittedCost)
               : 0,
         },
-        operation,
+        (_signal, admission) => operation(admission),
       ),
   );
+}
+
+// The page's own provider time already counts against the budget's wait.
+// A wait past the protocol's bound is cut to it; the 503 covers the rest.
+function waitForNextPage(nextPageAtMs: number | null) {
+  if (nextPageAtMs === null) return {};
+  const retryAfterMs = Math.min(
+    MAX_ENUMERATION_RETRY_AFTER_MS,
+    Math.ceil(nextPageAtMs - Date.now()),
+  );
+  return retryAfterMs > 0 ? { retryAfterMs } : {};
 }
 
 async function batchedMessages(provider: EmailProvider, keys: MessageKey[]) {

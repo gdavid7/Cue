@@ -49,8 +49,13 @@ vi.mock("@/utils/redis", () => ({
 vi.mock("@/utils/email/local-mail-sync-budget", async (original) => ({
   ...(await original<typeof import("@/utils/email/local-mail-sync-budget")>()),
   withLocalMailSyncBudget: vi.fn(
-    (_input: unknown, operation: (signal: AbortSignal) => Promise<unknown>) =>
-      operation(new AbortController().signal),
+    (
+      _input: unknown,
+      operation: (
+        signal: AbortSignal,
+        admission: { nextAdmitAfterMs: number | null },
+      ) => Promise<unknown>,
+    ) => operation(new AbortController().signal, { nextAdmitAfterMs: null }),
   ),
 }));
 
@@ -1562,6 +1567,102 @@ describe("createEmailProviderMailboxSource", () => {
       reason: "throttled",
     });
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
+  });
+
+  it("tells the client how long the sync budget holds its next backfill page", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockImplementationOnce(
+      (_input, operation) =>
+        operation(new AbortController().signal, { nextAdmitAfterMs: 6000 }),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    if (result.status !== "ok" || result.value.nextPage === null)
+      throw new Error("expected a next page");
+    // The page's own time counts against the wait.
+    expect(result.value.retryAfterMs).toBeGreaterThan(5000);
+    expect(result.value.retryAfterMs).toBeLessThanOrEqual(6000);
+    const [reservation] =
+      vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
+    // The next page is priced like this one: nine messages and the list.
+    expect(reservation?.nextCost).toBe(545);
+  });
+
+  it("caps the wait it gives at a minute", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockImplementationOnce(
+      (_input, operation) =>
+        operation(new AbortController().signal, {
+          nextAdmitAfterMs: 10 * 60_000,
+        }),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      value: { retryAfterMs: 60_000 },
+    });
+  });
+
+  it("gives no wait when the sync budget already covers the next page", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.status === "ok" && "retryAfterMs" in result.value).toBe(
+      false,
+    );
   });
 
   it("puts the sync budget's pause reason on the request's metrics", async () => {

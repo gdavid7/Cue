@@ -492,6 +492,149 @@ describe("engine bootstrap coverage", () => {
     await engine.close();
   });
 
+  it("waits out the budget's hint before asking for the next page", async () => {
+    let now = 1000;
+    const pages: string[] = [];
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: (page) => pages.push(page),
+        pages: ["page-1", "page-2"],
+        nextPageRetryAfterMs: 6500,
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(5000);
+    await engine.runUntil(5000);
+
+    // The page landed and the next one waits, without a refused request.
+    expect(pages).toEqual(["page-1"]);
+    expect(
+      await store.readBootstrapScan({
+        session: { accountId: "acc-1", generation: "g1" },
+        scopeId: "primary",
+      }),
+    ).toMatchObject({ page: "page-2", nextAttemptAtMs: 7500, errorCode: null });
+    expect((await engine.getDiagnostics("acc-1")).connection).toBe("ready");
+
+    now = 7500;
+    await engine.runUntil(10_000);
+    expect(pages).toEqual(["page-1", "page-2"]);
+    expect((await engine.getDiagnostics("acc-1")).coverage).toEqual([
+      expect.objectContaining({ scopeId: "primary", metadata: "complete" }),
+    ]);
+    await engine.close();
+  });
+
+  it("waits at most a minute however long a hint asks", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        pages: ["page-1", "page-2"],
+        nextPageRetryAfterMs: 30 * 24 * 60 * 60 * 1000,
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => 1000 }),
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(5000);
+
+    expect(
+      await store.readBootstrapScan({
+        session: { accountId: "acc-1", generation: "g1" },
+        scopeId: "primary",
+      }),
+    ).toMatchObject({ page: "page-2", nextAttemptAtMs: 61_000 });
+    await engine.close();
+  });
+
+  it("asks for the next page at once when a page carries no hint", async () => {
+    const pages: string[] = [];
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: (page) => pages.push(page),
+        pages: ["page-1", "page-2"],
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => 1000 }),
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(5000);
+
+    expect(pages).toEqual(["page-1", "page-2"]);
+    await engine.close();
+  });
+
+  it("runs a user's action at once while the scan waits out a hint", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const execute = vi.fn(async () => ({
+      status: "confirmed" as const,
+      receiptId: null,
+      observations: [],
+      targets: [],
+    }));
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        pages: ["page-1", "page-2"],
+        nextPageRetryAfterMs: 60_000,
+      }),
+      executor: { ...uncertainExecutor(), execute },
+      runtime: createHostRuntime({ nowMs: () => 1000 }),
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(5000);
+    expect(
+      await store.readBootstrapScan({
+        session: { accountId: "acc-1", generation: "g1" },
+        scopeId: "primary",
+      }),
+    ).toMatchObject({ nextAttemptAtMs: 61_000 });
+
+    await engine.submitMetadata({
+      accountId: "acc-1",
+      commandId: "archive-1",
+      targets: [{ accountId: "acc-1", messageId: "m1" }],
+      change: { kind: "archive" },
+    });
+    await engine.runUntil(5000);
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    await engine.close();
+  });
+
   it("keeps the account ready while a throttled enumeration waits", async () => {
     const now = 1000;
     const store = await createSqliteMailStore(createNodeSqliteDriver());
@@ -732,6 +875,7 @@ function slowBootstrapSource(hooks: {
   onBeginScope?: (scope: ScopeDescriptor) => void;
   repeatNextPage?: boolean;
   pauseFirstEnumerationMs?: number;
+  nextPageRetryAfterMs?: number;
   windowStartMs?: number;
   catchUpRounds?: boolean;
 }): MailboxSource {
@@ -822,7 +966,14 @@ function slowBootstrapSource(hooks: {
       return {
         status: "ok",
         value: nextPage
-          ? { ...base, nextPage, catchUpFrom: null }
+          ? {
+              ...base,
+              nextPage,
+              catchUpFrom: null,
+              ...(hooks.nextPageRetryAfterMs !== undefined && {
+                retryAfterMs: hooks.nextPageRetryAfterMs,
+              }),
+            }
           : {
               ...base,
               nextPage: null,
