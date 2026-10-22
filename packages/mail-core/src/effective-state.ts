@@ -1,4 +1,5 @@
 import type { MetadataChange } from "./commands";
+import { PROVIDER_CAPABILITIES, type Provider } from "./identities";
 import type { MessageMetadata } from "./messages";
 import type { MailboxRole } from "./messages";
 
@@ -84,6 +85,27 @@ export function applyMetadataChange(
   }
 }
 
+/**
+ * The messages of one conversation that a conversation command changes. On a
+ * folder-based provider, a change that moves mail between folders leaves the
+ * user's own Sent and Drafts copies where they are, as the provider's own
+ * conversation actions do, unless they are all the conversation has.
+ */
+export function conversationTargets<T extends { roles: MailboxRole[] }>(
+  messages: T[],
+  change: MetadataChange,
+  provider: Provider,
+): T[] {
+  if (
+    !PROVIDER_CAPABILITIES[provider].folderBasedRoles ||
+    !movesBetweenFolders(change)
+  ) {
+    return messages;
+  }
+  const others = messages.filter((message) => !isOwnMail(message.roles));
+  return others.length > 0 ? others : messages;
+}
+
 export function deriveEffectiveMessage(
   confirmed: ConfirmedMessage,
   pending: PendingEffect[],
@@ -165,4 +187,29 @@ function uniqueRoles(roles: MailboxRole[]): MailboxRole[] {
 function setMembership(ids: string[], id: string, present: boolean): string[] {
   if (present) return [...new Set([...ids, id])];
   return ids.filter((candidate) => candidate !== id);
+}
+
+function movesBetweenFolders(change: MetadataChange): boolean {
+  switch (change.kind) {
+    case "archive":
+    case "unarchive":
+    case "trash":
+    case "restore_from_trash":
+    case "set_spam":
+    case "move":
+    case "snooze":
+      return true;
+    case "set_read":
+    case "set_starred":
+    case "set_membership":
+      return false;
+    default: {
+      const exhaustive: never = change;
+      return exhaustive;
+    }
+  }
+}
+
+function isOwnMail(roles: MailboxRole[]) {
+  return roles.includes("sent") || roles.includes("draft");
 }

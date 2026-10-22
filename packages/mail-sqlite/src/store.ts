@@ -30,6 +30,7 @@ import {
 import {
   applyMetadataChange,
   applyMetadataPatch,
+  conversationTargets,
   deriveEffectiveMessage,
   type ConfirmedMessage,
 } from "@inboxzero/mail-core/effective-state";
@@ -37,6 +38,7 @@ import type {
   ConversationKey,
   LocalRevision,
   MessageKey,
+  Provider,
 } from "@inboxzero/mail-core/identities";
 import type { MessageMetadata } from "@inboxzero/mail-core/messages";
 import {
@@ -399,6 +401,14 @@ export async function createSqliteMailStore(
           }
           await applyChange(tx, change, read);
         }
+        newTargets.push(
+          ...(await narrowConversationTargets(tx, {
+            accountId: input.accountId,
+            commandId: input.commandId,
+            conversationId: input.page.conversation.conversationId,
+            change: operationChange(operation),
+          })),
+        );
         await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
@@ -881,7 +891,7 @@ export async function createSqliteMailStore(
         // after opening) covers the ones this page adds, so they don't show
         // it undone until its own preparation lands.
         const preparing = await tx.query(
-          `SELECT c.command_id FROM operation_conversations c
+          `SELECT c.command_id, o.payload_json FROM operation_conversations c
            JOIN operations o
              ON o.account_id = c.account_id AND o.command_id = c.command_id
            WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
@@ -914,6 +924,16 @@ export async function createSqliteMailStore(
             continue;
           }
           await applyChange(tx, change, read);
+        }
+        for (const row of preparing) {
+          newTargets.push(
+            ...(await narrowConversationTargets(tx, {
+              accountId,
+              commandId: String(row.command_id),
+              conversationId,
+              change: operationChange(row),
+            })),
+          );
         }
         await recomputeTargets(tx, newTargets);
         if (!input.page.nextPage) {
@@ -2357,6 +2377,7 @@ async function admitConversations(
     return { status: "rejected", code: "invalid" };
   }
   let complete = true;
+  const provider = await accountProvider(tx, input.accountId);
   const knownTargets: Array<MessageKey & { conversationId: string }> = [];
   for (const conversation of input.conversations) {
     if (conversation.accountId !== input.accountId) {
@@ -2368,11 +2389,18 @@ async function admitConversations(
     );
     if (!flag[0] || Number(flag[0].complete) !== 1) complete = false;
     const messages = await tx.query(
-      "SELECT message_id FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
+      "SELECT message_id, roles_json FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
       [conversation.accountId, conversation.conversationId],
     );
+    const targets = provider
+      ? conversationTargets(
+          messages.map((row) => ({ row, roles: parseRoles(row.roles_json) })),
+          input.change,
+          provider,
+        ).map(({ row }) => row)
+      : messages;
     knownTargets.push(
-      ...messages.map((row) => ({
+      ...targets.map((row) => ({
         accountId: conversation.accountId,
         messageId: String(row.message_id),
         conversationId: conversation.conversationId,
@@ -3114,6 +3142,73 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       messageId: message.messageId,
     });
   }
+}
+
+// Drops the command's targets in this conversation that its change leaves
+// alone, now that the messages a membership page found are stored with their
+// folders. Returns the dropped keys so their effective state is redone.
+async function narrowConversationTargets(
+  tx: SqlTransaction,
+  input: {
+    accountId: string;
+    commandId: string;
+    conversationId: string;
+    change: SubmitMetadataCommand["change"];
+  },
+): Promise<MessageKey[]> {
+  const provider = await accountProvider(tx, input.accountId);
+  if (!provider) return [];
+  const rows = await tx.query(
+    `SELECT t.message_id, m.roles_json
+     FROM operation_targets t
+     LEFT JOIN messages m
+       ON m.account_id = t.account_id AND m.message_id = t.message_id AND m.deleted = 0
+     WHERE t.account_id = ? AND t.command_id = ? AND t.conversation_id = ?`,
+    [input.accountId, input.commandId, input.conversationId],
+  );
+  const targeted = rows.map((row) => ({
+    messageId: String(row.message_id),
+    roles: row.roles_json == null ? [] : parseRoles(row.roles_json),
+  }));
+  const kept = new Set(
+    conversationTargets(targeted, input.change, provider).map(
+      (target) => target.messageId,
+    ),
+  );
+  const dropped: MessageKey[] = [];
+  for (const { messageId } of targeted) {
+    if (kept.has(messageId)) continue;
+    await tx.execute(
+      "DELETE FROM operation_targets WHERE account_id = ? AND command_id = ? AND message_id = ?",
+      [input.accountId, input.commandId, messageId],
+    );
+    dropped.push({ accountId: input.accountId, messageId });
+  }
+  return dropped;
+}
+
+async function accountProvider(
+  tx: SqlTransaction,
+  accountId: string,
+): Promise<Provider | null> {
+  const rows = await tx.query(
+    "SELECT provider FROM accounts WHERE account_id = ?",
+    [accountId],
+  );
+  const provider = rows[0]?.provider;
+  return provider === "google" || provider === "microsoft" ? provider : null;
+}
+
+function operationChange(row: { payload_json?: unknown }) {
+  return (
+    JSON.parse(String(row.payload_json)) as {
+      change: SubmitMetadataCommand["change"];
+    }
+  ).change;
+}
+
+function parseRoles(value: unknown) {
+  return JSON.parse(String(value)) as MessageMetadata["roles"];
 }
 
 // Queues a preparing command once every conversation's membership is known,
