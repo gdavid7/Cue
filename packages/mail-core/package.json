@@ -27,6 +27,7 @@
     "./sync": "./src/sync.ts",
     "./engine": "./src/engine.ts",
     "./canonical": "./src/canonical.ts",
+    "./capabilities": "./src/capabilities.ts",
     "./subscriptions": "./src/subscriptions.ts",
     "./ports/mailbox-source": "./src/ports/mailbox-source.ts",
     "./ports/operation-executor": "./src/ports/operation-executor.ts",

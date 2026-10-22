@@ -1,3 +1,4 @@
+import type { MailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import type { MailClient, WorkAdmission } from "@inboxzero/mail-core/engine";
 import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
 import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
@@ -84,6 +85,12 @@ export type WorkerPreopenRequest = {
   type: "preopen";
   maxPendingOperations?: number;
 };
+
+/**
+ * The worker's answer to `start`. Its engine reports its capabilities here so
+ * the page knows them before the first query.
+ */
+export type WorkerStarted = { capabilities: MailEngineCapabilities };
 
 export type WorkerRequest =
   | { id: string; type: "start"; input: BrowserEngineStart }
