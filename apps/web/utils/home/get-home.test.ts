@@ -595,6 +595,92 @@ describe("getHomeData", () => {
     expect(home.stats.readingCapped).toBe(true);
   });
 
+  it("bundles what Cue sorted as newsletters on an account without the Newsletter label", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const read = thread("read", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Read already",
+      labels: ["INBOX"],
+    });
+    const archived = thread("archived", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Archived",
+      labels: ["UNREAD"],
+    });
+    const dentist = thread("dentist", {
+      from: "Dentist <d@smile.com>",
+      subject: "Your appointment",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly, read, dentist], CUE: [archived] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly", "read", "archived"]);
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    // A read one is filed as the label's are: in neither lane.
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+    expect(home.newsletterThreadIds).toEqual(["weekly", "read", "archived"]);
+  });
+
+  it("shows a newsletter both the label and Cue's sorting name once", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const digest = thread("digest", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Daily",
+      labels: ["INBOX", "UNREAD"],
+    });
+    digest.messages[0].internalDate = String(NOW.getTime() + 60_000);
+    const provider = mockProvider({
+      INBOX: [weekly, digest],
+      Newsletter: [weekly],
+    });
+    sortedAsNewsletters(["weekly", "digest"]);
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["digest", "weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
+    // The label's listing already holds it, so it isn't read again.
+    expect(vi.mocked(provider.getThread)).not.toHaveBeenCalledWith(
+      "weekly",
+      expect.anything(),
+    );
+  });
+
+  it("reads only so many of Cue's newsletters, and still fills Reading's cap", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `n-${i}`);
+    const unread = ids.map((id) =>
+      thread(id, {
+        from: `Letter <${id}@news.example>`,
+        subject: id,
+        labels: ["INBOX", "UNREAD"],
+      }),
+    );
+    const provider = mockProvider(
+      { CUE: unread },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(ids);
+
+    const home = await run(provider);
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
+    expect(vi.mocked(provider.getThread)).toHaveBeenCalledTimes(10);
+  });
+
   it("names the labels Cue files under, so the browser's own inbox can leave filed mail out too", async () => {
     const home = await run(mockProvider({}));
 
@@ -1162,6 +1248,22 @@ const TOOL_RESULTS: Record<string, unknown> = {
   },
 };
 
+/** Cue's latest decisions, newest first, as its Newsletter rule's runs. */
+function sortedAsNewsletters(threadIds: string[]) {
+  prisma.executedRule.findMany.mockImplementation((async ({
+    where,
+  }: {
+    where?: { rule?: unknown };
+  }) =>
+    where?.rule
+      ? threadIds.map((threadId) => ({
+          threadId,
+          messageId: `${threadId}-m`,
+          rule: { systemType: "NEWSLETTER" },
+        }))
+      : []) as never);
+}
+
 function connection(app: string) {
   return {
     id: `connection-${app}`,
@@ -1269,8 +1371,11 @@ function thread(
  * Returns the threads for whichever label a query asks for. NEEDS_REPLY and
  * AWAITING are Cue's open reply trackers rather than labels.
  */
-function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
-  const nameById = new Map(LABELS.map((l) => [l.id, l.name]));
+function mockProvider(
+  threadsByLabel: Record<string, EmailThread[]>,
+  { labels = LABELS }: { labels?: typeof LABELS } = {},
+) {
+  const nameById = new Map(labels.map((l) => [l.id, l.name]));
   const threadsById = new Map(
     Object.values(threadsByLabel)
       .flat()
@@ -1290,7 +1395,7 @@ function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
       if (!found) throw new Error("Not found");
       return found;
     }),
-    getLabels: vi.fn(async () => LABELS),
+    getLabels: vi.fn(async () => labels),
     getThreadsWithQuery: vi.fn(
       async ({ query }: { query: { labelIds?: string[] } }) => {
         const labelId = query.labelIds?.find((id) => id !== "INBOX") ?? "INBOX";

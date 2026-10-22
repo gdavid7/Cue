@@ -38,8 +38,9 @@ export type TodayData = Omit<
   | "agentTasks"
   | "cue"
   | "today"
-  // Label ids are each mailbox's own, so they aren't merged.
+  // Label and thread ids are each mailbox's own, so they aren't merged.
   | "handledLabelIds"
+  | "newsletterThreadIds"
 > & {
   needsYou: TodayThread[];
   waiting: TodayThread[];

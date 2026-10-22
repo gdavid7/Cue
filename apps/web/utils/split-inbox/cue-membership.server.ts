@@ -33,54 +33,40 @@ export async function getCueMembership({
   emailAccountId: string;
   now?: Date;
 }): Promise<CueMembership> {
-  const [trackers, executions] = await Promise.all([
-    prisma.threadTracker.findMany({
-      where: {
-        emailAccountId,
-        type: ThreadTrackerType.NEEDS_REPLY,
-        resolved: false,
-      },
-      select: { threadId: true, messageId: true },
-      orderBy: { sentAt: "desc" },
-      take: MEMBERSHIP_LIMIT,
-    }),
-    prisma.executedRule.findMany({
-      where: {
-        emailAccountId,
-        status: ExecutedRuleStatus.APPLIED,
-        createdAt: {
-          gte: new Date(now.getTime() - READING_WINDOW_DAYS * 86_400_000),
-        },
-        rule: {
-          systemType: { in: [...READING_TYPES, ...CONVERSATION_STATUS_TYPES] },
-        },
-      },
-      select: {
-        threadId: true,
-        messageId: true,
-        rule: { select: { systemType: true } },
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: READING_SCAN_LIMIT,
-    }),
-  ]);
+  const { trackers, decisions } = await loadCueDecisions({
+    emailAccountId,
+    since: new Date(now.getTime() - READING_WINDOW_DAYS * 86_400_000),
+  });
 
   const membership: CueMembership = {
     TO_REPLY: trackers.map((tracker) => tracker.messageId),
     NEWSLETTER: [],
     MARKETING: [],
   };
-
-  const decisions = latestReadingDecisions(
-    executions,
-    new Set(trackers.map((tracker) => tracker.threadId)),
-  );
   for (const { messageId, type } of decisions) {
     if (membership[type].length < MEMBERSHIP_LIMIT)
       membership[type].push(messageId);
   }
 
   return membership;
+}
+
+/**
+ * The conversations Cue sorted as newsletters since `since`, newest decision
+ * first, by the same rule as the Newsletter tab. Ids only.
+ */
+export async function getCueNewsletterThreadIds({
+  emailAccountId,
+  since,
+}: {
+  emailAccountId: string;
+  since: Date;
+}): Promise<string[]> {
+  const { decisions } = await loadCueDecisions({ emailAccountId, since });
+  return decisions
+    .filter((decision) => decision.type === SystemType.NEWSLETTER)
+    .slice(0, MEMBERSHIP_LIMIT)
+    .map((decision) => decision.threadId);
 }
 
 /**
@@ -129,6 +115,51 @@ export async function getCueReadingType({
   return decision?.type ?? null;
 }
 
+async function loadCueDecisions({
+  emailAccountId,
+  since,
+}: {
+  emailAccountId: string;
+  since: Date;
+}) {
+  const [trackers, executions] = await Promise.all([
+    prisma.threadTracker.findMany({
+      where: {
+        emailAccountId,
+        type: ThreadTrackerType.NEEDS_REPLY,
+        resolved: false,
+      },
+      select: { threadId: true, messageId: true },
+      orderBy: { sentAt: "desc" },
+      take: MEMBERSHIP_LIMIT,
+    }),
+    prisma.executedRule.findMany({
+      where: {
+        emailAccountId,
+        status: ExecutedRuleStatus.APPLIED,
+        createdAt: { gte: since },
+        rule: {
+          systemType: { in: [...READING_TYPES, ...CONVERSATION_STATUS_TYPES] },
+        },
+      },
+      select: {
+        threadId: true,
+        messageId: true,
+        rule: { select: { systemType: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: READING_SCAN_LIMIT,
+    }),
+  ]);
+  return {
+    trackers,
+    decisions: latestReadingDecisions(
+      executions,
+      new Set(trackers.map((tracker) => tracker.threadId)),
+    ),
+  };
+}
+
 /**
  * Cue's latest decision per thread decides Reading, from executions newest
  * first. Marking a newsletter as needing a reply is a correction: it leaves
@@ -143,13 +174,22 @@ function latestReadingDecisions(
   awaitingReplyThreadIds: Set<string>,
 ) {
   const seenThreadIds = new Set(awaitingReplyThreadIds);
-  const decisions: { messageId: string; type: CueFilterValue }[] = [];
+  const decisions: {
+    threadId: string;
+    messageId: string;
+    type: CueFilterValue;
+  }[] = [];
   for (const execution of executions) {
     if (seenThreadIds.has(execution.threadId)) continue;
     seenThreadIds.add(execution.threadId);
     const systemType = execution.rule?.systemType;
     const type = READING_TYPES.find((candidate) => candidate === systemType);
-    if (type) decisions.push({ messageId: execution.messageId, type });
+    if (type)
+      decisions.push({
+        threadId: execution.threadId,
+        messageId: execution.messageId,
+        type,
+      });
   }
   return decisions;
 }

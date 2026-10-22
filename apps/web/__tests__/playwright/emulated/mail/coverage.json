@@ -45,7 +45,8 @@
     "app/(app)/[emailAccountId]/mail/ReadingBundle.tsx",
     "app/(app)/[emailAccountId]/mail/reading-lane.ts",
     "app/(app)/[emailAccountId]/mail/use-reading-bulk.ts",
-    "utils/label/reading-label.ts"
+    "utils/label/reading-label.ts",
+    "utils/split-inbox/cue-membership.server.ts"
   ],
   "today-quiet.spec.ts": [
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
