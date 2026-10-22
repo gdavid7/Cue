@@ -150,6 +150,30 @@ describe("readWaitingOnYou", () => {
     expect(await ids(store)).toEqual([]);
   });
 
+  it("leaves out mail from your own address left in the inbox", async () => {
+    const store = await setup();
+    await write(store, [
+      mail({
+        id: "sent",
+        conversation: "t",
+        from: ME,
+        to: [ANA],
+        at: NOW - 2 * HOUR,
+        roles: ["sent"],
+      }),
+      // Outlook can file your own message in the inbox, not Sent.
+      mail({
+        id: "self",
+        conversation: "t",
+        from: `Me <${ME.toUpperCase()}>`,
+        to: [ANA],
+        at: NOW - HOUR,
+      }),
+    ]);
+
+    expect(await ids(store)).toEqual([]);
+  });
+
   it("leaves out someone you've never written to", async () => {
     const store = await setup();
     await write(store, [mail({ id: "cold", from: BEN, at: NOW - HOUR })]);
@@ -222,6 +246,7 @@ async function setup(accountIds = ["a"]) {
 function read(store: MailStore, input: Partial<WaitingOnYouQuery> = {}) {
   return store.readWaitingOnYou({
     accountIds: ["a"],
+    ownAddresses: [ME],
     receivedSinceMs: SINCE,
     limit: 5,
     ...input,

@@ -85,6 +85,7 @@ export function useWaitingOnYou({
     () =>
       queryWaitingOnYou?.({
         accountIds: readiness.accountIds,
+        ownAddresses: accounts.map((account) => account.email),
         receivedSinceMs: Date.now() - WINDOW_DAYS * DAY_MS,
         excludedLabelIds: handledLabelIds,
         limit,
@@ -117,7 +118,7 @@ export function useWaitingOnYou({
       });
       const since = Date.now() - WINDOW_DAYS * DAY_MS;
       // A dismissal outlives the window it could show in only as clutter.
-      setDismissed((current) => ({
+      setDismissed((current: Record<string, number>) => ({
         ...Object.fromEntries(
           Object.entries(current).filter(([, at]) => at >= since),
         ),

@@ -451,6 +451,8 @@ export const PERSON_CARD_CONVERSATION_LIMIT = 6;
  */
 export type WaitingOnYouQuery = {
   accountIds: string[];
+  /** The user's own addresses: their mail is never waiting on them. */
+  ownAddresses: string[];
   /** Mail received before this is left out. */
   receivedSinceMs: number;
   /** Per account, labels or categories whose mail is left out. */

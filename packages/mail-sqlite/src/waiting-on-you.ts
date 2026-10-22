@@ -17,6 +17,9 @@ export async function readWaitingOnYou(
 ): Promise<WaitingOnYouConversation[]> {
   const rows: WaitingOnYouConversation[] = [];
   if (input.limit <= 0) return rows;
+  const own = JSON.stringify(
+    input.ownAddresses.map((address) => address.trim().toLowerCase()),
+  );
   for (const accountId of new Set(input.accountIds)) {
     const excluded = input.excludedLabelIds?.[accountId] ?? [];
     const result = await tx.query(
@@ -25,6 +28,12 @@ export async function readWaitingOnYou(
        FROM effective_messages l
        WHERE l.account_id = ? AND l.in_inbox = 1 AND l.received_at_ms >= ?
          AND l.in_sent = 0 AND l.in_draft = 0 AND l.in_trash = 0 AND l.in_spam = 0
+         -- Outlook can file the user's own message in the inbox, not Sent.
+         AND NOT EXISTS (
+           SELECT 1 FROM json_each(?) o
+           WHERE lower(trim(l.from_address)) = o.value
+             OR instr(lower(l.from_address), '<' || o.value || '>') > 0
+         )
          -- The inbox's main tab: no other Gmail tab, not Outlook's Other.
          AND (l.inbox_section IS NULL OR l.inbox_section != 'other')
          AND NOT EXISTS (
@@ -71,7 +80,14 @@ export async function readWaitingOnYou(
          )
        ORDER BY l.received_at_ms DESC, l.conversation_id
        LIMIT ?`,
-      [accountId, input.receivedSinceMs, ...excluded, ...excluded, input.limit],
+      [
+        accountId,
+        input.receivedSinceMs,
+        own,
+        ...excluded,
+        ...excluded,
+        input.limit,
+      ],
     );
     for (const row of result)
       rows.push({
