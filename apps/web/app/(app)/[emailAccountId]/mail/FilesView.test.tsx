@@ -159,6 +159,38 @@ describe("FilesView", () => {
     expect(screen.queryByText(/No files/)).toBeNull();
   });
 
+  it("notes how many messages carry a file only when more than one does", async () => {
+    mocks.queryFiles.mockResolvedValue({
+      files: [
+        { ...entry("plan.pdf", "pdf", "m1"), copies: 3 },
+        entry("budget.xlsx", "spreadsheet", "m2"),
+      ],
+      nextPage: null,
+    });
+    renderView();
+
+    expect(await screen.findByText(/In 3 messages/)).toBeTruthy();
+    expect(screen.getAllByText(/In \d+ messages?/)).toHaveLength(1);
+  });
+
+  it("searches names from the first letter typed", async () => {
+    renderView();
+    await screen.findByText("budget.xlsx");
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search file names" }),
+      {
+        target: { value: "q" },
+      },
+    );
+
+    await waitFor(() =>
+      expect(mocks.queryFiles).toHaveBeenLastCalledWith(
+        expect.objectContaining({ name: "q" }),
+      ),
+    );
+  });
+
   it("offers to clear filters that match nothing", async () => {
     mocks.queryFiles.mockResolvedValue({ files: [], nextPage: null });
     renderView();
@@ -194,6 +226,7 @@ function entry(
     subject: "Q3",
     from: "Ana Lima <ana@example.com>",
     receivedAtMs: Date.UTC(2026, 0, 2),
+    copies: 1,
     kind,
     attachment: {
       attachmentId: `att-${messageId}`,

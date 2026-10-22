@@ -424,6 +424,11 @@ function FileRow({
                 file.subject.trim() || "(no subject)",
               ].join(" · ")}
             </span>
+            {file.copies > 1 ? (
+              <span className="shrink-0 tabular-nums">
+                In {file.copies} messages
+              </span>
+            ) : null}
           </span>
         </span>
       </button>

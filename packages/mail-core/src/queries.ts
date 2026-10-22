@@ -482,6 +482,11 @@ export type FileEntry = {
   receivedAtMs: number;
   kind: FileKind;
   attachment: MessageAttachmentDescriptor;
+  /**
+   * How many messages of this conversation carry this file (same name and
+   * size) among those matching the query. The entry is from the newest.
+   */
+  copies: number;
 };
 
 /** Newest first. */
