@@ -3,11 +3,7 @@ import type {
   MatchingFilter,
   MatchingScope,
 } from "@/utils/actions/mail-bulk-matching.validation";
-import {
-  GMAIL_SYSTEM_LABELS,
-  getGmailViewLabelIds,
-  GmailLabel,
-} from "@/utils/gmail/label";
+import { getGmailViewLabelIds, GmailLabel } from "@/utils/gmail/label";
 import { mapWithConcurrency } from "@/utils/async";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
@@ -112,17 +108,14 @@ function scopeLabelIds(scope: MatchingScope) {
 }
 
 /**
- * A label's view holds conversations, as Gmail's own select-all treats it:
- * archiving or changing read state reaches every message of each one, not
- * just those carrying the label, or a digest whose replies lack it would stay
- * behind. System views and searches stay per message.
+ * The Reading lane holds conversations, so its job archives or changes read
+ * state for every message of each conversation whose labelled message still
+ * matches, or a digest whose replies lack the label would stay behind. Every
+ * other view and search stays per message.
  */
 function actsOnConversations(scope: MatchingScope, only: MatchingFilter) {
   const changesState = only.inInbox || only.unread !== undefined;
-  const namesUserLabel = (scopeLabelIds(scope) ?? []).some(
-    (labelId) => !GMAIL_SYSTEM_LABELS.includes(labelId),
-  );
-  return Boolean(changesState && namesUserLabel);
+  return Boolean(scope.wholeConversations && changesState);
 }
 
 /** The page's conversations' messages the action would change, each once. */
@@ -139,29 +132,54 @@ async function withConversationMessages({
   const threads = await mapWithConcurrency(
     threadIds,
     CONVERSATION_CONCURRENCY,
-    (threadId) =>
-      withGmailRetry(() =>
-        gmail.users.threads.get({
-          userId: "me",
-          id: threadId,
-          format: "minimal",
-          fields: "messages(id,threadId,labelIds)",
-        }),
-      ),
+    async (threadId) => {
+      try {
+        const thread = await withGmailRetry(() =>
+          gmail.users.threads.get({
+            userId: "me",
+            id: threadId,
+            format: "minimal",
+            fields: "messages(id,threadId,labelIds)",
+          }),
+        );
+        return thread.data.messages ?? [];
+      } catch (error) {
+        // Gone since the listing: what was listed is still the best guess.
+        if (!isNotFound(error)) throw error;
+        return messages
+          .filter((message) => message.threadId === threadId)
+          .map((message) => ({ ...message, labelIds: null }));
+      }
+    },
   );
-  const changes = (labelIds: string[]) => {
+  const listedIds = new Set(messages.map((message) => message.id));
+  const changes = (id: string, labelIds: string[] | null) => {
+    if (!labelIds) return listedIds.has(id);
+    if (
+      labelIds.includes(GmailLabel.TRASH) ||
+      labelIds.includes(GmailLabel.SPAM)
+    )
+      return false;
     if (only.inInbox && !labelIds.includes(GmailLabel.INBOX)) return false;
     if (only.unread === true) return labelIds.includes(GmailLabel.UNREAD);
     if (only.unread === false) return !labelIds.includes(GmailLabel.UNREAD);
     return true;
   };
   const seen = new Set<string>();
-  return threads.flatMap((thread) =>
-    (thread.data.messages ?? []).flatMap((message) => {
+  return threads.flatMap((threadMessages) =>
+    threadMessages.flatMap((message) => {
       if (!message.id || !message.threadId || seen.has(message.id)) return [];
-      if (!changes(message.labelIds ?? [])) return [];
+      if (!changes(message.id, message.labelIds ?? null)) return [];
       seen.add(message.id);
       return [{ id: message.id, threadId: message.threadId }];
     }),
   );
+}
+
+function isNotFound(error: unknown) {
+  const { code, status } = (error ?? {}) as {
+    code?: unknown;
+    status?: unknown;
+  };
+  return code === 404 || status === 404;
 }

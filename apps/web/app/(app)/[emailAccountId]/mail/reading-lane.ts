@@ -3,7 +3,6 @@ import { isThreadUnread } from "@/app/(app)/[emailAccountId]/mail/read-state";
 import { getThreadParticipantNames } from "@/app/(app)/[emailAccountId]/mail/thread-participants";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { MailSplitFilterKind } from "@/generated/prisma/enums";
-import type { MatchingScope } from "@/utils/actions/mail-bulk-matching.validation";
 import type { MailUrlView } from "@/utils/mail-url";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 
@@ -36,16 +35,6 @@ export function inboxWithoutReadingQuery(labelId: string): ThreadsQuery {
       },
     ],
   };
-}
-
-/**
- * The bundled inbox for Gmail's "select all that match": the inbox without the
- * newsletters its Reading row stands in for, which nobody saw selected.
- */
-export function inboxWithoutReadingMatchingScope(
-  labelName: string,
-): MatchingScope {
-  return { type: "inbox", q: `-label:"${labelName.replaceAll('"', "")}"` };
 }
 
 /**

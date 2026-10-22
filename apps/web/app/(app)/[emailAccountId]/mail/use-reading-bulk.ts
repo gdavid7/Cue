@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   getReadingBulkPlan,
@@ -24,7 +24,8 @@ const ACTION_NAMES: Record<ReadingBulkAction, string> = {
  * newsletter in it rather than the page loaded so far (see
  * `getReadingBulkPlan`). `applyLoaded` acts on the lane's loaded rows through
  * the engine, and `capped` says some were still left past the page limit;
- * `onServerJobFinished` runs once a server job over the lane has finished.
+ * `onServerJobFinished` runs once a server job over the lane has changed
+ * something.
  * `readingQuery` is null outside the lane, which stops a load in progress.
  */
 export function useReadingBulk({
@@ -51,7 +52,10 @@ export function useReadingBulk({
     const scope = readingQuery
       ? getMatchingScope(readingQuery, provider)
       : null;
-    return scope ? [{ id: emailAccountId, scope }] : null;
+    // The lane holds conversations, so its job acts on them whole.
+    return scope
+      ? [{ id: emailAccountId, scope: { ...scope, wholeConversations: true } }]
+      : null;
   }, [emailAccountId, readingQuery, provider]);
   const matching = useSelectAllMatching({
     accounts,
@@ -62,6 +66,9 @@ export function useReadingBulk({
     onFinished: () => undefined,
   });
   const [jobRunning, setJobRunning] = useState(false);
+  // Set at once on a press, so a second press before the busy state renders
+  // starts nothing.
+  const runningRef = useRef(false);
   const [drain, setDrain] = useState<{
     action: ReadingBulkAction;
     pages: number;
@@ -72,6 +79,7 @@ export function useReadingBulk({
   useEffect(() => {
     if (!drain) return;
     if (!readingQuery) {
+      runningRef.current = false;
       setDrain(null);
       toast.message(
         `${ACTION_NAMES[drain.action]} stopped when you left Reading.`,
@@ -84,21 +92,28 @@ export function useReadingBulk({
       loadMore().catch(() => undefined);
       return;
     }
+    runningRef.current = false;
     setDrain(null);
     applyLoaded(drain.action, hasMore);
   }, [drain, readingQuery, isLoadingMore, hasMore, loadMore, applyLoaded]);
 
   const run = useStableCallback(async (action: ReadingBulkAction) => {
-    if (drain || jobRunning) return;
+    if (runningRef.current) return;
     const plan = getReadingBulkPlan({ hasMore, canMatch: Boolean(accounts) });
     if (plan === "loaded") return applyLoaded(action, false);
+    runningRef.current = true;
     if (plan === "drain") return setDrain({ action, pages: 0 });
     setJobRunning(true);
     try {
-      await matching.run(action === "read" ? "mark_read" : "archive");
+      const applied = await matching.run(
+        action === "read" ? "mark_read" : "archive",
+      );
+      if (applied > 0) onServerJobFinished(action);
+    } catch {
+      toast.error("Couldn't start that. Please try again.");
     } finally {
+      runningRef.current = false;
       setJobRunning(false);
-      onServerJobFinished(action);
     }
   });
 

@@ -94,34 +94,26 @@ describe("runMailBulkJobStep", () => {
     expect(provider.markMessagesReadState).toHaveBeenCalledWith(["m1"], true);
   });
 
-  it("archives and marks read a label view's whole conversations, labels split across messages", async () => {
+  it("the Reading lane's job archives and marks read whole conversations, labels split across messages", async () => {
     // Only the digest's first message carries the label; its reply doesn't.
-    const thread = {
-      messages: [
-        { id: "m1", threadId: "t1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
-        { id: "m2", threadId: "t1", labelIds: ["INBOX", "UNREAD"] },
-      ],
-    };
-    const gmail = {
-      users: {
-        messages: {
-          list: vi.fn().mockResolvedValue({
-            data: { messages: [{ id: "m1", threadId: "t1" }] },
-          }),
-        },
-        threads: { get: vi.fn().mockResolvedValue({ data: thread }) },
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX", "UNREAD"] },
+        ],
       },
-    } as unknown as gmail_v1.Gmail;
-    const scope: MatchingScope = { labelIds: ["INBOX", "Label_42"] };
+    });
+    const scope: MatchingScope = {
+      labelIds: ["INBOX", "Label_42"],
+      wholeConversations: true,
+    };
 
     for (const action of ["archive", "mark_read"] as const) {
       const store = createStore();
       await store.create(JOB_ID, newJob({ action }));
-      const provider = createProvider({ pages: [] });
-      vi.mocked(provider.listMatchingMessages).mockImplementation(
-        ({ only, pageToken }) =>
-          listGmailMatchingMessages({ gmail, scope, only, pageToken }),
-      );
+      const provider = gmailProvider(gmail);
 
       await runStep({ store, provider, listings: createListings({ scope }) });
 
@@ -138,6 +130,55 @@ describe("runMailBulkJobStep", () => {
         conversations: 1,
       });
     }
+  });
+
+  it("lists a conversation split across two pages once", async () => {
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }], [{ id: "m3", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX"] },
+          { id: "m3", labelIds: ["INBOX", "Label_42"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = {
+      labelIds: ["INBOX", "Label_42"],
+      wholeConversations: true,
+    };
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = gmailProvider(gmail);
+
+    await runStep({ store, provider, listings: createListings({ scope }) });
+
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m1", "m2", "m3"]);
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "done",
+      total: 3,
+      conversations: 1,
+    });
+  });
+
+  it("keeps any other label view's job per message", async () => {
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = { labelIds: ["INBOX", "Label_42"] };
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = gmailProvider(gmail);
+
+    await runStep({ store, provider, listings: createListings({ scope }) });
+
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m1"]);
   });
 
   it("trashes and reports spam once per conversation", async () => {
@@ -841,7 +882,13 @@ function createProvider({
   pageLink?: (index: number) => string;
 }) {
   const listMatchingMessages = vi.fn(
-    async ({ pageToken }: { only: MatchingFilter; pageToken?: string }) => {
+    async ({
+      pageToken,
+    }: {
+      scope: MatchingScope;
+      only: MatchingFilter;
+      pageToken?: string;
+    }) => {
       const index = pageToken ? Number(pageToken.split(/[-=]/).at(-1)) : 0;
       return {
         messages: pages[index] ?? [],
@@ -900,6 +947,10 @@ function createStore(): typeof mailBulkJobStore {
       conversations.set(jobId, seen);
       return seen.size - before;
     },
+    async knownConversations(jobId, threadIds) {
+      const seen = conversations.get(jobId) ?? new Set<string>();
+      return new Set(threadIds.filter((threadId) => seen.has(threadId)));
+    },
     async readTargets(jobId, start, count) {
       return (targets.get(jobId) ?? []).slice(start, start + count);
     },
@@ -935,4 +986,50 @@ function createListings(
       if (owned(jobId, emailAccountId)) rows.delete(jobId);
     },
   };
+}
+
+/** A Gmail client whose listing returns `pages` and threads hold `threads`. */
+function gmailWith({
+  pages,
+  threads,
+}: {
+  pages: { id: string; threadId: string }[][];
+  threads: Record<string, { id: string; labelIds: string[] }[]>;
+}) {
+  return {
+    users: {
+      messages: {
+        list: vi.fn(async ({ pageToken }: { pageToken?: string }) => {
+          const index = pageToken ? Number(pageToken) : 0;
+          return {
+            data: {
+              messages: pages[index] ?? [],
+              nextPageToken:
+                index + 1 < pages.length ? String(index + 1) : undefined,
+            },
+          };
+        }),
+      },
+      threads: {
+        get: vi.fn(async ({ id }: { id: string }) => ({
+          data: {
+            messages: (threads[id] ?? []).map((message) => ({
+              ...message,
+              threadId: id,
+            })),
+          },
+        })),
+      },
+    },
+  } as unknown as gmail_v1.Gmail;
+}
+
+/** A provider that lists through Gmail's own matching listing. */
+function gmailProvider(gmail: gmail_v1.Gmail) {
+  const provider = createProvider({ pages: [] });
+  vi.mocked(provider.listMatchingMessages).mockImplementation(
+    ({ scope, only, pageToken }) =>
+      listGmailMatchingMessages({ gmail, scope, only, pageToken }),
+  );
+  return provider;
 }

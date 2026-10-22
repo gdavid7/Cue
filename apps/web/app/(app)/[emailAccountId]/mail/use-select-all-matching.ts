@@ -79,8 +79,12 @@ export function useSelectAllMatching({
   const clear = useCallback(() => setSelected(null), []);
 
   const run = useCallback(
-    async (action: MatchingBulkAction, options?: { labelId?: string }) => {
-      if (!accounts?.length) return;
+    /** Resolves with how many messages the jobs changed, once they end. */
+    async (
+      action: MatchingBulkAction,
+      options?: { labelId?: string },
+    ): Promise<number> => {
+      if (!accounts?.length) return 0;
       setSelected(null);
       const started = await Promise.all(
         accounts.map(async (account): Promise<RunningJob | null> => {
@@ -98,8 +102,8 @@ export function useSelectAllMatching({
         }),
       );
       const jobs = started.filter((job): job is RunningJob => Boolean(job));
-      if (!jobs.length) return;
-      await followJobs({ jobs, action, onFinished });
+      if (!jobs.length) return 0;
+      return followJobs({ jobs, action, onFinished });
     },
     [accounts, onFinished],
   );
@@ -115,7 +119,7 @@ async function followJobs({
   jobs: RunningJob[];
   action: MatchingBulkAction | "undo";
   onFinished: () => void;
-}) {
+}): Promise<number> {
   const toastId = `mail-bulk-${jobs[0]?.jobId}`;
   const stop = () => {
     for (const job of jobs)
@@ -160,6 +164,10 @@ async function followJobs({
     0,
   );
   const failed = known.reduce((sum, state) => sum + state.failed, 0);
+  const applied = Math.max(
+    0,
+    known.reduce((sum, state) => sum + state.applied, 0) - failed,
+  );
   const anyFailed = known.some((state) => state.status === "failed");
   const capped = known.some((state) => state.capped);
   const cancelled = known.some((state) => state.status === "cancelled");
@@ -173,7 +181,7 @@ async function followJobs({
       description: "It carries on in the background; you can leave this page.",
       duration: 8000,
     });
-    return;
+    return applied;
   }
   if (anyFailed) {
     toast.error("Couldn't finish that for every conversation", {
@@ -181,7 +189,7 @@ async function followJobs({
       description: "Some may have changed. Try again to finish the rest.",
       duration: 10_000,
     });
-    return;
+    return applied;
   }
 
   const message = cancelled
@@ -206,13 +214,14 @@ async function followJobs({
       onUndo: () => undoJobs({ jobs, onFinished }),
     });
     if (description) toast.message(description);
-    return;
+    return applied;
   }
   toast.success(message, {
     id: toastId,
     description: description || undefined,
     duration: 6000,
   });
+  return applied;
 }
 
 async function undoJobs({

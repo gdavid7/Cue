@@ -5,13 +5,11 @@ import {
 } from "@inboxzero/mail-core/query-semantics";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
-import { gmailMatchingListQuery } from "@/utils/gmail/matching";
 import { threadsQuery } from "@/utils/threads/validation";
 import {
   getReadingBulkPlan,
   getReadingRoute,
   getReadingSummary,
-  inboxWithoutReadingMatchingScope,
   inboxWithoutReadingQuery,
   readingLaneQuery,
 } from "./reading-lane";
@@ -109,16 +107,6 @@ describe("the inbox and its Reading lane", () => {
       inbox: false,
       lane: false,
     });
-  });
-});
-
-describe("inboxWithoutReadingMatchingScope", () => {
-  it("lets Gmail's select all cover the bundled inbox without its newsletters", () => {
-    expect(
-      gmailMatchingListQuery(inboxWithoutReadingMatchingScope("Newsletter"), {
-        inInbox: true,
-      }),
-    ).toMatchObject({ labelIds: ["INBOX"], q: '-label:"Newsletter"' });
   });
 });
 

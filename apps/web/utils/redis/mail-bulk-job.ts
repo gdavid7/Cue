@@ -177,6 +177,13 @@ export const mailBulkJobStore = {
     return added;
   },
 
+  /** The given conversations this job has already listed. */
+  async knownConversations(jobId: string, threadIds: string[]) {
+    if (!threadIds.length) return new Set<string>();
+    const known = await redis.smismember(conversationIdsKey(jobId), threadIds);
+    return new Set(threadIds.filter((_, index) => known[index] === 1));
+  },
+
   async readTargets(
     jobId: string,
     start: number,

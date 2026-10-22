@@ -43,7 +43,7 @@ import { TrashNotice } from "@/app/(app)/[emailAccountId]/mail/TrashNotice";
 import { useSelectAllMatching } from "@/app/(app)/[emailAccountId]/mail/use-select-all-matching";
 import {
   getMatchingResultCopy,
-  getMatchingScope,
+  getAccountMatchingScope,
   needsMatchingConfirm,
 } from "@/app/(app)/[emailAccountId]/mail/select-all-matching";
 import type {
@@ -60,7 +60,6 @@ import {
 import {
   getReadingRoute,
   getReadingSummary,
-  inboxWithoutReadingMatchingScope,
   inboxWithoutReadingQuery,
   isReadingMailView,
   MAIL_READING_TYPE,
@@ -237,6 +236,8 @@ const NO_SLUGS: MailSlugs = { labels: new Map(), folders: new Map() };
 const INBOX_VIEW: MailUrlView = { kind: "inbox" };
 const INBOX_THREADS_QUERY: ThreadsQuery = { type: "inbox" };
 const LABELS_WAIT_MS = 1500;
+// How long after the bundle swaps in a lost focus is still put on its row.
+const READING_SWAP_WINDOW_MS = 5000;
 
 /**
  * Owns the mail screen's URL, thread list, selection, and triage state, and
@@ -736,6 +737,8 @@ export function MailShell() {
   // but only briefly, as a slow labels request must never hold the inbox.
   const labelsPending = isPlainInbox && labelsLoading;
   const [labelWaitOver, setLabelWaitOver] = useState(false);
+  // A later wait for labels, such as another account's, gets its own time.
+  if (!labelsPending && labelWaitOver) setLabelWaitOver(false);
   useEffect(() => {
     if (!labelsPending || labelWaitOver) return;
     const timer = setTimeout(() => setLabelWaitOver(true), LABELS_WAIT_MS);
@@ -1281,34 +1284,17 @@ export function MailShell() {
         ? combinedAccounts.map((account) => ({ id: account.id, scope }))
         : null;
     }
-    // A whole-inbox job must not reach the newsletters the Reading row stands
-    // in for, which the user never saw selected. Gmail can leave them out by
-    // search; elsewhere select all stays per page.
-    if (bundlesReading) {
-      const name = allLabels.find((label) => label.id === readingLabelId)?.name;
-      return isGoogle && name
-        ? [
-            {
-              id: emailAccountId,
-              scope: inboxWithoutReadingMatchingScope(name),
-            },
-          ]
-        : null;
-    }
-    const scope = getMatchingScope(query, provider);
+    const scope = getAccountMatchingScope({ query, provider, bundlesReading });
     return scope ? [{ id: emailAccountId, scope }] : null;
   }, [
     activeSplit?.filters.length,
     allInboxesMailboxType,
-    allLabels,
     bundlesReading,
     combinedAccounts,
     emailAccountId,
     isAllAccounts,
-    isGoogle,
     provider,
     query,
-    readingLabelId,
     searchQuery,
   ]);
   const refreshAfterMatching = useStableCallback(() => {
@@ -1802,7 +1788,9 @@ export function MailShell() {
   );
   const finishReadingJob = useStableCallback((action: "read" | "archive") => {
     client?.requestSync([emailAccountId]).catch(() => undefined);
-    if (action === "archive")
+    // Only the lane's own reader and selection: somewhere else by now, the
+    // user's place there is theirs.
+    if (action === "archive" && inReadingLane)
       finishReadingArchive(readingThreadState.threads.map(getListThreadKey));
   });
   const readingBulk = useReadingBulk({
@@ -2219,6 +2207,41 @@ export function MailShell() {
   // Opening the lane puts focus on its first newsletter, and leaving it on
   // the Reading row it came from, so the keyboard keeps its place.
   const pendingReadingFocus = useRef<"lane" | "bundle" | null>(null);
+  // Labels landing after the inbox showed swap its newsletters out for the
+  // Reading row. A focused or open row that left with them hands focus to
+  // that row rather than dropping it on the page.
+  const wasBundling = useRef(bundlesReading);
+  const readingSwap = useRef<{
+    keys: string[];
+    ids: string[];
+    at: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    if (bundlesReading && !wasBundling.current) {
+      const keys = [orderedIds[clampedIndex], openThreadKey].filter(
+        (key): key is string => Boolean(key),
+      );
+      readingSwap.current = keys.length
+        ? { keys, ids: orderedIds, at: Date.now() }
+        : null;
+    }
+    wasBundling.current = bundlesReading;
+    const swap = readingSwap.current;
+    if (!swap) return;
+    if (Date.now() - swap.at > READING_SWAP_WINDOW_MS) {
+      readingSwap.current = null;
+      return;
+    }
+    if (isLoading || orderedIds === swap.ids) return;
+    readingSwap.current = null;
+    const active = document.activeElement;
+    const focusOnList =
+      !active ||
+      active === document.body ||
+      active.matches("[data-mail-thread-row]");
+    if (focusOnList && swap.keys.some((key) => !orderedIds.includes(key)))
+      pendingReadingFocus.current = "bundle";
+  });
   const openReadingLane = useStableCallback(() => {
     pendingReadingFocus.current = "lane";
     setFocusedIndex(0);
