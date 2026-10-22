@@ -206,7 +206,7 @@ test("Mail you never read: frequent unread senders on Today, Not now kept, Unsub
 });
 
 /**
- * One unread inbox message from `sender`, received in the last few days.
+ * One unread inbox message from `sender`, received in the last few hours.
  * Returns what takes it out again.
  */
 async function seedUnreadInboxMail(
@@ -259,7 +259,8 @@ async function seedUnreadInboxMail(
       subject,
       body_text: "This week's picks.",
       labelIds: ["INBOX", "UNREAD"],
-      internalDate: String(Date.now() - (index + 1) * 86_400_000),
+      // Hours apart: a first sync may only cover the last day or two.
+      internalDate: String(Date.now() - (index + 1) * 3_600_000),
     },
   });
   expect(inserted.ok(), await inserted.text()).toBe(true);
