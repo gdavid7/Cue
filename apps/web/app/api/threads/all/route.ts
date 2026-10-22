@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { z } from "zod";
 import { getConnectedEmailAccounts } from "@/utils/email/connected-accounts";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -42,7 +41,6 @@ export const GET = withAuth(
     });
     const result = await loadCombinedThreads({
       accounts,
-      preferAccountId: request.headers.get(EMAIL_ACCOUNT_HEADER),
       cursor: cursor ?? null,
       limit,
       logger: request.logger,

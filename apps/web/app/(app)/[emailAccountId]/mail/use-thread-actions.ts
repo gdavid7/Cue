@@ -158,40 +158,52 @@ export function useThreadActions({
       if (rumAction) recordRumAfterPaint(`${rumAction}_optimistic`, startedAt);
       const snapshots: ThreadSnapshot[] = [];
       const rejectionCodes: string[] = [];
-      for (const [accountId, accountTargets] of Object.entries(
-        groupBy(targets, (target) => target.emailAccountId),
-      )) {
-        const result = await submitConversationChanges({
-          accountId,
-          change,
-          client,
-          conversationIds: accountTargets.map((target) => target.threadId),
-        });
-        rejectionCodes.push(...result.rejectionCodes);
-        const commandIds = new Map(
-          result.accepted.map((item) => [item.conversationId, item.commandId]),
-        );
-        // A bulk change is one batch: the account's last command ending is
-        // when the server has all of it, so one observation covers it.
-        const lastCommandId = result.accepted.at(-1)?.commandId;
-        if (rumAction && lastCommandId) {
-          observeRumConfirmation({
-            client,
-            accountId,
-            operationId: lastCommandId,
-            name: `${rumAction}_confirmed`,
-            startedAt,
-          });
-        }
-        for (const { copies: _copies, ...target } of accountTargets) {
-          const mutationId = commandIds.get(target.threadId);
-          if (mutationId) snapshots.push({ ...target, mutationId });
-        }
-      }
+      // Every account's command starts in this task, each registering its
+      // optimistic change before its first await, so a row's hidden copies
+      // change with it rather than one account at a time.
+      await Promise.all(
+        Object.entries(groupBy(targets, (target) => target.emailAccountId)).map(
+          async ([accountId, accountTargets]) => {
+            const result = await submitConversationChanges({
+              accountId,
+              change,
+              client,
+              conversationIds: accountTargets.map((target) => target.threadId),
+            });
+            rejectionCodes.push(...result.rejectionCodes);
+            const commandIds = new Map(
+              result.accepted.map((item) => [
+                item.conversationId,
+                item.commandId,
+              ]),
+            );
+            // A bulk change is one batch: the account's last command ending is
+            // when the server has all of it, so one observation covers it.
+            const lastCommandId = result.accepted.at(-1)?.commandId;
+            if (rumAction && lastCommandId) {
+              observeRumConfirmation({
+                client,
+                accountId,
+                operationId: lastCommandId,
+                name: `${rumAction}_confirmed`,
+                startedAt,
+              });
+            }
+            for (const { copies: _copies, ...target } of accountTargets) {
+              const mutationId = commandIds.get(target.threadId);
+              if (mutationId) snapshots.push({ ...target, mutationId });
+            }
+          },
+        ),
+      );
       if (rumAction && rejectionCodes.length) {
         recordRumAction(`${rumAction}_confirmed`, startedAt, "error");
       }
-      return { snapshots, rows: rowKeys(snapshots), rejectionCodes };
+      return {
+        snapshots,
+        rows: completeRows(targets, snapshots),
+        rejectionCodes,
+      };
     },
     [client],
   );
@@ -242,7 +254,8 @@ export function useThreadActions({
         },
       ),
     );
-    const restoredKeys = rowKeys(
+    const restoredKeys = completeRows(
+      snapshots,
       results.flatMap((result) =>
         result.status === "fulfilled" ? result.value : [],
       ),
@@ -289,12 +302,16 @@ export function useThreadActions({
         undone: false,
       };
       lastAction.current = batch;
-      const { rows, rejectionCodes } = await enqueued.catch((error) => {
-        if (lastAction.current === batch) lastAction.current = previous;
-        throw error;
-      });
+      const { rows, snapshots, rejectionCodes } = await enqueued.catch(
+        (error) => {
+          if (lastAction.current === batch) lastAction.current = previous;
+          throw error;
+        },
+      );
       if (!rows.length) {
-        if (lastAction.current === batch) lastAction.current = previous;
+        // Copies that did change stay undoable with the shortcut.
+        if (!snapshots.length && lastAction.current === batch)
+          lastAction.current = previous;
         if (threadKeys.length) {
           toast.error(
             enqueueFailureCopy(
@@ -564,6 +581,23 @@ function copyTargets(target: ThreadActionTarget): ThreadActionTarget[] {
     threadId: copy.threadId,
     rowKey: target.key,
   }));
+}
+
+/**
+ * The rows whose own copy and every hidden copy are in `done`: a row half
+ * changed in another account isn't one the user asked for.
+ */
+function completeRows(
+  expected: Pick<ThreadSnapshot, "key" | "rowKey">[],
+  done: Pick<ThreadSnapshot, "key">[],
+) {
+  const doneKeys = new Set(done.map((item) => item.key));
+  const missing = new Set(
+    expected
+      .filter((item) => !doneKeys.has(item.key))
+      .map((item) => item.rowKey ?? item.key),
+  );
+  return rowKeys(expected).filter((row) => !missing.has(row));
 }
 
 /** The rows changed: a row's hidden copies count with it. */

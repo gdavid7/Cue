@@ -81,6 +81,104 @@ describe("counts across accounts", () => {
     });
   });
 
+  // The list pairs each account's copies newest first, so the second pair
+  // here is unread through b's copy though a's is read.
+  it("pair one account's copies with another's by rank, unread through either", async () => {
+    const store = await open();
+    await write(store, "a", [
+      patch("a", "m1", {
+        conversation: "c1",
+        at: T0 + 2,
+        internetMessageId: "<dup@x>",
+      }),
+      patch("a", "m2", {
+        conversation: "c2",
+        at: T0 + 1,
+        internetMessageId: "<dup@x>",
+        read: true,
+      }),
+    ]);
+    await write(store, "b", [
+      patch("b", "m1", {
+        conversation: "c1",
+        at: T0 + 2,
+        internetMessageId: "<dup@x>",
+        read: true,
+      }),
+      patch("b", "m2", {
+        conversation: "c2",
+        at: T0 + 1,
+        internetMessageId: "<dup@x>",
+      }),
+    ]);
+
+    expect(await counts(store, ["a", "b"], INBOX)).toEqual({
+      matching: 2,
+      unread: 2,
+    });
+  });
+
+  it("follow the conversation's latest message as it changes", async () => {
+    const store = await open();
+    await write(store, "a", [
+      patch("a", "m1", { conversation: "c1", internetMessageId: "<first@x>" }),
+    ]);
+    await write(store, "b", [
+      patch("b", "m1", { conversation: "c1", internetMessageId: "<later@x>" }),
+    ]);
+    expect(await counts(store, ["a", "b"], INBOX)).toMatchObject({
+      matching: 2,
+    });
+
+    // A reply in a's conversation that b also got: now the same message.
+    await write(store, "a", [
+      patch("a", "m2", {
+        conversation: "c1",
+        at: T0 + 1000,
+        internetMessageId: "<Later@X>",
+      }),
+    ]);
+    expect(await counts(store, ["a", "b"], INBOX)).toMatchObject({
+      matching: 1,
+    });
+
+    // A draft reply never stands for the conversation.
+    await write(store, "a", [
+      patch("a", "d1", { conversation: "c1", at: T0 + 2000, roles: ["draft"] }),
+    ]);
+    expect(await counts(store, ["a", "b"], INBOX)).toMatchObject({
+      matching: 1,
+    });
+  });
+
+  it("key mail stored before the keys existed, once migrated", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await open(driver);
+    await write(store, "a", [
+      patch("a", "m1", { conversation: "c1", internetMessageId: "<s@x>" }),
+    ]);
+    await write(store, "b", [
+      patch("b", "m1", { conversation: "c1", internetMessageId: "<S@x>" }),
+    ]);
+    // The mailbox as a build before message keys left it.
+    await driver.write(async (tx) => {
+      for (const event of ["insert", "delete", "update"])
+        await tx.exec(`DROP TRIGGER conversation_message_keys_after_${event}`);
+      for (const event of ["insert", "delete"])
+        await tx.exec(`DROP TRIGGER shared_message_copies_after_${event}`);
+      await tx.exec("DROP TABLE shared_message_copies");
+      await tx.exec("DROP TABLE conversation_message_keys");
+      await tx.exec("ALTER TABLE effective_messages DROP COLUMN message_key");
+      await tx.exec("DELETE FROM schema_migrations WHERE id = 17");
+    });
+
+    const migrated = await createSqliteMailStore(driver);
+
+    expect(await counts(migrated, ["a", "b"], INBOX)).toMatchObject({
+      matching: 1,
+    });
+  });
+
   it("count each account's drafts, as Drafts lists each", async () => {
     const store = await open();
     for (const account of ["a", "b"])
@@ -102,8 +200,8 @@ describe("counts across accounts", () => {
   });
 });
 
-async function open() {
-  const store = await createSqliteMailStore(createNodeSqliteDriver());
+async function open(driver = createNodeSqliteDriver()) {
+  const store = await createSqliteMailStore(driver);
   cleanups.push(() => store.close());
   for (const accountId of ["a", "b"])
     await store.ensureAccount({

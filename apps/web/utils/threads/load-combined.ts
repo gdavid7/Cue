@@ -29,15 +29,15 @@ export type CombinedListThread = ThreadListItem & {
   /** The user's other accounts this row's newest message was delivered to. */
   alsoIn?: CombinedAccount[];
   /**
-   * The conversations this row stands for in those accounts. Reading,
-   * archiving and starring the row change them too; other actions don't.
+   * The conversations this row stands for in those accounts, on rows of the
+   * local list. Reading, archiving and starring the row change them too;
+   * other actions don't.
    */
   copies?: Array<{ accountId: string; threadId: string }>;
 };
 
 export async function loadCombinedThreads({
   accounts,
-  preferAccountId,
   cursor,
   limit,
   loadPage,
@@ -45,8 +45,6 @@ export async function loadCombinedThreads({
   pageBuffer,
 }: {
   accounts: CombinedThreadsAccount[];
-  /** The account the user is in, whose copy stands for copies that tie. */
-  preferAccountId?: string | null;
   cursor: string | null;
   limit: number;
   loadPage: (input: {
@@ -105,11 +103,8 @@ export async function loadCombinedThreads({
   const accountsById = new Map(
     items.map((item) => [item.account.id, item.account]),
   );
-  // No client calls this route today. One that does names the account it is
-  // in; without one, the user's first connected account stands for ties.
-  const preferred =
-    accounts.find((account) => account.id === preferAccountId)?.id ??
-    accounts[0]?.id;
+  // No client calls this route today, so it knows no account the user is in;
+  // the user's first connected account stands for copies that tie.
   const threads = showCopiesOnce(
     items,
     (thread) => ({
@@ -117,7 +112,7 @@ export async function loadCombinedThreads({
       messageId: newestReceivedMessage(thread)?.headers["message-id"],
       at: getThreadTimestamp(thread),
     }),
-    preferred,
+    accounts[0]?.id,
   ).map(({ row, copies }) =>
     copies.length
       ? {
@@ -125,10 +120,6 @@ export async function loadCombinedThreads({
           alsoIn: copies.flatMap(
             (copy) => accountsById.get(copy.account.id) ?? [],
           ),
-          copies: copies.map((copy) => ({
-            accountId: copy.account.id,
-            threadId: copy.id,
-          })),
         }
       : row,
   );

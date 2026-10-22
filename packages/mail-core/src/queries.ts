@@ -190,7 +190,10 @@ export const conversationSummarySchema = z.object({
   pendingOperationIds: z.array(z.string()),
   /** The newest message that isn't a draft or in the trash. */
   latestMessageId: z.string().optional(),
-  /** That message's Message-ID header, once the store has read it. */
+  /**
+   * That message's Message-ID header, normalised (normalizeInternetMessageId),
+   * once the store has read it: the key one message has in every mailbox.
+   */
   latestInternetMessageId: z.string().optional(),
   hasAttachments: z.boolean().optional(),
 });

@@ -10,8 +10,10 @@ import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
  * Copies that arrived at the same moment are listed in no meaningful order,
  * so `preferAccountId`'s copy (the account the user is in) stands for them.
  *
- * The local store counts copies once by the same rule (mail-sqlite's
- * countConversationRows), so the two must change together.
+ * The local store keys each conversation once (mail-sqlite's
+ * conversation_message_keys, read here as latestInternetMessageId) and its
+ * counts pair copies by rank within each account as this does
+ * (countConversationRows), so the two must change together.
  */
 export function showCopiesOnce<T>(
   rows: T[],

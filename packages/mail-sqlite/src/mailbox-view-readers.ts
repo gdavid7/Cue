@@ -170,54 +170,67 @@ function readCounts(
 }
 
 /**
- * Counts conversation rows ({account_id, conversation_id, unread}). Across
- * accounts, All inboxes lists a message delivered to several of them once
- * (showCopiesOnce in apps/web), so copies count once too: conversations whose
- * newest message has the same Message-ID form one row per account they're
- * in, unread if any copy is. Within one account each conversation counts.
- * Drafts are each account's own and are always counted apart.
+ * Counts conversation rows ({account_id, conversation_id, latest, unread}).
+ * Across accounts, All inboxes lists a message delivered to several of them
+ * once (showCopiesOnce in apps/web), so copies count once too: conversations
+ * sharing a stored message key pair up by their rank within each account,
+ * newest first, as the list pairs them, and a pair is unread if any copy is.
+ * Within one account each conversation counts, and Drafts are each account's
+ * own. Only conversations whose key is in more than one account
+ * (shared_message_copies) are looked at, so the extra cost grows with the
+ * copies, not the mailbox.
  */
 async function countConversationRows(
   tx: SqlTransaction,
   scope: CountScope,
   rows: { sql: string; bindings: SqlValue[] },
 ): Promise<Counts> {
-  const [row] =
-    scope.accountIds.length > 1 && !mentionsDrafts(scope.predicate)
-      ? await tx.query(
-          `WITH scoped AS (${rows.sql}),
-           keyed AS (
-             SELECT s.account_id, s.unread,
-                    COALESCE(
-                      NULLIF((${LATEST_MESSAGE_ID_SQL}), ''),
-                      'conversation:' || s.account_id || char(0) || s.conversation_id
-                    ) AS k
-             FROM scoped s
-           ),
-           per_account AS (
-             SELECT k, COUNT(*) AS n, SUM(unread) AS u
-             FROM keyed GROUP BY k, account_id
-           )
-           SELECT COALESCE(SUM(n), 0) AS n, COALESCE(SUM(u), 0) AS u
-           FROM (SELECT MAX(n) AS n, MAX(u) AS u FROM per_account GROUP BY k)`,
-          rows.bindings,
-        )
-      : await tx.query(
-          `SELECT COUNT(*) AS n, COALESCE(SUM(unread), 0) AS u FROM (${rows.sql})`,
-          rows.bindings,
-        );
-  return { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  const [row] = await tx.query(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(unread), 0) AS u FROM (${rows.sql})`,
+    rows.bindings,
+  );
+  const counts = { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  if (scope.accountIds.length < 2 || mentionsDrafts(scope.predicate))
+    return counts;
+  // Each key's copies in scope; the hidden ones are all but one per pair.
+  // One copy per account is the rule, so only a key with two conversations in
+  // one account is ranked to pair it as the list does.
+  const [hidden] = await tx.query(
+    `WITH copies AS (
+       SELECT k.message_key, s.account_id, s.conversation_id, s.latest, s.unread
+       FROM shared_message_copies k
+       CROSS JOIN (${rows.sql}) s
+         ON s.account_id = k.account_id AND s.conversation_id = k.conversation_id
+     ),
+     per_key AS (
+       SELECT message_key, COUNT(*) AS n, COUNT(DISTINCT account_id) AS accounts,
+              SUM(unread) AS u, MAX(unread) AS shown
+       FROM copies GROUP BY message_key
+     ),
+     ranked AS (
+       SELECT message_key, unread,
+              ROW_NUMBER() OVER (
+                PARTITION BY message_key, account_id
+                ORDER BY latest DESC, conversation_id
+              ) AS rank
+       FROM copies
+       WHERE message_key IN (SELECT message_key FROM per_key WHERE n > accounts)
+     ),
+     pairs AS (
+       SELECT n, u, shown FROM per_key WHERE n = accounts
+       UNION ALL
+       SELECT COUNT(*), SUM(unread), MAX(unread) FROM ranked
+       GROUP BY message_key, rank
+     )
+     SELECT COALESCE(SUM(n - 1), 0) AS n, COALESCE(SUM(u - shown), 0) AS u
+     FROM pairs`,
+    rows.bindings,
+  );
+  return {
+    matching: counts.matching - Number(hidden?.n ?? 0),
+    unread: counts.unread - Number(hidden?.u ?? 0),
+  };
 }
-
-// The Message-ID of the message a conversation summary names as its latest
-// (readConversationSummaries): the newest that isn't a draft or in the
-// trash, else the newest. Normalised as normalizeInternetMessageId does.
-const LATEST_MESSAGE_ID_SQL = `SELECT lower(trim(trim(trim(m.internet_message_id), '<>')))
-  FROM effective_messages e
-  JOIN messages m ON m.account_id = e.account_id AND m.message_id = e.message_id
-  WHERE e.account_id = s.account_id AND e.conversation_id = s.conversation_id
-  ORDER BY (e.in_draft = 0 AND e.in_trash = 0) DESC, e.received_at_ms DESC, e.message_id DESC
-  LIMIT 1`;
 
 function mentionsDrafts(predicate: MailPredicate): boolean {
   switch (predicate.kind) {
@@ -311,7 +324,7 @@ async function readFilteredCounts(
   // that is itself snoozed.
   const snoozed = mailbox === "snoozed";
   return countConversationRows(tx, scope, {
-    sql: `SELECT e.account_id, e.conversation_id,
+    sql: `SELECT e.account_id, e.conversation_id, MAX(e.received_at_ms) AS latest,
             MAX(CASE WHEN e.read = 0${snoozed ? " AND IFNULL(e.snoozed_until_ms, 0) > ?" : ""} THEN 1 ELSE 0 END) AS unread
           FROM ${from}
           WHERE ${where}
@@ -431,7 +444,8 @@ async function readIndexedCounts(
 ): Promise<Counts> {
   const { where, whereBindings } = indexedScope(scope, index);
   return countConversationRows(tx, scope, {
-    sql: `SELECT c.account_id, c.conversation_id, (c.unread = 1) AS unread
+    sql: `SELECT c.account_id, c.conversation_id, c.latest_at_ms AS latest,
+            (c.unread = 1) AS unread
           FROM ${index.source} c WHERE ${where}`,
     bindings: whereBindings,
   });
@@ -465,14 +479,14 @@ async function readConversationSummaries(
   const members = await tx.query(
     `SELECT account_id, conversation_id, message_id, subject, preview, from_address, to_json,
             received_at_ms, unread, starred, label_ids_json, roles_json, pending_operation_ids_json,
-            has_attachments, internet_message_id
+            has_attachments, message_key
      FROM (
        SELECT e.account_id, e.conversation_id, e.message_id, e.subject, e.preview, e.from_address,
               e.to_json, e.received_at_ms, e.read AS unread, e.starred, e.label_ids_json, e.roles_json,
-              e.pending_operation_ids_json, e.has_attachments, m.internet_message_id
+              e.pending_operation_ids_json, e.has_attachments, k.message_key
        FROM effective_messages e
-       LEFT JOIN messages m
-         ON m.account_id = e.account_id AND m.message_id = e.message_id
+       LEFT JOIN conversation_message_keys k
+         ON k.account_id = e.account_id AND k.conversation_id = e.conversation_id
        WHERE ${page
          .map(() => "(e.account_id = ? AND e.conversation_id = ?)")
          .join(" OR ")}
@@ -532,11 +546,9 @@ async function readConversationSummaries(
       ) as MessageMetadata["roles"],
       pendingOperationIds: jsonStringArray(message.pending_operation_ids_json),
       latestMessageId: String(subjectMessage.message_id),
-      ...(subjectMessage.internet_message_id == null
+      ...(message.message_key == null
         ? {}
-        : {
-            latestInternetMessageId: String(subjectMessage.internet_message_id),
-          }),
+        : { latestInternetMessageId: String(message.message_key) }),
       hasAttachments: conversationMembers.some(
         (member) => Number(member.has_attachments) === 1,
       ),
