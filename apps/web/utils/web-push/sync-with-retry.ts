@@ -5,7 +5,7 @@ export const PUSH_SYNC_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
  * Runs a push subscription sync and, if it fails (no service worker in time,
  * a server error, a browser refusal), tries again on a short backoff and
  * whenever the reader comes back to the tab, until one succeeds. Without this
- * a failed resume after a pause leaves push off until the next page load.
+ * a failed sync leaves the server's copy stale until the next page load.
  */
 export function syncWithRetry({
   sync,

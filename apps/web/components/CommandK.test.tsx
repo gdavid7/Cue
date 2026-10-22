@@ -113,6 +113,11 @@ const quiet = vi.hoisted(() => ({
 vi.mock("@/hooks/useNotificationsQuiet", () => ({
   useNotificationsQuiet: () => quiet,
 }));
+vi.mock("@/utils/web-push/subscription", () => ({
+  isWebPushAvailable: () => false,
+  syncWebPushQuietUntil: vi.fn(async () => true),
+  syncWebPushSubscription: vi.fn(async () => true),
+}));
 vi.mock("@/hooks/useSnoozeDateParser", () => ({
   useSnoozeDateParser: vi.fn(() => null),
 }));
