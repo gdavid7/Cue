@@ -17,6 +17,7 @@ import type { KeyedMutator } from "swr";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import {
   CheckIcon,
+  ChevronDownIcon,
   FlagIcon,
   MailSearchIcon,
   PauseIcon,
@@ -50,6 +51,7 @@ import {
   removeFromCachedToday,
 } from "@/utils/home/today-cache";
 import { useMailHref } from "@/hooks/useMailHref";
+import { cn } from "@/utils";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { mailCommandContextAtom } from "@/store/command-palette";
@@ -77,7 +79,7 @@ import {
 } from "./CueNotice";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
-import { formatTime } from "./today-format";
+import { formatSenders, formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
 import { TodayWeather } from "./TodayWeather";
 import {
@@ -165,6 +167,7 @@ export function HomeDashboard() {
   const [hidden, setHidden] = useState(NO_THREADS);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [waitingShown, setWaitingShown] = useState(false);
+  const [readingShown, setReadingShown] = useState(false);
 
   // The local engine syncs, and so acts in, only accounts it was told about;
   // the routed one is told on startup. All inboxes tells it the same way.
@@ -258,6 +261,7 @@ export function HomeDashboard() {
       waitingOnYou: visible(waitingOnYouShown),
       waiting: visible(data.waiting),
       alsoInInbox: visibleAlsoInInbox,
+      reading: visible(data.reading),
     };
   }, [data, hidden, waitingOnYouShown, visibleAlsoInInbox]);
   const notice =
@@ -299,8 +303,13 @@ export function HomeDashboard() {
     const middle = allClear
       ? [...(waitingShown ? lanes.waiting : []), ...lanes.waitingOnYou]
       : [...lanes.waitingOnYou, ...lanes.waiting];
-    return [...lanes.needsYou, ...middle, ...lanes.alsoInInbox];
-  }, [lanes, allClear, waitingShown, visibleAlsoInInbox]);
+    return [
+      ...lanes.needsYou,
+      ...middle,
+      ...lanes.alsoInInbox,
+      ...(readingShown ? lanes.reading : []),
+    ];
+  }, [lanes, allClear, waitingShown, readingShown, visibleAlsoInInbox]);
   const focused = rows.find((thread) => rowKey(thread) === focusedId);
   const allRows = useMemo(
     () => [
@@ -308,6 +317,7 @@ export function HomeDashboard() {
       ...waitingOnYouShown,
       ...(data?.waiting ?? []),
       ...alsoInInbox,
+      ...(data?.reading ?? []),
     ],
     [data, waitingOnYouShown, alsoInInbox],
   );
@@ -409,23 +419,57 @@ export function HomeDashboard() {
     element?.focus({ preventScroll: !target });
   });
 
-  // Gone at once, with focus on its neighbour; back if the engine refuses it.
-  const removeRow = useStableCallback(
-    async (key: string, run: (threadKeys: string[]) => Promise<string[]>) => {
-      const index = rows.findIndex((thread) => rowKey(thread) === key);
-      const neighbour = rows[index + 1] ?? rows[index - 1];
-      setHidden((current) => new Set(current).add(key));
-      focusRow(neighbour ? rowKey(neighbour) : null);
-      const done = await run([key]);
-      if (!done.length) return showThreads([key]);
-      // So it doesn't come back on the next visit before Today refreshes.
-      const thread = rowByKey.get(key);
-      if (thread)
-        removeFromCachedToday(thread.account?.id ?? emailAccountId, [
+  // Gone at once; back if the engine refuses them.
+  const removeRows = useStableCallback(
+    async (
+      keys: string[],
+      run: (threadKeys: string[]) => Promise<string[]>,
+    ) => {
+      setHidden((current) => {
+        const next = new Set(current);
+        for (const key of keys) next.add(key);
+        return next;
+      });
+      const done = new Set(await run(keys));
+      const refused = keys.filter((key) => !done.has(key));
+      if (refused.length) showThreads(refused);
+      // So they don't come back on the next visit before Today refreshes.
+      const threadIdsByAccount = new Map<string, string[]>();
+      for (const key of done) {
+        const thread = rowByKey.get(key);
+        if (!thread) continue;
+        const accountId = thread.account?.id ?? emailAccountId;
+        threadIdsByAccount.set(accountId, [
+          ...(threadIdsByAccount.get(accountId) ?? []),
           thread.threadId,
         ]);
+      }
+      for (const [accountId, threadIds] of threadIdsByAccount)
+        removeFromCachedToday(accountId, threadIds);
     },
   );
+  // With focus on its neighbour, so the keyboard keeps its place.
+  const removeRow = useStableCallback(
+    (key: string, run: (threadKeys: string[]) => Promise<string[]>) => {
+      const index = rows.findIndex((thread) => rowKey(thread) === key);
+      const neighbour = rows[index + 1] ?? rows[index - 1];
+      focusRow(neighbour ? rowKey(neighbour) : null);
+      return removeRows([key], run);
+    },
+  );
+  // The whole Reading bundle at once. Read or archived, a newsletter has
+  // left the bundle, so its rows go either way.
+  const clearReading = useStableCallback((change: "read" | "archive") => {
+    const keys = (lanes?.reading ?? []).map(rowKey);
+    if (!keys.length) return;
+    if (focusedId && keys.includes(focusedId)) focusRow(null);
+    return removeRows(
+      keys,
+      change === "read"
+        ? (threadKeys) => setReadState(threadKeys, true)
+        : archive,
+    );
+  });
 
   // Flags change in place; the server snapshot catches up on its next load.
   const patchRow = useStableCallback(
@@ -687,6 +731,9 @@ export function HomeDashboard() {
             allClear={allClear}
             waitingShown={waitingShown}
             onToggleWaiting={() => setWaitingShown((shown) => !shown)}
+            readingShown={readingShown}
+            onToggleReading={() => setReadingShown((shown) => !shown)}
+            onClearReading={clearReading}
             emailAccountId={emailAccountId}
             accountIds={allInboxesAccounts?.map((account) => account.id)}
             accountColorIndexById={accountColorIndexById}
@@ -734,6 +781,9 @@ function HomeLanes({
   allClear,
   waitingShown,
   onToggleWaiting,
+  readingShown,
+  onToggleReading,
+  onClearReading,
   emailAccountId,
   accountIds,
   accountColorIndexById,
@@ -756,12 +806,16 @@ function HomeLanes({
     waitingOnYou: TodayThread[];
     waiting: TodayThread[];
     alsoInInbox: TodayThread[];
+    reading: TodayThread[];
   };
   /** Why Cue can't yet say what needs a reply, which then says so instead. */
   notice: ReturnType<typeof cueNotice>;
   allClear: boolean;
   waitingShown: boolean;
   onToggleWaiting: () => void;
+  readingShown: boolean;
+  onToggleReading: () => void;
+  onClearReading: (change: "read" | "archive") => void;
   emailAccountId: string;
   /** Across accounts: every account Today shows. */
   accountIds?: string[];
@@ -978,7 +1032,113 @@ function HomeLanes({
             : undefined
         }
       />
+
+      <ReadingSection
+        threads={lanes.reading}
+        capped={stats.readingCapped}
+        open={readingShown}
+        onToggle={onToggleReading}
+        onClear={onClearReading}
+        outdated={outdated.has("reading")}
+        rowContext={rowContext}
+      />
     </>
+  );
+}
+
+/**
+ * Unread newsletters in one calm row that names who they're from, rather than
+ * a row each. It opens in place to the list; the whole bundle can be marked
+ * read or archived at once.
+ */
+function ReadingSection({
+  threads,
+  capped,
+  open,
+  onToggle,
+  onClear,
+  outdated,
+  rowContext,
+}: {
+  threads: TodayThread[];
+  capped: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onClear: (change: "read" | "archive") => void;
+  outdated?: boolean;
+  rowContext: TodayRowContext;
+}) {
+  const listId = useId();
+  if (!threads.length) return null;
+  const actionClassName =
+    "font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50";
+  return (
+    <Section
+      title="Reading"
+      count={formatCount(threads.length, capped)}
+      outdated={outdated}
+      action={
+        // Changes go through the mail engine, as the rows' own do.
+        <span className="flex items-center gap-3">
+          <button
+            className={actionClassName}
+            disabled={!rowContext.canChange}
+            onClick={() => onClear("read")}
+            type="button"
+          >
+            Mark all read
+          </button>
+          <button
+            className={actionClassName}
+            disabled={!rowContext.canChange}
+            onClick={() => onClear("archive")}
+            type="button"
+          >
+            Archive all
+          </button>
+        </span>
+      }
+    >
+      <div className="-mx-4 sm:mx-0 border-border/60 border-t">
+        <button
+          aria-controls={open ? listId : undefined}
+          aria-expanded={open}
+          // Text starts where the lanes' rows put it, past their unread-dot slot.
+          className={cn(
+            "flex w-full items-center gap-3 bg-background py-2.5 pr-3.5 pl-8 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-muted lg:pr-5",
+            !open && "border-border/60 border-b",
+          )}
+          onClick={onToggle}
+          type="button"
+        >
+          <span className="min-w-0 flex-1 truncate text-foreground text-sm">
+            From {formatSenders(threads.map((thread) => thread.fromName))}
+          </span>
+          <ChevronDownIcon
+            aria-hidden
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground motion-safe:transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+      </div>
+      {open ? (
+        <div id={listId}>
+          <ThreadList
+            hasFocusedRow={threads.some(
+              (thread) => rowKey(thread) === rowContext.focusedId,
+            )}
+            label="Reading"
+          >
+            {/* Every row here is a newsletter; the lane already says so. */}
+            {threads.map((thread) =>
+              renderTodayRow({ ...thread, tag: undefined }, rowContext),
+            )}
+          </ThreadList>
+        </div>
+      ) : null}
+    </Section>
   );
 }
 
@@ -1383,5 +1543,6 @@ function patchThread(
     needsYou: patch(data.needsYou),
     waiting: patch(data.waiting),
     alsoInInbox: patch(data.alsoInInbox),
+    reading: patch(data.reading),
   };
 }

@@ -311,7 +311,7 @@ describe("getHomeData", () => {
 
       expect(home.needsYou.map((t) => t.threadId)).toEqual(["sarah"]);
       expect(home.alsoInInbox).toEqual([]);
-      expect(home.pending).toEqual(["alsoInInbox"]);
+      expect(home.pending).toEqual(["alsoInInbox", "reading"]);
     } finally {
       vi.useRealTimers();
     }
@@ -357,7 +357,7 @@ describe("getHomeData", () => {
 
     expect(home.alsoInInbox).toEqual([]);
     expect(home.pending).toEqual([]);
-    expect(home.failed).toEqual(["alsoInInbox"]);
+    expect(home.failed).toEqual(["alsoInInbox", "reading"]);
   });
 
   it("holds back the rest of the inbox until the labels load, so filed mail isn't shown there", async () => {
@@ -376,7 +376,8 @@ describe("getHomeData", () => {
       const home = await run(provider);
 
       expect(home.alsoInInbox).toEqual([]);
-      expect(home.pending).toEqual(["alsoInInbox"]);
+      expect(home.reading).toEqual([]);
+      expect(home.pending).toEqual(["alsoInInbox", "reading"]);
     }
   });
 
@@ -488,9 +489,118 @@ describe("getHomeData", () => {
 
     const home = await run(provider);
 
-    // Read from the inbox listing's own labels: no list per filing label.
-    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
+    // Read from the inbox listing's own labels: no list per filing label,
+    // only the newsletters Today bundles under Reading.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(2);
     expect(home.alsoInInbox).toEqual([]);
+  });
+
+  it("bundles unread newsletters still in the inbox under Reading, which the rest of the inbox leaves out", async () => {
+    const unread = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const read = thread("read", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Read already",
+      labels: ["INBOX", "Label_Newsletter"],
+    });
+    const archived = thread("archived", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Archived",
+      labels: ["UNREAD", "Label_Newsletter"],
+    });
+    const old = thread("old", {
+      from: "Old News <old@news.example>",
+      subject: "Weeks ago",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    old.messages[0].internalDate = String(NOW.getTime() - 10 * 86_400_000);
+    const dentist = thread("dentist", {
+      from: "Dentist <d@smile.com>",
+      subject: "Your appointment",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider({
+      INBOX: [unread, read, dentist],
+      Newsletter: [unread, read, archived, old],
+    });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.reading[0]).toMatchObject({
+      fromName: "Field Notes",
+      tag: "Newsletter",
+      unread: true,
+      inInbox: true,
+    });
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+    expect(home.stats.readingCapped).toBe(false);
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: {
+          labelIds: ["Label_Newsletter", "INBOX"],
+          isUnread: true,
+          after: new Date(NOW.getTime() - 7 * 86_400_000),
+        },
+      }),
+    );
+  });
+
+  it("leaves what Reading shows out of the rest of the inbox, even when the inbox listing doesn't name its label", async () => {
+    const filed = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    // Outlook names a message's categories only once it knows them.
+    const unnamed = {
+      ...filed,
+      messages: filed.messages.map((m) => ({
+        ...m,
+        labelIds: ["INBOX", "UNREAD"],
+      })),
+    };
+    const provider = mockProvider({ INBOX: [unnamed], Newsletter: [filed] });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
+  });
+
+  it("shows a newsletter that needs a reply only under Needs reply", async () => {
+    const newsletter = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "Reply to win",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const provider = mockProvider({
+      NEEDS_REPLY: [newsletter],
+      Newsletter: [newsletter],
+    });
+
+    const home = await run(provider);
+
+    expect(home.needsYou.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.reading).toEqual([]);
+  });
+
+  it("says when Reading holds more newsletters than it lists", async () => {
+    const newsletters = Array.from({ length: 10 }, (_, i) =>
+      thread(`weekly-${i}`, {
+        from: `Letter ${i} <l${i}@news.example>`,
+        subject: `Issue ${i}`,
+        labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+      }),
+    );
+
+    const home = await run(mockProvider({ Newsletter: newsletters }));
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
   });
 
   it("names the labels Cue files under, so the browser's own inbox can leave filed mail out too", async () => {
@@ -549,8 +659,8 @@ describe("getHomeData", () => {
         }),
       }),
     );
-    // Counted from Cue's records: no extra mailbox reads.
-    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
+    // Counted from Cue's records: no reads past the inbox and its newsletters.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(2);
   });
 });
 

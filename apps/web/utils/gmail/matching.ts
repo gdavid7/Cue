@@ -4,11 +4,13 @@ import type {
   MatchingScope,
 } from "@/utils/actions/mail-bulk-matching.validation";
 import { getGmailViewLabelIds, GmailLabel } from "@/utils/gmail/label";
+import { mapWithConcurrency } from "@/utils/async";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
 
 // The most messages.list returns in one page.
 const MATCHING_PAGE_SIZE = 500;
+const CONVERSATION_CONCURRENCY = 5;
 
 /** The messages.list arguments for every message a scope holds. */
 export function gmailMatchingListQuery(
@@ -59,12 +61,15 @@ export async function listGmailMatchingMessages({
     }),
   );
 
+  const messages = (response.data.messages ?? []).flatMap((message) =>
+    message.id && message.threadId
+      ? [{ id: message.id, threadId: message.threadId }]
+      : [],
+  );
   return {
-    messages: (response.data.messages ?? []).flatMap((message) =>
-      message.id && message.threadId
-        ? [{ id: message.id, threadId: message.threadId }]
-        : [],
-    ),
+    messages: actsOnConversations(scope, only)
+      ? await withConversationMessages({ gmail, messages, only })
+      : messages,
     nextPageToken: response.data.nextPageToken ?? undefined,
   };
 }
@@ -100,4 +105,81 @@ function scopeLabelIds(scope: MatchingScope) {
   // A search covers the whole mailbox, as Gmail's own search box does.
   if (scope.q && !scope.type) return [];
   return getGmailViewLabelIds(scope.type);
+}
+
+/**
+ * The Reading lane holds conversations, so its job archives or changes read
+ * state for every message of each conversation whose labelled message still
+ * matches, or a digest whose replies lack the label would stay behind. Every
+ * other view and search stays per message.
+ */
+function actsOnConversations(scope: MatchingScope, only: MatchingFilter) {
+  const changesState = only.inInbox || only.unread !== undefined;
+  return Boolean(scope.wholeConversations && changesState);
+}
+
+/** The page's conversations' messages the action would change, each once. */
+async function withConversationMessages({
+  gmail,
+  messages,
+  only,
+}: {
+  gmail: gmail_v1.Gmail;
+  messages: { id: string; threadId: string }[];
+  only: MatchingFilter;
+}) {
+  const threadIds = [...new Set(messages.map((message) => message.threadId))];
+  const threads = await mapWithConcurrency(
+    threadIds,
+    CONVERSATION_CONCURRENCY,
+    async (threadId) => {
+      try {
+        const thread = await withGmailRetry(() =>
+          gmail.users.threads.get({
+            userId: "me",
+            id: threadId,
+            format: "minimal",
+            fields: "messages(id,threadId,labelIds)",
+          }),
+        );
+        return thread.data.messages ?? [];
+      } catch (error) {
+        // Gone since the listing: what was listed is still the best guess.
+        if (!isNotFound(error)) throw error;
+        return messages
+          .filter((message) => message.threadId === threadId)
+          .map((message) => ({ ...message, labelIds: null }));
+      }
+    },
+  );
+  const listedIds = new Set(messages.map((message) => message.id));
+  const changes = (id: string, labelIds: string[] | null) => {
+    if (!labelIds) return listedIds.has(id);
+    if (
+      labelIds.includes(GmailLabel.TRASH) ||
+      labelIds.includes(GmailLabel.SPAM)
+    )
+      return false;
+    if (only.inInbox && !labelIds.includes(GmailLabel.INBOX)) return false;
+    if (only.unread === true) return labelIds.includes(GmailLabel.UNREAD);
+    if (only.unread === false) return !labelIds.includes(GmailLabel.UNREAD);
+    return true;
+  };
+  const seen = new Set<string>();
+  return threads.flatMap((threadMessages) =>
+    threadMessages.flatMap((message) => {
+      if (!message.id || !message.threadId || seen.has(message.id)) return [];
+      if (!changes(message.id, message.labelIds ?? null)) return [];
+      seen.add(message.id);
+      return [{ id: message.id, threadId: message.threadId }];
+    }),
+  );
+}
+
+function isNotFound(error: unknown) {
+  const { code, status } = (error ?? {}) as {
+    code?: unknown;
+    status?: unknown;
+  };
+  return code === 404 || status === 404;
 }

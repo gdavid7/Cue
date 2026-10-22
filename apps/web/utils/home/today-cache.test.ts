@@ -325,6 +325,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
     needsYou: [thread("needs-1")],
     waiting: [],
     alsoInInbox: [thread("inbox-1")],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
@@ -340,6 +341,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
       waiting: 0,
       needsYouCapped: false,
       waitingCapped: false,
+      readingCapped: false,
     },
     ...overrides,
   } as GetHomeResponse;

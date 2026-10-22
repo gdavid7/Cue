@@ -1,5 +1,6 @@
 "use client";
 
+import { isReadingMailView } from "@/app/(app)/[emailAccountId]/mail/reading-lane";
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
@@ -65,14 +66,17 @@ export function MailMobileNav({
   const pathname = usePathname() ?? "";
   const isToday = pathname.endsWith("/home");
   const searchParams = useSearchParams();
-  // Inbox is current only on the inbox itself (any of its tabs), not on Sent,
-  // a label, a search or All Inboxes.
+  // Inbox is current only on the inbox itself (any of its tabs, and the
+  // Reading lane its newsletters are bundled into), not on Sent, a label, a
+  // search or All Inboxes.
   const mailView = parseMailPath(pathname, searchParams);
   const isInbox =
     !isToday &&
     (!mailView ||
       (!mailView.allInboxes &&
-        (mailView.view?.kind === "inbox" || mailView.view?.kind === "split")));
+        (mailView.view?.kind === "inbox" ||
+          mailView.view?.kind === "split" ||
+          isReadingMailView(mailView.view))));
 
   if (readerActions) {
     return (

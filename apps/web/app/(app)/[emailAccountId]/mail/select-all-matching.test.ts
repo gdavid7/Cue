@@ -4,6 +4,7 @@ import {
   getMatchingResultCopy,
   getMatchingScope,
   needsMatchingConfirm,
+  getAccountMatchingScope,
 } from "@/app/(app)/[emailAccountId]/mail/select-all-matching";
 
 describe("getMatchingScope", () => {
@@ -116,5 +117,25 @@ describe("getMatchingResultCopy", () => {
     expect(getMatchingResultCopy("delete_forever", 3)).toBe(
       "Deleted 3 conversations forever",
     );
+  });
+});
+
+describe("getAccountMatchingScope", () => {
+  it("never covers a bundled inbox, whose newsletters the user never saw selected", () => {
+    const query = { type: "inbox" };
+    expect(
+      getAccountMatchingScope({
+        query,
+        provider: "google",
+        bundlesReading: true,
+      }),
+    ).toBeNull();
+    expect(
+      getAccountMatchingScope({
+        query,
+        provider: "google",
+        bundlesReading: false,
+      }),
+    ).toEqual({ type: "inbox" });
   });
 });

@@ -113,7 +113,12 @@ describe("mergeHomeData", () => {
     ]);
 
     expect(data?.needsYou.map((row) => row.threadId)).toEqual(["a1"]);
-    expect(data?.pending).toEqual(["needsYou", "waiting", "alsoInInbox"]);
+    expect(data?.pending).toEqual([
+      "needsYou",
+      "waiting",
+      "alsoInInbox",
+      "reading",
+    ]);
     expect(failedAccountIds).toEqual([]);
   });
 
@@ -139,7 +144,12 @@ describe("mergeHomeData", () => {
     ]);
 
     expect(data?.needsYou).toEqual([]);
-    expect(data?.failed).toEqual(["needsYou", "waiting", "alsoInInbox"]);
+    expect(data?.failed).toEqual([
+      "needsYou",
+      "waiting",
+      "alsoInInbox",
+      "reading",
+    ]);
     expect(failedAccountIds).toEqual([B.id]);
   });
 
@@ -389,6 +399,7 @@ function home(): GetHomeResponse {
     needsYou: [],
     waiting: [],
     alsoInInbox: [],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
@@ -409,6 +420,7 @@ function stats(): GetHomeResponse["stats"] {
     waiting: 0,
     needsYouCapped: false,
     waitingCapped: false,
+    readingCapped: false,
   };
 }
 

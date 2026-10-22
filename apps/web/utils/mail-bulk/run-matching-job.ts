@@ -156,7 +156,15 @@ export async function runMailBulkJobStep({
           only: filterForAction(job.action),
           pageToken,
         });
+        // A conversation listed whole on an earlier page is already in full.
+        const known = listing.scope.wholeConversations
+          ? await store.knownConversations(
+              body.jobId,
+              uniq(page.messages.map((message) => message.threadId)),
+            )
+          : null;
         const targets = page.messages
+          .filter((message) => !known?.has(message.threadId))
           .slice(0, Math.max(0, targetCap - total))
           .map((message) => ({
             messageId: message.id,
