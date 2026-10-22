@@ -2306,6 +2306,32 @@ export class GmailProvider implements EmailProvider {
     }));
   }
 
+  async listUnreadInboxThreadIds({
+    after,
+    maxResults,
+  }: {
+    after: Date;
+    maxResults: number;
+  }): Promise<string[]> {
+    return this.withRateLimitTracking(
+      "list-unread-inbox-thread-ids",
+      async () => {
+        const response = await withGmailRetry(() =>
+          this.client.users.threads.list({
+            userId: "me",
+            labelIds: [GmailLabel.INBOX],
+            q: `is:unread after:${Math.floor(after.getTime() / 1000)}`,
+            maxResults,
+            fields: "threads/id",
+          }),
+        );
+        return (response.data.threads ?? []).flatMap((thread) =>
+          thread.id ? [thread.id] : [],
+        );
+      },
+    );
+  }
+
   async getInboxStats(): Promise<{ total: number; unread: number }> {
     const label = await getLabelById({ gmail: this.client, id: "INBOX" });
     return {

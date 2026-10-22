@@ -74,6 +74,11 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       accountId: accountIdSchema.optional(),
     }),
     z.object({
+      kind: z.literal("conversation"),
+      ids: z.array(z.string().min(1).max(512)).max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
+    }),
+    z.object({
       kind: z.literal("text"),
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
@@ -118,6 +123,12 @@ export type MailPredicate =
   | { kind: "has_attachment"; value: boolean }
   /** These messages, of `accountId` alone when it is set. */
   | { kind: "message"; ids: string[]; accountId?: string }
+  /**
+   * Every message of these conversations, of `accountId` alone when it is
+   * set. Newer than the other kinds: check `predicate:conversation` with
+   * `mailClientSupports` before sending it to an engine.
+   */
+  | { kind: "conversation"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";

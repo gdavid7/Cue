@@ -70,12 +70,13 @@ test("an account without the Newsletter label bundles what Cue sorted as newslet
   test.setTimeout(240_000);
   // Cue sorts without labelling the mailbox by default, so most accounts
   // have no Newsletter label and only Cue's own records say what's what.
-  await removeNewsletterLabel(page);
+  const restoreLabel = await removeNewsletterLabel(page);
   const subject = `Slow Mail digest ${Date.now()}`;
   const newsletter = await seedNewsletter(page, subject, { labelled: false });
   const emailAccountId = await getEmailAccountId(page);
-  const unsort = await sortAsNewsletter(emailAccountId, newsletter);
+  let unsort: (() => Promise<void>) | undefined;
   try {
+    unsort = await sortAsNewsletter(emailAccountId, newsletter);
     await openToday(page);
     const reading = page
       .locator("section")
@@ -117,8 +118,9 @@ test("an account without the Newsletter label bundles what Cue sorted as newslet
       .poll(() => newsletter.folderOf(), { timeout: 60_000 })
       .toBe("archive");
   } finally {
-    await unsort();
+    await unsort?.();
     await newsletter.remove();
+    await restoreLabel();
   }
 });
 
@@ -998,7 +1000,10 @@ async function openNeedsReplyTrackers(
   });
 }
 
-/** Takes the Newsletter label (an Outlook category) off the account. */
+/**
+ * Takes the Newsletter label (an Outlook category) off the account, and
+ * returns what puts it back, so later tests find the account as it was.
+ */
 async function removeNewsletterLabel(page: Page) {
   const headers = {
     Authorization: `Bearer ${await readProviderAccessToken()}`,
@@ -1010,15 +1015,22 @@ async function removeNewsletterLabel(page: Page) {
     const { value } = (await listed.json()) as {
       value: { id: string; displayName: string }[];
     };
-    for (const category of value.filter(
+    const removed = value.filter(
       (candidate) => candidate.displayName === "Newsletter",
-    )) {
-      const removed = await page.request.delete(`${base}/${category.id}`, {
+    );
+    for (const category of removed) {
+      const deleted = await page.request.delete(`${base}/${category.id}`, {
         headers,
       });
-      expect(removed.ok(), await removed.text()).toBe(true);
+      expect(deleted.ok(), await deleted.text()).toBe(true);
     }
-    return;
+    return async () => {
+      if (!removed.length) return;
+      await page.request.post(base, {
+        headers,
+        data: { displayName: "Newsletter" },
+      });
+    };
   }
   const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/labels`;
   const listed = await page.request.get(base, { headers });
@@ -1026,14 +1038,20 @@ async function removeNewsletterLabel(page: Page) {
   const { labels } = (await listed.json()) as {
     labels: { id: string; name: string }[];
   };
-  for (const label of labels.filter(
-    (candidate) => candidate.name === "Newsletter",
-  )) {
-    const removed = await page.request.delete(`${base}/${label.id}`, {
+  const removed = labels.filter((candidate) => candidate.name === "Newsletter");
+  for (const label of removed) {
+    const deleted = await page.request.delete(`${base}/${label.id}`, {
       headers,
     });
-    expect(removed.ok(), await removed.text()).toBe(true);
+    expect(deleted.ok(), await deleted.text()).toBe(true);
   }
+  return async () => {
+    if (!removed.length) return;
+    await page.request.post(base, {
+      headers,
+      data: { name: "Newsletter" },
+    });
+  };
 }
 
 /**

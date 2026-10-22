@@ -82,6 +82,35 @@ describe("useHome", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it("says which loads nobody asked for, so the server reads Gmail behind what people are doing", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(answer(["waiting"]))
+      .mockResolvedValue(answer([]));
+    renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
+    // Opening Today, then asking again for the lane still pending.
+    await act(() => vi.advanceTimersByTimeAsync(5100));
+    // Cue sorted something new.
+    await act(async () => {
+      announceTodayChanged();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    // The user comes back to the tab.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    const paths = fetcher.mock.calls.map(([key]) => (key as string[])[0]);
+    expect(paths).toEqual([
+      `/api/user/home?tz=${encodeURIComponent(ZONE)}`,
+      `/api/user/home?tz=${encodeURIComponent(ZONE)}&refresh=auto`,
+      `/api/user/home?tz=${encodeURIComponent(ZONE)}&refresh=auto`,
+      `/api/user/home?tz=${encodeURIComponent(ZONE)}`,
+    ]);
+  });
+
   it("reloads when the user comes back to the tab", async () => {
     const fetcher = vi.fn(async () => answer([]));
     renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });

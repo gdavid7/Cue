@@ -65,6 +65,7 @@ const PREDICATE_KINDS = {
   received: true,
   has_attachment: true,
   message: true,
+  conversation: true,
   text: true,
   search: true,
   account: true,

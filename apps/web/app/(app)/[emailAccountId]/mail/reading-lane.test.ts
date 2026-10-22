@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  conversationMatchesPredicate,
   type EffectiveMessage,
   messageMatchesPredicate,
 } from "@inboxzero/mail-core/query-semantics";
@@ -20,7 +21,16 @@ import {
 
 const NEWSLETTER = "Label_42";
 const CUE_NEWSLETTER = "m-cue";
+const CUE_CONVERSATION = "c-cue";
 const MEMBERSHIP: CueMembership = {
+  TO_REPLY: [],
+  NEWSLETTER: [CUE_NEWSLETTER],
+  MARKETING: [],
+  threads: { TO_REPLY: [], NEWSLETTER: [CUE_CONVERSATION], MARKETING: [] },
+};
+// As useCueMembership hands it to a page whose engine can't match whole
+// conversations.
+const MESSAGES_ONLY: CueMembership = {
   TO_REPLY: [],
   NEWSLETTER: [CUE_NEWSLETTER],
   MARKETING: [],
@@ -29,6 +39,7 @@ const NO_MEMBERSHIP: CueMembership = {
   TO_REPLY: [],
   NEWSLETTER: [],
   MARKETING: [],
+  threads: { TO_REPLY: [], NEWSLETTER: [], MARKETING: [] },
 };
 
 describe("getReadingRoute", () => {
@@ -36,47 +47,35 @@ describe("getReadingRoute", () => {
     getReadingRoute({
       isReadingView: true,
       isAllAccounts: false,
-      readingLabelId: NEWSLETTER,
       hasLaneQuery: true,
+      membershipLoading: false,
       labelsLoading: false,
       labelsFailed: false,
       ...overrides,
     });
 
-  it("shows the lane once the Newsletter label is known", () => {
+  it("shows the lane once the label or Cue's sorting names newsletters", () => {
     expect(route({})).toBe("lane");
+    // Cue's sorting alone, even when the labels didn't load.
+    expect(route({ labelsFailed: true })).toBe("lane");
+  });
+
+  it("waits for Cue's sorting, which may widen the lane, rather than show part of it", () => {
+    expect(route({ membershipLoading: true })).toBe("resolving");
   });
 
   it("never shows the lane's bar over the inbox it falls back to when labels fail", () => {
-    expect(
-      route({
-        readingLabelId: undefined,
-        hasLaneQuery: false,
-        labelsFailed: true,
-      }),
-    ).toBe("failed");
-  });
-
-  it("shows the lane from Cue's sorting alone, once the labels have had their say", () => {
-    expect(route({ readingLabelId: undefined })).toBe("lane");
-    expect(route({ readingLabelId: undefined, labelsFailed: true })).toBe(
-      "lane",
-    );
-    expect(route({ readingLabelId: undefined, labelsLoading: true })).toBe(
-      "resolving",
-    );
+    expect(route({ hasLaneQuery: false, labelsFailed: true })).toBe("failed");
   });
 
   it("waits while labels load", () => {
-    expect(route({ readingLabelId: undefined, labelsLoading: true })).toBe(
+    expect(route({ hasLaneQuery: false, labelsLoading: true })).toBe(
       "resolving",
     );
   });
 
   it("goes back to the inbox when nothing names a newsletter, or across accounts", () => {
-    expect(route({ readingLabelId: undefined, hasLaneQuery: false })).toBe(
-      "redirect",
-    );
+    expect(route({ hasLaneQuery: false })).toBe("redirect");
     expect(route({ isAllAccounts: true })).toBe("redirect");
   });
 
@@ -104,15 +103,10 @@ describe.each([
   ["Cue's sorting", undefined, MEMBERSHIP],
   ["the label and Cue's sorting", NEWSLETTER, MEMBERSHIP],
 ])("the inbox and its Reading lane, by %s", (_, labelId, cueMembership) => {
-  const sources = getReadingSources({ labelId, cueMembership });
-  const inbox = predicateFor(
-    inboxWithoutReadingQuery(sources.inbox),
-    cueMembership,
-  );
-  const lane = predicateFor(readingLaneQuery(sources.lane), cueMembership);
+  const { inbox, lane } = predicates(labelId, cueMembership);
   const newsletter = labelId
     ? { labelIds: [labelId] }
-    : { messageId: CUE_NEWSLETTER };
+    : { conversationId: CUE_CONVERSATION };
   const shownIn = (fields: Partial<EffectiveMessage>) => {
     const msg = message(fields);
     return {
@@ -150,6 +144,40 @@ describe.each([
   });
 });
 
+describe("a conversation Cue sorted by one of its messages", () => {
+  // Cue decided on the newest message; the first is a plain message of the
+  // same conversation.
+  const conversation = [
+    message({
+      messageId: "m-first",
+      conversationId: CUE_CONVERSATION,
+      roles: ["inbox"],
+    }),
+    message({
+      messageId: CUE_NEWSLETTER,
+      conversationId: CUE_CONVERSATION,
+      roles: ["inbox"],
+    }),
+  ];
+
+  it("shows in Reading alone, never in the inbox as well", () => {
+    const { inbox, lane } = predicates(undefined, MEMBERSHIP);
+    expect({
+      inbox: conversationMatchesPredicate(conversation, inbox),
+      lane: conversationMatchesPredicate(conversation, lane),
+    }).toEqual({ inbox: false, lane: true });
+  });
+
+  it("stays in the inbox, unbundled, where the engine can't match conversations", () => {
+    const sources = getReadingSources({
+      labelId: undefined,
+      cueMembership: MESSAGES_ONLY,
+    });
+    expect(inboxWithoutReadingQuery(sources)).toBeNull();
+    expect(readingLaneQuery(sources)).toBeNull();
+  });
+});
+
 describe("Reading by the label and Cue's sorting", () => {
   const sources = getReadingSources({
     labelId: NEWSLETTER,
@@ -157,7 +185,7 @@ describe("Reading by the label and Cue's sorting", () => {
   });
 
   it("lists a conversation both name once, as the server reads it", () => {
-    const query = readingLaneQuery(sources.lane);
+    const query = readingLaneQuery(sources);
     if (!query) throw new Error("expected a lane");
     const matches = createThreadsQueryFilter(query, MEMBERSHIP);
     const both = {
@@ -178,7 +206,7 @@ describe("Reading by the label and Cue's sorting", () => {
   });
 
   it("acts on all of the lane through the engine, as no mailbox search can express Cue's sorting", () => {
-    const query = readingLaneQuery(sources.lane);
+    const query = readingLaneQuery(sources);
     if (!query) throw new Error("expected a lane");
     expect(getMatchingScope(query, "google")).toBeNull();
     expect(getReadingBulkPlan({ hasMore: true, canMatch: false })).toBe(
@@ -187,11 +215,9 @@ describe("Reading by the label and Cue's sorting", () => {
   });
 
   it("keeps the label's own job when Cue sorted no newsletters", () => {
-    const labelOnly = getReadingSources({
-      labelId: NEWSLETTER,
-      cueMembership: NO_MEMBERSHIP,
-    });
-    const query = readingLaneQuery(labelOnly.lane);
+    const query = readingLaneQuery(
+      getReadingSources({ labelId: NEWSLETTER, cueMembership: NO_MEMBERSHIP }),
+    );
     if (!query) throw new Error("expected a lane");
     expect(getMatchingScope(query, "google")).toEqual({
       labelIds: ["INBOX", NEWSLETTER],
@@ -205,8 +231,8 @@ describe("getReadingSources", () => {
       labelId: undefined,
       cueMembership: MEMBERSHIP,
     });
-    expect(inboxWithoutReadingQuery(sources.inbox)).not.toBeNull();
-    expect(readingLaneQuery(sources.lane)).not.toBeNull();
+    expect(inboxWithoutReadingQuery(sources)).not.toBeNull();
+    expect(readingLaneQuery(sources)).not.toBeNull();
   });
 
   it("has nothing to bundle when neither names a newsletter", () => {
@@ -214,17 +240,19 @@ describe("getReadingSources", () => {
       labelId: undefined,
       cueMembership: NO_MEMBERSHIP,
     });
-    expect(inboxWithoutReadingQuery(sources.inbox)).toBeNull();
-    expect(readingLaneQuery(sources.lane)).toBeNull();
+    expect(inboxWithoutReadingQuery(sources)).toBeNull();
+    expect(readingLaneQuery(sources)).toBeNull();
   });
 
-  it("never holds the inbox for Cue's sorting, while the lane waits for it", () => {
+  it("bundles by the label alone while Cue's sorting loads, so the label's newsletters keep their row", () => {
     const sources = getReadingSources({
-      labelId: undefined,
+      labelId: NEWSLETTER,
       cueMembership: undefined,
     });
-    expect(inboxWithoutReadingQuery(sources.inbox)).toBeNull();
-    expect(readingLaneQuery(sources.lane)).not.toBeNull();
+    expect(sources).toEqual({ labelId: NEWSLETTER, byCue: false });
+    expect(readingLaneQuery(sources)).toEqual({
+      labelIds: ["INBOX", NEWSLETTER],
+    });
   });
 });
 
@@ -243,12 +271,15 @@ describe("getReadingSummary", () => {
   });
 });
 
-function predicateFor(
-  query: ReturnType<typeof readingLaneQuery>,
-  cueMembership: CueMembership,
-) {
-  if (!query) throw new Error("expected a query");
-  return threadsQueryToPredicate(threadsQuery.parse(query), cueMembership);
+function predicates(labelId: string | undefined, cueMembership: CueMembership) {
+  const sources = getReadingSources({ labelId, cueMembership });
+  const inbox = inboxWithoutReadingQuery(sources);
+  const lane = readingLaneQuery(sources);
+  if (!inbox || !lane) throw new Error("expected Reading");
+  return {
+    inbox: threadsQueryToPredicate(threadsQuery.parse(inbox), cueMembership),
+    lane: threadsQueryToPredicate(threadsQuery.parse(lane), cueMembership),
+  };
 }
 
 function listMessage(id: string, labelIds: string[]) {

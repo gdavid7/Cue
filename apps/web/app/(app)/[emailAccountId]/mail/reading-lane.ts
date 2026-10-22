@@ -20,16 +20,18 @@ export function isReadingMailView(view: MailUrlView | undefined) {
 /**
  * What says a conversation is a newsletter: the mailbox's Newsletter label
  * (an Outlook category), and Cue's own sorting, which most accounts rely on
- * as Cue doesn't label the mailbox by default. `byCue` is false only once
- * Cue's sorting has loaded with no newsletters, so the lane keeps the
- * label's own, cheaper query.
+ * as Cue doesn't label the mailbox by default. `byCue` is false when Cue
+ * sorted no newsletters, so the lane keeps the label's own, cheaper query.
  */
 export type ReadingSources = { labelId: string | undefined; byCue: boolean };
 
 /**
- * Where Reading's newsletters come from for the lane, which waits for Cue's
- * sorting rather than act on part of the lane, and for the inbox, which never
- * waits on it: until it loads, only the label bundles.
+ * Where Reading's newsletters come from. Cue's sorting counts only once it
+ * names whole conversations (see `useCueMembership`): matched message by
+ * message, a conversation with one sorted message and one not would show in
+ * both the inbox and Reading. So until it loads, and on an engine that can't
+ * match conversations, only the label bundles, and nothing is hidden that
+ * Reading doesn't show.
  */
 export function getReadingSources({
   labelId,
@@ -38,11 +40,10 @@ export function getReadingSources({
   labelId: string | undefined;
   /** Undefined while it loads. */
   cueMembership: CueMembership | undefined;
-}): { lane: ReadingSources; inbox: ReadingSources } {
-  const hasCueNewsletters = Boolean(cueMembership?.NEWSLETTER.length);
+}): ReadingSources {
   return {
-    lane: { labelId, byCue: !cueMembership || hasCueNewsletters },
-    inbox: { labelId, byCue: hasCueNewsletters },
+    labelId,
+    byCue: Boolean(cueMembership?.threads?.NEWSLETTER.length),
   };
 }
 
@@ -95,26 +96,27 @@ export function inboxWithoutReadingQuery({
 export function getReadingRoute({
   isReadingView,
   isAllAccounts,
-  readingLabelId,
   hasLaneQuery,
+  membershipLoading,
   labelsLoading,
   labelsFailed,
 }: {
   isReadingView: boolean;
   isAllAccounts: boolean;
-  readingLabelId: string | undefined;
   /** See `readingLaneQuery`. */
   hasLaneQuery: boolean;
+  /** Cue's sorting may still widen the lane, so it isn't acted on yet. */
+  membershipLoading: boolean;
   labelsLoading: boolean;
   labelsFailed: boolean;
 }): "off" | "resolving" | "failed" | "lane" | "redirect" {
   if (!isReadingView) return "off";
   if (isAllAccounts) return "redirect";
-  if (readingLabelId) return "lane";
-  // Cue's sorting alone still makes a lane, once the labels have had their say.
-  if (labelsFailed) return hasLaneQuery ? "lane" : "failed";
+  if (membershipLoading) return "resolving";
+  if (hasLaneQuery) return "lane";
+  if (labelsFailed) return "failed";
   if (labelsLoading) return "resolving";
-  return hasLaneQuery ? "lane" : "redirect";
+  return "redirect";
 }
 
 /**

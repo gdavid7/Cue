@@ -38,14 +38,21 @@ export async function getCueMembership({
     since: new Date(now.getTime() - READING_WINDOW_DAYS * 86_400_000),
   });
 
+  const threads: Record<CueFilterValue, string[]> = {
+    TO_REPLY: [...new Set(trackers.map((tracker) => tracker.threadId))],
+    NEWSLETTER: [],
+    MARKETING: [],
+  };
   const membership: CueMembership = {
     TO_REPLY: trackers.map((tracker) => tracker.messageId),
     NEWSLETTER: [],
     MARKETING: [],
+    threads,
   };
-  for (const { messageId, type } of decisions) {
-    if (membership[type].length < MEMBERSHIP_LIMIT)
-      membership[type].push(messageId);
+  for (const { threadId, messageId, type } of decisions) {
+    if (membership[type].length >= MEMBERSHIP_LIMIT) continue;
+    membership[type].push(messageId);
+    threads[type].push(threadId);
   }
 
   return membership;
@@ -58,14 +65,16 @@ export async function getCueMembership({
 export async function getCueNewsletterThreadIds({
   emailAccountId,
   since,
+  limit = MEMBERSHIP_LIMIT,
 }: {
   emailAccountId: string;
   since: Date;
+  limit?: number;
 }): Promise<string[]> {
   const { decisions } = await loadCueDecisions({ emailAccountId, since });
   return decisions
     .filter((decision) => decision.type === SystemType.NEWSLETTER)
-    .slice(0, MEMBERSHIP_LIMIT)
+    .slice(0, limit)
     .map((decision) => decision.threadId);
 }
 

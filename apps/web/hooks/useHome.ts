@@ -39,26 +39,40 @@ export function useHome(emailAccountId?: string | null) {
     pendingLoadsRef.current = loads;
     setPendingLoads(loads);
   };
+  // A load Today starts by itself, to show a change or a lane still pending,
+  // rather than one the user asked for by opening or returning to it.
+  const changeLoadRef = useRef(false);
+  const isUnrequestedLoad = () => {
+    const unrequested = changeLoadRef.current || pendingLoadsRef.current > 0;
+    changeLoadRef.current = false;
+    return unrequested;
+  };
   const key = homeKey(emailAccountId);
   const { cache, mutate: mutateKey, fetcher } = useSWRConfig();
   useSavedHomeSeed(emailAccountId);
-  const home = useSWR<TodayHomeData>(key, loadHome(cache, fetcher), {
-    // A row action while a load is on its way makes SWR drop that load's
-    // answer; ask again so the fresh lanes still arrive. A newer load still
-    // running will answer instead: asking again then would replace it, and
-    // that one would be dropped in turn, without end.
-    onDiscarded: (discarded) => {
-      if (key && !cache.get(discarded)?.isValidating) mutateKey(key);
+  const home = useSWR<TodayHomeData>(
+    key,
+    loadHome(cache, fetcher, isUnrequestedLoad),
+    {
+      // A row action while a load is on its way makes SWR drop that load's
+      // answer; ask again so the fresh lanes still arrive. A newer load still
+      // running will answer instead: asking again then would replace it, and
+      // that one would be dropped in turn, without end.
+      onDiscarded: (discarded) => {
+        if (key && !cache.get(discarded)?.isValidating) mutateKey(key);
+      },
+      // Each load spends Gmail quota, so tab switches share one.
+      focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
+      onSuccess: (data) =>
+        countPendingLoads(isRefreshing(data) ? pendingLoadsRef.current + 1 : 0),
+      refreshInterval: (data) =>
+        data &&
+        isRefreshing(data) &&
+        pendingLoadsRef.current < PENDING_LOAD_LIMIT
+          ? PENDING_REFRESH_MS
+          : 0,
     },
-    // Each load spends Gmail quota, so tab switches share one.
-    focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
-    onSuccess: (data) =>
-      countPendingLoads(isRefreshing(data) ? pendingLoadsRef.current + 1 : 0),
-    refreshInterval: (data) =>
-      data && isRefreshing(data) && pendingLoadsRef.current < PENDING_LOAD_LIMIT
-        ? PENDING_REFRESH_MS
-        : 0,
-  });
+  );
   const { mutate } = home;
 
   useEffect(() => {
@@ -79,6 +93,7 @@ export function useHome(emailAccountId?: string | null) {
     let changedSinceLoad = false;
     const load = () => {
       changedSinceLoad = false;
+      changeLoadRef.current = true;
       mutate();
       timer = setTimeout(() => {
         timer = undefined;
@@ -168,13 +183,24 @@ function useSavedHomeSeed(emailAccountId: string | null | undefined) {
   }, [serializedKey, emailAccountId, cache, mutate]);
 }
 
-/** The app's fetcher, keeping what Today shows of each lane still loading. */
-function loadHome(cache: Cache, fetcher: BareFetcher | undefined) {
+/**
+ * The app's fetcher, keeping what Today shows of each lane still loading. A
+ * load nobody asked for says so, and the server then reads Gmail behind what
+ * people are doing rather than ahead of it.
+ */
+function loadHome(
+  cache: Cache,
+  fetcher: BareFetcher | undefined,
+  isUnrequestedLoad: () => boolean = () => false,
+) {
   return async (
     key: NonNullable<ReturnType<typeof homeKey>>,
   ): Promise<TodayHomeData> => {
     if (!fetcher) throw new Error("No SWR fetcher configured");
-    const fresh = (await fetcher(key)) as TodayHomeData;
+    const [path, accountId] = key;
+    const fresh = (await fetcher(
+      isUnrequestedLoad() ? [`${path}&refresh=auto`, accountId] : key,
+    )) as TodayHomeData;
     // Read once it answers, so changes made meanwhile are what is kept.
     const shown = cache.get(unstable_serialize(key))?.data as
       | TodayHomeData

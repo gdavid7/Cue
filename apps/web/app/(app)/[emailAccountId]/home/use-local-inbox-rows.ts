@@ -24,7 +24,7 @@ import { HANDLED_WINDOW_DAYS } from "@/utils/home/today-constants";
 // Today shows five, but those the server puts under Needs reply and mail Cue
 // filed are left out, so read the most one page holds: a local read is cheap.
 const PAGE_SIZE = 100;
-const NO_HANDLED_LABELS: Record<string, string[]> = {};
+const NO_IDS_BY_ACCOUNT: Record<string, string[]> = {};
 
 /**
  * The inbox as this browser's local mail store holds it, newest first, as
@@ -36,8 +36,8 @@ const NO_HANDLED_LABELS: Record<string, string[]> = {};
 export function useLocalInboxRows({
   accounts,
   named,
-  handledLabelIds = NO_HANDLED_LABELS,
-  newsletterThreadIds = NO_HANDLED_LABELS,
+  handledLabelIds = NO_IDS_BY_ACCOUNT,
+  newsletterThreadIds = NO_IDS_BY_ACCOUNT,
   enabled,
 }: {
   accounts: TodayAccount[];
@@ -89,8 +89,8 @@ export function localInboxRows(
   {
     accounts,
     named,
-    handledLabelIds = NO_HANDLED_LABELS,
-    newsletterThreadIds = NO_HANDLED_LABELS,
+    handledLabelIds = NO_IDS_BY_ACCOUNT,
+    newsletterThreadIds = NO_IDS_BY_ACCOUNT,
     now = Date.now(),
   }: {
     accounts: TodayAccount[];
@@ -123,7 +123,10 @@ export function localInboxRows(
     )
       return [];
     // And so is what Cue sorted as a newsletter without labelling it.
-    if (newsletters.get(account.id)?.has(conversation.key.conversationId))
+    if (
+      conversation.latestMessageAtMs >= handledSince &&
+      newsletters.get(account.id)?.has(conversation.key.conversationId)
+    )
       return [];
     const row = toTodayThread(conversation, account.email);
     if (!row) return [];

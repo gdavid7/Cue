@@ -471,6 +471,14 @@ export interface EmailProvider {
     messages: { id: string; threadId: string }[];
     nextPageToken?: string;
   }>;
+  /**
+   * Conversations in the inbox with unread mail received since `after`,
+   * newest first, by id only: one cheap listing to check ids against.
+   */
+  listUnreadInboxThreadIds(options: {
+    after: Date;
+    maxResults: number;
+  }): Promise<string[]>;
   readonly localMailSyncStrategy: "account-history" | "folder-delta";
   markMessagesReadState(messageIds: string[], read: boolean): Promise<void>;
   markMessagesStarredState(

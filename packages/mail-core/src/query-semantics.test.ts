@@ -7,6 +7,37 @@ import {
   resolveSearchPredicates,
 } from "./query-semantics";
 
+describe("conversation predicates", () => {
+  const named: Extract<MailPredicate, { kind: "conversation" }> = {
+    kind: "conversation",
+    ids: ["c-1"],
+  };
+  const conversation = [
+    message({ messageId: "m-1", conversationId: "c-1", roles: ["inbox"] }),
+    message({ messageId: "m-2", conversationId: "c-1", roles: ["inbox"] }),
+  ];
+
+  it("matches every message of a named conversation, so its inverse matches none", () => {
+    expect(conversationMatchesPredicate(conversation, named)).toBe(true);
+    expect(
+      conversationMatchesPredicate(conversation, {
+        kind: "not",
+        predicate: named,
+      }),
+    ).toBe(false);
+  });
+
+  it("is accepted by the query schema and scoped to its account", () => {
+    expect(mailPredicateSchema.safeParse(named).success).toBe(true);
+    expect(
+      conversationMatchesPredicate(conversation, {
+        ...named,
+        accountId: "someone-else",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("mailbox predicates", () => {
   it("treats archive as a conversation with no inbox, trash, or spam members", () => {
     expect(

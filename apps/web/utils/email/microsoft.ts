@@ -2838,6 +2838,38 @@ export class OutlookProvider implements EmailProvider {
     }
   }
 
+  async listUnreadInboxThreadIds({
+    after,
+    maxResults,
+  }: {
+    after: Date;
+    maxResults: number;
+  }): Promise<string[]> {
+    const response: { value?: { conversationId?: string | null }[] } =
+      await withMicrosoftGraphRetry(
+        () =>
+          this.client
+            .getClient()
+            .api("/me/mailFolders/inbox/messages")
+            .select("conversationId")
+            // Graph wants the ordered property first in the filter.
+            .filter(
+              `receivedDateTime ge ${after.toISOString()} and isRead eq false`,
+            )
+            .orderby("receivedDateTime desc")
+            .top(maxResults)
+            .get(),
+        this.logger,
+      );
+    return [
+      ...new Set(
+        (response.value ?? []).flatMap((message) =>
+          message.conversationId ? [message.conversationId] : [],
+        ),
+      ),
+    ];
+  }
+
   async getInboxStats(): Promise<{ total: number; unread: number }> {
     const folder = await withMicrosoftGraphRetry(
       () =>

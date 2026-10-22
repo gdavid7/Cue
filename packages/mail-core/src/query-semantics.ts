@@ -75,6 +75,10 @@ export function messageMatchesPredicate(
       if (predicate.accountId && predicate.accountId !== message.accountId)
         return false;
       return predicate.ids.includes(message.messageId);
+    case "conversation":
+      if (predicate.accountId && predicate.accountId !== message.accountId)
+        return false;
+      return predicate.ids.includes(message.conversationId);
     case "text":
       return textMatches(
         message,

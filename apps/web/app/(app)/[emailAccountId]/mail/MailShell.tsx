@@ -353,27 +353,29 @@ export function MailShell() {
   const isReadingView = isReadingMailView(routeView);
   const readingLabelId = findReadingLabelId(allLabels);
   // Cue's own sorting names newsletters too, as it doesn't label the mailbox
-  // by default (see `getReadingSources`).
-  const { membership: cueMembership } = useCueMembership(
-    !mailLocation.allInboxes,
-  );
+  // by default (see `getReadingSources`). Only the inbox and its tabs bundle
+  // them, and only the lane reads them, so no other view asks.
+  const readsCueMembership =
+    !mailLocation.allInboxes &&
+    (isReadingView || routeView.kind === "inbox" || routeView.kind === "split");
+  const { membership: cueMembership } = useCueMembership(readsCueMembership);
   const readingSources = useMemo(
     () => getReadingSources({ labelId: readingLabelId, cueMembership }),
     [readingLabelId, cueMembership],
   );
   const readingQuery = useMemo(
-    () => readingLaneQuery(readingSources.lane),
+    () => readingLaneQuery(readingSources),
     [readingSources],
   );
   const inboxWithoutReading = useMemo(
-    () => inboxWithoutReadingQuery(readingSources.inbox),
+    () => inboxWithoutReadingQuery(readingSources),
     [readingSources],
   );
   const readingRoute = getReadingRoute({
     isReadingView,
     isAllAccounts: Boolean(mailLocation.allInboxes),
-    readingLabelId,
     hasLaneQuery: Boolean(readingQuery),
+    membershipLoading: readsCueMembership && !cueMembership,
     labelsLoading,
     // Labels aren't asked for while the provider is rate limited, which is a
     // failure to load them, not an account without the label.
