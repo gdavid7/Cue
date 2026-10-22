@@ -438,14 +438,40 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
           field: `interactive:${name}`,
         })),
       });
-      // 30 + 30 + 30 fit the second's 100; a fourth 30 would not.
+      // 30 + 30 + 30 fit the second's 100; a fourth 30 would not, and the
+      // result says what it would be told, as asking itself does.
       expect(result).toEqual({
         waitMs: 0,
         defer: false,
         queued: 2,
         ahead: 0,
         reservation: null,
+        nextWait: {
+          waitMs: expect.any(Number),
+          held: {
+            gate: "pace",
+            blocker: 0,
+            availableUnits: expect.any(Number),
+            neededUnits: 230,
+            paceUnits: 90,
+          },
+        },
       });
+      const asked = await admit({ cost: 30, floor: 200, paceCap: 100 });
+      expect(asked.held).toEqual({
+        ...result.nextWait?.held,
+        // The bucket refills in the moment between the two.
+        availableUnits: expect.any(Number),
+      });
+      expect(asked.held?.availableUnits).toBeGreaterThanOrEqual(
+        result.nextWait!.held.availableUnits,
+      );
+      expect(
+        asked.held!.availableUnits - result.nextWait!.held.availableUnits,
+      ).toBeLessThan(5);
+      expect(asked.waitMs).toBeGreaterThan(0);
+      expect(asked.waitMs).toBeLessThanOrEqual(result.nextWait!.waitMs);
+      expect(result.nextWait!.waitMs - asked.waitMs).toBeLessThan(50);
       expect(
         await take({ cost: 20, floor: 200, paceCap: 100 }),
       ).toBeGreaterThan(0);
@@ -463,6 +489,35 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       expect(
         trailing.map((member) => Number(member.split(":").at(-1))),
       ).toEqual([90]);
+    });
+
+    it("says how long the bucket holds the next request as it admits one, as asking then does", async () => {
+      // 1,000 tokens at 60 a second: 500 leaves 500, and another 500 needs
+      // 700 above the floor.
+      const result = await admit({ cost: 500, floor: 200 });
+      expect(result).toMatchObject({
+        waitMs: 0,
+        nextWait: {
+          held: {
+            gate: "bucket",
+            blocker: 0,
+            availableUnits: 500,
+            neededUnits: 700,
+            paceUnits: 500,
+          },
+        },
+      });
+      expect(result.nextWait!.waitMs).toBeGreaterThan(3000);
+      expect(result.nextWait!.waitMs).toBeLessThanOrEqual(3400);
+
+      const asked = await admit({ cost: 500, floor: 200 });
+      expect(asked.held).toMatchObject({
+        gate: "bucket",
+        neededUnits: 700,
+        paceUnits: 500,
+      });
+      expect(asked.waitMs).toBeLessThanOrEqual(result.nextWait!.waitMs);
+      expect(result.nextWait!.waitMs - asked.waitMs).toBeLessThan(50);
     });
 
     it("reserves ahead only from the spare half of the second, held in the pace window until its lease ends", async () => {

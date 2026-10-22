@@ -135,7 +135,13 @@ const SUMMARY_LOOKBACK_MINUTES = 4;
 //   units per user, about 3% of the highest budget).
 // - A call whose lane was just told to wait, for a call costing no more, takes
 //   that answer for up to `SHARED_WAIT_MS` instead of asking again. This can
-//   only make a call wait, never admit it.
+//   only make a call wait, never admit it. A round trip that admits also says
+//   what the next call would be told (the first waiting call it left out, or
+//   one costing the same), so a lane sending one call after another, as a
+//   sync page's batches do, waits that out instead of asking only to hear it.
+//   A wait the bucket set, unless it defers, is taken for up to
+//   `SHARED_BUCKET_WAIT_MS`, since nothing but a budget raise (at most every
+//   ten minutes) makes the bucket fill sooner.
 // What this instance learns (a refusal, a first sync starting or ending, a
 // person's turn) clears its lanes at once; other instances follow within one
 // lease. Usage counts and deferrals stay in memory until the account's next
@@ -144,6 +150,7 @@ const SUMMARY_LOOKBACK_MINUTES = 4;
 const LEASE_MS = 500;
 const LEASE_SHARE = 0.5;
 const SHARED_WAIT_MS = 500;
+const SHARED_BUCKET_WAIT_MS = 5000;
 const BURST_MS = 100;
 const NOTE_FLUSH_MS = 2000;
 const NOTE_FLUSH_FIELDS = 100;
@@ -1517,8 +1524,8 @@ async function takeForLane(
       });
       gateStats.leasedUnits += result.ahead;
     }
-    if (result.waitMs > 0) lane.waitedAt = sentAt;
-    if (result.waitMs > 0)
+    if (result.waitMs > 0) {
+      lane.waitedAt = sentAt;
       lane.waits.set(waitKey, {
         from: sentAt,
         until: sentAt + result.waitMs,
@@ -1526,6 +1533,21 @@ async function takeForLane(
         defer: result.defer,
         held: result.held,
       });
+    } else if (
+      result.nextWait &&
+      !request.blockers.some((blocker) => blocker.deferMs)
+    ) {
+      // What the store would tell the next call, as if it had asked itself.
+      // A caller a marker defers (the engine's backfill) keeps asking, so it
+      // never waits inside the gate while one is up.
+      lane.waits.set(waitKey, {
+        from: sentAt,
+        until: sentAt + result.nextWait.waitMs,
+        cost: queued[result.queued]?.cost ?? request.cost,
+        defer: false,
+        held: result.nextWait.held,
+      });
+    }
     return result;
   } catch (error) {
     for (const waiter of lane.queue) {
@@ -1604,13 +1626,22 @@ function recentLaneUnits(lane: Lane) {
     .reduce((sum, entry) => sum + entry.units, 0);
 }
 
+// Only spending or a lower budget changes how soon the bucket has room, and
+// both make it later, so the bucket's wait holds for up to
+// `SHARED_BUCKET_WAIT_MS`; a wait set by the pace can end sooner, once others
+// release what they reserved. A deferral comes from a marker another instance
+// may clear at any time, so it is shared only briefly too.
 function sharedWait(lane: Lane, waitKey: string, cost: number) {
   const wait = lane.waits.get(waitKey);
+  if (!wait) return null;
   const now = Date.now();
+  const shareMs =
+    wait.held?.gate === "bucket" && !wait.defer
+      ? SHARED_BUCKET_WAIT_MS
+      : SHARED_WAIT_MS;
   if (
-    !wait ||
     wait.from > now ||
-    now >= Math.min(wait.until, wait.from + SHARED_WAIT_MS) ||
+    now >= Math.min(wait.until, wait.from + shareMs) ||
     cost < wait.cost
   )
     return null;
