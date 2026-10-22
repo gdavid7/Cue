@@ -37,7 +37,7 @@ export const SERVER_CACHE_WRITES: Record<
       {
         key: "assistant-local-search:{emailAccountId}:{requestId}",
         holds:
-          '"pending", then the message and thread ids the browser matched, or an unavailable reason enum',
+          '"pending", then the message and thread ids the browser matched, or for a count per-account totals, top groups (count, newest message id, month/week or label-id key) and the newest message ids; or an unavailable reason enum',
         ttl: "10s, deleted once read",
       },
     ],

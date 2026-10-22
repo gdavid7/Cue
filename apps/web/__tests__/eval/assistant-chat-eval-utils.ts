@@ -4,6 +4,7 @@ import type { getEmailAccount } from "@/__tests__/helpers";
 import type { MessageContext } from "@/utils/ai/assistant/chat-context-validation";
 import { writeEvalDebugArtifact } from "@/__tests__/eval/debug-artifacts";
 import { aiProcessAssistantChat } from "@/utils/ai/assistant/chat";
+import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 
@@ -83,10 +84,13 @@ export async function captureAssistantChatTrace({
   context,
   chatHasHistory,
   chatLastSeenRulesRevision,
+  localMailSearch,
 }: {
   emailAccount: ReturnType<typeof getEmailAccount>;
   messages: ModelMessage[];
   logger: Logger;
+  /** Stands in for the chat's browser and its local mail store. */
+  localMailSearch?: LocalMailSearch;
   inboxStats?: { total: number; unread: number } | null;
   supportsInlineEmailCards?: boolean;
   context?: MessageContext;
@@ -109,6 +113,7 @@ export async function captureAssistantChatTrace({
     context,
     chatHasHistory,
     chatLastSeenRulesRevision,
+    localMailSearch,
     logger,
     onStepEnd: async (step) => {
       steps.push(step);
@@ -150,6 +155,8 @@ export async function captureAssistantChatTrace({
   }
 
   const finalText = await Promise.resolve(result.text);
+  // What the next turn of a multi-turn case sends back as history.
+  const responseMessages = (await Promise.resolve(result.response)).messages;
 
   const debugArtifactPath = writeEvalDebugArtifact({
     kind: "assistant-chat-trace",
@@ -170,6 +177,7 @@ export async function captureAssistantChatTrace({
   return {
     debugArtifactPath,
     finalText,
+    responseMessages,
     resolvedModels,
     steps,
     toolCalls: recordedToolCalls,
