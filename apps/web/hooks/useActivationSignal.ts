@@ -2,23 +2,45 @@
 
 import { useEffect } from "react";
 import { recordActivationSignalAction } from "@/utils/actions/activation";
-import type { ActivationSignalBody } from "@/utils/actions/activation.validation";
+import type { ActivationSignal } from "@/utils/actions/activation.validation";
+import { runWhenIdle } from "@/utils/analytics/summary-flush";
+import { createBrowserCache } from "@/utils/browser-cache";
 
-type ActivationSignal = ActivationSignalBody["event"];
+// Remembers in this browser which signals the server has taken, so a page
+// load doesn't ask again. It is cleared on sign-out, and the server's Redis
+// claim stays the real once-per-mailbox dedupe.
+const taken = createBrowserCache<true>({
+  name: "activation",
+  ttlMs: 400 * 24 * 60 * 60 * 1000,
+  maxEntries: 8,
+});
+// Calls in flight, and those taken this session when storage is blocked.
+const inFlight = new Set<string>();
+const takenThisSession = new Set<string>();
 
-// The server's Redis claim is the real once-per-mailbox dedupe; this only
-// spares the round trip for the rest of the page session.
-const reported = new Set<string>();
-
-/** Fire and forget: a lost signal costs one funnel count, never the user's action. */
+/**
+ * Fire and forget: a lost signal costs one funnel count, never the user's
+ * action. A failed call is tried again the next time the step happens.
+ */
 export function reportActivationSignal(
   emailAccountId: string,
   event: ActivationSignal,
 ) {
   const key = `${emailAccountId}:${event}`;
-  if (reported.has(key)) return;
-  reported.add(key);
-  recordActivationSignalAction(emailAccountId, { event }).catch(() => {});
+  if (inFlight.has(key) || takenThisSession.has(key)) return;
+  if (taken.get(emailAccountId, event)) return;
+  inFlight.add(key);
+  // After the user's own server actions, not queued ahead of them.
+  runWhenIdle(() => {
+    recordActivationSignalAction(emailAccountId, { event })
+      .then((result) => {
+        if (result?.serverError || result?.validationErrors) return;
+        takenThisSession.add(key);
+        taken.set(emailAccountId, event, true);
+      })
+      .catch(() => {})
+      .finally(() => inFlight.delete(key));
+  });
 }
 
 export function useActivationSignal(

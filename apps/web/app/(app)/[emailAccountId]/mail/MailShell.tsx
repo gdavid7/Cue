@@ -102,6 +102,7 @@ import {
 import {
   getListThreadKey,
   getListThreadSelection,
+  getRepliedThreadEmailAccountId,
   getThreadSelectionKey,
   type MailLayoutMode,
   type ThreadSelection,
@@ -1030,7 +1031,7 @@ export function MailShell() {
   useActivationSignal(
     openThreadSelection?.emailAccountId,
     "first_thread_opened",
-    Boolean(openThreadSelection),
+    openMessages.length > 0,
   );
   const latestOpenMessageId = openMessages
     .filter((message) => !message.labelIds?.includes(GmailLabel.DRAFT))
@@ -2192,7 +2193,12 @@ export function MailShell() {
   const onSendSuccess = useStableCallback(
     (_messageId: string, sentThreadId: string, repliedThreadId: string) => {
       reportActivationSignal(
-        openThreadSelection?.emailAccountId ?? emailAccountId,
+        getRepliedThreadEmailAccountId({
+          repliedThreadId,
+          openSelection: openThreadSelection,
+          threads: navThreads,
+          currentEmailAccountId: emailAccountId,
+        }),
         "first_triage_action",
       );
       // A held send settles after the undo window, by which time the user may

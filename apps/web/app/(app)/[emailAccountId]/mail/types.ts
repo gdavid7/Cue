@@ -56,6 +56,30 @@ export function getListThreadEmailAccountId(
   return thread.account?.id ?? currentEmailAccountId;
 }
 
+/**
+ * The account a sent reply belongs to. A held send settles after the user may
+ * have opened another thread, so the open thread only counts when it is the
+ * one replied to.
+ */
+export function getRepliedThreadEmailAccountId({
+  repliedThreadId,
+  openSelection,
+  threads,
+  currentEmailAccountId,
+}: {
+  repliedThreadId: string;
+  openSelection: ThreadSelection | null;
+  threads: ActionableThread[];
+  currentEmailAccountId: string;
+}) {
+  if (openSelection?.threadId === repliedThreadId)
+    return openSelection.emailAccountId;
+  const thread = threads.find((item) => item.id === repliedThreadId);
+  return thread
+    ? getListThreadEmailAccountId(thread, currentEmailAccountId)
+    : currentEmailAccountId;
+}
+
 export function getListThreadSelection(
   thread: ListThread,
   currentEmailAccountId: string,

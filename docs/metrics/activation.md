@@ -28,8 +28,8 @@ from a fixed list and whose mailbox must belong to the signed-in user. The
 client sends each at most once per mailbox per page session and ignores a
 failure. The server's Redis claim is the real dedupe. Mailboxes that finished a
 sync before these events shipped log `first_sync_ready` on their next visit,
-with a large `msSinceFirstSignIn`; the funnel query only reads mailboxes that
-have a `first_sign_in`. Bulk "select all that match" archives run as a server
+with a large `msSinceFirstSignIn`; the funnel query leaves out mailboxes that
+signed in before `shippedAt`. Bulk "select all that match" archives run as a server
 job and are not counted as a triage action.
 
 The unit is the mailbox, because `emailAccountId` is the only id the events
@@ -131,11 +131,15 @@ counted.
 ### First-run funnel
 
 How many mailboxes reach each step after sign-in, and the median minutes it
-takes. Use the same time range as above. A mailbox that skips a step (for
-example a triage before the reader opens) still counts at the later step, so
-read each step as "reached", not "reached in order".
+takes. Use the same time range as above. Set `shippedAt` to the day the three
+client events were deployed: mailboxes that signed in earlier have no
+trustworthy first-run timings, and their late `first_sync_ready` would skew the
+medians. A mailbox that skips a step (for example a triage before the reader
+opens) still counts at the later step, so read each step as "reached", not
+"reached in order".
 
 ```kusto
+let shippedAt = datetime(2026-10-23);
 ['DATASET']
 | where message in (
     "activation.first_sign_in",
@@ -146,21 +150,26 @@ read each step as "reached", not "reached in order".
   )
 | extend emailAccountId = tostring(['fields']['emailAccountId'])
 | summarize
+    signedInCount = countif(message == "activation.first_sign_in"),
+    syncReadyCount = countif(message == "activation.first_sync_ready"),
+    needsReplyCount = countif(message == "activation.needs_reply_first_item"),
+    openedCount = countif(message == "activation.first_thread_opened"),
+    triagedCount = countif(message == "activation.first_triage_action"),
     signedInAt = minif(_time, message == "activation.first_sign_in"),
     syncReadyAt = minif(_time, message == "activation.first_sync_ready"),
     needsReplyAt = minif(_time, message == "activation.needs_reply_first_item"),
     openedAt = minif(_time, message == "activation.first_thread_opened"),
     triagedAt = minif(_time, message == "activation.first_triage_action")
     by emailAccountId
-| where isnotnull(signedInAt)
+| where signedInCount > 0 and todatetime(signedInAt) >= shippedAt
 | summarize
     signedIn = count(),
-    syncReady = countif(isnotnull(syncReadyAt)),
-    needsReply = countif(isnotnull(needsReplyAt)),
-    opened = countif(isnotnull(openedAt)),
-    triaged = countif(isnotnull(triagedAt)),
-    medianMinToSyncReady = percentile(datetime_diff('second', todatetime(syncReadyAt), todatetime(signedInAt)) / 60.0, 50),
-    medianMinToNeedsReply = percentile(datetime_diff('second', todatetime(needsReplyAt), todatetime(signedInAt)) / 60.0, 50),
-    medianMinToOpened = percentile(datetime_diff('second', todatetime(openedAt), todatetime(signedInAt)) / 60.0, 50),
-    medianMinToTriaged = percentile(datetime_diff('second', todatetime(triagedAt), todatetime(signedInAt)) / 60.0, 50)
+    syncReady = countif(syncReadyCount > 0),
+    needsReply = countif(needsReplyCount > 0),
+    opened = countif(openedCount > 0),
+    triaged = countif(triagedCount > 0),
+    medianMinToSyncReady = percentileif(datetime_diff('second', todatetime(syncReadyAt), todatetime(signedInAt)) / 60.0, 50, syncReadyCount > 0),
+    medianMinToNeedsReply = percentileif(datetime_diff('second', todatetime(needsReplyAt), todatetime(signedInAt)) / 60.0, 50, needsReplyCount > 0),
+    medianMinToOpened = percentileif(datetime_diff('second', todatetime(openedAt), todatetime(signedInAt)) / 60.0, 50, openedCount > 0),
+    medianMinToTriaged = percentileif(datetime_diff('second', todatetime(triagedAt), todatetime(signedInAt)) / 60.0, 50, triagedCount > 0)
 ```

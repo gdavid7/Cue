@@ -1,3 +1,4 @@
+import type { ActivationSignal } from "@/utils/actions/activation.validation";
 import { createScopedLogger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
@@ -127,24 +128,6 @@ export async function recordFirstSyncReady(emailAccountId: string) {
   }
 }
 
-/** The first thread opened in the reader, reported by the client. */
-export async function recordFirstThreadOpened(emailAccountId: string) {
-  await recordFirstClientEvent(
-    ACTIVATION_EVENTS.firstThreadOpened,
-    `activation:first-thread-opened:${emailAccountId}`,
-    emailAccountId,
-  );
-}
-
-/** The first archive, snooze or reply done from Cue, reported by the client. */
-export async function recordFirstTriageAction(emailAccountId: string) {
-  await recordFirstClientEvent(
-    ACTIVATION_EVENTS.firstTriageAction,
-    `activation:first-triage-action:${emailAccountId}`,
-    emailAccountId,
-  );
-}
-
 /** At most once per mailbox per UTC day. */
 export async function recordActiveDay(emailAccountId: string) {
   try {
@@ -170,17 +153,15 @@ export async function recordActiveDay(emailAccountId: string) {
   }
 }
 
-async function recordFirstClientEvent(
-  event: string,
-  key: string,
-  emailAccountId: string,
-) {
-  try {
-    if (!(await claimOnce(key))) return;
-    logger.info(event, { emailAccountId, at: new Date().toISOString() });
-  } catch (error) {
-    logger.warn("Failed to record activation event", { event, error });
-  }
+function recordFirstOnce(event: string, claim: string) {
+  return async (emailAccountId: string) => {
+    try {
+      if (!(await claimOnce(`activation:${claim}:${emailAccountId}`))) return;
+      logger.info(event, { emailAccountId, at: new Date().toISOString() });
+    } catch (error) {
+      logger.warn("Failed to record activation event", { event, error });
+    }
+  };
 }
 
 /** Whether this call is the first to claim the key across all instances. */
@@ -194,3 +175,19 @@ async function claimOnce(key: string, ttlSeconds = FIRST_EVENT_TTL_SECONDS) {
   }
   return claimed === "OK";
 }
+
+/** What the signed-in client may report, each claimed once per mailbox. */
+export const ACTIVATION_SIGNAL_RECORDERS: Record<
+  ActivationSignal,
+  (emailAccountId: string) => Promise<void>
+> = {
+  first_sync_ready: recordFirstSyncReady,
+  first_thread_opened: recordFirstOnce(
+    ACTIVATION_EVENTS.firstThreadOpened,
+    "first-thread-opened",
+  ),
+  first_triage_action: recordFirstOnce(
+    ACTIVATION_EVENTS.firstTriageAction,
+    "first-triage-action",
+  ),
+};

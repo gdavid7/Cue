@@ -146,6 +146,7 @@ export function useEngineMailThreads({
 
   // The mail screen shows while the engine starts, and has no answer yet.
   const engineStarting = enabled && !client;
+  const lastSyncedAt = lastSyncedAtMs(mailbox.data?.coverage ?? []);
   return {
     threads,
     hasRemoteResponse: !engineStarting && mailbox.status !== "loading",
@@ -184,20 +185,13 @@ export function useEngineMailThreads({
         (coverage) => coverage.lastCompletedSyncAtMs != null,
       ),
     /** A sync of this mailbox has finished, so the engine holds its mail. */
-    hasCompletedSync:
-      enabled &&
-      Boolean(client) &&
-      Boolean(
-        mailbox.data?.coverage.some(
-          (coverage) => coverage.lastCompletedSyncAtMs != null,
-        ),
-      ),
+    hasCompletedSync: enabled && Boolean(client) && lastSyncedAt != null,
     /**
      * When the mailbox last finished catching up: its primary stream's last
      * round where there is one, as Gmail's other scopes finish rounds that
      * read no mail.
      */
-    lastSyncedAtMs: lastSyncedAtMs(mailbox.data?.coverage ?? []),
+    lastSyncedAtMs: lastSyncedAt,
     /** Included accounts with no finished sync yet, once the mailbox has loaded. */
     firstSyncAccountIds,
     failedAccountIds,
