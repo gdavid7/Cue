@@ -153,37 +153,27 @@ function CatchUpDialog({
   query: ThreadsQuery;
   actedKeys: Set<string>;
 }) {
-  const contentRef = useRef<HTMLDivElement>(null);
   const replying = useRef(false);
 
+  // The body mounts per opening, so each one starts a fresh batch.
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent
-        className="w-[calc(100%-2rem)] max-w-md gap-0 rounded-lg p-0 outline-none motion-reduce:animate-none"
-        // Keys pressed here are the card's, and the list behind stays still.
-        {...{ [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" }}
-        onCloseAutoFocus={(event) => {
-          // Reply moves focus to the composer it opens.
-          if (replying.current) event.preventDefault();
-          replying.current = false;
-        }}
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          contentRef.current?.focus();
-        }}
-        ref={contentRef}
-        tabIndex={-1}
-      >
+      {open ? (
         <CatchUpBody
           {...props}
+          onClose={() => onOpenChange(false)}
+          onCloseAutoFocus={(event) => {
+            // Reply moves focus to the composer it opens.
+            if (replying.current) event.preventDefault();
+            replying.current = false;
+          }}
           onReply={(item) => {
             replying.current = true;
             onOpenChange(false);
             props.onReply(item);
           }}
-          onClose={() => onOpenChange(false)}
         />
-      </DialogContent>
+      ) : null}
     </Dialog>
   );
 }
@@ -196,12 +186,15 @@ function CatchUpBody({
   onRemoved,
   onRestored,
   onClose,
+  onCloseAutoFocus,
 }: CatchUpHandlers & {
   emailAccountId: string;
   query: ThreadsQuery;
   actedKeys: Set<string>;
   onClose: () => void;
+  onCloseAutoFocus: (event: Event) => void;
 }) {
+  const contentRef = useRef<HTMLDivElement>(null);
   const client = useOptionalMailClient();
   const [batch, setBatch] = useState<CatchUpState | null>(null);
   const [lastAction, setLastAction] = useState<{
@@ -300,7 +293,7 @@ function CatchUpBody({
       await threadActions.setReadState([undone.key], false, false);
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     // The snooze picker is portaled, and its keys are its own.
     if (!event.currentTarget.contains(event.target as Node)) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -330,7 +323,21 @@ function CatchUpBody({
   const left = batch ? catchUpLeft(batch) : 0;
 
   return (
-    <div className="flex flex-col gap-4 p-5 sm:p-6" onKeyDown={onKeyDown}>
+    <DialogContent
+      className="flex w-[calc(100%-2rem)] max-w-md flex-col gap-4 rounded-lg p-5 outline-none motion-reduce:animate-none sm:p-6"
+      // Keys pressed here are the card's, and the list behind stays still.
+      {...{ [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" }}
+      onCloseAutoFocus={onCloseAutoFocus}
+      onKeyDown={onKeyDown}
+      onOpenAutoFocus={(event) => {
+        // Focus rests on the overlay, so its keys work before any button
+        // looks pressed.
+        event.preventDefault();
+        contentRef.current?.focus();
+      }}
+      ref={contentRef}
+      tabIndex={-1}
+    >
       <div className="flex items-baseline gap-3 pr-8">
         <DialogTitle className="font-semibold text-base">Catch up</DialogTitle>
         {batch && current ? (
@@ -443,7 +450,7 @@ function CatchUpBody({
           </>
         ) : null}
       </div>
-    </div>
+    </DialogContent>
   );
 }
 
