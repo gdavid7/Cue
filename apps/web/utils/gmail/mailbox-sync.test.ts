@@ -491,6 +491,51 @@ describe("getGmailMailboxSyncPage", () => {
     expect(page.deletedMessageIds).toEqual([]);
     expect(page.changedThreadIds).toEqual(["alert-thread"]);
   });
+
+  // A first sync's backfill lists the inbox first; mail moved into the inbox
+  // after that phase passed its date is the primary stream's to bring, since
+  // its cursor covers all time.
+  it("brings an old message moved into the inbox from an all-time cursor", async () => {
+    vi.mocked(getHistory).mockResolvedValue({
+      history: [
+        {
+          labelsAdded: [
+            {
+              labelIds: ["INBOX"],
+              message: { id: "moved-to-inbox", threadId: "old-thread" },
+            },
+          ],
+        },
+      ],
+      historyId: "200",
+    });
+    vi.mocked(getMessagesBatch).mockResolvedValue([
+      {
+        ...getMockMessage({ id: "moved-to-inbox", labelIds: ["INBOX"] }),
+        internalDate: String(Date.now() - 400 * 24 * 60 * 60 * 1000),
+      },
+    ]);
+
+    const page = await getGmailMailboxSyncPage({
+      gmail: {} as never,
+      accessToken: "access-token",
+      logger,
+      cursor: encodeMailboxSyncCursor({
+        version: 1,
+        provider: "google",
+        phase: "delta",
+        historyId: "100",
+        after: new Date(0).toISOString(),
+      }),
+      limit: 100,
+    });
+
+    expect(page.upsertedMessages.map((message) => message.id)).toEqual([
+      "moved-to-inbox",
+    ]);
+    expect(page.upsertedMessages[0]?.labelIds).toEqual(["INBOX"]);
+    expect(page.deletedMessageIds).toEqual([]);
+  });
 });
 
 describe("getGmailMailboxChangeIds", () => {

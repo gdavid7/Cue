@@ -598,6 +598,97 @@ describe("Gmail quota on a first load", () => {
     expect(recentWindowMs).toBeLessThanOrEqual(12_000);
   }, 60_000);
 
+  // A fresh device: the recent scan is quick, then the backfill brings the
+  // inbox's older rows. A quarter of the backfill window is still in the
+  // inbox; the rest is archived mail of the same weeks, which the inbox
+  // never shows. The engine's own envelope is not modelled here, so the
+  // bound comes from the gate alone.
+  it("brings a first sync's older inbox rows first, inside the account's caps, while thread opens stay immediate", async () => {
+    const { gmail, provider, route, retried, engineScope, sleep } =
+      await startReplay(STEADY_MS, {
+        unitsPerSecond: GMAIL_UNITS_PER_SECOND,
+        recentCount: 40,
+        inboxEvery: 4,
+      });
+    const olderInboxAt: number[] = [];
+    const onPage = (messageIds: string[]) => {
+      for (const id of messageIds) {
+        const i = Number(id.slice(1));
+        if (i >= 40 && (i - 40) % 4 === 0)
+          olderInboxAt.push(Date.now() - start);
+      }
+    };
+    const opens: number[] = [];
+    const reader = async () => {
+      for (let i = 0; i < 10; i++) {
+        await sleep(5000);
+        const openedAt = Date.now();
+        const result = await route("threads/detail", () =>
+          provider.getThread(`t${i}`),
+        );
+        if (result.ok) opens.push(Date.now() - openedAt);
+      }
+    };
+    const insights = sleep(1500).then(() =>
+      retried("user/inbox-insights", () =>
+        getInboxInsights({
+          emailAccountId: ACCOUNT,
+          userId: "user-1",
+          userEmail: "me@example.com",
+          items: Array.from({ length: 25 }, (_, i) => ({
+            threadId: `t${i}`,
+            messageId: `m${i}`,
+          })),
+          emailProvider: provider,
+          logger,
+        }),
+      ),
+    );
+    const firstSync = { initial: true, windowedBackfill: true };
+    const actors = Promise.all([
+      engineScope("a", "primary", firstSync),
+      engineScope("a", "history", { ...firstSync, onPage }),
+      reader(),
+      insights,
+    ]);
+    await advanceUntilSettled(actors, STEADY_MS + 60_000);
+
+    const olderInboxRowMs = (count: number) => olderInboxAt[count - 1];
+    logger.info("Older inbox rows of a first sync", {
+      first: olderInboxRowMs(1),
+      hundredth: olderInboxRowMs(100),
+      twoHundredth: olderInboxRowMs(200),
+      byMinute: [60_000, 120_000, 180_000].map(
+        (ms) => olderInboxAt.filter((at) => at <= ms).length,
+      ),
+    });
+    // The first older inbox row lands within seconds of the recent scan, and
+    // two hundred of them in about the minute their 12,000 units take at the
+    // account's budget (the engine's backfill share, not modelled here,
+    // stretches that to about 2.4 minutes). Read as background, mixed with the archived mail of
+    // the same weeks, the first took 24 s and a hundred never came within
+    // four minutes.
+    expect(olderInboxRowMs(1)).toBeLessThanOrEqual(15_000);
+    expect(olderInboxRowMs(100)).toBeLessThanOrEqual(50_000);
+    expect(olderInboxRowMs(200)).toBeLessThanOrEqual(80_000);
+    // It only moves the inbox's share earlier: no refusal, any minute within
+    // the account's budget and the bucket saved before it, any second within
+    // the gate's highest cap.
+    expect(gmail.limitedCalls()).toEqual([]);
+    // Each phase pages with its own query's cursors.
+    expect(gmail.mismatchedPageTokens()).toEqual([]);
+    expect(gmail.peakMinuteUnits()).toBeLessThanOrEqual(
+      GMAIL_USER_UNITS_PER_MINUTE * 0.8 + 2000,
+    );
+    expect(gmail.peakSecondUnits()).toBeLessThanOrEqual(GATE_UNITS_PER_SECOND);
+    // A thread opened meanwhile is read in the fake's one round trip (D-086).
+    expect(opens).toEqual(new Array(10).fill(250));
+    // Background work still gets its turn once the inbox has filled.
+    expect(
+      gmail.unitsByCaller(start, start + STEADY_MS)["user/inbox-insights"],
+    ).toBeGreaterThan(0);
+  }, 60_000);
+
   it("keeps the backfill moving while someone opens threads at nearly the bucket's refill rate", async () => {
     const { gmail, provider, route, engineScope, sleep, rateLimitModes } =
       await startReplay(STEADY_MS);
@@ -722,7 +813,12 @@ async function startReplay(
   {
     unitsPerSecond,
     recentCount,
-  }: { unitsPerSecond?: number; recentCount?: number } = {},
+    inboxEvery,
+  }: {
+    unitsPerSecond?: number;
+    recentCount?: number;
+    inboxEvery?: number;
+  } = {},
 ) {
   const start = Date.now();
   const rateLimitModes: Array<{ at: number; source: string }> = [];
@@ -730,6 +826,7 @@ async function startReplay(
     unitsPerMinute: GMAIL_USER_UNITS_PER_MINUTE,
     unitsPerSecond,
     recentCount,
+    inboxEvery,
     latencyMs: 250,
   });
   const client = await getGmailClientWithRefresh({
@@ -785,7 +882,16 @@ async function startReplay(
   const engineScope = async (
     tab: string,
     scopeId: string,
-    { initial }: { initial?: boolean } = {},
+    {
+      initial,
+      windowedBackfill,
+      onPage,
+    }: {
+      initial?: boolean;
+      windowedBackfill?: boolean;
+      /** Told the message ids each page brings. */
+      onPage?: (messageIds: string[]) => void;
+    } = {},
   ) => {
     const source = createEmailProviderMailboxSource({
       provider,
@@ -806,6 +912,7 @@ async function startReplay(
           scope: { id: scopeId, kind: "account", folderId: null },
           afterMs: null,
           initial,
+          windowedBackfill,
         }),
       );
       if (begun.ok && begun.value.status === "ok")
@@ -822,8 +929,14 @@ async function startReplay(
         }),
       );
       if (!result.ok) await sleep(15_000);
-      else if (result.value.status === "ok") page = result.value.value.nextPage;
-      else if (result.value.status === "paused")
+      else if (result.value.status === "ok") {
+        onPage?.(
+          result.value.value.changes.flatMap((change) =>
+            change.kind === "message_patch" ? [change.key.messageId] : [],
+          ),
+        );
+        page = result.value.value.nextPage;
+      } else if (result.value.status === "paused")
         await sleep(result.value.retryAfterMs);
       else await sleep(1000);
     }

@@ -36,7 +36,7 @@ import { isEmailProviderRateLimitRedisConfigured } from "@/utils/redis/email-pro
 import type { Logger } from "@/utils/logger";
 import { randomUUID } from "node:crypto";
 import { getAuditContext } from "@/utils/audit/context";
-import { noteRequestPause } from "@/utils/request-metrics";
+import { noteEnumerationPage, noteRequestPause } from "@/utils/request-metrics";
 import {
   getFastRequestSampleRate,
   isFastRequestSampled,
@@ -86,6 +86,14 @@ const GMAIL_THREAD_COST = 120;
 // loop, and a first screen of them comes back on its own so the inbox fills
 // sooner; later pages read what `gmailScanPageSize` allows.
 const GMAIL_FIRST_PAGE_SIZE = 12;
+// A first sync's backfill lists the inbox before the rest of its window, so
+// older inbox rows arrive before archived mail of the same weeks. Its first
+// couple of hundred inbox messages read at sync, once the primary scan is
+// done, and the long tail stays background. Both still draw on the
+// backfill's share of the account's sync envelope, 5,000 units a minute, so
+// this moves units earlier rather than adding any: 200 messages are about
+// 12,000 units, about 2.4 minutes at that share (less from a full bucket).
+const GMAIL_FIRST_INBOX_SYNC_MESSAGES = 200;
 
 const SUPPORTED_CHANGES = [
   "archive",
@@ -118,6 +126,20 @@ type BootstrapToken = {
   scopeId?: string;
   /** A first sync's backfill: inbox, starred and drafts, and other mail from this time on. */
   windowStartMs?: number;
+  /**
+   * Which part of a windowed backfill this page lists: the inbox, then the
+   * window's other mail. A backfill begun without one lists both in one query.
+   */
+  phase?: "inbox" | "rest";
+  /**
+   * A phased backfill's Gmail cursor, valid only for its phase's query. It
+   * never goes in `pageToken`: a server from before phases reads only that,
+   * so it restarts its one combined query from the window start rather than
+   * resume it with a cursor minted for another query, which could skip mail.
+   */
+  phasePageToken?: string;
+  /** Inbox messages the backfill has listed at sync priority so far. */
+  synced?: number;
 };
 
 export function createEmailProviderMailboxSource(input: {
@@ -190,6 +212,7 @@ export function createEmailProviderMailboxSource(input: {
             isHistory &&
             windowedBackfill && {
               windowStartMs: Date.now() - GMAIL_FIRST_BACKFILL_WINDOW_MS,
+              phase: "inbox" as const,
             }),
           scopeId: scope.id,
           folderId: scopedFolderId(provider, scope),
@@ -229,6 +252,7 @@ export function createEmailProviderMailboxSource(input: {
       try {
         const token = JSON.parse(page) as BootstrapToken;
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
+        const pageToken = token.phase ? token.phasePageToken : token.pageToken;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
         // The backfill only fills in older mail, so it yields to everything
@@ -238,21 +262,34 @@ export function createEmailProviderMailboxSource(input: {
         // for what a person opens meanwhile. It goes first all the same, as
         // the first sync's first call, with background held off until the
         // scan ends and a full bucket that covers it above sync's floor.
-        const priority: GmailQuotaPriority = isBackfill ? "background" : "sync";
+        // A first sync's older inbox is sync too, behind the primary scan.
+        const inboxFirst =
+          isBackfill &&
+          token.phase === "inbox" &&
+          (token.synced ?? 0) < GMAIL_FIRST_INBOX_SYNC_MESSAGES;
+        const priority: GmailQuotaPriority =
+          isBackfill && !inboxFirst ? "background" : "sync";
+        noteEnumerationPage({
+          scope:
+            token.scopeId === GMAIL_HISTORY_SCOPE_ID ? "history" : "primary",
+          phase: token.phase ?? "none",
+          gatePriority: priority,
+          promoted: inboxFirst,
+        });
         const maxResults = Math.min(
           pageSize,
           maxPageSize,
-          isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
+          isGmail && !pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
           isGmail ? gmailScanPageSize(priority) : maxPageSize,
         );
         const listPage = () =>
           provider.getMessagesWithPagination({
             ...(token.windowStartMs != null && {
-              query: `{in:inbox is:starred in:drafts after:${Math.floor(token.windowStartMs / 1000) - 1}}`,
+              query: backfillWindowQuery(token.windowStartMs, token.phase),
             }),
             maxResults,
             folderId: token.folderId ?? undefined,
-            pageToken: token.pageToken,
+            pageToken,
             includeDrafts: true,
             ...(token.receivedAfterMs != null && {
               after: new Date(token.receivedAfterMs),
@@ -269,20 +306,22 @@ export function createEmailProviderMailboxSource(input: {
         );
         let nextPageAtMs: number | null = null;
         const syncPage = isGmail
-          ? await runWithGmailQuota({ priority }, () =>
-              withGmailSyncBudget(
-                {
-                  emailAccountId: accountId,
-                  priority: isBackfill ? "backfill" : "current",
-                  cost: gmailPageCost(maxResults),
-                  nextCost: gmailPageCost(nextPageSize),
-                },
-                ({ nextAdmitAfterMs }) => {
-                  if (nextAdmitAfterMs !== null)
-                    nextPageAtMs = Date.now() + nextAdmitAfterMs;
-                  return listPage();
-                },
-              ),
+          ? await runWithGmailQuota(
+              { priority, afterInitialSync: inboxFirst },
+              () =>
+                withGmailSyncBudget(
+                  {
+                    emailAccountId: accountId,
+                    priority: isBackfill ? "backfill" : "current",
+                    cost: gmailPageCost(maxResults),
+                    nextCost: gmailPageCost(nextPageSize),
+                  },
+                  ({ nextAdmitAfterMs }) => {
+                    if (nextAdmitAfterMs !== null)
+                      nextPageAtMs = Date.now() + nextAdmitAfterMs;
+                    return listPage();
+                  },
+                ),
             )
           : await listPage();
         if (isPrimaryGmailScan && !syncPage.nextPageToken)
@@ -294,7 +333,18 @@ export function createEmailProviderMailboxSource(input: {
           accountId,
           syncPage.messages,
         );
-        if (syncPage.nextPageToken) {
+        const synced = inboxFirst
+          ? (token.synced ?? 0) + syncPage.messages.length
+          : token.synced;
+        // The rest phase is another query, so it starts without a cursor.
+        let next: {
+          pageToken?: string;
+          phase: BootstrapToken["phase"];
+        } | null = null;
+        if (syncPage.nextPageToken)
+          next = { pageToken: syncPage.nextPageToken, phase: token.phase };
+        else if (token.phase === "inbox") next = { phase: "rest" };
+        if (next) {
           return {
             status: "ok" as const,
             value: {
@@ -307,12 +357,16 @@ export function createEmailProviderMailboxSource(input: {
                 afterMs: token.afterMs ?? 0,
                 catchUpFrom: token.catchUpFrom ?? null,
                 folderId: token.folderId ?? null,
-                pageToken: syncPage.nextPageToken,
+                ...(next.phase
+                  ? { phasePageToken: next.pageToken }
+                  : { pageToken: next.pageToken }),
                 receivedAfterMs: token.receivedAfterMs,
                 receivedBeforeMs: token.receivedBeforeMs,
                 scopeId: token.scopeId ?? "primary",
                 windowStartMs: token.windowStartMs,
-              }),
+                phase: next.phase,
+                synced,
+              } satisfies BootstrapToken),
               catchUpFrom: null,
               ...waitForNextPage(nextPageAtMs),
             },
@@ -980,6 +1034,20 @@ function throttled(retryAfterMs: number) {
     retryAfterMs: Math.max(1000, Math.ceil(retryAfterMs)),
     reason: "throttled" as const,
   };
+}
+
+// Gmail lists newest first, so the inbox phase brings older inbox rows in the
+// order the inbox shows them. The two phases are disjoint and together cover
+// exactly what the one combined query does.
+function backfillWindowQuery(
+  windowStartMs: number,
+  phase: BootstrapToken["phase"],
+) {
+  const after = Math.floor(windowStartMs / 1000) - 1;
+  if (phase === "inbox") return "in:inbox";
+  if (phase === "rest")
+    return `{is:starred in:drafts after:${after}} -in:inbox`;
+  return `{in:inbox is:starred in:drafts after:${after}}`;
 }
 
 function gmailPageCost(pageSize: number) {

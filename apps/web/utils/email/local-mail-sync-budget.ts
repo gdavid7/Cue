@@ -13,7 +13,8 @@ import {
 // account envelope claims two thirds of that. The costs below are Cue's own
 // conservative units, a full read priced like a whole message. Gmail scan
 // pages are sized to the quota burst their priority can spend without waiting
-// (nine whole messages for backfill, nineteen for the primary scan), so they
+// (nine whole messages for backfill; nineteen for the primary scan and for a
+// first sync's first inbox backfill pages, which read at sync), so they
 // cost well under 3,100 and each fits a single reservation. maximumCost stays
 // 3,100 because search and foreground debits are not page-sized: a 50-message
 // read costs 3,005 and must still be accepted and charged in full.
