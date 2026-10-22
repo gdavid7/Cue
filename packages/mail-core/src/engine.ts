@@ -19,6 +19,7 @@ import type {
 import type { OperationState } from "./operations";
 import {
   MAX_CHANGES_BATCH_READS,
+  MAX_ENUMERATION_RETRY_AFTER_MS,
   type MailboxSource,
   type SyncReadResult,
 } from "./ports/mailbox-source";
@@ -1595,7 +1596,7 @@ export function createMailEngine(input: {
       }
       // The source says its budget would refuse the next page before then,
       // so the scan waits instead of spending a refused request. Only this
-      // scan waits; commands and reads run in their own lanes.
+      // scan waits, primary or backfill; commands and reads run apart.
       const page = enumerated.value;
       if (page.nextPage !== null && page.retryAfterMs) {
         await store.deferBootstrapScan({
@@ -1603,7 +1604,10 @@ export function createMailEngine(input: {
           scopeId: page.scopeId,
           bootstrapId: scan.bootstrapId,
           page: page.nextPage,
-          nextAttemptAtMs: runtime.nowMs() + page.retryAfterMs,
+          // Sources other than the HTTP one skip its schema's bound.
+          nextAttemptAtMs:
+            runtime.nowMs() +
+            Math.min(page.retryAfterMs, MAX_ENUMERATION_RETRY_AFTER_MS),
           errorCode: null,
         });
         break;

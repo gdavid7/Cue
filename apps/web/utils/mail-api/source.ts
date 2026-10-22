@@ -1,8 +1,9 @@
 import { messageMatchesPredicate } from "@inboxzero/mail-core/query-semantics";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
-import type {
-  MailboxSource,
-  ScopeDescriptor,
+import {
+  MAX_ENUMERATION_RETRY_AFTER_MS,
+  type MailboxSource,
+  type ScopeDescriptor,
 } from "@inboxzero/mail-core/ports/mailbox-source";
 import type { BodyObservation, SyncPosition } from "@inboxzero/mail-core/sync";
 import type { MessageKey } from "@inboxzero/mail-core/identities";
@@ -1081,9 +1082,13 @@ function withGmailSyncBudget<T>(
 }
 
 // The page's own provider time already counts against the budget's wait.
+// A wait past the protocol's bound is cut to it; the 503 covers the rest.
 function waitForNextPage(nextPageAtMs: number | null) {
   if (nextPageAtMs === null) return {};
-  const retryAfterMs = Math.ceil(nextPageAtMs - Date.now());
+  const retryAfterMs = Math.min(
+    MAX_ENUMERATION_RETRY_AFTER_MS,
+    Math.ceil(nextPageAtMs - Date.now()),
+  );
   return retryAfterMs > 0 ? { retryAfterMs } : {};
 }
 

@@ -1605,6 +1605,39 @@ describe("createEmailProviderMailboxSource", () => {
     expect(reservation?.nextCost).toBe(545);
   });
 
+  it("caps the wait it gives at a minute", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockImplementationOnce(
+      (_input, operation) =>
+        operation(new AbortController().signal, {
+          nextAdmitAfterMs: 10 * 60_000,
+        }),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      value: { retryAfterMs: 60_000 },
+    });
+  });
+
   it("gives no wait when the sync budget already covers the next page", async () => {
     const source = createEmailProviderMailboxSource({
       logger,

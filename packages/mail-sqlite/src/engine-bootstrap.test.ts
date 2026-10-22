@@ -535,6 +535,36 @@ describe("engine bootstrap coverage", () => {
     await engine.close();
   });
 
+  it("waits at most a minute however long a hint asks", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        pages: ["page-1", "page-2"],
+        nextPageRetryAfterMs: 30 * 24 * 60 * 60 * 1000,
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => 1000 }),
+    });
+    await engine.requestSync(["acc-1"]);
+    await engine.runUntil(5000);
+
+    expect(
+      await store.readBootstrapScan({
+        session: { accountId: "acc-1", generation: "g1" },
+        scopeId: "primary",
+      }),
+    ).toMatchObject({ page: "page-2", nextAttemptAtMs: 61_000 });
+    await engine.close();
+  });
+
   it("asks for the next page at once when a page carries no hint", async () => {
     const pages: string[] = [];
     const store = await createSqliteMailStore(createNodeSqliteDriver());
