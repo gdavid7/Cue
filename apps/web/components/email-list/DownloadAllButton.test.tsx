@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AttachmentTooLargeError } from "@/utils/attachments/download";
 import { DownloadAllButton } from "@/components/email-list/DownloadAllButton";
 import type { ThreadMessage } from "@/components/email-list/types";
 
@@ -26,7 +27,8 @@ vi.mock("@/components/Toast", () => ({
   toastError: mocks.toastError,
   toastInfo: mocks.toastInfo,
 }));
-vi.mock("@/utils/attachments/download", () => ({
+vi.mock("@/utils/attachments/download", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/attachments/download")>()),
   fetchAttachment: mocks.fetchAttachment,
   getAttachmentUrl: ({ attachmentId }: { attachmentId: string }) =>
     `/attachment/${attachmentId}`,
@@ -134,15 +136,54 @@ describe("DownloadAllButton click", () => {
     );
   });
 
-  it("is disabled while the download is pending", async () => {
-    mocks.fetchAttachment.mockReturnValue(new Promise(() => {}));
+  it("says the limit is the problem when every file is over the cap", async () => {
+    render(
+      <DownloadAllButton
+        message={message(["a.bin", "b.bin"], {
+          "a.bin": 200 * 1024 * 1024,
+          "b.bin": 200 * 1024 * 1024,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Download all (2)" }));
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    expect(mocks.toastError.mock.calls[0]?.[0].description).toContain("100 MB");
+    expect(mocks.fetchAttachment).not.toHaveBeenCalled();
+    expect(mocks.saveBlob).not.toHaveBeenCalled();
+  });
+
+  it("counts a file that outgrows the cap while downloading as skipped, not failed", async () => {
+    mocks.fetchAttachment
+      .mockResolvedValueOnce(fakeBlob())
+      .mockRejectedValueOnce(new AttachmentTooLargeError());
     render(<DownloadAllButton message={message(["a.pdf", "b.png"])} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Download all (2)" }));
 
-    const pending = await screen.findByRole("button", { name: /Zipping/ });
-    expect(pending.hasAttribute("disabled")).toBe(true);
-    expect(pending.getAttribute("aria-busy")).toBe("true");
+    await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledTimes(1));
+    const description = mocks.toastInfo.mock.calls[0]?.[0].description;
+    expect(description).toContain("1 skipped");
+    expect(description).not.toContain("failed");
+  });
+
+  it("keeps focus and ignores clicks while pending, and announces progress", async () => {
+    mocks.fetchAttachment.mockReturnValue(new Promise(() => {}));
+    render(<DownloadAllButton message={message(["a.pdf", "b.png"])} />);
+    const button = screen.getByRole("button", { name: "Download all (2)" });
+    button.focus();
+
+    fireEvent.click(button);
+
+    await screen.findByRole("button", { name: "Downloading 1 of 2…" });
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(button);
+    expect(screen.getByRole("status").textContent).toBe("Downloading 1 of 2");
+    fireEvent.click(button);
+    expect(mocks.fetchAttachment).toHaveBeenCalledTimes(1);
   });
 });
 

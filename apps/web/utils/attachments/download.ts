@@ -18,6 +18,13 @@ export function getAttachmentUrl({
   return `/api/mail/v1/accounts/${encodeURIComponent(accountId)}/attachment-content?${searchParams}`;
 }
 
+export class AttachmentTooLargeError extends Error {
+  constructor() {
+    super("Attachment exceeds the download size limit");
+    this.name = "AttachmentTooLargeError";
+  }
+}
+
 export function saveBlob(blob: Blob, filename: string) {
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -70,8 +77,7 @@ export async function fetchAttachment({
   if (maxBytes === undefined && !onProgress) return response.blob();
 
   const limit = maxBytes ?? Number.POSITIVE_INFINITY;
-  const sizeError = () =>
-    new Error("Attachment exceeds the download size limit");
+  const sizeError = () => new AttachmentTooLargeError();
   if (Number(response.headers.get("content-length")) > limit) {
     await response.body?.cancel().catch(() => undefined);
     throw sizeError();

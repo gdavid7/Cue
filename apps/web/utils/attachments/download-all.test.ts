@@ -66,12 +66,12 @@ describe("dedupeFilenames", () => {
     expect(new Set(result.map((name) => name.toLowerCase())).size).toBe(3);
   });
 
-  it("handles names without an extension and dotfiles", () => {
+  it("handles names without an extension and drops leading dots", () => {
     expect(dedupeFilenames(["notes", "notes", ".env", ".env"])).toEqual([
       "notes",
       "notes (1)",
-      ".env",
-      ".env (1)",
+      "env",
+      "env (1)",
     ]);
   });
 
@@ -81,6 +81,41 @@ describe("dedupeFilenames", () => {
       "attachment",
       "attachment (1)",
     ]);
+  });
+});
+
+describe("dedupeFilenames entry-name safety", () => {
+  it("never produces a traversal or empty name", () => {
+    expect(dedupeFilenames(["..", ".", "a/..", "../../.."])).toEqual([
+      "attachment",
+      "attachment (1)",
+      "attachment (2)",
+      "attachment (3)",
+    ]);
+  });
+
+  it("replaces NUL and other control characters", () => {
+    expect(dedupeFilenames(["a\u0000b.txt", "x\u0007y.txt"])).toEqual([
+      "a b.txt",
+      "x y.txt",
+    ]);
+  });
+
+  it("removes drive prefixes and characters Windows rejects", () => {
+    expect(dedupeFilenames(["C:evil", 'q*u?"o<t>e|d.txt'])).toEqual([
+      "C evil",
+      "q u o t e d.txt",
+    ]);
+  });
+
+  it("prefixes Windows device names, with or without an extension", () => {
+    expect(
+      dedupeFilenames(["CON.txt", "nul", "Com1.tar.gz", "lpt9", "console.txt"]),
+    ).toEqual(["_CON.txt", "_nul", "_Com1.tar.gz", "_lpt9", "console.txt"]);
+  });
+
+  it("strips trailing dots and spaces, then keeps 'a.' and 'a' apart", () => {
+    expect(dedupeFilenames(["a.", "a", " b . "])).toEqual(["a", "a (1)", "b"]);
   });
 });
 

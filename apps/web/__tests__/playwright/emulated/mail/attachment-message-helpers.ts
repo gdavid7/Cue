@@ -112,21 +112,29 @@ async function insertOutlookMessage(
   });
   expect(created.ok(), await created.text()).toBe(true);
   const { id } = (await created.json()) as { id: string };
-  for (const { name, type, bytes, inline } of attachments) {
-    const attached = await page.request.post(
-      `${outlook}/v1.0/me/messages/${id}/attachments`,
-      {
-        headers: OUTLOOK_HEADERS,
-        data: {
-          "@odata.type": "#microsoft.graph.fileAttachment",
-          name,
-          contentType: type,
-          contentBytes: bytes.toString("base64"),
-          ...(inline ? { isInline: true, contentId: "files-logo" } : {}),
+  try {
+    for (const { name, type, bytes, inline } of attachments) {
+      const attached = await page.request.post(
+        `${outlook}/v1.0/me/messages/${id}/attachments`,
+        {
+          headers: OUTLOOK_HEADERS,
+          data: {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name,
+            contentType: type,
+            contentBytes: bytes.toString("base64"),
+            ...(inline ? { isInline: true, contentId: "files-logo" } : {}),
+          },
         },
-      },
-    );
-    expect(attached.ok(), await attached.text()).toBe(true);
+      );
+      expect(attached.ok(), await attached.text()).toBe(true);
+    }
+  } catch (error) {
+    // A half-built draft would linger in Drafts for other specs.
+    await page.request.delete(`${outlook}/v1.0/me/messages/${id}`, {
+      headers: OUTLOOK_HEADERS,
+    });
+    throw error;
   }
   // Created messages start as drafts; moving one to the inbox delivers it.
   const moved = await page.request.post(

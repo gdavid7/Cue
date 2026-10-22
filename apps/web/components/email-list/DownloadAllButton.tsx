@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { DownloadIcon } from "lucide-react";
+import { DownloadIcon, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toastError, toastInfo } from "@/components/Toast";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import {
+  AttachmentTooLargeError,
   fetchAttachment,
   getAttachmentUrl,
   saveBlob,
@@ -22,14 +23,8 @@ import {
 export function DownloadAllButton({ message }: { message: ThreadMessage }) {
   const { emailAccountId } = useAccount();
   const [progress, setProgress] = useState<{ done: number; total: number }>();
-  const controller = useRef(new AbortController());
-  // The message id is the trigger: a different message must cancel this one's download.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
-  useEffect(() => {
-    const current = new AbortController();
-    controller.current = current;
-    return () => current.abort();
-  }, [emailAccountId, message.id]);
+  const controller = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => controller.current?.abort(), []);
 
   const attachments = (message.attachments ?? []).filter(
     (attachment) => attachment.attachmentId,
@@ -39,13 +34,17 @@ export function DownloadAllButton({ message }: { message: ThreadMessage }) {
   const pending = !!progress;
 
   const downloadAll = async () => {
-    const signal = controller.current.signal;
+    // Made on click: a dev-mode remount would leave an eager one aborted.
+    if (!controller.current || controller.current.signal.aborted)
+      controller.current = new AbortController();
+    const { signal } = controller.current;
     const { included, skipped } = selectUnderCap(
       attachments,
       DOWNLOAD_ALL_MAX_BYTES,
     );
     const files: { name: string; data: Uint8Array }[] = [];
     let failed = 0;
+    let skippedCount = skipped.length;
     let usedBytes = 0;
     setProgress({ done: 0, total: included.length });
 
@@ -66,9 +65,10 @@ export function DownloadAllButton({ message }: { message: ThreadMessage }) {
           signal.throwIfAborted();
           usedBytes += data.byteLength;
           files.push({ name: attachment.filename, data });
-        } catch {
+        } catch (error) {
           signal.throwIfAborted();
-          failed++;
+          if (error instanceof AttachmentTooLargeError) skippedCount++;
+          else failed++;
         }
         setProgress((current) =>
           current ? { ...current, done: current.done + 1 } : current,
@@ -76,7 +76,12 @@ export function DownloadAllButton({ message }: { message: ThreadMessage }) {
       }
 
       if (files.length === 0) {
-        toastError({ description: "Failed to download attachments" });
+        toastError({
+          description:
+            failed === 0
+              ? `Attachments over ${LIMIT_LABEL} can't be downloaded together`
+              : "Failed to download attachments",
+        });
         return;
       }
 
@@ -89,16 +94,19 @@ export function DownloadAllButton({ message }: { message: ThreadMessage }) {
         signal,
       );
       signal.throwIfAborted();
+      const downloaded = files.length;
+      // The archive holds its own copy; don't keep every file in memory for the toast.
+      files.length = 0;
       saveBlob(zip, zipFilename(message.headers.subject));
 
       const notes = [
-        skipped.length > 0 &&
-          `${skipped.length} skipped for going over the 100 MB limit`,
+        skippedCount > 0 &&
+          `${skippedCount} skipped for going over the ${LIMIT_LABEL} limit`,
         failed > 0 && `${failed} failed to download`,
       ].filter(Boolean);
       if (notes.length > 0)
         toastInfo({
-          title: `Downloaded ${files.length} of ${attachments.length} attachments`,
+          title: `Downloaded ${downloaded} of ${attachments.length} attachments`,
           description: `${notes.join(", ")}.`,
         });
     } catch {
@@ -115,19 +123,29 @@ export function DownloadAllButton({ message }: { message: ThreadMessage }) {
         variant="outline"
         size="sm"
         type="button"
-        title="Download all attachments as one zip file"
+        className="aria-disabled:pointer-events-none aria-disabled:opacity-60"
+        aria-disabled={pending}
         aria-busy={pending}
-        disabled={pending}
-        loading={pending}
-        onClick={downloadAll}
+        onClick={() => {
+          if (!pending) downloadAll();
+        }}
       >
-        {!pending && (
+        {pending ? (
+          <Loader2 className="mr-2 size-4 animate-spin" aria-hidden="true" />
+        ) : (
           <DownloadIcon className="mr-2 size-4" aria-hidden="true" />
         )}
         {progress
-          ? `Zipping ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
+          ? `Downloading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`
           : `Download all (${attachments.length})`}
       </Button>
+      <span role="status" className="sr-only">
+        {progress
+          ? `Downloading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}`
+          : ""}
+      </span>
     </div>
   );
 }
+
+const LIMIT_LABEL = `${DOWNLOAD_ALL_MAX_BYTES / (1024 * 1024)} MB`;

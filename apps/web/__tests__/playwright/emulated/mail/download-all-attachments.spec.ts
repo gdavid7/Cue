@@ -71,6 +71,7 @@ test("downloads every attachment of a message as one zip", async ({
   );
   expect(Object.keys(entries)).toHaveLength(3);
   expect(Object.keys(entries)).toContain(notes);
+  expect(Object.keys(entries)).toContain(notes.replace(".txt", " (1).txt"));
   expect(texts.sort()).toEqual(["first notes", "second notes", "the plan"]);
   await expect(downloadAll).toBeEnabled();
 });

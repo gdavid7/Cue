@@ -5,18 +5,15 @@ export const DOWNLOAD_ALL_MAX_BYTES = 100 * 1024 * 1024;
 const FALLBACK_ARCHIVE_NAME = "attachments.zip";
 const FALLBACK_FILE_NAME = "attachment";
 const MAX_SUBJECT_CHARACTERS = 100;
+// Windows refuses these names, with or without an extension.
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
 export function zipFilename(subject: string | undefined): string {
-  const cleaned = Array.from(
-    (subject ?? "")
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is being removed
-      .replace(/[\u0000-\u001f\u007f\\/:*?"<>|]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim(),
-  )
-    .slice(0, MAX_SUBJECT_CHARACTERS)
-    .join("")
-    .replace(/^[.\s]+|[.\s]+$/g, "");
+  const cleaned = cleanName(
+    Array.from(cleanName(subject ?? ""))
+      .slice(0, MAX_SUBJECT_CHARACTERS)
+      .join(""),
+  );
   return cleaned
     ? `${cleaned} ${FALLBACK_ARCHIVE_NAME}`
     : FALLBACK_ARCHIVE_NAME;
@@ -26,7 +23,9 @@ export function zipFilename(subject: string | undefined): string {
 export function dedupeFilenames(names: string[]): string[] {
   const taken = new Set<string>();
   return names.map((raw) => {
-    const name = raw.split(/[\\/]/).pop()?.trim() || FALLBACK_FILE_NAME;
+    const last = raw.split(/[\\/]/).pop() ?? "";
+    const cleaned = cleanName(last) || FALLBACK_FILE_NAME;
+    const name = WINDOWS_DEVICE_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
     const dot = name.lastIndexOf(".");
     const stem = dot > 0 ? name.slice(0, dot) : name;
     const extension = dot > 0 ? name.slice(dot) : "";
@@ -36,6 +35,16 @@ export function dedupeFilenames(names: string[]): string[] {
     taken.add(candidate.toLowerCase());
     return candidate;
   });
+}
+
+function cleanName(raw: string): string {
+  return (
+    raw
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what is being removed
+      .replace(/[\u0000-\u001f\u007f\\/:*?"<>|]/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/^[.\s]+|[.\s]+$/g, "")
+  );
 }
 
 export function selectUnderCap<T extends { size: number }>(
@@ -94,6 +103,7 @@ export function zipAttachments(
       for (const { name, data } of files) {
         const entry = new AsyncZipDeflate(name, { level: 6 });
         zip.add(entry);
+        // push hands the buffer to a worker, which detaches `data` here.
         entry.push(data, true);
       }
       zip.end();
