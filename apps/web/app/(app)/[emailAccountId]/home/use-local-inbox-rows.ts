@@ -128,21 +128,46 @@ function toTodayThread(
     splitRecipientList(conversation.to)[0] ||
     conversation.to ||
     conversation.from;
+  return localTodayThread({
+    conversationId: conversation.key.conversationId,
+    messageId: conversation.latestMessageId,
+    counterpart,
+    subject: conversation.subject,
+    preview: conversation.preview,
+    atMs: conversation.latestMessageAtMs,
+    unread: conversation.unread,
+    starred: conversation.starred,
+  });
+}
+
+/** A conversation in local inbox mail as Today's row, named for who it is with. */
+export function localTodayThread(input: {
+  conversationId: string;
+  messageId: string;
+  /** The address the row names, as "Name <address>" or a bare address. */
+  counterpart: string;
+  subject: string;
+  preview: string;
+  atMs: number;
+  unread: boolean;
+  starred: boolean;
+}): TodayThread {
   return {
-    threadId: conversation.key.conversationId,
+    threadId: input.conversationId,
     fromName:
-      extractNameFromEmail(counterpart) || extractEmailAddress(counterpart),
-    fromEmail: extractEmailAddress(counterpart),
-    subject: (conversation.subject || "(no subject)").replace(
+      extractNameFromEmail(input.counterpart) ||
+      extractEmailAddress(input.counterpart),
+    fromEmail: extractEmailAddress(input.counterpart),
+    subject: (input.subject || "(no subject)").replace(
       /^((re|fwd?):\s*)+/i,
       "",
     ),
-    preview: conversation.preview,
-    at: new Date(conversation.latestMessageAtMs).toISOString(),
-    priority: conversation.unread ? "medium" : "low",
-    unread: conversation.unread,
-    messageId: conversation.latestMessageId,
-    starred: conversation.starred,
+    preview: input.preview,
+    at: new Date(input.atMs).toISOString(),
+    priority: input.unread ? "medium" : "low",
+    unread: input.unread,
+    messageId: input.messageId,
+    starred: input.starred,
     inInbox: true,
   };
 }

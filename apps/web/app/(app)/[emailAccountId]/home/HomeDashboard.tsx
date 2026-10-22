@@ -176,13 +176,19 @@ export function HomeDashboard() {
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
     handledLabelIds,
-    // Cue's own Needs reply takes over once it has something.
-    enabled: !data?.needsYou.length,
+    // Only for a mailbox Cue hasn't read yet; after that Needs reply is
+    // Cue's answer, and this would second-guess it.
+    enabled: !data || (!data.cue.hasReadMail && !data.needsYou.length),
   });
   // Only beside a Needs reply that is known to be empty, and never a
   // conversation Today already lists as waiting on someone else.
   const waitingOnYouShown = useMemo(() => {
-    if (!data || data.pending.includes("needsYou") || data.needsYou.length)
+    if (
+      !data ||
+      data.cue.hasReadMail ||
+      data.pending.includes("needsYou") ||
+      data.needsYou.length
+    )
       return [];
     const waiting = new Set(data.waiting.map(rowKey));
     return waitingOnYou.threads.filter(
@@ -714,6 +720,7 @@ function HomeLanes({
   ) => renderTodayRow(thread, rowContext, options);
   const hasFocus = (threads: TodayThread[]) =>
     threads.some((thread) => rowKey(thread) === rowContext.focusedId);
+  const waitingOnYouDetailId = useId();
 
   return (
     <>
@@ -742,8 +749,10 @@ function HomeLanes({
         <Section
           title="Waiting on you"
           detail="From your mail, not checked by AI"
+          detailId={waitingOnYouDetailId}
         >
           <ThreadList
+            describedBy={waitingOnYouDetailId}
             hasFocusedRow={hasFocus(lanes.waitingOnYou)}
             label="Waiting on you"
           >
@@ -1009,6 +1018,7 @@ function cueNotice(
 function Section({
   title,
   detail,
+  detailId,
   count,
   outdated,
   action,
@@ -1017,6 +1027,8 @@ function Section({
   title: string;
   /** A quiet line under the title, such as where its rows come from. */
   detail?: string;
+  /** For a list that the detail line describes. */
+  detailId?: string;
   count?: string;
   /** Its rows are from an earlier answer that a refresh couldn't replace. */
   outdated?: boolean;
@@ -1041,7 +1053,9 @@ function Section({
         {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
       {detail ? (
-        <p className="-mt-1 mb-2 text-muted-foreground text-sm">{detail}</p>
+        <p className="-mt-1 mb-2 text-muted-foreground text-sm" id={detailId}>
+          {detail}
+        </p>
       ) : null}
       {children}
     </section>
@@ -1055,15 +1069,18 @@ function Section({
  */
 function ThreadList({
   label,
+  describedBy,
   hasFocusedRow,
   children,
 }: {
   label: string;
+  describedBy?: string;
   hasFocusedRow: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div
+      aria-describedby={describedBy}
       aria-label={label}
       className="-mx-4 sm:mx-0 border-border/60 border-t outline-none"
       onFocus={(event) => {

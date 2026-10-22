@@ -34,6 +34,13 @@ export async function readWaitingOnYou(
            WHERE lower(trim(l.from_address)) = o.value
              OR instr(lower(l.from_address), '<' || o.value || '>') > 0
          )
+         -- A meeting invitation or response is answered from the calendar.
+         -- Known once its body is stored on this device.
+         AND NOT EXISTS (
+           SELECT 1 FROM message_content c
+           WHERE c.account_id = l.account_id AND c.message_id = l.message_id
+             AND c.is_meeting_invitation = 1
+         )
          -- The inbox's main tab: no other Gmail tab, not Outlook's Other.
          AND (l.inbox_section IS NULL OR l.inbox_section != 'other')
          AND NOT EXISTS (

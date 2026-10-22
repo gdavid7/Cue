@@ -156,8 +156,9 @@ vi.mock("./use-local-inbox-rows", async (importOriginal) => {
   };
 });
 vi.mock("./use-waiting-on-you", () => ({
-  useWaitingOnYou: ({ enabled }: { enabled: boolean }) => ({
-    threads: enabled ? mocks.waitingOnYou : [],
+  // What the hook found, whether or not Today still wants it.
+  useWaitingOnYou: () => ({
+    threads: mocks.waitingOnYou,
     dismiss: mocks.dismissWaitingOnYou,
   }),
 }));
@@ -753,8 +754,17 @@ describe("HomeDashboard Waiting on you", () => {
     ).toBeNull();
   });
 
+  it("leaves a mailbox Cue has read to Cue, even when nothing needs a reply", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(lanes()).not.toContain("Waiting on you");
+  });
+
   it("hides once Needs reply has conversations of its own", () => {
-    mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
+    mocks.home.data = unread(homeData([thread("a", "Quarterly numbers")]));
 
     renderToday();
 
@@ -762,7 +772,7 @@ describe("HomeDashboard Waiting on you", () => {
   });
 
   it("waits for Needs reply to load rather than showing beside its placeholder", () => {
-    mocks.home.data = { ...homeData([]), pending: ["needsYou"] };
+    mocks.home.data = { ...unread(homeData([])), pending: ["needsYou"] };
 
     renderToday();
 
@@ -770,7 +780,7 @@ describe("HomeDashboard Waiting on you", () => {
   });
 
   it("dismisses a conversation", () => {
-    mocks.home.data = homeData([]);
+    mocks.home.data = unread(homeData([]));
 
     renderToday();
     fireEvent.click(
@@ -1372,6 +1382,14 @@ function syncedView(
       lastCompletedSyncAtMs: 1,
     })),
     connection: "ready",
+  };
+}
+
+/** A mailbox Cue hasn't read yet. */
+function unread(home: GetHomeResponse): GetHomeResponse {
+  return {
+    ...home,
+    cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
   };
 }
 

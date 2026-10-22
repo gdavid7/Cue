@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { WaitingOnYouQuery } from "@inboxzero/mail-core/queries";
-import type { ProviderChange } from "@inboxzero/mail-core/sync";
+import type {
+  BodyObservation,
+  ProviderChange,
+} from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 
@@ -174,6 +177,31 @@ describe("readWaitingOnYou", () => {
     expect(await ids(store)).toEqual([]);
   });
 
+  it("leaves out meeting responses and invitations", async () => {
+    const store = await setup();
+    await write(
+      store,
+      [
+        ...wroteToAna(),
+        mail({ id: "accepted", from: ANA, at: NOW - HOUR }),
+        mail({ id: "ask", from: ANA, at: NOW - 2 * HOUR }),
+      ],
+      "a",
+      [
+        {
+          key: { accountId: "a", messageId: "accepted" },
+          version: "1",
+          html: null,
+          text: "Accepted: Planning",
+          attachments: [],
+          isMeetingInvitation: true,
+        },
+      ],
+    );
+
+    expect(await ids(store)).toEqual(["ask"]);
+  });
+
   it("leaves out someone you've never written to", async () => {
     const store = await setup();
     await write(store, [mail({ id: "cold", from: BEN, at: NOW - HOUR })]);
@@ -261,6 +289,7 @@ async function write(
   store: MailStore,
   changes: ProviderChange[],
   accountId = "a",
+  bodies: BodyObservation[] = [],
 ) {
   expect(
     await store.applyHydration({
@@ -271,7 +300,10 @@ async function write(
           ? { ...change, key: { ...change.key, accountId } }
           : change,
       ),
-      bodies: [],
+      bodies: bodies.map((observation) => ({
+        ...observation,
+        key: { ...observation.key, accountId },
+      })),
     }),
   ).toMatchObject({ status: "committed" });
 }
