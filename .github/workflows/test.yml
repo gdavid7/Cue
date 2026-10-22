@@ -155,12 +155,17 @@ jobs:
         run: pnpm install --frozen-lockfile
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # Retry the apt install so a stalled mirror fails fast instead of eating the job.
+      - name: Install redis-server
+        run: |
+          for attempt in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends redis-server && break
+            sleep 5
+          done
+          test -x /usr/bin/redis-server
       - name: Run Redis Lua tests
         timeout-minutes: 5
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends redis-server
-          pnpm -F inbox-zero-ai exec vitest run --dir __tests__/redis
+        run: pnpm -F inbox-zero-ai exec vitest run --dir __tests__/redis
         env:
           RUN_INTEGRATION_TESTS: true
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
