@@ -1,5 +1,6 @@
 import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { SqlTransaction } from "./driver";
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 
 /**
  * Each conversation's message key: the normalised Message-ID of its latest
@@ -10,7 +11,8 @@ import type { SqlTransaction } from "./driver";
  */
 export async function migrateConversationMessageKeys(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 17",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.conversationMessageKeys.id],
   );
   if (applied.length) return;
 
@@ -154,9 +156,10 @@ export async function migrateConversationMessageKeys(tx: SqlTransaction) {
       ${rebuildKey("NEW")}
     END;
   `);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (17, '0017-conversation-message-keys')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.conversationMessageKeys.id,
+    LOCAL_MIGRATIONS.conversationMessageKeys.name,
+  ]);
 }
 
 const LATEST_ORDER =
