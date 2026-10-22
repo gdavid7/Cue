@@ -267,19 +267,14 @@ test("a newsletter opened by link reads, closes and archives from the reader", a
 
     await openByLink();
     await expect(heading).toBeVisible({ timeout: 60_000 });
+    expect(await newsletter.inInbox()).toBe(true);
     await page.keyboard.press("e");
+    // Off the list, the reader moves on to the inbox's own next row.
     await expect(heading).toHaveCount(0, { timeout: 30_000 });
+    // The newsletter itself left the inbox, not a row the list had focused.
     await expect
-      .poll(
-        () =>
-          readLatestMailMutation(page, {
-            emailAccountId,
-            kind: "archive",
-            threadId: newsletter.threadId,
-          }),
-        { timeout: 60_000 },
-      )
-      .toMatchObject({ status: "succeeded" });
+      .poll(() => newsletter.inInbox(), { timeout: 60_000 })
+      .toBe(false);
   } finally {
     await newsletter.remove();
   }
@@ -671,6 +666,19 @@ async function seedNewsletter(page: Page, subject: string) {
     };
     return {
       threadId: message.conversationId,
+      // Archiving moves the message, which in Graph gives it a new id.
+      inInbox: async () => {
+        const [current, inbox] = await Promise.all([
+          page.request.get(`${base}/messages/${message.id}`, { headers }),
+          page.request.get(`${base}/mailFolders/inbox`, { headers }),
+        ]);
+        if (!current.ok() || !inbox.ok()) return false;
+        const { parentFolderId } = (await current.json()) as {
+          parentFolderId?: string;
+        };
+        const { id } = (await inbox.json()) as { id: string };
+        return parentFolderId === id || parentFolderId === "inbox";
+      },
       remove: () =>
         page.request.post(`${base}/messages/${message.id}/permanentDelete`, {
           headers,
@@ -708,6 +716,14 @@ async function seedNewsletter(page: Page, subject: string) {
   const message = (await inserted.json()) as { id: string; threadId: string };
   return {
     threadId: message.threadId,
+    inInbox: async () => {
+      const current = await page.request.get(`${base}/messages/${message.id}`, {
+        headers,
+      });
+      if (!current.ok()) return false;
+      const { labelIds } = (await current.json()) as { labelIds?: string[] };
+      return Boolean(labelIds?.includes("INBOX"));
+    },
     remove: () =>
       page.request.delete(`${base}/messages/${message.id}`, { headers }),
   };

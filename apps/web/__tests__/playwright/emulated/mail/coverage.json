@@ -43,7 +43,9 @@
     "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx",
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
     "app/(app)/[emailAccountId]/mail/ReadingBundle.tsx",
-    "app/(app)/[emailAccountId]/mail/reading-lane.ts"
+    "app/(app)/[emailAccountId]/mail/reading-lane.ts",
+    "app/(app)/[emailAccountId]/mail/use-reading-bulk.ts",
+    "utils/label/reading-label.ts"
   ],
   "today-quiet.spec.ts": [
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
