@@ -458,7 +458,10 @@ test("a new mailbox shows Waiting on you from local mail before Today answers, a
     const status = page.getByRole("main").getByRole("status");
     // Cue's notice comes with the answer, which hasn't arrived.
     await expect(status).toHaveCount(0);
-    const before = await row.boundingBox();
+    // The row's wrapper has no box of its own; its option is what shows.
+    const option = row.getByRole("option").first();
+    const before = await option.boundingBox();
+    expect(before).not.toBeNull();
     await capturePlaywrightCheckpoint(
       page,
       testInfo,
@@ -471,7 +474,7 @@ test("a new mailbox shows Waiting on you from local mail before Today answers, a
     });
     await expect(row).toBeVisible();
     // The answer's notice lands below the group, so the row doesn't move.
-    expect((await row.boundingBox())?.y).toBeCloseTo(before?.y ?? -1, 0);
+    expect((await option.boundingBox())?.y).toBeCloseTo(before?.y ?? -1, 0);
     await capturePlaywrightCheckpoint(
       page,
       testInfo,
