@@ -5,8 +5,10 @@ import {
   catchUpLeft,
   currentCatchUpItem,
   startCatchUp,
+  toCatchUpItems,
   undoCatchUp,
 } from "./catch-up-queue";
+import type { ConversationSummary } from "@inboxzero/mail-core/queries";
 
 describe("startCatchUp", () => {
   it("starts from the oldest conversation", () => {
@@ -121,6 +123,52 @@ describe("undoCatchUp", () => {
     expect(result.undone).toBeNull();
   });
 });
+
+describe("toCatchUpItems", () => {
+  it("names who the conversation is with, not the user who wrote last", () => {
+    const [entry] = toCatchUpItems(
+      [
+        conversation({
+          senders: ["Dana Example <dana@example.com>", "Me <me@example.com>"],
+        }),
+      ],
+      "ME@example.com",
+    );
+    expect(entry.sender).toBe("Dana Example");
+  });
+
+  it("leaves out read conversations and drafts with nothing sent", () => {
+    const items = toCatchUpItems(
+      [
+        conversation({ unread: false }),
+        conversation({ latestMessageId: undefined }),
+      ],
+      "me@example.com",
+    );
+    expect(items).toEqual([]);
+  });
+});
+
+function conversation(
+  overrides: Partial<ConversationSummary>,
+): ConversationSummary {
+  return {
+    key: { accountId: "account", conversationId: "thread" },
+    subject: "Subject",
+    preview: "Preview",
+    from: "Dana Example <dana@example.com>",
+    to: "me@example.com",
+    senders: ["Dana Example <dana@example.com>"],
+    latestMessageAtMs: 1,
+    unread: true,
+    starred: false,
+    labelIds: [],
+    roles: ["inbox"],
+    pendingOperationIds: [],
+    latestMessageId: "message",
+    ...overrides,
+  };
+}
 
 function item(key: string, atMs: number): CatchUpItem {
   return {

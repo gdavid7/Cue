@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/dialog";
 import { useCueMembership } from "@/hooks/useCueMembership";
 import { useUser } from "@/hooks/useUser";
+import { useAccount } from "@/providers/EmailAccountProvider";
 import {
   isTypingTarget,
   MAIL_SHORTCUTS_OFF_ATTRIBUTE,
@@ -195,6 +196,7 @@ function CatchUpBody({
   onCloseAutoFocus: (event: Event) => void;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const { userEmail } = useAccount();
   const client = useOptionalMailClient();
   const [batch, setBatch] = useState<CatchUpState | null>(null);
   const [lastAction, setLastAction] = useState<{
@@ -230,7 +232,9 @@ function CatchUpBody({
     !getFirstSyncAccountIds([emailAccountId], view.coverage).length
   ) {
     setBatch(
-      startCatchUp(toCatchUpItems(view.conversations), { skip: actedKeys }),
+      startCatchUp(toCatchUpItems(view.conversations, userEmail), {
+        skip: actedKeys,
+      }),
     );
   }
 
@@ -386,7 +390,7 @@ function CatchUpBody({
             </p>
           </article>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2">
             <CardButton
               icon={<ArchiveIcon className="size-4" />}
               keyLabel="E"

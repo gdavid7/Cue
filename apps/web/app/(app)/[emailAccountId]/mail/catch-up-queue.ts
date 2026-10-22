@@ -33,11 +33,17 @@ export type CatchUpState = {
 /** The unread conversations in a mailbox view, as the card shows them. */
 export function toCatchUpItems(
   conversations: ConversationSummary[],
+  ownEmail: string,
 ): CatchUpItem[] {
+  const own = ownEmail.toLowerCase();
   return conversations.flatMap((conversation) => {
     // A conversation that is only a draft has nothing to read yet.
     if (!conversation.unread || !conversation.latestMessageId) return [];
-    const from = conversation.senders.at(-1) || conversation.from;
+    // Who it's with: the latest sender who isn't the user, as Today names it.
+    const from =
+      conversation.senders.findLast(
+        (sender) => extractEmailAddress(sender).toLowerCase() !== own,
+      ) || conversation.from;
     return [
       {
         key: getListThreadKey({ id: conversation.key.conversationId }),
