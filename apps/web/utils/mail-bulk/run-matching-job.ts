@@ -488,7 +488,7 @@ async function applyChunk({
  * and makes its undo exact: undoing "mark read" marks unread only what was
  * unread before.
  */
-function filterForAction(action: MailBulkJobAction): MatchingFilter {
+export function filterForAction(action: MailBulkJobAction): MatchingFilter {
   switch (action) {
     case "archive":
       return { inInbox: true };

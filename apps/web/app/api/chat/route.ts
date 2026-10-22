@@ -358,6 +358,7 @@ export const POST = withEmailAccount("chat", async (request) => {
           data.localMailSearchSyntaxes.includes("outlook")))
         ? createLocalMailSearch({
             emailAccountId,
+            canCount: data.localMailCount,
             logger: runLogger,
             abortSignal: chatRun.abortSignal,
           })

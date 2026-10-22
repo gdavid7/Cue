@@ -236,7 +236,7 @@ function msg(overrides: Partial<MessageSearchMatch>): MessageSearchMatch {
 function many(
   count: number,
   fields: (index: number) => Partial<MessageSearchMatch>,
-): MessageSearchMatch[] {
+): Partial<MessageSearchMatch>[] {
   return Array.from({ length: count }, (_, index) => fields(index));
 }
 

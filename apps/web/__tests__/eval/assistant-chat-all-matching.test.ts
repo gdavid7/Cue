@@ -533,7 +533,7 @@ async function localStoreWith(messages: FixtureMessage[]) {
           ...item,
           metadata: "complete" as const,
           indexedContent: "complete" as const,
-          windowStartMs: null,
+          windowStartMs: undefined,
         })),
       };
     },

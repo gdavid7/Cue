@@ -319,6 +319,8 @@ export const assistantInputSchema = z.object({
   // The query syntaxes its local search reads. Tabs from before Outlook
   // support send only `localMailSearch` and read Gmail's syntax alone.
   // Syntaxes this server does not know are dropped rather than refused.
+  // It can also count everything a search matches. Older tabs only search.
+  localMailCount: z.boolean().optional().default(false),
   localMailSearchSyntaxes: z
     .array(z.string().max(32))
     .max(8)

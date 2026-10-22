@@ -329,6 +329,78 @@ describe("chat inbox tools", () => {
     });
   });
 
+  it("labels everything a search matches only after the user confirms the count", async () => {
+    const listMatchingMessages = vi.fn(async () => ({
+      messages: [
+        { id: "m1", threadId: "t1" },
+        { id: "m2", threadId: "t1" },
+        { id: "m3", threadId: "t2" },
+      ],
+    }));
+    const getLabelByName = vi.fn().mockResolvedValue({
+      id: "Label_9",
+      name: "Receipts",
+      type: "user",
+    });
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      listMatchingMessages,
+      getLabelByName,
+    } as any);
+    const toolInstance = manageInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      provider: "google",
+      logger,
+    });
+    const input = {
+      action: "label_threads",
+      labelName: "Receipts",
+      query: "from:billing@shop.example",
+    };
+
+    const result = await (toolInstance.execute as any)(input, {
+      messages: [{ role: "user", content: "Label all my shop bills Receipts" }],
+    });
+
+    expect(listMatchingMessages).toHaveBeenCalledWith({
+      scope: { q: "from:billing@shop.example" },
+      only: {},
+      pageToken: undefined,
+    });
+    expect(result).toMatchObject({
+      status: "needs_confirmation",
+      conversations: 2,
+      messages: 3,
+    });
+  });
+
+  it("won't trash, or act on listed threads, through a search", async () => {
+    const schema = manageInboxTool({
+      email: TEST_EMAIL,
+      emailAccountId: "email-account-1",
+      userId: "user-1",
+      provider: "google",
+      logger,
+    }).inputSchema as any;
+
+    expect(
+      schema.safeParse({ action: "trash_threads", query: "older_than:1y" })
+        .success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        action: "archive_threads",
+        query: "older_than:1y",
+        threadIds: ["t1"],
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ action: "archive_threads", query: "older_than:1y" })
+        .success,
+    ).toBe(true);
+  });
+
   it("requires action-specific Gmail manageInbox fields", async () => {
     const schema = manageInboxTool({
       email: TEST_EMAIL,

@@ -31,7 +31,7 @@ const MAX_POLL_MS = 6 * 60 * 60 * 1000;
 const MAX_FAILED_POLLS = 20;
 
 type MatchingAccount = { id: string; scope: MatchingScope };
-type RunningJob = { accountId: string; jobId: string };
+export type RunningJob = { accountId: string; jobId: string };
 
 /**
  * Gmail's "select all conversations that match": once every row on the page
@@ -99,7 +99,7 @@ export function useSelectAllMatching({
       );
       const jobs = started.filter((job): job is RunningJob => Boolean(job));
       if (!jobs.length) return;
-      await followJobs({ jobs, action, onFinished });
+      await followMatchingJobs({ jobs, action, onFinished });
     },
     [accounts, onFinished],
   );
@@ -107,7 +107,11 @@ export function useSelectAllMatching({
   return { showBanner, active, total, select, clear, run };
 }
 
-async function followJobs({
+/**
+ * Follows running select-all jobs with a progress toast that can stop them,
+ * then reports the result and, where the action is reversible, offers undo.
+ */
+export async function followMatchingJobs({
   jobs,
   action,
   onFinished,
@@ -237,7 +241,7 @@ async function undoJobs({
   );
   const undoing = started.filter((job): job is RunningJob => Boolean(job));
   if (undoing.length)
-    await followJobs({ jobs: undoing, action: "undo", onFinished });
+    await followMatchingJobs({ jobs: undoing, action: "undo", onFinished });
 }
 
 async function countMatching(accounts: MatchingAccount[]) {
