@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
+import { appUrl } from "@/utils/playwright/app-origin";
 import { parseMailPath } from "@/utils/mail-url";
 import { assertOnlySelfRecipients, guardRecipients } from "./qa-session";
 
@@ -10,7 +11,9 @@ import { assertOnlySelfRecipients, guardRecipients } from "./qa-session";
 
 /** The QA user's mailbox for `email` in Cue, or null when it is not linked. */
 export async function findMailAccount(page: Page, email: string) {
-  const response = await page.request.get("/api/user/email-accounts");
+  const response = await page.request.get(
+    appUrl(page, "/api/user/email-accounts"),
+  );
   expect(response.ok(), "email accounts load").toBe(true);
   const { emailAccounts }: GetEmailAccountsResponse = await response.json();
   const index = emailAccounts.findIndex(
@@ -57,7 +60,7 @@ export async function trashOpenThread(page: Page, accountId: string) {
   const threadId = parseMailPath(new URL(page.url()).pathname)?.threadId;
   if (!threadId) return;
   await page.request.post(
-    `/api/threads/${encodeURIComponent(threadId)}/trash`,
+    appUrl(page, `/api/threads/${encodeURIComponent(threadId)}/trash`),
     { headers: { "X-Email-Account-ID": accountId } },
   );
 }

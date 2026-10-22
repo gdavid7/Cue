@@ -59,4 +59,5 @@ export const POST = withEmailProvider(
       }),
     );
   },
+  { readOnly: true },
 );

@@ -3,6 +3,7 @@ import { attachmentContentQuerySchema } from "./protocol/mail-http";
 import {
   MAX_ATTACHMENT_ID_LENGTH,
   messageAttachmentDescriptorSchema,
+  normalizeInternetMessageId,
 } from "./messages";
 
 describe("message attachment descriptors", () => {
@@ -24,5 +25,18 @@ describe("message attachment descriptors", () => {
         inline: false,
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("normalizeInternetMessageId", () => {
+  it("compares Message-IDs with or without angle brackets, case or padding", () => {
+    expect(normalizeInternetMessageId(" <Plan@Mail.Example> ")).toBe(
+      "plan@mail.example",
+    );
+    expect(normalizeInternetMessageId("plan@mail.example")).toBe(
+      "plan@mail.example",
+    );
+    expect(normalizeInternetMessageId(" <> ")).toBeNull();
+    expect(normalizeInternetMessageId(undefined)).toBeNull();
   });
 });

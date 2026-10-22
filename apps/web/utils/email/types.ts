@@ -431,6 +431,8 @@ export interface EmailProvider {
   getThreadsWithParticipant(options: {
     participantEmail: string;
     maxThreads?: number;
+    /** Left out of the result without being read, such as a thread the caller already has. */
+    excludeThreadId?: string;
   }): Promise<EmailThread[]>;
   getThreadsWithQuery(options: {
     query?: ThreadsQuery;

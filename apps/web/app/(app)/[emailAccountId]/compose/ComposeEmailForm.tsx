@@ -75,6 +75,7 @@ import {
 import { env } from "@/env";
 import { getAccountScopedKey } from "@/utils/swr";
 import { useEmailAccountFull } from "@/hooks/useEmailAccountFull";
+import { usePreSendCheck } from "@/hooks/usePreSendCheck";
 import { useLocalReplyDraft } from "@/hooks/useLocalReplyDraft";
 import {
   DraftAutosaveHaltedError,
@@ -163,6 +164,14 @@ import {
   waitForReaderEmailSettlement,
 } from "./queued-reply";
 import { beginUndoSend, UNDO_SEND_DELAY_MS } from "./undo-send";
+import { PreSendConfirmation } from "./PreSendConfirmation";
+import { selectPlaceholderIn } from "./select-placeholder";
+import {
+  getComposeBodyText,
+  getPreSendWarnings,
+  type PreSendWarning,
+  type PreSendWarningFix,
+} from "./pre-send-warnings";
 import { getReplyToEmailPayload } from "./reply-to-email-payload";
 import {
   enqueueDraftOperation,
@@ -211,6 +220,10 @@ export type ReplyingToEmail = {
     "id" | "filename" | "mimeType" | "size"
   >[];
   references?: string;
+  /** Everyone on the message being replied to, to tell who a reply adds. */
+  participants?: string;
+  /** Recipients a rule the user set up chose for this reply. */
+  ruleRecipients?: string;
   subject: string;
   to: string;
   cc?: string;
@@ -606,6 +619,14 @@ function ComposeEmailFormContent({
   const inlineImageInputRef = useRef<HTMLInputElement>(null);
   const sendAndMarkDoneButtonRef = useRef<HTMLButtonElement>(null);
   const deliveryOptionsRef = useRef<DeliveryOptionsHandle>(null);
+  const [preSendCheckEnabled] = usePreSendCheck();
+  const [preSend, setPreSend] = useState<{
+    warnings: PreSendWarning[];
+    markDone: boolean;
+    returnFocus: Element | null;
+  }>();
+  // The warnings on screen, so sending again with the same ones confirms them.
+  const shownPreSendWarnings = useRef<string | undefined>(undefined);
   const shortcutOwnerId = useId();
   const {
     register,
@@ -614,6 +635,7 @@ function ComposeEmailFormContent({
     formState: { errors, isSubmitting },
     watch,
     setValue,
+    setFocus,
   } = useForm<ComposeFormValues>({
     defaultValues: movedDraft?.values ??
       withRecipient(storedDraft?.content?.values, initialTo) ?? {
@@ -644,6 +666,11 @@ function ComposeEmailFormContent({
     editorRef,
     emailAccountId: selectedEmailAccountId,
     threadId: replyingToEmail?.threadId,
+    // A forward answers no one, so it teaches no reply memories.
+    replyToMessageId:
+      draftMode === "forward"
+        ? undefined
+        : (draftKeyMessageId ?? replyingToEmail?.messageId),
     getEnvelope: () => ({
       to: getValues("to") || undefined,
       subject: getValues("subject") || undefined,
@@ -1347,6 +1374,52 @@ function ComposeEmailFormContent({
         return;
       }
 
+      if (preSendCheckEnabled) {
+        const editableHtml =
+          editorRef.current?.getValue().editableHtml ??
+          initialDraft.editableHtml;
+        const warnings = getPreSendWarnings(
+          {
+            ...recipients,
+            subject: data.subject ?? "",
+            bodyText: getComposeBodyText(editableHtml),
+            placeholderText: getComposeBodyText(editableHtml, {
+              forPlaceholders: true,
+            }),
+            attachmentCount:
+              attachmentsRef.current.length +
+              (replyingToEmail?.forwardedAttachments?.length ?? 0) +
+              ruleFiles.length +
+              (replyingToEmail?.draftHasAttachments ? 1 : 0),
+          },
+          {
+            kind: getPreSendKind(draftMode, replyingToEmail),
+            // Not the reply's own recipients, which may already add someone.
+            // A reopened draft only knows who it was going to.
+            repliedToAddresses: (replyingToEmail?.participants
+              ? [replyingToEmail.participants]
+              : [replyingToEmail?.to, replyingToEmail?.cc, replyingToEmail?.bcc]
+            ).flatMap((list) => (list ? [list] : [])),
+            chosenAddresses: replyingToEmail?.ruleRecipients
+              ? [replyingToEmail.ruleRecipients]
+              : [],
+            ownEmails,
+          },
+        );
+        const shown = warnings.map((warning) => warning.message).join("\n");
+        if (warnings.length && shown !== shownPreSendWarnings.current) {
+          shownPreSendWarnings.current = shown;
+          setPreSend({
+            warnings,
+            markDone: markDoneAfterSend,
+            returnFocus: document.activeElement,
+          });
+          return;
+        }
+      }
+      shownPreSendWarnings.current = undefined;
+      setPreSend(undefined);
+
       // Files go to the mailbox draft as they are attached, so a send waits
       // for them and never carries their bytes itself.
       await waitForDraftOperations(draftQueueKey);
@@ -1539,11 +1612,12 @@ function ComposeEmailFormContent({
             attachments: attachmentsRef.current.flatMap(toAttachmentReference),
             online,
             threadId: readerThreadId,
-            onQueued: async () => {
+            onQueued: async (operationId) => {
               deliveryAccepted = true;
               showDraftAgain = hideSendingDraftMessages(
                 selectedEmailAccountId,
                 draftMessageIds,
+                operationId,
               );
               if (replyingToEmail?.threadId?.trim()) {
                 await mutate([
@@ -1677,6 +1751,9 @@ function ComposeEmailFormContent({
     },
     [
       assistIsOpen,
+      preSendCheckEnabled,
+      draftMode,
+      ownEmails,
       ruleFiles,
       focusAssist,
       stopProviderAutosave,
@@ -1786,6 +1863,34 @@ function ComposeEmailFormContent({
     setEditReply(false);
     requestAnimationFrame(() => inlineReplySummaryButtonRef.current?.focus());
   };
+  const dismissPreSend = useCallback(() => {
+    const returnFocus = preSend?.returnFocus;
+    shownPreSendWarnings.current = undefined;
+    setPreSend(undefined);
+    if (returnFocus instanceof HTMLElement && returnFocus.isConnected)
+      requestAnimationFrame(() => returnFocus.focus());
+    else requestAnimationFrame(() => editorRef.current?.focus());
+  }, [preSend]);
+  const confirmPreSend = useCallback(() => {
+    formRef.current?.requestSubmit(
+      (preSend?.markDone && sendAndMarkDoneButtonRef.current) || undefined,
+    );
+  }, [preSend]);
+  const fixPreSend = (fix: PreSendWarningFix, selectText?: string) => {
+    shownPreSendWarnings.current = undefined;
+    setPreSend(undefined);
+    if (fix === "attach") attachmentInputRef.current?.click();
+    else if (fix === "subject") setFocus("subject");
+    else if (fix === "body") {
+      editorRef.current?.focus();
+      const editable = formRef.current?.querySelector<HTMLElement>(
+        "[contenteditable='true']",
+      );
+      if (editable && selectText) selectPlaceholderIn(editable, selectText);
+    } else if (showInlineReplySummary) openInlineReplyFields();
+    else formRef.current?.querySelector<HTMLElement>("#to")?.focus();
+  };
+
   const handleSendAtChange = (value: string) => {
     const nextRemindAt = getReminderAfterSendTimeChange(value, remindAt);
     setSubmissionError("");
@@ -2233,10 +2338,9 @@ function ComposeEmailFormContent({
                 type="text"
                 name="subject"
                 registerProps={{
-                  ...register("subject", { required: true }),
+                  ...register("subject"),
                   "aria-label": "Subject",
                 }}
-                error={errors.subject}
                 placeholder="Subject"
                 // Borderless like the rest of the header, with a hairline in
                 // the focus colour so keyboard focus stays visible.
@@ -2339,6 +2443,15 @@ function ComposeEmailFormContent({
         </div>
       )}
 
+      {preSend && (
+        <PreSendConfirmation
+          className={cn(isComposeWindow && "mx-4 shrink-0")}
+          onDismiss={dismissPreSend}
+          onFix={fixPreSend}
+          onSend={confirmPreSend}
+          warnings={preSend.warnings}
+        />
+      )}
       <div
         className={cn(
           "flex flex-wrap items-center justify-between gap-2",
@@ -2347,7 +2460,9 @@ function ComposeEmailFormContent({
         )}
       >
         <div className="flex flex-wrap items-center gap-1">
+          {/* The send check above takes the tooltip's place. */}
           <Tooltip
+            hide={Boolean(preSend)}
             shortcuts={onMarkDone ? ["send", "sendAndMarkDone"] : ["send"]}
           >
             <Button disabled={isSubmitting} type="submit">
@@ -2627,6 +2742,17 @@ function getQueuedEmailDescription(
     return "Email queued. Reconnect this account to send it.";
   }
   return "Email queued and will keep sending in the background.";
+}
+
+function getPreSendKind(
+  draftMode: ReplyDraftMode | undefined,
+  replyingToEmail: ReplyingToEmail | undefined,
+) {
+  if (draftMode === "forward" || replyingToEmail?.forwardedMessageId)
+    return "forward";
+  if (replyingToEmail?.threadId || replyingToEmail?.headerMessageId)
+    return "reply";
+  return "new";
 }
 
 function isShortcutForForm(

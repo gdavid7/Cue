@@ -65,6 +65,30 @@ describe("swrFetcher with an expired session", () => {
     );
   });
 
+  it("keeps the page when a refreshed session lets the request through", async () => {
+    let refreshed = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("/api/auth/get-session")) {
+          refreshed = true;
+          return Response.json({ user: { id: "u1" }, session: {} });
+        }
+        if (refreshed) return Response.json({ panel: "ok" });
+        return Response.json(
+          { error: "Unauthorized", errorCode: "SESSION_EXPIRED" },
+          { status: 401 },
+        );
+      }),
+    );
+    const { swrFetcher } = await loadPage();
+
+    await expect(swrFetcher("/api/panel", undefined, "acc-1")).resolves.toEqual(
+      { panel: "ok" },
+    );
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("stops SWR from retrying a signed-out request", async () => {
     const { swrFetcher, onSWRErrorRetry } = await loadPage();
     const error = await swrFetcher("/api/panel", undefined, "acc-1").catch(
@@ -375,3 +399,37 @@ async function loadPage({ signedIn = true } = {}) {
     ...session,
   };
 }
+
+describe("swrFetcher while signing out", () => {
+  it("sends nothing once sign-out started", async () => {
+    const { swrFetcher } = await loadPage();
+    const { startSigningOut } = await import("@/utils/signing-out");
+    startSigningOut();
+
+    const settled = vi.fn();
+    swrFetcher("/api/panel", undefined, "acc-1").then(settled, settled);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("does not report or act on a 401 that lands after sign-out started", async () => {
+    const { swrFetcher } = await loadPage();
+    const { startSigningOut } = await import("@/utils/signing-out");
+    vi.mocked(fetch).mockImplementationOnce(async () => {
+      startSigningOut();
+      return Response.json(
+        { error: "Unauthorized", errorCode: "SESSION_EXPIRED" },
+        { status: 401 },
+      );
+    });
+
+    const settled = vi.fn();
+    swrFetcher("/api/panel", undefined, "acc-1").then(settled, settled);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settled).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+});

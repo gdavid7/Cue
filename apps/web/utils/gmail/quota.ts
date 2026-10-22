@@ -258,6 +258,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/public-contact-context",
     // Pages and panels a person opened.
     "user/home",
+    // The newest inbox mail for the inbox a person came back to.
+    "user/inbox-catch-up",
     "user/contacts",
     "user/folders",
     "user/mail-splits",
@@ -296,6 +298,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     // What a person scheduled, due now.
     "scheduled-actions/execute",
     "snoozed-threads/execute",
+    // Summarizing mail a person's own digest rule picked.
+    "digest",
     // A durable send it delivers raises itself to interactive.
     "scheduled-emails/execute",
     // Push for an account just signed in or linked.
@@ -797,6 +801,7 @@ export async function admitGmailCall({
         emailAccountId,
         caller: context.caller,
         cost,
+        waitMs: wait,
         heldByStore: admission.defer,
         waitBudgetMs: Number.isFinite(deadline)
           ? Math.max(0, deadline - Date.now())
@@ -918,6 +923,15 @@ export function isGmailQuotaRefusal(error: unknown) {
  */
 export function gmailRequestUnitsFor(priority: GmailQuotaPriority) {
   return PACE_CAP[priority] / 2;
+}
+
+/**
+ * The most units work at `priority` can spend from a full bucket without
+ * waiting for it to refill. Work that costs more sleeps in the gate for the
+ * difference at the budget's refill rate.
+ */
+export function gmailBurstUnitsFor(priority: GmailQuotaPriority) {
+  return BUCKET_CAPACITY - FLOOR[priority];
 }
 
 /**
@@ -1122,6 +1136,7 @@ function logDeferral({
   emailAccountId,
   caller,
   cost,
+  waitMs,
   heldByStore,
   waitBudgetMs,
   held,
@@ -1132,6 +1147,7 @@ function logDeferral({
   emailAccountId: string;
   caller: string;
   cost: number;
+  waitMs: number;
   heldByStore: boolean;
   waitBudgetMs: number | null;
   held: GmailQuotaHold | undefined;
@@ -1143,13 +1159,17 @@ function logDeferral({
   if (deferralCounts.size < 200 || deferralCounts.has(countKey))
     deferralCounts.set(countKey, (deferralCounts.get(countKey) ?? 0) + 1);
   const { requestId, source } = getAuditContext();
-  const sampleRate = getFastRequestSampleRate(source);
+  // A person is waiting on an interactive deferral, so every one ships.
+  const sampleRate =
+    error.priority === "interactive" ? 1 : getFastRequestSampleRate(source);
   const sampled = isFastRequestSampled(requestId ?? randomUUID(), sampleRate);
   (sampled ? logger.info : logger.trace).call(logger, "Gmail call deferred", {
     emailAccountId,
     requestId,
     sampled,
     sampleRate,
+    route: caller,
+    waitMs,
     reason: error.reason,
     // "store_hold" is a pause the gate told callers not to wait on; otherwise
     // the wait was longer than the caller could spend.

@@ -21,7 +21,7 @@ describe("getUncategorizedSenders", () => {
 
   it("returns uncategorized senders with their names", async () => {
     mockGetSenders.mockResolvedValue([
-      { from: "new@example.com", fromName: "New Sender" },
+      { id: "m1", from: "new@example.com", fromName: "New Sender" },
     ]);
 
     const result = await getUncategorizedSenders({
@@ -29,15 +29,15 @@ describe("getUncategorizedSenders", () => {
     });
 
     expect(result.uncategorizedSenders).toEqual([
-      { email: "new@example.com", name: "New Sender" },
+      { email: "new@example.com", name: "New Sender", sourceMessageId: "m1" },
     ]);
   });
 
   it("skips senders whose from header has no parseable email address", async () => {
     mockGetSenders.mockResolvedValue([
-      { from: "", fromName: "KE Camps" },
-      { from: "not an email", fromName: "Broken" },
-      { from: "valid@example.com", fromName: "Valid" },
+      { id: "m1", from: "", fromName: "KE Camps" },
+      { id: "m2", from: "not an email", fromName: "Broken" },
+      { id: "m3", from: "valid@example.com", fromName: "Valid" },
     ]);
 
     const result = await getUncategorizedSenders({
@@ -45,14 +45,14 @@ describe("getUncategorizedSenders", () => {
     });
 
     expect(result.uncategorizedSenders).toEqual([
-      { email: "valid@example.com", name: "Valid" },
+      { email: "valid@example.com", name: "Valid", sourceMessageId: "m3" },
     ]);
   });
 
   it("dedupes case variants of the same sender into one entry", async () => {
     mockGetSenders.mockResolvedValue([
-      { from: "Sender@example.com", fromName: null },
-      { from: "sender@example.com", fromName: "Sender" },
+      { id: "m1", from: "Sender@example.com", fromName: null },
+      { id: "m2", from: "sender@example.com", fromName: "Sender" },
     ]);
 
     const result = await getUncategorizedSenders({
@@ -60,14 +60,14 @@ describe("getUncategorizedSenders", () => {
     });
 
     expect(result.uncategorizedSenders).toEqual([
-      { email: "sender@example.com", name: "Sender" },
+      { email: "sender@example.com", name: "Sender", sourceMessageId: "m2" },
     ]);
   });
 
   it("treats mixed-case senders as categorized when a canonicalized record exists", async () => {
     mockGetSenders.mockResolvedValue([
-      { from: "Costco@digital.costco.com", fromName: "Costco" },
-      { from: "new@example.com", fromName: "New Sender" },
+      { id: "m1", from: "Costco@digital.costco.com", fromName: "Costco" },
+      { id: "m2", from: "new@example.com", fromName: "New Sender" },
     ]);
     prisma.newsletter.findMany.mockResolvedValue([
       { email: "costco@digital.costco.com" },
@@ -78,7 +78,7 @@ describe("getUncategorizedSenders", () => {
     });
 
     expect(result.uncategorizedSenders).toEqual([
-      { email: "new@example.com", name: "New Sender" },
+      { email: "new@example.com", name: "New Sender", sourceMessageId: "m2" },
     ]);
     expect(prisma.newsletter.findMany).toHaveBeenCalledWith(
       expect.objectContaining({

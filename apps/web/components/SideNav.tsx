@@ -67,6 +67,8 @@ export type NavItem = {
   count?: number;
   hideInMail?: boolean;
   active?: boolean;
+  /** Shown in place but not a link, until what it opens exists. */
+  disabled?: boolean;
   beta?: boolean;
   new?: boolean;
   /**
@@ -124,7 +126,8 @@ export const useNavigation = () => {
       },
       {
         name: "Today",
-        href: todayHref,
+        href: todayHref ?? "",
+        disabled: !todayHref,
         icon: SunIcon,
         keywords: ["home", "briefing", "dashboard"],
       },

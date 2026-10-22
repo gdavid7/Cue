@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
-import type { LocalRevision } from "@inboxzero/mail-core/identities";
+import type {
+  LocalRevision,
+  MessageKey,
+} from "@inboxzero/mail-core/identities";
 import type {
   ClaimedWork,
   MailStore,
@@ -155,6 +158,102 @@ describe("provider reads sent before a confirmed local change", () => {
     });
 
     expect((await readConfirmedM1(store))?.starred).toBe(true);
+    await store.close();
+  });
+
+  // Label and category changes on a whole conversation resolve its messages
+  // first; the change confirmed for them must hold the same way.
+  it("keeps an Outlook category set on a conversation when a sync page read before it lands", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, BLUE, [M1]);
+
+    await applyPage(store, "1", "2", [patch("microsoft")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ categoryIds: ["Blue"] });
+    expect(await claim(store, "hydrate")).toMatchObject({ keys: [M1] });
+    await store.close();
+  });
+
+  it("keeps a conversation's category on a message its preparation found", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, BLUE, [M1, M2]);
+
+    await applyPage(
+      store,
+      "1",
+      "2",
+      [patch("microsoft"), patch("microsoft", {}, null, "m2", "c-m1")],
+      requestedAt,
+    );
+
+    const inspection = await store.inspect();
+    expect(
+      inspection.messages.map((message) => [
+        message.messageId,
+        message.effective?.categoryIds,
+      ]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["m1", ["Blue"]],
+        ["m2", ["Blue"]],
+      ]),
+    );
+    await store.close();
+  });
+
+  it("keeps a Gmail label set on a complete conversation when a read at the same version lands", async () => {
+    const store = await mailbox("google");
+    await store.applyConversationMembership({
+      session: SESSION,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: "open-1",
+        keys: [M1],
+        changes: [patch("google")],
+        nextPage: null,
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, WORK_LABEL, [M1]);
+
+    await applyPage(store, "1", "2", [patch("google")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({
+      labelIds: expect.arrayContaining(["Work"]),
+    });
+    await store.close();
+  });
+
+  it("applies a newer change to a conversation's category read after it", async () => {
+    const store = await mailbox("microsoft");
+    await confirmConversation(store, BLUE, [M1]);
+    const requestedAt = await store.readRevision();
+
+    // Category cleared in Outlook on the web afterwards.
+    await applyPage(store, "1", "2", [patch("microsoft")], requestedAt);
+
+    expect(await readM1(store)).toMatchObject({ categoryIds: [] });
+    await store.close();
+  });
+
+  it("still applies a deletion read before a conversation's category change", async () => {
+    const store = await mailbox("microsoft");
+    const requestedAt = await store.readRevision();
+    await confirmConversation(store, BLUE, [M1]);
+
+    await applyPage(
+      store,
+      "1",
+      "2",
+      [{ kind: "message_deleted", key: M1, evidence: "deleted" }],
+      requestedAt,
+    );
+
+    expect(await readM1(store)).toBeNull();
     await store.close();
   });
 
@@ -622,8 +721,101 @@ describe("toggling read on Outlook while sync reads are out", () => {
   });
 });
 
+describe("a conversation command being prepared", () => {
+  it("shows a conversation's pending category on a message found before its preparation finishes", async () => {
+    const store = await mailbox("microsoft");
+    const admission = await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "blue-c1",
+      conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+      change: BLUE,
+      observedRevision: (await store.inspect()).revision,
+    });
+    expect(admission.status).toBe("preparing");
+    const work = await claim(store, "prepare");
+
+    await store.applyPreparationPage({
+      accountId: "acc-1",
+      commandId: "blue-c1",
+      attemptId: work.attemptId,
+      session: work.session,
+      previousPage: work.page,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: work.resolutionId,
+        keys: [M2],
+        changes: [patch("microsoft", {}, null, "m2", "c-m1")],
+        nextPage: "page-2",
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+
+    const inspection = await store.inspect();
+    expect(
+      inspection.messages.find((message) => message.messageId === "m2")
+        ?.effective,
+    ).toMatchObject({ categoryIds: ["Blue"] });
+    await store.close();
+  });
+
+  it("doesn't bring back a Gmail message deleted since, from a copy at the same version", async () => {
+    const store = await mailbox("google");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("google", {}, "10")]);
+
+    expect(await isM1Deleted(store)).toBe(true);
+    await store.close();
+  });
+
+  it("doesn't bring back a Gmail message deleted since, from an older copy", async () => {
+    const store = await mailbox("google");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("google", {}, "9")]);
+
+    expect(await isM1Deleted(store)).toBe(true);
+    await store.close();
+  });
+
+  it("brings back a deleted Gmail message from a strictly newer copy", async () => {
+    const store = await mailbox("google");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("google", { starred: true }, "11")]);
+
+    expect(await isM1Deleted(store)).toBe(false);
+    expect((await readConfirmedM1(store))?.starred).toBe(true);
+    await store.close();
+  });
+
+  it("doesn't bring back an Outlook message deleted since, from a copy without a version", async () => {
+    const store = await mailbox("microsoft");
+    await deleteM1(store);
+
+    await prepareWith(store, [patch("microsoft")]);
+
+    expect(await isM1Deleted(store)).toBe(true);
+    await store.close();
+  });
+});
+
 const SESSION = { accountId: "acc-1", generation: "g1" };
 const M1 = { accountId: "acc-1", messageId: "m1" };
+const M2 = { accountId: "acc-1", messageId: "m2" };
+const BLUE: MetadataChange = {
+  kind: "set_membership",
+  membership: "category",
+  id: "Blue",
+  present: true,
+};
+const WORK_LABEL: MetadataChange = {
+  kind: "set_membership",
+  membership: "label",
+  id: "Work",
+  present: true,
+};
 const STAR: MetadataChange = { kind: "set_starred", starred: true };
 const READ: MetadataChange = { kind: "set_read", read: true };
 const UNREAD: MetadataChange = { kind: "set_read", read: false };
@@ -665,6 +857,95 @@ async function confirm(
       targets: [{ key: M1, outcome: "applied", code: null }],
     },
   });
+}
+
+// Admits the change for conversation c-m1, resolves it to `keys` when it
+// isn't complete yet, and confirms it with no fresh copy of any message.
+async function confirmConversation(
+  store: MailStore,
+  change: MetadataChange,
+  keys: MessageKey[],
+) {
+  const commandId = `${change.kind}-${Math.random()}`;
+  const admission = await store.admitConversations({
+    accountId: "acc-1",
+    commandId,
+    conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+    change,
+    observedRevision: (await store.inspect()).revision,
+  });
+  if (admission.status === "preparing") {
+    const work = await claim(store, "prepare");
+    await store.applyPreparationPage({
+      accountId: "acc-1",
+      commandId,
+      attemptId: work.attemptId,
+      session: work.session,
+      previousPage: work.page,
+      page: {
+        conversation: { accountId: "acc-1", conversationId: "c-m1" },
+        resolutionId: work.resolutionId,
+        keys,
+        changes: keys.map((key) =>
+          patch("microsoft", {}, null, key.messageId, "c-m1"),
+        ),
+        nextPage: null,
+        evidence: null,
+      },
+      requestedAt: await store.readRevision(),
+    });
+  } else {
+    expect(admission.status).toBe("queued");
+  }
+  const work = await claim(store, "command");
+  await store.settleAttempt({
+    attemptId: work.attemptId,
+    operation: work.operation,
+    result: {
+      status: "confirmed",
+      receiptId: null,
+      observations: [],
+      targets: keys.map((key) => ({ key, outcome: "applied", code: null })),
+    },
+  });
+}
+
+async function deleteM1(store: MailStore) {
+  await applyPage(store, "1", "2", [
+    { kind: "message_deleted", key: M1, evidence: "deleted" },
+  ]);
+  expect(await isM1Deleted(store)).toBe(true);
+}
+
+// Prepares a category change on conversation c-m1 with one page carrying
+// `changes`, as a command on a conversation not yet fully stored does.
+async function prepareWith(store: MailStore, changes: ProviderChange[]) {
+  const admission = await store.admitConversations({
+    accountId: "acc-1",
+    commandId: "blue-c1",
+    conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+    change: BLUE,
+    observedRevision: (await store.inspect()).revision,
+  });
+  expect(admission.status).toBe("preparing");
+  const work = await claim(store, "prepare");
+  const applied = await store.applyPreparationPage({
+    accountId: "acc-1",
+    commandId: "blue-c1",
+    attemptId: work.attemptId,
+    session: work.session,
+    previousPage: work.page,
+    page: {
+      conversation: { accountId: "acc-1", conversationId: "c-m1" },
+      resolutionId: work.resolutionId,
+      keys: [M1],
+      changes,
+      nextPage: null,
+      evidence: null,
+    },
+    requestedAt: await store.readRevision(),
+  });
+  expect(applied.status).toBe("preparing");
 }
 
 async function claim<Kind extends ClaimedWork["kind"]>(
@@ -773,6 +1054,12 @@ async function readConfirmedM1(store: MailStore) {
     ?.confirmed;
 }
 
+async function isM1Deleted(store: MailStore) {
+  const inspection = await store.inspect();
+  return inspection.messages.find((candidate) => candidate.messageId === "m1")
+    ?.deleted;
+}
+
 async function withDatabaseFile(run: (path: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "mail-stale-read-"));
   try {
@@ -787,6 +1074,7 @@ function patch(
   fields: { starred?: boolean; read?: boolean; archived?: boolean } = {},
   version: string | null = provider === "google" ? "10" : null,
   messageId = "m1",
+  conversationId = `c-${messageId}`,
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   return {
     kind: "message_patch",
@@ -794,7 +1082,7 @@ function patch(
     reference: {
       provider,
       messageId,
-      conversationId: `c-${messageId}`,
+      conversationId,
       version,
     },
     fields: {

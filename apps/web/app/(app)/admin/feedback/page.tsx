@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { FeedbackList } from "@/app/(app)/admin/feedback/FeedbackList";
 
 export default async function AdminFeedbackPage() {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
 
   if (!isAdmin({ email: session?.user.email })) {
     return (

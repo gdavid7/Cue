@@ -11,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { usePathname } from "next/navigation";
@@ -29,7 +30,12 @@ import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import type { MailLayoutMode } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useEmailLabels } from "@/providers/EmailLabelsProvider";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { isGoogleProvider } from "@/utils/email/provider-types";
+import { fetchWithAccount } from "@/utils/fetch";
+import { isLocalMailboxStale } from "@/utils/mail-engine/local-mailbox-cookie";
+import { followWakeCatchUp } from "@/utils/mail-engine/wake-catch-up";
 import { buildMailPath, parseMailPath, withPageParams } from "@/utils/mail-url";
+import type { GetInboxCatchUpResponse } from "@/app/api/user/inbox-catch-up/route";
 
 const NO_SELECTION = () => false;
 const IGNORE = () => undefined;
@@ -210,6 +216,63 @@ export function useIngestInboxPreview() {
       waiting = false;
     };
   }, [client, seed, retired, emailAccountId]);
+}
+
+/**
+ * The same catch-up a page load gets for a mailbox that fell behind (RL-1),
+ * for a tab shown again after a long absence, or woken from a long sleep with
+ * it showing, without reloading: the newest
+ * inbox mail is read once, at interactive priority, and handed to the engine
+ * ahead of its own catch-up. Only the open account's; the others follow their
+ * usual sync. Gmail only, as the server's preview hands Outlook's engine
+ * nothing.
+ */
+export function useCatchUpOnWake({
+  lastSyncedAtMs,
+  enabled,
+}: {
+  /** When the open account's local mailbox last finished a sync. */
+  lastSyncedAtMs: number | null;
+  enabled: boolean;
+}) {
+  const { emailAccountId, provider } = useAccount();
+  const client = useOptionalMailClient();
+  // A ref, not a dependency: the listener must outlive each sync's new time,
+  // or every finished sync would restart it and forget the absence. Read when
+  // the wake settles, so a catch-up that finished since counts.
+  const lastSynced = useRef(lastSyncedAtMs);
+  useEffect(() => {
+    lastSynced.current = lastSyncedAtMs;
+  }, [lastSyncedAtMs]);
+  useEffect(() => {
+    if (
+      !enabled ||
+      !emailAccountId ||
+      !client?.ingestMessages ||
+      !isGoogleProvider(provider)
+    )
+      return;
+    return followWakeCatchUp({
+      accountId: emailAccountId,
+      isStale: () =>
+        lastSynced.current != null && isLocalMailboxStale(lastSynced.current),
+      onWake: async (signal) => {
+        const response = await fetchWithAccount({
+          url: "/api/user/inbox-catch-up",
+          emailAccountId,
+          init: { signal },
+        });
+        if (!response.ok || signal.aborted) return;
+        const body: GetInboxCatchUpResponse = await response.json();
+        const changes = previewChangesSchema.safeParse(body.changes);
+        if (!changes.success || !changes.data.length || signal.aborted) return;
+        await client.ingestMessages?.({
+          accountId: emailAccountId,
+          changes: changes.data,
+        });
+      },
+    });
+  }, [enabled, emailAccountId, provider, client]);
 }
 
 /**

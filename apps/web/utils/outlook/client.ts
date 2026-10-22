@@ -323,6 +323,9 @@ export const getOutlookClientWithRefresh = async ({
     await saveTokens({
       tokens: {
         access_token: tokens.access_token,
+        // Microsoft rotates refresh tokens; keeping the original would let the
+        // stored grant age out even while the mailbox is in daily use.
+        refresh_token: tokens.refresh_token || undefined,
         expires_at: Math.floor(Date.now() / 1000 + tokens.expires_in),
       },
       accountRefreshToken: refreshToken,

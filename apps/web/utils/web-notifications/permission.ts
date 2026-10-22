@@ -2,9 +2,12 @@ import {
   announcePreferenceChange,
   hasBeenAskedToEnable,
   markAskedToEnable,
+  readEffectiveMode,
+  readQuietUntilMs,
   writeStoredMode,
   type WebNotificationMode,
 } from "@/utils/web-notifications/preference";
+import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import {
   isWebPushAvailable,
   syncWebPushSubscription,
@@ -17,6 +20,22 @@ export function getWebNotificationPermission(): WebNotificationPermission {
   return Notification.permission;
 }
 
+/** The desktop app shows its own notifications. */
+export function isDesktopShell() {
+  return (
+    Boolean(getInboxZeroDesktopApp()) || /Electron/i.test(navigator.userAgent)
+  );
+}
+
+/** Only then is there anything to pause on this browser. */
+export function isNotifyingInThisBrowser() {
+  return (
+    getWebNotificationPermission() === "granted" &&
+    readEffectiveMode() !== "off" &&
+    !isDesktopShell()
+  );
+}
+
 /**
  * Saves the reader's choice and, only when they picked a mode that notifies,
  * asks the browser. Always called from a click, never on load.
@@ -26,8 +45,13 @@ export async function chooseWebNotificationMode(
 ): Promise<WebNotificationPermission> {
   writeStoredMode(mode);
   const permission = await requestPermissionFor(mode);
-  // Push carries the same choice to the server for when no tab is open.
-  if (isWebPushAvailable() && (mode === "off" || permission === "granted"))
+  // Push carries the same choice to the server for when no tab is open. A
+  // pause keeps push off; the open tabs turn it back on when the pause ends.
+  if (
+    isWebPushAvailable() &&
+    (mode === "off" ||
+      (permission === "granted" && readQuietUntilMs() === null))
+  )
     syncWebPushSubscription(mode).catch(() => undefined);
   return permission;
 }

@@ -61,6 +61,21 @@ function renderSidebar(overrides: Partial<MailSidebarProps> = {}) {
 }
 
 describe("MailSidebar", () => {
+  it("keeps Today in place but not a link while there is no account", () => {
+    renderSidebar({ todayHref: null });
+
+    expect(screen.getByText("Today")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Today/ })).toBeNull();
+  });
+
+  it("links Today once there is an account", () => {
+    renderSidebar({ todayHref: "/a/home" });
+
+    expect(
+      screen.getByRole("link", { name: /Today/ }).getAttribute("href"),
+    ).toBe("/a/home");
+  });
+
   it("switches views of the open mail screen without a server round trip", () => {
     window.history.replaceState(null, "", "/mail/u/0/inbox");
     renderSidebar({

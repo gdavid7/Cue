@@ -190,6 +190,8 @@ export const conversationSummarySchema = z.object({
   pendingOperationIds: z.array(z.string()),
   /** The newest message that isn't a draft or in the trash. */
   latestMessageId: z.string().optional(),
+  /** That message's Message-ID header, once the store has read it. */
+  latestInternetMessageId: z.string().optional(),
   hasAttachments: z.boolean().optional(),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
@@ -223,6 +225,12 @@ export const mailboxViewSchema = z.object({
         ]),
         /** Whether the provider has answered any of the search yet. */
         answered: z.boolean(),
+        /**
+         * While searching: when the provider began reading the search, so a
+         * view can time it from there rather than from when it was queued.
+         * Left out while the search waits for its turn.
+         */
+        startedAtMs: z.number().int().optional(),
       }),
     )
     .max(50)
@@ -329,6 +337,23 @@ export type MessageSearchQuery = {
   after: string | null;
 };
 
+/**
+ * A search by meaning: the messages of `accountId` whose on-device vectors
+ * are nearest to `text`, at most one per conversation.
+ */
+export type SemanticSearchQuery = {
+  accountId: string;
+  text: string;
+  limit: number;
+};
+
+export type SemanticMatch = {
+  messageId: string;
+  conversationId: string;
+  /** Cosine similarity to the search, from -1 to 1. */
+  similarity: number;
+};
+
 export type MessageSearchMatch = {
   messageId: string;
   conversationId: string;
@@ -418,3 +443,49 @@ export type PersonCard = {
 
 /** One more than the card lists, so it can leave out the open conversation. */
 export const PERSON_CARD_CONVERSATION_LIMIT = 6;
+
+/** The groups the Files view filters attachments by. */
+export const FILE_KINDS = [
+  "document",
+  "spreadsheet",
+  "presentation",
+  "pdf",
+  "image",
+  "other",
+] as const;
+export type FileKind = (typeof FILE_KINDS)[number];
+
+/**
+ * Every attachment on stored mail, read from the local store alone: it never
+ * asks the provider. Inline images such as signature logos are left out, as
+ * local search leaves them out, and so is mail in Trash, Spam and Drafts.
+ */
+export type FilesQuery = {
+  /** One account, or every account All inboxes includes. */
+  accountIds: string[];
+  kind: FileKind | null;
+  /** Only files on mail from this address. */
+  sender: string | null;
+  /** Words in the file's name, matched the way local search matches them. */
+  name: string | null;
+  pageSize: number;
+  after: string | null;
+};
+
+export type FileEntry = {
+  accountId: string;
+  conversationId: string;
+  messageId: string;
+  subject: string;
+  /** The message's sender as stored, such as `Ana Lima <ana@example.com>`. */
+  from: string;
+  receivedAtMs: number;
+  kind: FileKind;
+  attachment: MessageAttachmentDescriptor;
+};
+
+/** Newest first. */
+export type FilesPage = { files: FileEntry[]; nextPage: string | null };
+
+/** Who sent the files a Files view can list, most files first. */
+export type FileSender = { email: string; name: string | null; files: number };

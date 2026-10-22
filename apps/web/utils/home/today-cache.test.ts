@@ -53,6 +53,7 @@ describe("Today's cache", () => {
       data: home({
         calendar: {
           connected: true,
+          clearThroughTomorrow: false,
           next: {
             title: "Standup",
             at: iso(NOW + HOUR),
@@ -74,6 +75,23 @@ describe("Today's cache", () => {
     expect(later?.nextUp.map((item) => item.id)).toEqual(["review"]);
     // The day's counts are still the day's.
     expect(later?.today).toEqual(home().today);
+  });
+
+  it("never says the calendar is clear from a saved copy, even the same day", () => {
+    writeCachedToday({
+      ...account,
+      data: home({
+        calendar: { connected: true, clearThroughTomorrow: true, next: null },
+      }),
+      now: NOW,
+    });
+
+    const later = readCachedToday({ ...account, now: NOW + HOUR });
+    expect(later?.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: false,
+      next: null,
+    });
   });
 
   it("keeps an earlier day's conversations, and marks the rest of it unknown", () => {
@@ -309,7 +327,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 3, filed: 1, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: {

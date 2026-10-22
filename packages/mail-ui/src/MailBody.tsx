@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { linkifyPlainText } from "./linkify";
 import { sanitizeMailHtml } from "./sanitize-html";
 import {
   adaptMailDocumentForDarkMode,
@@ -105,7 +106,7 @@ export function MailMessageBody({
     );
   }
 
-  return <MailPlainTextBody segments={[{ type: "text", text: text ?? "" }]} />;
+  return <LinkifiedPlainTextBody text={text ?? ""} />;
 }
 
 export function MailPlainTextBody({
@@ -712,4 +713,9 @@ function applyDarkModeClass(mailDocument: Document, isDarkMode: boolean) {
 
   mailDocument.documentElement.classList.add("dark");
   mailDocument.body.classList.add("dark");
+}
+
+function LinkifiedPlainTextBody({ text }: { text: string }) {
+  const segments = useMemo(() => linkifyPlainText(text), [text]);
+  return <MailPlainTextBody segments={segments} />;
 }

@@ -172,6 +172,9 @@ test("weather: on only when asked, from this browser, stored coarse, and off aga
   await expect.poll(() => readTodayWeather(emailAccountId)).toBeNull();
 
   // Not wanted at all: "Not now" stops offering it, across reloads.
+  const forecastsBefore = weatherRequests.filter(
+    (url) => url.hostname === "api.open-meteo.com",
+  ).length;
   await main.getByRole("button", { name: "Show weather" }).click();
   await page.getByRole("button", { name: "Not now" }).click();
   await expect(main.getByRole("button", { name: "Show weather" })).toHaveCount(
@@ -190,6 +193,47 @@ test("weather: on only when asked, from this browser, stored coarse, and off aga
   await expect(main.getByRole("button", { name: "Show weather" })).toHaveCount(
     0,
   );
+
+  // Changed their mind: Settings turns the offer back on.
+  await page.goto("/settings", { waitUntil: "domcontentloaded" });
+  const toggle = page.getByRole("switch", { name: "Weather on Today" });
+  await expect(toggle).not.toBeChecked({ timeout: 60_000 });
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await expect.poll(() => readTodayWeather(emailAccountId)).toBeNull();
+  await capturePlaywrightCheckpoint(page, testInfo, "today-weather-setting");
+  await openToday(page);
+  await expect(main.getByRole("button", { name: "Show weather" })).toBeVisible({
+    timeout: 60_000,
+  });
+  expect(
+    weatherRequests.filter((url) => url.hostname === "api.open-meteo.com"),
+  ).toHaveLength(forecastsBefore);
+});
+
+test("a calendar read in full with nothing on it: says it's clear through tomorrow", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  await mockWeather(page);
+  await page.route("**/api/user/home*", async (route) => {
+    const response = await route.fetch();
+    const home = await response.json();
+    home.cue = { aiAccess: true, replyTracking: true, hasReadMail: true };
+    home.needsYou = [];
+    home.calendar = { connected: true, clearThroughTomorrow: true, next: null };
+    await route.fulfill({ response, json: home });
+  });
+  const main = page.getByRole("main");
+
+  await openToday(page);
+  await expect(main.getByRole("status")).toContainText("All clear.", {
+    timeout: 60_000,
+  });
+  await expect(
+    main.getByText("Calendar clear through tomorrow."),
+  ).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "today-calendar-clear");
 });
 
 test("weather service down: Today stays calm and the weather can be turned off", async ({

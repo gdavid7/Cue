@@ -18,7 +18,7 @@ const packagedBin = join(
 );
 // Same origin as the default app URL, so the restored window is one the
 // hosted shell would otherwise reopen.
-const hostedMailUrl = "https://cue-inbox.vercel.app/account-1/mail?type=inbox";
+const hostedMailUrl = "https://cuemail.tech/account-1/mail?type=inbox";
 
 describe.skipIf(!hasElectronBinary())(
   "desktop packaged local mail renderer",
@@ -41,7 +41,7 @@ describe.skipIf(!hasElectronBinary())(
       ]);
       expect(payload.url).toContain("file:");
       expect(payload.url).toContain("renderer/index.html");
-      expect(payload.url).not.toContain("cue-inbox.vercel.app");
+      expect(payload.url).not.toContain("cuemail.tech");
       expect(payload.ready).toBe(true);
       expect(payload.engine).toBe(true);
     }, 90_000);
@@ -54,7 +54,7 @@ describe.skipIf(!hasElectronBinary())(
         ]);
         expect(payload.url).toContain("file:");
         expect(payload.url).toContain("renderer/index.html");
-        expect(payload.url).not.toContain("cue-inbox.vercel.app");
+        expect(payload.url).not.toContain("cuemail.tech");
         expect(payload.ready).toBe(true);
       },
       90_000,

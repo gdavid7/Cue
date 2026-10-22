@@ -4,6 +4,7 @@ import type {
   MessageSearchQuery,
 } from "@inboxzero/mail-core/queries";
 import type { MessageMetadata } from "@inboxzero/mail-core/messages";
+import { withContactNames } from "./contact-name-search";
 import type { SqlTransaction, SqlValue } from "./driver";
 import {
   compilePredicate,
@@ -20,8 +21,11 @@ import { readCoverage } from "./store-read-utils";
 export async function readMessageSearch(
   tx: SqlTransaction,
   query: MessageSearchQuery,
-  search: SearchSupport,
+  storeSearch: SearchSupport,
 ): Promise<MessageSearchPage> {
+  const search = await withContactNames(tx, storeSearch, query.predicate, [
+    query.accountId,
+  ]);
   const driven = searchDrivenSource(query.predicate, search);
   const compiled = compilePredicate(driven?.rest ?? query.predicate, search);
   const where = ["e.account_id = ?", compiled.sql];

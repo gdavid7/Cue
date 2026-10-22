@@ -378,7 +378,7 @@ function todayData(subject: string) {
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     stats: { needsYou: 1, estimatedMinutes: 3, needsYouCapped: false },
   } as unknown as GetHomeResponse;

@@ -19,6 +19,11 @@ import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
 import { PUSHED_CHANGES_CATCH_UP_INTERVAL_MS } from "@/utils/mail-engine/follow-mailbox-changes";
+import { createWorkerTextEmbedder } from "@/utils/mail-engine/embedding-worker-client";
+import {
+  createSemanticIndex,
+  semanticSearchSupported,
+} from "@/utils/mail-engine/semantic-index";
 
 performance.mark("mail-engine:worker-loaded");
 // Compiling sqlite-wasm takes a while and opens no files, so it starts as
@@ -104,15 +109,40 @@ async function createWorkerEngine(
   }
   performance.mark("mail-engine:sync-requested");
   const loop = startEngineLoop(created);
+  const semantic = startSemanticIndex(store, input);
   const originalClose = created.close.bind(created);
   return {
     ...created,
     ensureAccount,
+    ...(semantic && { searchSemantic: semantic.search }),
     async close() {
+      semantic?.stop();
       // The loop stops first, so its turn neither waits out its deadline nor
       // fails against the closed store and pauses before noticing.
       await loop.stop();
       await originalClose();
+    },
+  };
+}
+
+// Nothing of the model loads here: its worker starts on the index's first
+// batch or the first search. Devices it doesn't suit search as before.
+function startSemanticIndex(store: MailStore, input: BrowserEngineStart) {
+  if (!semanticSearchSupported(navigator, { touchOnly: input.touchOnly }))
+    return null;
+  const embedder = createWorkerTextEmbedder();
+  const index = createSemanticIndex({
+    store,
+    embedder,
+    startDelayMs: input.semanticIndexIntervalMs,
+    recheckMs: input.semanticIndexIntervalMs,
+  });
+  index.start();
+  return {
+    search: index.search,
+    stop() {
+      index.stop();
+      embedder.close();
     },
   };
 }

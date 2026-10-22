@@ -68,7 +68,9 @@ export const GET = withError("outlook/linking/callback", (request) =>
 );
 
 async function handleMicrosoftLinkingCallback(request: RequestWithLogger) {
-  const actorSession = await auth(request.headers);
+  const actorSession = await auth(request.headers, {
+    disableCookieCache: true,
+  });
   const actorUserId = actorSession?.user.id ?? null;
   let logger = request.logger.with({
     actorUserId,

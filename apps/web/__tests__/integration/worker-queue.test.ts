@@ -240,7 +240,11 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
 
       await enqueueBackgroundJob({
         topic: "ai-digest",
-        body: { emailAccountId: "account-2", message: { id: "msg-1" } },
+        body: {
+          emailAccountId: "account-2",
+          messageId: "msg-1",
+          threadId: "t-1",
+        },
         qstash: {
           queueName: "digest-item-summarize",
           parallelism: 3,
@@ -251,7 +255,11 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
 
       expect(capturedRequests).toHaveLength(1);
       expect(capturedRequests[0]).toMatchObject({
-        body: { emailAccountId: "account-2", message: { id: "msg-1" } },
+        body: {
+          emailAccountId: "account-2",
+          messageId: "msg-1",
+          threadId: "t-1",
+        },
         method: "POST",
         url: "/api/ai/digest",
       });

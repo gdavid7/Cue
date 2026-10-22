@@ -3,7 +3,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const DESKTOP_PROTOCOL = "inboxzero";
 export const DESKTOP_AUTH_CALLBACK_PATH = "/auth-callback";
-export const DEFAULT_APP_URL = "https://cue-inbox.vercel.app";
+export const DEFAULT_APP_URL = "https://cuemail.tech";
 export const DESKTOP_AUTH_PROVIDERS = ["apple", "google", "microsoft"] as const;
 
 export type DesktopAuthProvider = (typeof DESKTOP_AUTH_PROVIDERS)[number];

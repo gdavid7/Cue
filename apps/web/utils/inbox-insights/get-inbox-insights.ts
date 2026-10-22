@@ -100,10 +100,7 @@ export async function getInboxInsights({
   /** Of the items' messages, those with a reply Cue wrote waiting in Cue. */
   draftedMessageIds: string[];
 }> {
-  const knownIds = new Set(known);
-  const missing = items
-    .filter((item) => !knownIds.has(item.messageId))
-    .slice(0, MAX_NEW_PER_REQUEST);
+  const missing = selectNewInsightItems(items, known);
 
   // A page the browser already holds costs no model call and is not charged.
   if (missing.length) {
@@ -155,6 +152,17 @@ export async function getInboxInsights({
     draftRepliesEnabled: canWriteRequestedReplies(settings.draftReplies),
     draftedMessageIds: [...drafted],
   };
+}
+
+/** The items this request reads and sends to the model: not yet held, capped. */
+export function selectNewInsightItems<T extends { messageId: string }>(
+  items: T[],
+  known: string[],
+) {
+  const knownIds = new Set(known);
+  return items
+    .filter((item) => !knownIds.has(item.messageId))
+    .slice(0, MAX_NEW_PER_REQUEST);
 }
 
 async function extractMissing({

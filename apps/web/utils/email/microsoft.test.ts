@@ -2020,6 +2020,41 @@ describe("OutlookProvider.getThreadsWithParticipant", () => {
 
     expect(threads).toEqual([]);
   });
+
+  it("does not read the excluded conversation again", async () => {
+    const participantEmail = "participant@example.com";
+    const fromParticipant = (id: string, conversationId: string) =>
+      ({
+        ...createMessage({ id, conversationId }),
+        from: { emailAddress: { address: participantEmail } },
+      }) as Message;
+    const conversationFilters: string[] = [];
+    const client = createMockOutlookClient([], {
+      responsesByApiPath: {
+        "/me/messages": ({ search, filter }) => {
+          if (search)
+            return {
+              value: [
+                fromParticipant("m-open", "open"),
+                fromParticipant("m-older", "older"),
+              ],
+            };
+          if (filter) conversationFilters.push(filter);
+          return { value: [] };
+        },
+      },
+    });
+    const provider = new OutlookProvider(client, createTestLogger());
+
+    const threads = await provider.getThreadsWithParticipant({
+      participantEmail,
+      maxThreads: 2,
+      excludeThreadId: "open",
+    });
+
+    expect(threads.map((thread) => thread.id)).toEqual(["older"]);
+    expect(conversationFilters.join(" ")).not.toContain("'open'");
+  });
 });
 
 function createMockOutlookClient(

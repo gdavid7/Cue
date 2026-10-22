@@ -123,12 +123,19 @@ async function markOnboardingComplete(email: string) {
           }
           // The week-1 Get started checklist on Today, for the same reason;
           // onboarding/get-started.spec.ts opens it again.
-          await client.query(
-            `UPDATE "User"
-             SET "dismissedHints" = array_append("dismissedHints", $2)
-             WHERE email = $1 AND NOT ($2 = ANY("dismissedHints"))`,
-            [email, "get-started:dismissed"],
-          );
+          // The notifications-off reminder (NOTIFICATIONS_OFF_HINT_ID) joins
+          // the same list; mail/notifications-off-hint.spec.ts opens it again.
+          for (const hintId of [
+            "get-started:dismissed",
+            "web-notifications-off",
+          ]) {
+            await client.query(
+              `UPDATE "User"
+               SET "dismissedHints" = array_append("dismissedHints", $2)
+               WHERE email = $1 AND NOT ($2 = ANY("dismissedHints"))`,
+              [email, hintId],
+            );
+          }
           return;
         }
       }

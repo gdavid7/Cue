@@ -43,6 +43,7 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "chat/confirm-email-action": "interactive",
   // Pages a person opened.
   "user/home": "interactive",
+  "user/inbox-catch-up": "interactive",
   labels: "interactive",
   "google/linking/callback": "interactive",
   "clean/onboarding": "interactive",
@@ -56,6 +57,8 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "google/webhook": "sync",
   "mobile/mailbox-sync": "sync",
   "snoozed-threads/execute": "sync",
+  // Summarizing mail a person's own digest rule picked.
+  digest: "sync",
   "scheduled-emails/execute": "sync",
   "auth/link-watch": "sync",
   // Work nobody asked for and can't see yet.

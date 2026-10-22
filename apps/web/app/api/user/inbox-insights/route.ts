@@ -4,7 +4,10 @@ import {
   OPEN_THREAD_GMAIL_WAIT_MS,
   runWithGmailWaitBudget,
 } from "@/utils/gmail/quota";
-import { getInboxInsights } from "@/utils/inbox-insights/get-inbox-insights";
+import {
+  getInboxInsights,
+  selectNewInsightItems,
+} from "@/utils/inbox-insights/get-inbox-insights";
 import { withEmailProvider } from "@/utils/middleware";
 
 // One page of the inbox; the hook splits longer lists into requests this size.
@@ -56,6 +59,15 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
     (searchParams.get("known") ?? "").split(",").filter(Boolean),
   );
 
+  const isOpenThread = searchParams.get("open") === "1" && items.length === 1;
+  // Numbers and a lane only, so "Request completed" can set a chunk's size
+  // against its duration.
+  request.logger = request.logger.with({
+    itemCount: items.length,
+    newCount: selectNewInsightItems(items, known).length,
+    priority: isOpenThread ? "interactive" : "background",
+  });
+
   const load = () =>
     getInboxInsights({
       emailAccountId: request.auth.emailAccountId,
@@ -67,11 +79,10 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
       emailProvider: request.emailProvider,
       logger: request.logger,
     });
-  const result =
-    searchParams.get("open") === "1" && items.length === 1
-      ? await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, load, {
-          priority: "interactive",
-        })
-      : await load();
+  const result = isOpenThread
+    ? await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, load, {
+        priority: "interactive",
+      })
+    : await load();
   return NextResponse.json(result satisfies GetInboxInsightsResponse);
 });

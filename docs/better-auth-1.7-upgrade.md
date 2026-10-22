@@ -21,7 +21,7 @@ Open `/admin` → **SCIM provisioning**, enter the registered SSO provider ID an
 
 Before reprovisioning existing users, populate `ScimIdentityLink` with the new connection ID, the IdP's immutable external ID, and the reviewed local user ID. Unmapped identities are created; they are never linked by matching email. Run full reprovisioning and verify that existing users retain the correct application identity. SCIM does not create authentication accounts or project organization roles. Existing application memberships must be reviewed separately.
 
-Deprovisioning records `User.scimAccessDisabled` and deletes sessions transactionally. New session creation rejects disabled users. Reprovisioning an active identity clears the disabled flag. Existing session cookies may remain cached until the configured cookie cache expires, so include that interval in access-revocation checks.
+Deprovisioning records `User.scimAccessDisabled` and deletes sessions transactionally. New session creation rejects disabled users. Reprovisioning an active identity clears the disabled flag. A copy of a deleted session's cookie cache still passes for reads until it expires (at most 60 seconds). Server actions, API requests that change state, admin pages and routes, account linking callbacks and Better Auth's account and OAuth-grant endpoints check the session in the database, so they reject it at once; include the 60-second interval in access-revocation checks for reads.
 
 ## Rollback
 

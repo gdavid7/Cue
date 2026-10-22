@@ -76,11 +76,29 @@ describe("mail bulk matching actions", () => {
       action: "archive",
       status: "listing",
     });
+    expect(prisma.mailBulkJobListing.create).toHaveBeenCalledWith({
+      data: { jobId, emailAccountId: "account-1", scope: { type: "inbox" } },
+    });
     expect(mockEnqueue).toHaveBeenCalledWith({
       jobId,
       emailAccountId: "account-1",
-      scope: { type: "inbox" },
       deferrals: 0,
+    });
+  });
+
+  it("fails the job and drops its view when it can't be queued", async () => {
+    mockEnqueue.mockRejectedValueOnce(new Error("queue down"));
+
+    const result = await startMatchingBulkActionAction("account-1", {
+      scope: { q: "from:alice@example.com" },
+      action: "archive",
+    });
+
+    expect(result?.serverError).toBeDefined();
+    const [jobId] = [...jobs.keys()];
+    expect(jobs.get(jobId)?.status).toBe("failed");
+    expect(prisma.mailBulkJobListing.deleteMany).toHaveBeenCalledWith({
+      where: { jobId, emailAccountId: "account-1" },
     });
   });
 
@@ -112,9 +130,10 @@ describe("mail bulk matching actions", () => {
     });
 
     expect(result?.serverError).toBeUndefined();
-    expect(mockEnqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: { type: "trash" } }),
-    );
+    expect(prisma.mailBulkJobListing.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ scope: { type: "trash" } }),
+    });
+    expect(mockEnqueue).toHaveBeenCalled();
   });
 
   it("undoes an archive by stopping it and restoring what it moved", async () => {

@@ -1,6 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
+import {
+  createSecondEmailAccount,
+  deleteSecondEmailAccount,
+} from "./account-test-helpers";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
@@ -314,6 +318,77 @@ test("the strip reads well in light and dark, on desktop and phones", async ({
         `cue-strip-${theme}-${size.width}`,
       );
     }
+  }
+});
+
+// PF-3: a pointer resting on a row starts the reader's summary, so it is on
+// its way before the click, and opening the row asks for nothing again.
+test("a pointer resting on a row starts its summary before the click", async ({
+  page,
+}, testInfo) => {
+  const briefRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/user/thread-brief"))
+      briefRequests.push(request.url());
+  });
+  const { conversations } = await openMail(page);
+  const row = conversationWithSubject(page, conversations, PERSON_SUBJECT);
+
+  await row.hover();
+  await expect.poll(() => briefRequests.length, { timeout: 10_000 }).toBe(1);
+  await row.click();
+  await expect(page.getByRole("heading", { name: PERSON_SUBJECT })).toBeVisible(
+    { timeout: 60_000 },
+  );
+  const strip = page.getByRole("region", { name: "Cue summary" });
+  await expect(strip.getByText(SUMMARY)).toBeVisible({ timeout: 60_000 });
+  expect(briefRequests).toHaveLength(1);
+  await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-prefetched");
+});
+
+// PF-3: in All inboxes the same email can sit in two accounts; the hover asks
+// with the row's own account, the one the reader then shows it in, so the
+// open takes the prefetch over instead of asking again.
+test("All inboxes prefetches a row's summary with the row's own account", async ({
+  page,
+}, testInfo) => {
+  const { emailAccountId } = await openMail(page);
+  const second = await createSecondEmailAccount(emailAccountId);
+  try {
+    const briefAccounts: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/user/thread-brief"))
+        briefAccounts.push(request.headers()["x-email-account-id"] ?? "");
+    });
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    const conversations = page.getByRole("listbox", { name: "Conversations" });
+    const rows = conversations
+      .getByRole("option")
+      .filter({ hasText: PERSON_SUBJECT });
+    await expect(rows).toHaveCount(2, { timeout: 60_000 });
+
+    await rows.nth(1).hover();
+    await expect.poll(() => briefAccounts.length, { timeout: 10_000 }).toBe(1);
+    await rows.nth(1).click();
+    await expect(
+      page.getByRole("heading", { name: PERSON_SUBJECT }),
+    ).toBeVisible({ timeout: 60_000 });
+    const strip = page.getByRole("region", { name: "Cue summary" });
+    await expect(strip.getByText(SUMMARY)).toBeVisible({ timeout: 60_000 });
+
+    // The account the reader opened the row in, by its position in All inboxes.
+    const opened =
+      new URL(page.url()).searchParams.get("account") === "1"
+        ? second.id
+        : emailAccountId;
+    expect(briefAccounts).toEqual([opened]);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "cue-strip-prefetched-all-inboxes",
+    );
+  } finally {
+    await deleteSecondEmailAccount(second.accountId);
   }
 });
 

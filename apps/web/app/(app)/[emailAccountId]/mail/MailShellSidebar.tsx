@@ -43,7 +43,10 @@ import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
-import { useLabelCounts } from "@/hooks/useLabelCounts";
+import {
+  useAllInboxesLabelCounts,
+  useLabelCounts,
+} from "@/hooks/useLabelCounts";
 import { useLabels } from "@/hooks/useLabels";
 import { useRules } from "@/hooks/useRules";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -61,7 +64,6 @@ import {
 } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import { GMAIL_LABEL_COLORS } from "@/utils/gmail/label-colors";
-import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets";
 import { OUTLOOK_CATEGORY_COLORS } from "@/utils/outlook/category-colors";
 import { getEmailTerminology } from "@/utils/terminology";
 import { logOut } from "@/utils/user";
@@ -71,7 +73,6 @@ const OUTLOOK_LABEL_COLOR_OPTIONS = OUTLOOK_CATEGORY_COLORS.map((option) => ({
   backgroundColor: option.value,
   textColor: "#000000",
 }));
-const NO_COUNTS = new Map<string, MailboxLabelCount>();
 const NO_LABELS: EmailLabel[] = [];
 const NO_FOLDERS: OutlookFolder[] = [];
 const NO_CATEGORIES: MailCategory[] = [];
@@ -131,8 +132,14 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   });
   const { onOpen: openCompose } = useComposeModal();
   const { data: accountsData } = useAccounts();
-  const hasAllInboxes =
-    getAllInboxesAccounts(accountsData?.emailAccounts ?? []).length > 1;
+  const allInboxesAccounts = useMemo(
+    () => getAllInboxesAccounts(accountsData?.emailAccounts ?? []),
+    [accountsData?.emailAccounts],
+  );
+  const hasAllInboxes = allInboxesAccounts.length > 1;
+  const allInboxesCountsById = useAllInboxesLabelCounts(
+    isAllAccounts ? allInboxesAccounts : undefined,
+  );
   const { appLinks, toolLinks } = useMailAppLinks();
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
@@ -256,7 +263,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
       hrefFor={hrefFor}
       labels={isAllAccounts ? NO_LABELS : sidebarLabels}
       folders={isAllAccounts || !isOutlook ? NO_FOLDERS : folders}
-      countsById={isAllAccounts ? NO_COUNTS : countsById}
+      countsById={isAllAccounts ? allInboxesCountsById : countsById}
       categories={
         isAllAccounts
           ? NO_CATEGORIES

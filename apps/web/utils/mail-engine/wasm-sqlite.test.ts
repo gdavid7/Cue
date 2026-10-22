@@ -266,7 +266,7 @@ describe("browser wasm sqlite driver", () => {
       await tx.exec(
         `DROP TABLE message_fts;
          DELETE FROM message_fts_keys;
-         DELETE FROM schema_migrations WHERE id = 6;
+         DELETE FROM schema_migrations WHERE id = 13;
          CREATE VIRTUAL TABLE message_fts USING fts5(account_id UNINDEXED, message_id UNINDEXED, subject, preview, from_address, body);
          INSERT INTO message_fts(account_id, message_id, subject, preview, from_address, body)
            SELECT 'acc-1', 'm1', 'c1', 'm1', 'ada@example.com', 'quarterly invoice';

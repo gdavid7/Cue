@@ -6,6 +6,15 @@ export function getTodayForLLM(date: Date = new Date()) {
   return `Today's date and time is: ${date.toISOString()}.`;
 }
 
+/**
+ * Keeps text other people wrote (or a model wrote about it) from opening or
+ * closing a prompt's tags. Ampersands stay as typed, so a model doesn't copy
+ * entities into what it writes.
+ */
+export function escapePromptTags(text: string) {
+  return text.replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+}
+
 export const getUserInfoPrompt = ({
   emailAccount,
   prefix = "The user you are acting on behalf of is:",

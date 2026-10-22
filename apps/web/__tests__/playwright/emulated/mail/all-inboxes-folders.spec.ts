@@ -24,7 +24,7 @@ const INBOX_SUBJECT = "Playwright Test Message";
 
 // Every account here reads the same seeded mailbox, so each message is listed
 // once per account included in All inboxes, marked with its account.
-test("merges Drafts, Sent and Starred from every included account, each row acting in its own account", async ({
+test("merges Drafts, Sent and Starred from every included account, each row acting in its own account, with Drafts counted across them", async ({
   page,
 }, testInfo) => {
   test.setTimeout(300_000);
@@ -97,16 +97,20 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
     ).toHaveCount(0);
     await capturePlaywrightCheckpoint(page, testInfo, "all-inboxes-starred");
 
-    await mailboxes
-      .getByRole("link", { name: "Drafts", exact: true })
-      .first()
-      .click();
+    await draftsLink(mailboxes).click();
     await expect(page).toHaveURL(/\/all-inboxes\/drafts(\?|$)/);
     const draftRows = conversationWithSubject(page, conversations, subject);
     await expect(draftRows).toHaveCount(2, { timeout: 60_000 });
     await expect(
       conversationWithSubject(page, conversations, SENT_SUBJECT),
     ).toHaveCount(0);
+    // Drafts counts the drafts of every included account and no other, the
+    // same conversations the merged list shows.
+    const draftsCount = await expectDraftsCountMatchesList(
+      mailboxes,
+      conversations,
+    );
+    expect(draftsCount).toBeGreaterThanOrEqual(2);
     await capturePlaywrightCheckpoint(page, testInfo, "all-inboxes-drafts");
 
     await draftRows.filter({ has: accountMarker(page, second.email) }).click();
@@ -143,22 +147,42 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       .getByRole("button", { name: /Tomorrow morning/ })
       .click();
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await mailboxes
-      .getByRole("link", { name: "Drafts", exact: true })
-      .first()
-      .click();
+    await draftsLink(mailboxes).click();
     await expect(
       draftRows.filter({ has: accountMarker(page, second.email) }),
     ).toHaveCount(0, { timeout: 30_000 });
     await expect(
       draftRows.filter({ has: accountMarker(page, primaryEmail) }),
     ).toHaveCount(1);
+    // The scheduled draft leaves the count with the list, in its account only.
+    expect(await expectDraftsCountMatchesList(mailboxes, conversations)).toBe(
+      draftsCount - 1,
+    );
     await capturePlaywrightCheckpoint(
       page,
       testInfo,
       "all-inboxes-draft-scheduled",
     );
+
+    // Once the server has sent it, it stays out of the merged Drafts though
+    // this device hasn't synced that account's mailbox since.
+    await withClient((client) =>
+      client.query(
+        `UPDATE "ScheduledEmail" SET status = 'SENT', "sentAt" = now() WHERE "emailAccountId" = $1 AND status = 'PENDING'`,
+        [second.id],
+      ),
+    );
+    await page.reload();
+    await expect(conversations).toBeVisible({ timeout: 60_000 });
+    await expect(
+      draftRows.filter({ has: accountMarker(page, primaryEmail) }),
+    ).toHaveCount(1, { timeout: 60_000 });
+    await expect(
+      draftRows.filter({ has: accountMarker(page, second.email) }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "all-inboxes-draft-sent");
   } finally {
+    await deletePendingScheduledEmails(second.id).catch(() => undefined);
     await unstarSentMessage(page).catch(() => undefined);
     if (draftId) await deleteMailboxDraft(page, draftId).catch(() => undefined);
     await deleteSecondEmailAccount(excluded.accountId);
@@ -167,7 +191,31 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
 });
 
 function accountMarker(scope: Page | Locator, email: string) {
-  return scope.getByRole("img", { name: `Inbox: ${email}` });
+  return scope.getByRole("img", { name: `Account: ${email}` });
+}
+
+// The name carries the count once there is one.
+function draftsLink(mailboxes: Locator) {
+  return mailboxes.getByRole("link", { name: /^Drafts\s*\d*$/ }).first();
+}
+
+async function draftsCount(mailboxes: Locator) {
+  const text = await draftsLink(mailboxes).innerText();
+  return Number(/(\d+)\s*$/.exec(text)?.[1] ?? 0);
+}
+
+/** Waits for the sidebar's Drafts count to settle on the listed rows, and returns it. */
+async function expectDraftsCountMatchesList(
+  mailboxes: Locator,
+  conversations: Locator,
+) {
+  const rows = conversations.getByRole("option");
+  await expect
+    .poll(async () => (await draftsCount(mailboxes)) - (await rows.count()), {
+      timeout: 60_000,
+    })
+    .toBe(0);
+  return draftsCount(mailboxes);
 }
 
 function operationAccounts(urls: string[]) {
@@ -183,6 +231,16 @@ async function excludeFromAllInboxes(emailAccountId: string) {
   await withClient((client) =>
     client.query(
       `UPDATE "EmailAccount" SET "includeInAllAccounts" = false WHERE id = $1`,
+      [emailAccountId],
+    ),
+  );
+}
+
+// Account deletion cascades; this also stops a send that fires mid-teardown.
+async function deletePendingScheduledEmails(emailAccountId: string) {
+  await withClient((client) =>
+    client.query(
+      `DELETE FROM "ScheduledEmail" WHERE "emailAccountId" = $1 AND status = 'PENDING'`,
       [emailAccountId],
     ),
   );

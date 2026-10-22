@@ -84,6 +84,52 @@ describe("localInboxRows", () => {
     expect(rows?.map((row) => row.account)).toEqual([ADA, BOB]);
   });
 
+  it("carries the latest message's Message-ID, as the server's rows do", () => {
+    const [row] =
+      localInboxRows(
+        view([conversation("t1", { internetMessageId: "<same@mail>" })]),
+        { accounts: [ADA], named: false },
+      ) ?? [];
+
+    expect(row?.rfcMessageId).toBe("<same@mail>");
+  });
+
+  it("across accounts shows a message in two mailboxes once, saying where else it is", () => {
+    const rows = localInboxRows(
+      view(
+        [
+          conversation("t1", { internetMessageId: "<same@mail>" }),
+          conversation("t2", { accountId: BOB.id }),
+          conversation("bob-copy", {
+            accountId: BOB.id,
+            internetMessageId: "SAME@mail",
+          }),
+        ],
+        [ADA.id, BOB.id],
+      ),
+      { accounts: [ADA, BOB], named: true },
+    );
+
+    expect(
+      rows?.map((row) => [row.threadId, row.alsoIn?.map(({ id }) => id)]),
+    ).toEqual([
+      ["t1", [BOB.id]],
+      ["t2", undefined],
+    ]);
+  });
+
+  it("keeps two conversations in one mailbox that share a message", () => {
+    const rows = localInboxRows(
+      view([
+        conversation("t1", { internetMessageId: "<same@mail>" }),
+        conversation("t2", { internetMessageId: "<same@mail>" }),
+      ]),
+      { accounts: [ADA], named: false },
+    );
+
+    expect(rows?.map((row) => row.threadId)).toEqual(["t1", "t2"]);
+  });
+
   it("leaves out a conversation that is only a draft", () => {
     const rows = localInboxRows(
       view([conversation("t1", { latestMessageId: null })]),
@@ -182,6 +228,7 @@ function conversation(
     latestMessageId = `${conversationId}-latest`,
     labelIds = [],
     at = "2026-10-20T09:00:00.000Z",
+    internetMessageId,
   }: {
     accountId?: string;
     subject?: string;
@@ -191,6 +238,7 @@ function conversation(
     latestMessageId?: string | null;
     labelIds?: string[];
     at?: string;
+    internetMessageId?: string;
   } = {},
 ): ConversationSummary {
   return {
@@ -207,5 +255,8 @@ function conversation(
     roles: ["inbox"],
     pendingOperationIds: [],
     ...(latestMessageId ? { latestMessageId } : {}),
+    ...(internetMessageId
+      ? { latestInternetMessageId: internetMessageId }
+      : {}),
   };
 }

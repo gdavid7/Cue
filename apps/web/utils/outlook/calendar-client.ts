@@ -33,13 +33,13 @@ export const getCalendarClientWithRefresh = async ({
   accessToken,
   refreshToken,
   expiresAt,
-  emailAccountId,
+  connectionId,
   logger,
 }: {
   accessToken?: string | null;
   refreshToken: string | null;
   expiresAt: number | null;
-  emailAccountId: string;
+  connectionId: string;
   logger: Logger;
 }): Promise<Client> => {
   if (!refreshToken) throw new SafeError("No refresh token");
@@ -80,31 +80,17 @@ export const getCalendarClientWithRefresh = async ({
       throw new Error("Token response missing expires_in field");
     }
 
-    // Find the calendar connection to update
-    const calendarConnection = await prisma.calendarConnection.findFirst({
-      where: {
-        emailAccountId,
-        provider: "microsoft",
+    await saveCalendarTokens({
+      tokens: {
+        accessToken: tokens.access_token,
+        // Microsoft rotates refresh tokens; an absent one keeps the stored token.
+        refreshToken: tokens.refresh_token || undefined,
+        expiresAt: new Date(Date.now() + Number(tokens.expires_in) * 1000),
       },
-      select: { id: true },
+      connectionId,
+      expectedExpiresAt: expiresAt,
+      logger,
     });
-
-    if (calendarConnection) {
-      await saveCalendarTokens({
-        tokens: {
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt: new Date(Date.now() + Number(tokens.expires_in) * 1000),
-        },
-        connectionId: calendarConnection.id,
-        expectedExpiresAt: expiresAt,
-        logger,
-      });
-    } else {
-      logger.warn("No calendar connection found to update tokens", {
-        emailAccountId,
-      });
-    }
 
     const refreshedToken: string = tokens.access_token;
     return createMicrosoftGraphClient(() => refreshedToken);
@@ -114,25 +100,23 @@ export const getCalendarClientWithRefresh = async ({
       try {
         // Tokens are encrypted at rest, so compare the decrypted values before
         // guarding the write against a concurrent refresh or reconnect.
-        const connections = await prisma.calendarConnection.findMany({
-          where: { emailAccountId, provider: "microsoft", isConnected: true },
+        const connection = await prisma.calendarConnection.findUnique({
+          where: { id: connectionId },
           select: {
-            id: true,
             accessToken: true,
             refreshToken: true,
             updatedAt: true,
+            isConnected: true,
           },
         });
-        for (const connection of connections) {
-          if (
-            connection.refreshToken !== refreshToken ||
-            connection.accessToken !== (accessToken ?? null)
-          )
-            continue;
-
+        if (
+          connection?.isConnected &&
+          connection.refreshToken === refreshToken &&
+          connection.accessToken === (accessToken ?? null)
+        ) {
           await prisma.calendarConnection.updateMany({
             where: {
-              id: connection.id,
+              id: connectionId,
               updatedAt: connection.updatedAt,
               isConnected: true,
             },

@@ -25,7 +25,7 @@ import { AdminTopSpenders } from "@/app/(app)/admin/AdminTopSpenders";
 export const maxDuration = 300;
 
 export default async function AdminPage() {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
 
   if (!isAdmin({ email: session?.user.email })) {
     return (

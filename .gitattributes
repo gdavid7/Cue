@@ -1,0 +1,2 @@
+# Pinned model files are checked by SHA-256: never normalize or diff them.
+apps/web/public/models/** binary

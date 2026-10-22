@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockDeep } from "vitest-mock-extended";
-import type { CalendarConnection } from "@/generated/prisma/client";
 import { createTestLogger } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import { createMicrosoftGraphClient } from "@/utils/outlook/client";
@@ -46,9 +44,6 @@ describe("getCalendarClientWithRefresh token buffer", () => {
       }),
     );
     prisma.calendarConnection.updateMany.mockResolvedValue({ count: 1 });
-    prisma.calendarConnection.findFirst.mockResolvedValue(
-      mockDeep<CalendarConnection>({ id: "calendar-connection-id" }),
-    );
   });
 
   afterEach(() => {
@@ -63,7 +58,7 @@ describe("getCalendarClientWithRefresh token buffer", () => {
       accessToken: "cached-access-token",
       refreshToken: "refresh-token",
       expiresAt: now.getTime() + remainingMs,
-      emailAccountId: "email-account-id",
+      connectionId: "calendar-connection-id",
       logger: createTestLogger(),
     });
 
@@ -84,7 +79,7 @@ describe("getCalendarClientWithRefresh token buffer", () => {
       accessToken: "cached-access-token",
       refreshToken: "refresh-token",
       expiresAt: now.getTime() + 10 * 60 * 1000 + 1,
-      emailAccountId: "email-account-id",
+      connectionId: "calendar-connection-id",
       logger: createTestLogger(),
     });
 

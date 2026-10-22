@@ -1,3 +1,4 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
 import type { TodayHomeData } from "@/utils/home/keep-shown-lanes";
@@ -117,7 +118,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
     const rows: TodayThread[] = [];
     let more = false;
     for (const thread of threads) {
-      const key = conversationKey(thread);
+      const key = todayConversationKey(thread);
       const first = shown.get(key);
       // Within one mailbox Today shows what one account's Today shows.
       const sameMailbox =
@@ -203,6 +204,14 @@ export function mergeHomeData(accounts: AccountHome[]): {
       },
       calendar: {
         connected: loaded.some(({ data }) => data.calendar.connected),
+        // Every account reads the user's calendars: one that couldn't, or
+        // found a meeting, means the calendar isn't known to be clear.
+        clearThroughTomorrow:
+          loaded.some(({ data }) => data.calendar.connected) &&
+          loaded.every(
+            ({ data }) =>
+              !data.calendar.connected || data.calendar.clearThroughTomorrow,
+          ),
         next: nextEvents[0] ?? null,
       },
       nextUp: mergeNextUp(loaded.map(({ data }) => data.nextUp)),
@@ -270,8 +279,8 @@ export function mergeMeetingNews(lists: MeetingNews[][]): MeetingNews[] {
  * The same conversation in two mailboxes has its own thread id in each, but
  * its newest message carries one Message-ID header everywhere.
  */
-function conversationKey(thread: TodayThread) {
-  const messageId = thread.rfcMessageId?.trim().toLowerCase();
+export function todayConversationKey(thread: TodayThread) {
+  const messageId = normalizeInternetMessageId(thread.rfcMessageId);
   return messageId
     ? `message:${messageId}`
     : `thread:${thread.account?.id ?? ""}:${thread.threadId}`;

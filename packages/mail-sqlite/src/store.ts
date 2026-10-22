@@ -5,7 +5,16 @@ import {
   readContactSuggestions,
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
+import { readFileSenders, readFiles } from "./files";
 import { readPersonCard } from "./person-card";
+import {
+  countMessageEmbeddings,
+  deleteAccountMessageEmbeddings,
+  pruneMessageEmbeddings,
+  readEmbeddingBacklog,
+  readSemanticMatches,
+  writeMessageEmbeddings,
+} from "./message-embeddings";
 import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
@@ -29,11 +38,7 @@ import type {
   LocalRevision,
   MessageKey,
 } from "@inboxzero/mail-core/identities";
-import {
-  messageAttachmentDescriptorSchema,
-  type MessageAttachmentDescriptor,
-  type MessageMetadata,
-} from "@inboxzero/mail-core/messages";
+import type { MessageMetadata } from "@inboxzero/mail-core/messages";
 import {
   DEFERRED_DISPATCH_MIN_HOLD_MS,
   EXECUTABLE_OPERATION_STATUSES,
@@ -85,6 +90,7 @@ import {
   connectionStatus,
   metadataFromEffective,
   coversWholeMailbox,
+  parseStoredAttachments,
   readCoverage,
   readRevision,
 } from "./store-read-utils";
@@ -180,8 +186,31 @@ export async function createSqliteMailStore(
     readPersonCard(query) {
       return driver.read((tx) => readPersonCard(tx, query));
     },
+    readFiles(query) {
+      return driver.read(async (tx) =>
+        readFiles(tx, query, await searchSupport(tx)),
+      );
+    },
+    readFileSenders(accountIds) {
+      return driver.read((tx) => readFileSenders(tx, accountIds));
+    },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);
+    },
+    readEmbeddingBacklog(input) {
+      return driver.read((tx) => readEmbeddingBacklog(tx, bodyCodec, input));
+    },
+    writeMessageEmbeddings(input) {
+      return driver.write((tx) => writeMessageEmbeddings(tx, input));
+    },
+    pruneMessageEmbeddings(input) {
+      return driver.write((tx) => pruneMessageEmbeddings(tx, input));
+    },
+    countMessageEmbeddings(input) {
+      return driver.read((tx) => countMessageEmbeddings(tx, input));
+    },
+    readSemanticMatches(input) {
+      return driver.read((tx) => readSemanticMatches(tx, input));
     },
     async ensureAccount(input) {
       return driver.write(async (tx) => {
@@ -252,6 +281,7 @@ export async function createSqliteMailStore(
       return driver.write(async (tx) => {
         await deleteAccountSearchIndex(tx, accountId);
         await deleteAccountContactSuggestions(tx, accountId);
+        await deleteAccountMessageEmbeddings(tx, accountId);
         const existing = await tx.query(
           "SELECT 1 AS n FROM accounts WHERE account_id = ?",
           [accountId],
@@ -339,13 +369,12 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
-        const read = await readOrder(tx, input.requestedAt, digest);
-        for (const change of input.page.changes) {
-          await applyChange(tx, change, read);
-        }
+        // Targets go in first so the messages this page finds show the
+        // change while later pages are still being read.
+        const newTargets: MessageKey[] = [];
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
-          await tx.execute(
+          const inserted = await tx.execute(
             `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
              VALUES (?, ?, ?, ?)`,
             [
@@ -355,7 +384,19 @@ export async function createSqliteMailStore(
               input.page.conversation.conversationId,
             ],
           );
+          if (inserted.changedRows > 0) newTargets.push(key);
         }
+        const read = await readOrder(tx, input.requestedAt, digest);
+        for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessagePatch(tx, change))
+          ) {
+            continue;
+          }
+          await applyChange(tx, change, read);
+        }
+        await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
            SET next_page = ?, complete = ?
@@ -374,7 +415,11 @@ export async function createSqliteMailStore(
             input.previousPage,
           ],
         );
-        if (updated.changedRows === 0) return { status: "stale" };
+        // Checked above in this transaction; throwing rolls back the targets
+        // and changes already written, which returning would commit.
+        if (updated.changedRows === 0) {
+          throw new Error("Preparation page changed during its transaction");
+        }
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
@@ -2583,6 +2628,7 @@ async function resetAccountForGeneration(
 ) {
   await deleteAccountSearchIndex(tx, input.accountId);
   await deleteAccountContactSuggestions(tx, input.accountId);
+  await deleteAccountMessageEmbeddings(tx, input.accountId);
   const derivedTables = [
     "message_content",
     "effective_messages",
@@ -2992,8 +3038,9 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
     `INSERT INTO messages(
        account_id, message_id, conversation_id, provider, version, subject, preview, external_url,
        from_address, to_json, cc_json, bcc_json, received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json,
-       roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted
-     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted,
+       internet_message_id
+     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(account_id, message_id) DO UPDATE SET
        conversation_id = excluded.conversation_id,
        version = excluded.version,
@@ -3019,7 +3066,8 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
        in_spam = excluded.in_spam,
        has_attachments = excluded.has_attachments,
        snoozed_until_ms = excluded.snoozed_until_ms,
-       deleted = excluded.deleted`,
+       deleted = excluded.deleted,
+       internet_message_id = COALESCE(excluded.internet_message_id, messages.internet_message_id)`,
     [
       message.accountId,
       message.messageId,
@@ -3049,6 +3097,7 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       message.hasAttachments ? 1 : 0,
       message.snoozedUntilMs ?? null,
       message.deleted ? 1 : 0,
+      message.internetMessageId ?? null,
     ],
   );
   await indexContactMessage(tx, message);
@@ -3392,6 +3441,10 @@ function confirmedFromRow(
     hasAttachments: Number(row.has_attachments) === 1,
     snoozedUntilMs:
       row.snoozed_until_ms == null ? null : Number(row.snoozed_until_ms),
+    internetMessageId:
+      row.internet_message_id == null
+        ? undefined
+        : String(row.internet_message_id),
   };
 }
 
@@ -3466,6 +3519,7 @@ async function insertMessageContent(
     html: body.html,
     text: storedTextPart(body.html, body.text),
   };
+  const attachmentsJson = JSON.stringify(body.attachments ?? []);
   await tx.execute(
     `INSERT INTO message_content(account_id, message_id, version, html, text, attachments_json, is_meeting_invitation)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -3479,13 +3533,16 @@ async function insertMessageContent(
       body.version,
       await encodeMessageBody(codec, stored.html),
       await encodeMessageBody(codec, stored.text),
-      JSON.stringify(body.attachments ?? []),
+      attachmentsJson,
       body.isMeetingInvitation ? 1 : 0,
     ],
   );
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
-  await indexMessageContent(tx, body.key, stored);
+  await indexMessageContent(tx, body.key, {
+    ...stored,
+    attachments: parseStoredAttachments(attachmentsJson),
+  });
 }
 
 type ReadOrder = {
@@ -3839,22 +3896,6 @@ function parseOperationPayload(value: import("./driver").SqlValue) {
       conversationIds: [],
       messageIds: [],
     };
-  }
-}
-
-function parseStoredAttachments(
-  value: import("./driver").SqlValue,
-): MessageAttachmentDescriptor[] {
-  if (value === null || value === undefined) return [];
-  try {
-    const parsed = JSON.parse(String(value)) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      const result = messageAttachmentDescriptorSchema.safeParse(item);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
   }
 }
 

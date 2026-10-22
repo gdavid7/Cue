@@ -358,6 +358,7 @@ describe("queueReaderEmail", () => {
       }),
     );
     expect(onQueued).toHaveBeenCalledOnce();
+    expect(onQueued).toHaveBeenCalledWith("mutation");
     expect(client.observeOperation).not.toHaveBeenCalled();
   });
 

@@ -22,14 +22,21 @@ const state = vi.hoisted(() => ({
   localOnlyWindows: [] as string[],
   enabledPredicates: [] as unknown[],
   provider: "google",
+  client: null as null | { searchSemantic?: () => Promise<unknown> },
+  semantic: undefined as unknown,
 }));
 
 vi.mock("swr", () => ({
   default: (key: unknown, fetcher: (key: unknown) => Promise<unknown>) => {
+    if (Array.isArray(key) && key[0] === "cue-semantic")
+      return { data: state.semantic, error: undefined };
     state.swrKeys.push(key);
     state.fetcher = fetcher;
     return { data: key ? state.intent : undefined, error: undefined };
   },
+}));
+vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
+  useOptionalMailClient: () => state.client,
 }));
 vi.mock("@/hooks/useLabels", () => ({
   useLabels: () => ({
@@ -68,7 +75,10 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   },
 }));
 
-import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import {
+  searchByMeaning,
+  useCueSearch,
+} from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 
 const SENTENCE = "the lease contract Sarah sent last month";
 const SEARCH =
@@ -98,6 +108,8 @@ beforeEach(() => {
   state.provider = "google";
   state.labels = [];
   state.labelsLoading = false;
+  state.client = null;
+  state.semantic = undefined;
 });
 
 afterEach(() => {
@@ -157,6 +169,38 @@ describe("useCueSearch", () => {
     expect(new Set(state.enabledWindows)).toEqual(new Set([SEARCH]));
   });
 
+  it("adds mail close in meaning, read from the local mail alone, and waits for it", () => {
+    // Words alone: mail found by meaning must meet a search's sender and dates.
+    const words = "lease OR contract";
+    state.intent = { searches: [words], explanation: "", isQuestion: false };
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(words, { settled: true, ids: ["a", "b"] });
+    state.results.set("messages:m-lease", { settled: true, ids: ["lease"] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(result.current.foundNothing).toBe(false);
+
+    state.semantic = [
+      { messageId: "m-lease", conversationId: "lease", similarity: 0.8 },
+    ];
+    rerender({ q: SENTENCE });
+    expect(result.current.threads.map((t) => t.id)).toContain("lease");
+    expect(state.localOnlyWindows).toContain("messages:m-lease");
+  });
+
+  it("says it found nothing only once the search by meaning has answered too", () => {
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    for (const key of ladderKeys())
+      state.results.set(key, { settled: true, ids: [] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.foundNothing).toBe(false);
+
+    state.semantic = [];
+    rerender({ q: SENTENCE });
+    expect(result.current.foundNothing).toBe(true);
+  });
+
   it("climbs the ladder past tiers that find nothing new, stopping at the first that does", () => {
     const [fewer, sender, dates] = ladderKeys();
     state.results.set(SEARCH, { settled: true, ids: ["a"] });
@@ -209,6 +253,38 @@ describe("useCueSearch", () => {
     rerender({ q: SENTENCE });
     expect(result.current.stage).toBe("done");
     expect(result.current.threads.map((t) => t.id)).toEqual(["old"]);
+  });
+
+  it("sends only the first of a multi-search last tier to the provider", () => {
+    const other =
+      "from:bob has:attachment after:2026/09/01 before:2026/10/01 invoice OR receipt";
+    state.intent = { searches: [SEARCH, other], isQuestion: false };
+    const ladder = getWideningLadder([SEARCH, other], {
+      now: new Date(),
+      provider: "google",
+    });
+    const last = ladder[ladder.length - 1];
+    expect(last.searches.length).toBeGreaterThan(1);
+    state.results.set([SEARCH, other].join(" | "), { settled: true, ids: [] });
+    for (const step of ladder) {
+      state.results.set(step.searches.join(" | "), { settled: true, ids: [] });
+    }
+    state.results.set(last.searches[0], { settled: true, ids: [] });
+    const { result } = render(SENTENCE);
+
+    expect(result.current.widening).toMatchObject({
+      tier: last.tier,
+      onProvider: true,
+    });
+    const lastResort = state.enabledPredicates.at(-1) as {
+      kind: string;
+      predicates: unknown[];
+    };
+    // One provider search; the tier's other searches still read local mail.
+    expect(searchesOf(lastResort)).toEqual([last.searches[0]]);
+    expect(lastResort.kind).toBe("any");
+    expect(lastResort.predicates).toHaveLength(last.searches.length);
+    expect(state.localOnlyWindows).not.toContain(last.searches[0]);
   });
 
   it("says it found nothing once the provider's last-resort search finds nothing too", () => {
@@ -365,6 +441,23 @@ describe("useCueSearch", () => {
   });
 });
 
+describe("searchByMeaning", () => {
+  const query = { accountId: "account", text: SENTENCE, limit: 15 };
+
+  it("gives up at the search's budget, so a model still downloading never holds the search", async () => {
+    const pending = searchByMeaning(() => new Promise(() => undefined), query);
+    await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS);
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it("finds nothing when the engine can't search by meaning", async () => {
+    await expect(
+      searchByMeaning(() => Promise.reject(new Error("no model")), query),
+    ).resolves.toEqual([]);
+    await expect(searchByMeaning(undefined, query)).resolves.toEqual([]);
+  });
+});
+
 /** The window key of each tier of SEARCH's ladder, in order. */
 function ladderKeys() {
   const ladder = getWideningLadder([SEARCH], {
@@ -387,6 +480,8 @@ function searchesOf(predicate: unknown): string[] {
     predicates?: unknown[];
   };
   if (node.kind === "search" && node.query) return [node.query];
+  if (node.kind === "message")
+    return [`messages:${(node as unknown as { ids: string[] }).ids.join(",")}`];
   return (node.predicates ?? []).flatMap(searchesOf);
 }
 

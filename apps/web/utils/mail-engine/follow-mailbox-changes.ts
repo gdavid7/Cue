@@ -1,3 +1,5 @@
+import { isSigningOut, onSigningOut } from "@/utils/signing-out";
+
 const CLOSED_STREAM_RETRY_MS = 30_000;
 // One stream per account. Browsers hold about six connections to a host over
 // HTTP/1.1, and requests need the rest.
@@ -76,6 +78,7 @@ export function followMailboxChanges({
 
   const engaged = () =>
     !suspended &&
+    !isSigningOut() &&
     document.visibilityState !== "hidden" &&
     Date.now() - lastInputAt < USER_IDLE_MS;
 
@@ -146,6 +149,7 @@ export function followMailboxChanges({
     releaseLock = null;
   };
   const syncShown = () => {
+    if (isSigningOut()) return;
     const now = Date.now();
     if (now - lastShownSyncAt < SHOWN_SYNC_MIN_INTERVAL_MS) return;
     lastShownSyncAt = now;
@@ -189,7 +193,7 @@ export function followMailboxChanges({
       stepDown();
       return;
     }
-    if (leading && !connected) onChange();
+    if (leading && !connected && !isSigningOut()) onChange();
   }, DISCONNECTED_POLL_MS);
 
   document.addEventListener("visibilitychange", onVisibilityChange);
@@ -198,8 +202,10 @@ export function followMailboxChanges({
   window.addEventListener("pageshow", onPageShow);
   for (const type of ACTIVITY_EVENTS)
     window.addEventListener(type, onActivity, { passive: true, capture: true });
+  const stopOnSigningOut = onSigningOut(stepDown);
   lead();
   return () => {
+    stopOnSigningOut();
     clearInterval(tick);
     document.removeEventListener("visibilitychange", onVisibilityChange);
     window.removeEventListener("focus", onFocus);

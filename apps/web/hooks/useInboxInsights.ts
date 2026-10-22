@@ -1,5 +1,12 @@
 import groupBy from "lodash/groupBy";
-import { useEffect, useId, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useSWRConfig } from "swr";
 import type { GetInboxInsightsResponse } from "@/app/api/user/inbox-insights/route";
 import { createBrowserCache } from "@/utils/browser-cache";
@@ -25,6 +32,9 @@ const ROW_REQUEST_SPACING_MS = 15_000;
 // A failure with no retry time doubles from here; the open conversation's
 // note is waited on, so it starts sooner.
 const BACKOFF_BASE_MS: Record<Lane, number> = { rows: 5000, open: 1000 };
+
+// A deferral that names no wait: the account's budget refills each minute.
+const DEFERRAL_FALLBACK_MS = 15_000;
 
 // What Cue read from each email, kept in this browser for as long as the
 // email could still be on screen: the server keeps none of it (RD-3).
@@ -54,6 +64,11 @@ type InboxInsightItem = {
   threadId: string;
   messageId: string;
   /**
+   * The item's row in the list on screen, as `setVisibleRows` counts rows,
+   * when some rows have no item; otherwise its place among the items.
+   */
+  index?: number;
+  /**
    * The conversation on screen: asked for at once, at interactive Gmail
    * priority, rather than with the rows once mail has settled.
    */
@@ -64,7 +79,16 @@ type AccountFetcher = (
   key: [string, string],
 ) => Promise<GetInboxInsightsResponse>;
 type Lane = "rows" | "open";
-type Wanted = { threadId: string; messageId: string; pair: string };
+type Wanted = {
+  threadId: string;
+  messageId: string;
+  pair: string;
+  /** The row's place in its reader's list, for asking about what's on screen first. */
+  index: number;
+};
+/** Rows `start` (inclusive) to `end` (exclusive) of a reader's list are on screen. */
+export type VisibleRows = { start: number; end: number };
+type ListVersion = { version: number; keys: string[] };
 type Queue = {
   emailAccountId: string;
   lane: Lane;
@@ -76,6 +100,8 @@ type Queue = {
   timer: ReturnType<typeof setTimeout> | null;
   waitingForMail: boolean;
   failures: number;
+  /** Consecutive answers that said the account's Gmail budget is spent. */
+  deferrals: number;
   /** Requests made only for the account's settings and meetings. */
   metaAttempts: number;
   /** Asked to read the kept rows' drafted replies again (refreshInboxInsights). */
@@ -84,6 +110,14 @@ type Queue = {
 };
 
 const queues = new Map<string, Queue>();
+// What each reader has on screen. Read when a request is built, so a scroll
+// reorders what is asked next without re-rendering the list.
+// A range is kept with the list it was measured on, and only applies while
+// that list hasn't been replaced (a mailbox switch, a reorder).
+const visibleByReader = new Map<
+  string,
+  { rows: VisibleRows; list: ListVersion; measuredOn: number }
+>();
 const attempts = new Map<string, number>();
 const meta = new Map<
   string,
@@ -105,7 +139,9 @@ let mailSettled = false;
  * deferral waits out its Retry-After. The open conversation's item is asked
  * for at once. Rows from different accounts are asked for with their own
  * account, as the combined inbox mixes them. While `enabled` is false
- * nothing is asked for.
+ * nothing is asked for. Items are in screen order; with `setVisibleRows`
+ * the rows on screen and the screenful after them are asked for first, and
+ * the rest after, nearest first.
  */
 export function useInboxInsights(
   items: InboxInsightItem[],
@@ -114,6 +150,11 @@ export function useInboxInsights(
   const { fetcher } = useSWRConfig();
   const readerId = useId();
   const requests = useMemo(() => getInboxInsightRequests(items), [items]);
+  // Rows added below keep the range; any other change replaces the list.
+  const list = useRef<ListVersion>({ version: 0, keys: [] });
+  const keys = items.map((item) => item.key);
+  if (!startsWith(keys, list.current.keys)) list.current.version += 1;
+  list.current.keys = keys;
   const wantedKey = enabled
     ? requests
         .map(
@@ -142,10 +183,32 @@ export function useInboxInsights(
     };
   }, [wantedKey, fetcher, readerId]);
 
+  useEffect(
+    () => () => {
+      visibleByReader.delete(readerId);
+    },
+    [readerId],
+  );
+  const setVisibleRows = useCallback(
+    (rows: VisibleRows) => {
+      visibleByReader.set(readerId, {
+        rows,
+        list: list.current,
+        measuredOn: list.current.version,
+      });
+    },
+    [readerId],
+  );
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: the queues and caches change with storeVersion
   return useMemo(() => {
     if (!enabled)
-      return { data: undefined, error: undefined, isLoading: false };
+      return {
+        data: undefined,
+        error: undefined,
+        isLoading: false,
+        setVisibleRows,
+      };
     const data: Record<string, ThreadInsightData> = {};
     let isLoading = false;
     // Like one request for the page: an error only when every account on
@@ -176,8 +239,8 @@ export function useInboxInsights(
     }
     const failing = [...errors.values()];
     const error = failing.every(Boolean) ? failing[0] : undefined;
-    return { data, error, isLoading };
-  }, [items, enabled, storeVersion]);
+    return { data, error, isLoading, setVisibleRows };
+  }, [items, enabled, storeVersion, setVisibleRows]);
 }
 
 /**
@@ -196,31 +259,31 @@ export function threadInsightItem({
   return { key: threadId, emailAccountId, threadId, messageId, open: true };
 }
 
-/** One request per account, lane and page of rows, ordered so it is stable. */
+/**
+ * One request per account, lane and page of rows, each in screen order so the
+ * rows on screen can be asked for first.
+ */
 export function getInboxInsightRequests(items: InboxInsightItem[]) {
   const byAccount = groupBy(
-    items,
+    items.map((item, index) => ({ ...item, index: item.index ?? index })),
     (item) => `${item.open ? "open" : "rows"}\u0000${item.emailAccountId}`,
   );
   return Object.keys(byAccount)
     .sort()
     .flatMap((group) => {
       const [lane, emailAccountId] = group.split("\u0000") as [Lane, string];
-      const unique = new Map(
-        byAccount[group].map((item) => [
-          item.key,
-          {
-            key: item.key,
-            threadId: item.threadId,
-            messageId: item.messageId,
-            pair: `${encodeURIComponent(item.threadId)}:${encodeURIComponent(item.messageId)}`,
-          },
-        ]),
-      );
-      const sorted = [...unique.values()].sort((a, b) =>
-        a.pair.localeCompare(b.pair),
-      );
-      return chunk(sorted, CHUNK_SIZE).map((chunkItems) => ({
+      const unique = new Map<string, Wanted & { key: string }>();
+      for (const item of byAccount[group]) {
+        if (unique.has(item.key)) continue;
+        unique.set(item.key, {
+          key: item.key,
+          threadId: item.threadId,
+          messageId: item.messageId,
+          pair: `${encodeURIComponent(item.threadId)}:${encodeURIComponent(item.messageId)}`,
+          index: item.index,
+        });
+      }
+      return chunk([...unique.values()], CHUNK_SIZE).map((chunkItems) => ({
         emailAccountId,
         lane,
         items: chunkItems,
@@ -259,6 +322,7 @@ export function resetInboxInsightRequestsForTesting() {
     if (queue.timer) clearTimeout(queue.timer);
   }
   queues.clear();
+  visibleByReader.clear();
   attempts.clear();
   answered.clear();
   meta.clear();
@@ -289,11 +353,7 @@ function pump(queue: Queue) {
   }
   const { emailAccountId, fetcher } = queue;
   if (!fetcher) return;
-  const wanted = [
-    ...new Map(
-      [...queue.readers.values()].flat().map((item) => [item.pair, item]),
-    ).values(),
-  ];
+  const wanted = byScreenPriority(queue.readers);
   const pending = wanted.filter(
     (item) =>
       !keptExtraction(emailAccountId, item.messageId) &&
@@ -315,7 +375,13 @@ function pump(queue: Queue) {
   if (needsMeta) queue.metaAttempts += 1;
   queue.refresh = false;
   const batch = pending.length
-    ? pending.slice(0, MAX_NEW_PER_REQUEST)
+    ? pending.slice(
+        0,
+        firstRequestSize(
+          pending.length,
+          pending.filter((item) => item.onScreen).length,
+        ),
+      )
     : kept.slice(0, CHUNK_SIZE);
   // Only the meeting list and settings are wanted when every email is kept;
   // naming them spares the server reading them.
@@ -365,14 +431,31 @@ function pump(queue: Queue) {
         }
       }
       queue.failures = 0;
+      queue.deferrals = 0;
       queue.error = undefined;
       queue.nextAtMs =
         Date.now() + (queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0);
     })
     .catch((error: unknown) => {
+      const status = (error as { status?: number } | null)?.status;
+      if (isDeferral(error)) {
+        // The account's Gmail budget is spent for now: nothing went wrong, so
+        // the rows stay queued with their tries back, and are asked for once
+        // the window has passed, never sooner than the rows' usual spacing.
+        queue.deferrals += 1;
+        for (const item of batch) refundAttempt({ emailAccountId, ...item });
+        const hint = getRetryHint(
+          error as { status?: number; retryAfterMs?: number },
+          queue.deferrals,
+        );
+        const waitMs = hint.kind === "wait" ? hint.ms : DEFERRAL_FALLBACK_MS;
+        queue.nextAtMs =
+          Date.now() +
+          Math.max(waitMs, queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0);
+        return;
+      }
       queue.failures += 1;
       queue.error = error;
-      const status = (error as { status?: number } | null)?.status;
       // A rate limit is asked about once more, after its window.
       if (status === 429) {
         for (const item of batch) {
@@ -416,6 +499,7 @@ function queueFor(emailAccountId: string, lane: Lane) {
     timer: null,
     waitingForMail: false,
     failures: 0,
+    deferrals: 0,
     metaAttempts: 0,
     refresh: false,
     error: undefined,
@@ -438,6 +522,20 @@ function countAttempt(
 ) {
   const key = attemptKey(item);
   attempts.set(key, to ?? (attempts.get(key) ?? 0) + 1);
+}
+
+function refundAttempt(item: { emailAccountId: string; messageId: string }) {
+  const key = attemptKey(item);
+  const count = attempts.get(key) ?? 0;
+  if (count > 0) attempts.set(key, count - 1);
+}
+
+function isDeferral(error: unknown) {
+  const { status, retryAfterMs } = (error ?? {}) as {
+    status?: number;
+    retryAfterMs?: number;
+  };
+  return status === 503 && typeof retryAfterMs === "number";
 }
 
 function keptExtraction(emailAccountId: string, messageId: string) {
@@ -502,6 +600,62 @@ function toThreadInsight({
       : null,
     reply,
   };
+}
+
+/**
+ * Every reader's rows, once each: those on screen and the screenful after
+ * them first, in screen order, then the rest by how far they are from it.
+ */
+function byScreenPriority(readers: Queue["readers"]) {
+  const ranked = new Map<
+    string,
+    Wanted & { rank: number; onScreen: boolean }
+  >();
+  for (const [readerId, items] of readers) {
+    const measured = visibleByReader.get(readerId);
+    const visible =
+      measured && measured.measuredOn === measured.list.version
+        ? measured.rows
+        : undefined;
+    for (const item of items) {
+      const placed = placeOnScreen(item.index, visible);
+      const existing = ranked.get(item.pair);
+      if (!existing || placed.rank < existing.rank)
+        ranked.set(item.pair, { ...item, ...placed });
+    }
+  }
+  return [...ranked.values()].sort((a, b) => a.rank - b.rank);
+}
+
+function placeOnScreen(index: number, visible: VisibleRows | undefined) {
+  if (!visible || visible.end <= visible.start)
+    return { rank: index, onScreen: false };
+  const end = visible.end + (visible.end - visible.start);
+  if (index >= visible.start && index < end)
+    return { rank: index - visible.start, onScreen: true };
+  const distance = index < visible.start ? visible.start - index : index - end;
+  return { rank: end - visible.start + distance, onScreen: false };
+}
+
+/**
+ * The rows on screen go in a request of their own size when that costs no
+ * extra request: each request also reads the account's calendar and counts
+ * against its rate limit, so the page still takes as many requests as it
+ * did in pages of MAX_NEW_PER_REQUEST.
+ */
+function firstRequestSize(pendingCount: number, onScreenCount: number) {
+  if (!onScreenCount) return MAX_NEW_PER_REQUEST;
+  const requests = Math.ceil(pendingCount / MAX_NEW_PER_REQUEST);
+  const smallestWithoutExtraRequest =
+    pendingCount - MAX_NEW_PER_REQUEST * (requests - 1);
+  return Math.min(
+    MAX_NEW_PER_REQUEST,
+    Math.max(onScreenCount, smallestWithoutExtraRequest),
+  );
+}
+
+function startsWith(keys: string[], prefix: string[]) {
+  return prefix.every((key, index) => keys[index] === key);
 }
 
 function chunk<T>(items: T[], size: number): T[][] {

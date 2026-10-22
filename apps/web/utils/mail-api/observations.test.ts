@@ -113,6 +113,49 @@ describe("parsedMessageMetadata", () => {
     expect(metadata.roles).toEqual([]);
     expect(metadata.read).toBe(false);
   });
+
+  it("keeps the Message-ID header, which is the same in every mailbox", () => {
+    const message = (messageId: string | undefined) =>
+      ({
+        id: "m4",
+        threadId: "t4",
+        historyId: "1",
+        date: "2026-01-01T00:00:00.000Z",
+        subject: "Hello",
+        snippet: "Hi",
+        labelIds: ["INBOX"],
+        headers: {
+          from: "ada@example.com",
+          to: "me@example.com",
+          date: "",
+          "message-id": messageId,
+        },
+        inline: [],
+      }) as ParsedMessage;
+
+    expect(
+      parsedMessageMetadata(message(" <abc@mail.example> ")).internetMessageId,
+    ).toBe("<abc@mail.example>");
+    // Missing, as on some drafts, or too long to be one: left out, so the
+    // stored one is kept and the page still syncs.
+    expect(
+      parsedMessageMetadata(message("")).internetMessageId,
+    ).toBeUndefined();
+    expect(
+      parsedMessageMetadata(message(undefined)).internetMessageId,
+    ).toBeUndefined();
+    const oversized = parsedMessagePatch(
+      "account",
+      "google",
+      message(`<${"x".repeat(2000)}@mail.example>`),
+    );
+    expect(providerChangeSchema.parse(oversized)).toMatchObject({
+      fields: { subject: "Hello" },
+    });
+    expect(
+      "internetMessageId" in (oversized as { fields: object }).fields,
+    ).toBe(false);
+  });
 });
 
 describe("parsedMessageBodyObservation", () => {

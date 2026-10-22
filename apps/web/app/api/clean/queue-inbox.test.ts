@@ -23,7 +23,6 @@ const job: CleanInboxQueueBody = {
   emailAccountId: "account-1",
   jobId: "job-1",
   action: CleanAction.ARCHIVE,
-  instructions: "",
   skips: { reply: true, starred: true },
   markedDoneLabelId: "done-label",
   processedLabelId: "processed-label",
@@ -37,6 +36,26 @@ describe("queueCleanInboxThreads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getLabelById.mockResolvedValue({ threadsTotal: 50 });
+  });
+
+  it("keeps the person's free-text instructions out of every queued job", async () => {
+    getThreadsWithQuery.mockResolvedValueOnce({ threads: [{ id: "t1" }] });
+
+    await queueCleanInboxThreads({
+      ...job,
+      instructions: "Keep anything from boss@example.com",
+      emailProvider,
+      logger,
+    } as never);
+
+    const queued = vi
+      .mocked(bulkPublishToQstash)
+      .mock.calls.flatMap(([{ items }]) => items.map((item) => item.body));
+    expect(queued).toHaveLength(1);
+    for (const body of queued) {
+      expect(body).not.toHaveProperty("instructions");
+      expect(JSON.stringify(body)).not.toContain("@");
+    }
   });
 
   it("reads each page after the last instead of the first page again", async () => {

@@ -23,6 +23,12 @@ const OUT_OF_WINDOW = -2;
 const CONDITION_MET = 1;
 const CONDITION_UNMET = -2;
 const LOW_PRIORITY = -4;
+// How much a conversation's meaning counts, from the on-device model: up to
+// a subject match at a similarity of 1, nothing at the floor. Only what the
+// model clearly finds close leads alongside the search's own matches.
+const SEMANTIC_WEIGHT = 4;
+const SEMANTIC_FLOOR = 0.3;
+const SEMANTIC_LEAD_SIMILARITY = 0.4;
 // Recency only settles near ties: worth at most this, halving every month.
 const MAX_RECENCY = 0.5;
 const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -61,6 +67,12 @@ export type CueRankingContext = Pick<
   searches: string[];
   /** The account's labels, for label conditions and Cue's own sorting. */
   labels: SearchLabel[];
+  /**
+   * How close each conversation is to the search in meaning, by id, for
+   * those the on-device index found. Absent without vectors. Only
+   * `rankWithWidened` reads it.
+   */
+  similarity?: ReadonlyMap<string, number>;
 };
 
 /**
@@ -76,30 +88,50 @@ export function rankCueFoundThreads<T extends ListThread>(
   context: CueRankingContext,
 ): T[] {
   if (threads.length < 2) return threads;
-  return sortByScore(scoreThreads(threads, context));
+  return sortByScore(
+    scoreThreads(threads, { ...context, similarity: undefined }),
+  );
 }
 
 /**
- * Cue's matches with what a wider tier added beyond them. The first
- * search's matches lead, since they meet all of it, except those it
- * demotes (a promotion or newsletter the search didn't ask for): those
- * compete with the tier's on how well they fit, so mail that fits the
- * search better comes first even when only a wider search found it.
+ * Cue's matches with what a wider tier, and the search by meaning, added
+ * beyond them. The first search's matches lead, since they meet all of it,
+ * except those it demotes (a promotion or newsletter the search didn't ask
+ * for): those compete with the rest on how well they fit, so mail that fits
+ * the search better comes first even when only a wider search found it.
+ * Meaning stands in for the words the rest lacks, so it ranks only them;
+ * the first search's matches keep their order. Mail found by meaning alone
+ * must still meet the search's sender, dates and conditions, and leads only
+ * when the model finds it clearly close.
  */
 export function rankWithWidened<T extends ListThread>(
   primary: T[],
   widened: T[],
   context: CueRankingContext,
+  bySimilarity: T[] = [],
 ): T[] {
-  if (!widened.length) return rankCueFoundThreads(primary, context);
-  const scored = scoreThreads([...primary, ...widened], context);
-  const leading = scored.filter(
-    (entry) => entry.index < primary.length && !entry.demoted,
+  const found = new Set([...primary, ...widened].map((thread) => thread.id));
+  const semanticOnly = bySimilarity.filter((thread) => !found.has(thread.id));
+  if (!widened.length && !semanticOnly.length)
+    return rankCueFoundThreads(primary, context);
+  const semanticFrom = primary.length + widened.length;
+  const primaryIds = new Set(primary.map((thread) => thread.id));
+  const similarity = new Map(
+    [...(context.similarity ?? [])].filter(([id]) => !primaryIds.has(id)),
   );
-  const rest = scored.filter(
-    (entry) => entry.index >= primary.length || entry.demoted,
-  );
-  return [...sortByScore(leading), ...sortByScore(rest)];
+  const scored = scoreThreads([...primary, ...widened, ...semanticOnly], {
+    ...context,
+    similarity,
+  }).filter((entry) => entry.index < semanticFrom || entry.meetsStructure);
+  const leads = (entry: ScoredThread<T>) =>
+    !entry.demoted &&
+    (entry.index < primary.length ||
+      (entry.index >= semanticFrom &&
+        entry.similarity >= SEMANTIC_LEAD_SIMILARITY));
+  return [
+    ...sortByScore(scored.filter(leads)),
+    ...sortByScore(scored.filter((entry) => !leads(entry))),
+  ];
 }
 
 type ScoredThread<T> = {
@@ -108,6 +140,9 @@ type ScoredThread<T> = {
   latestMs: number;
   score: number;
   demoted: boolean;
+  similarity: number;
+  /** Meets the search's sender, dates and conditions, as far as the list shows. */
+  meetsStructure: boolean;
 };
 
 function scoreThreads<T extends ListThread>(
@@ -117,7 +152,8 @@ function scoreThreads<T extends ListThread>(
   const facets = readFacets(context);
   const lowPriorityIds = new Set(LOW_PRIORITY_LABEL_IDS);
   for (const label of context.labels) {
-    if (isLowPriorityLabelName(label.name)) lowPriorityIds.add(label.id);
+    if (isLowPriorityLabelName(label.name))
+      lowPriorityIds.add(labelKey(label.accountId, label.id));
   }
   const asksForLowPriority = facets.conditions.some((condition) =>
     mentionsLabel(condition, lowPriorityIds),
@@ -125,14 +161,17 @@ function scoreThreads<T extends ListThread>(
   const nowMs = context.now.getTime();
   return threads.map((thread, index) => {
     const fields = threadFields(thread);
+    const similarity = context.similarity?.get(thread.id) ?? 0;
     return {
       thread,
       index,
       latestMs: fields.latestMs,
+      similarity,
       ...scoreThread(fields, facets, {
         lowPriorityIds,
         asksForLowPriority,
         nowMs,
+        similarity,
       }),
     };
   });
@@ -163,6 +202,8 @@ type ThreadFields = {
   labelIds: Set<string>;
   hasAttachments: boolean | undefined;
   latestMs: number;
+  /** A row of a view across accounts, whose label ids are its account's. */
+  accountId: string | undefined;
 };
 
 function scoreThread(
@@ -172,13 +213,16 @@ function scoreThread(
     lowPriorityIds,
     asksForLowPriority,
     nowMs,
+    similarity,
   }: {
     lowPriorityIds: Set<string>;
     asksForLowPriority: boolean;
     nowMs: number;
+    similarity: number;
   },
-): { score: number; demoted: boolean } {
+): { score: number; demoted: boolean; meetsStructure: boolean } {
   let score = 0;
+  let meetsStructure = true;
   for (const group of facets.groups) {
     let best = 0;
     for (const term of group) {
@@ -195,6 +239,7 @@ function scoreThread(
     matchesWord(field === "from" ? fields.from : fields.to, value),
   );
   if (fromSender) score += SENDER_MATCH;
+  else if (facets.people.length) meetsStructure = false;
 
   if (facets.window) {
     const { afterMs, beforeMs } = facets.window;
@@ -202,15 +247,27 @@ function scoreThread(
       (afterMs === null || fields.latestMs >= afterMs) &&
       (beforeMs === null || fields.latestMs < beforeMs);
     score += inside ? IN_WINDOW : OUT_OF_WINDOW;
+    if (!inside) meetsStructure = false;
   }
 
   for (const condition of facets.conditions) {
     const met = conditionMet(condition, fields);
     if (met === true) score += CONDITION_MET;
-    if (met === false) score += CONDITION_UNMET;
+    if (met === false) {
+      score += CONDITION_UNMET;
+      meetsStructure = false;
+    }
   }
 
-  const lowPriority = [...fields.labelIds].some((id) => lowPriorityIds.has(id));
+  score +=
+    SEMANTIC_WEIGHT *
+    Math.max(0, (similarity - SEMANTIC_FLOOR) / (1 - SEMANTIC_FLOOR));
+
+  const lowPriority = [...fields.labelIds].some(
+    (id) =>
+      lowPriorityIds.has(id) ||
+      lowPriorityIds.has(labelKey(fields.accountId, id)),
+  );
   const demoted = lowPriority && !asksForLowPriority && !fromSender;
   if (demoted) score += LOW_PRIORITY;
 
@@ -218,6 +275,7 @@ function scoreThread(
   return {
     score: score + MAX_RECENCY * 0.5 ** (ageMs / RECENCY_HALF_LIFE_MS),
     demoted,
+    meetsStructure,
   };
 }
 
@@ -302,6 +360,7 @@ function threadFields(thread: ListThread): ThreadFields {
     labelIds,
     hasAttachments: thread.hasAttachments,
     latestMs,
+    accountId: "account" in thread ? thread.account.id : undefined,
   };
 }
 
@@ -355,7 +414,10 @@ function mentionsLabel(predicate: MailPredicate, ids: Set<string>): boolean {
     case "any":
       return predicate.predicates.some((child) => mentionsLabel(child, ids));
     case "membership":
-      return ids.has(predicate.id);
+      return (
+        ids.has(predicate.id) ||
+        ids.has(labelKey(predicate.accountId, predicate.id))
+      );
     case "role":
       return predicate.role === "spam";
     case "mailbox":
@@ -363,6 +425,12 @@ function mentionsLabel(predicate: MailPredicate, ids: Set<string>): boolean {
     default:
       return false;
   }
+}
+
+// Label ids are each account's own (Gmail's Label_1 exists in every account),
+// so a view across accounts keys them by account.
+function labelKey(accountId: string | undefined, id: string) {
+  return accountId ? `${accountId}:${id}` : id;
 }
 
 function isLowPriorityLabelName(name: string) {
