@@ -22,6 +22,7 @@ describe("proxy matcher", () => {
   it("runs for mail links, to keep them through login", () => {
     expect(matchesProxy("/mail/u/0/inbox")).toBe(true);
     expect(matchesProxy("/mail/u/1/label/receipts/thread-1")).toBe(true);
+    expect(matchesProxy("/mail/u/0/inbox/a.b")).toBe(true);
   });
 });
 

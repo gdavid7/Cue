@@ -1,18 +1,27 @@
 import type { MessageKey } from "@inboxzero/mail-core/identities";
+import type { MessageAttachmentDescriptor } from "@inboxzero/mail-core/messages";
 import type { SqlTransaction, SqlValue } from "./driver";
 import { decodeMessageBody, type MessageBodyCodec } from "./message-body-codec";
-import { searchableBody, searchableText } from "./search-text";
+import { parseStoredAttachments } from "./store-read-utils";
+import {
+  searchableAttachments,
+  searchableBody,
+  searchableText,
+} from "./search-text";
 
 const BACKLOG_BATCH_ROWS = 100;
 
 // contentless_delete (SQLite 3.43+) lets rows be replaced and removed by rowid
-// without the index keeping the text it tokenized.
+// without the index keeping the text it tokenized. Words are indexed as
+// written, not stemmed, so a prefix typed past a word's stem still matches;
+// the query adds word forms instead (searchMatchQuery).
 const MESSAGE_FTS_SQL = `
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
   subject,
   preview,
   from_address,
   body,
+  attachments,
   content = '',
   contentless_delete = 1,
   tokenize = 'unicode61'
@@ -21,12 +30,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
 
 // Rebuilds the index empty whenever what it stores changes: 0006 dropped the
 // index's own copy of every message's text, 0007 replaced raw HTML bodies
-// with their visible text and split unspaced scripts into characters.
+// with their visible text and split unspaced scripts into characters, 0012
+// joined hyphenated compounds and added attachment names.
 // Dropping is fast; indexSearchBacklog re-adds rows in engine-paced batches
 // so opening the mailbox never waits on a full rebuild.
 export async function migrateMessageSearchIndex(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 7",
+    "SELECT 1 FROM schema_migrations WHERE id = 13",
   );
   if (applied.length) return;
   const rebuilt = await withSearchIndex(tx, "rebuild_fts", async () => {
@@ -37,7 +47,7 @@ export async function migrateMessageSearchIndex(tx: SqlTransaction) {
   });
   if (!rebuilt) return;
   await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (7, '0007-clean-text-message-search')",
+    "INSERT INTO schema_migrations(id, name) VALUES (13, '0013-stemmed-message-search')",
   );
 }
 
@@ -63,7 +73,7 @@ export async function indexSearchBacklog(
   let last: MessageKey | null = null;
   const indexed = await withSearchIndex(tx, "index_backlog", async () => {
     const batch = await tx.query(
-      `SELECT c.account_id, c.message_id, c.text, c.html,
+      `SELECT c.account_id, c.message_id, c.text, c.html, c.attachments_json,
               m.subject, m.preview, m.from_address
        FROM message_content c
        JOIN messages m ON m.account_id = c.account_id AND m.message_id = c.message_id
@@ -80,6 +90,7 @@ export async function indexSearchBacklog(
       batch.map(async (row) => ({
         text: await decodeMessageBody(codec, row.text),
         html: await decodeMessageBody(codec, row.html),
+        attachments: parseStoredAttachments(row.attachments_json),
       })),
     );
     last = await insertSearchRows(tx, batch, bodies);
@@ -198,7 +209,11 @@ export async function clearSearchIndex(tx: SqlTransaction) {
   await markSearchIndexIncomplete(tx);
 }
 
-type MessageBody = { text: string | null; html: string | null };
+type MessageBody = {
+  text: string | null;
+  html: string | null;
+  attachments?: MessageAttachmentDescriptor[];
+};
 
 type BacklogBatch =
   | { indexed: false }
@@ -227,7 +242,7 @@ async function writeSearchRow(
     return;
   }
   await tx.execute(
-    "INSERT INTO message_fts(subject, preview, from_address, body) VALUES (?, ?, ?, ?)",
+    "INSERT INTO message_fts(subject, preview, from_address, body, attachments) VALUES (?, ?, ?, ?, ?)",
     searchColumns(message, content),
   );
   const [row] = await tx.query("SELECT last_insert_rowid() AS id");
@@ -253,8 +268,8 @@ async function insertSearchRows(
   );
   const base = Number(top?.rowid ?? 0);
   await tx.execute(
-    `INSERT INTO message_fts(rowid, subject, preview, from_address, body)
-     VALUES ${batch.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    `INSERT INTO message_fts(rowid, subject, preview, from_address, body, attachments)
+     VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
     batch.flatMap((row, index) => [
       base + index + 1,
       ...searchColumns(row, bodies[index]),
@@ -284,6 +299,7 @@ function searchColumns(
     searchableText(String(message.preview ?? "")),
     searchableText(String(message.from_address ?? "")),
     searchableBody(content),
+    searchableAttachments(content.attachments ?? []),
   ];
 }
 

@@ -395,14 +395,60 @@ describe("searchLocalMail against the local store", () => {
     }
   });
 
+  it("finds mail to and from a person you write to by their name", async () => {
+    const { client, close } = await engineWith([
+      message("to-dana", "c-1", {
+        from: "me@example.com",
+        to: ["Dana Ruiz <dana@acme.com>"],
+        receivedAtMs: Date.parse("2026-10-01T12:00:00Z"),
+        roles: ["sent"],
+      }),
+      message("from-dana", "c-1", {
+        from: "dana@acme.com",
+        receivedAtMs: Date.parse("2026-10-02T12:00:00Z"),
+      }),
+      message("other", "c-2", {
+        from: "lee@acme.com",
+        receivedAtMs: Date.parse("2026-10-03T12:00:00Z"),
+      }),
+    ]);
+    try {
+      const result = await searchLocalMail({
+        client,
+        accountId: ACCOUNT,
+        query: "ruiz",
+        limit: 20,
+        now: NOW,
+      });
+
+      expect(
+        result.status === "ok" && result.messages.map((m) => m.id),
+      ).toEqual(["from-dana", "to-dana"]);
+    } finally {
+      await close();
+    }
+  });
+
   it("finds a sender's mail among ten thousand messages in well under 100 ms", async () => {
     const { client, close } = await engineWith(
       Array.from({ length: 10_000 }, (_, i) =>
-        message(`m-${i}`, `c-${i}`, {
-          subject: `Message ${i}`,
-          from: i % 500 === 0 ? "jobs@acme.com" : `sender${i % 97}@example.com`,
-          receivedAtMs: Date.parse("2025-01-01T00:00:00Z") + i * 60_000,
-        }),
+        i % 50 === 25
+          ? // Mail you sent, so its people are found by their names.
+            message(`m-${i}`, `c-${i}`, {
+              subject: `Message ${i}`,
+              from: "me@example.com",
+              to: [`Dana Person${i % 7} <dana${i % 7}@example.com>`],
+              receivedAtMs: Date.parse("2025-01-01T00:00:00Z") + i * 60_000,
+              roles: ["sent"],
+            })
+          : message(`m-${i}`, `c-${i}`, {
+              subject: `Message ${i}`,
+              from:
+                i % 500 === 0
+                  ? "jobs@acme.com"
+                  : `Sender ${i % 97} <sender${i % 97}@example.com>`,
+              receivedAtMs: Date.parse("2025-01-01T00:00:00Z") + i * 60_000,
+            }),
       ),
     );
     try {
@@ -431,14 +477,39 @@ describe("searchLocalMail against the local store", () => {
         now: NOW,
       });
       const wordsElapsedMs = performance.now() - wordsStartedAt;
+      const nameStartedAt = performance.now();
+      const name = await searchLocalMail({
+        client,
+        accountId: ACCOUNT,
+        query: "dan",
+        limit: 20,
+        now: NOW,
+      });
+      const nameElapsedMs = performance.now() - nameStartedAt;
+      const nameAndWordStartedAt = performance.now();
+      const nameAndWord = await searchLocalMail({
+        client,
+        accountId: ACCOUNT,
+        query: "person3 message",
+        limit: 20,
+        now: NOW,
+      });
+      const nameAndWordElapsedMs = performance.now() - nameAndWordStartedAt;
 
       expect(result.status === "ok" && result.messages).toHaveLength(20);
       expect(words.status === "ok" && words.messages[0]?.id).toBe("m-9999");
+      expect(name.status === "ok" && name.messages[0]?.id).toBe("m-9975");
+      expect(name.status === "ok" && name.messages).toHaveLength(20);
+      expect(nameAndWord.status === "ok" && nameAndWord.messages).toHaveLength(
+        20,
+      );
       console.info(
-        `Local assistant search over 10,000 messages: sender ${elapsedMs.toFixed(1)} ms, words ${wordsElapsedMs.toFixed(1)} ms`,
+        `Local assistant search over 10,000 messages: sender ${elapsedMs.toFixed(1)} ms, words ${wordsElapsedMs.toFixed(1)} ms, name ${nameElapsedMs.toFixed(1)} ms, name and word ${nameAndWordElapsedMs.toFixed(1)} ms`,
       );
       expect(elapsedMs).toBeLessThan(100);
       expect(wordsElapsedMs).toBeLessThan(100);
+      expect(nameElapsedMs).toBeLessThan(100);
+      expect(nameAndWordElapsedMs).toBeLessThan(100);
     } finally {
       await close();
     }
@@ -782,6 +853,7 @@ function message(
   fields: {
     subject?: string;
     from?: string;
+    to?: string[];
     receivedAtMs: number;
     read?: boolean;
     roles?: Array<"inbox" | "sent" | "draft" | "trash" | "spam">;
@@ -801,7 +873,7 @@ function message(
       subject: fields.subject ?? `Subject ${messageId}`,
       preview: `Preview ${messageId}`,
       from: fields.from ?? "ada@example.com",
-      to: ["me@example.com"],
+      to: fields.to ?? ["me@example.com"],
       cc: [],
       receivedAtMs: fields.receivedAtMs,
       read: fields.read ?? true,

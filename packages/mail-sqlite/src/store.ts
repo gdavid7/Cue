@@ -37,11 +37,7 @@ import type {
   LocalRevision,
   MessageKey,
 } from "@inboxzero/mail-core/identities";
-import {
-  messageAttachmentDescriptorSchema,
-  type MessageAttachmentDescriptor,
-  type MessageMetadata,
-} from "@inboxzero/mail-core/messages";
+import type { MessageMetadata } from "@inboxzero/mail-core/messages";
 import {
   DEFERRED_DISPATCH_MIN_HOLD_MS,
   EXECUTABLE_OPERATION_STATUSES,
@@ -93,6 +89,7 @@ import {
   connectionStatus,
   metadataFromEffective,
   coversWholeMailbox,
+  parseStoredAttachments,
   readCoverage,
   readRevision,
 } from "./store-read-utils";
@@ -3506,6 +3503,7 @@ async function insertMessageContent(
     html: body.html,
     text: storedTextPart(body.html, body.text),
   };
+  const attachmentsJson = JSON.stringify(body.attachments ?? []);
   await tx.execute(
     `INSERT INTO message_content(account_id, message_id, version, html, text, attachments_json, is_meeting_invitation)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -3519,13 +3517,16 @@ async function insertMessageContent(
       body.version,
       await encodeMessageBody(codec, stored.html),
       await encodeMessageBody(codec, stored.text),
-      JSON.stringify(body.attachments ?? []),
+      attachmentsJson,
       body.isMeetingInvitation ? 1 : 0,
     ],
   );
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
-  await indexMessageContent(tx, body.key, stored);
+  await indexMessageContent(tx, body.key, {
+    ...stored,
+    attachments: parseStoredAttachments(attachmentsJson),
+  });
 }
 
 type ReadOrder = {
@@ -3879,22 +3880,6 @@ function parseOperationPayload(value: import("./driver").SqlValue) {
       conversationIds: [],
       messageIds: [],
     };
-  }
-}
-
-function parseStoredAttachments(
-  value: import("./driver").SqlValue,
-): MessageAttachmentDescriptor[] {
-  if (value === null || value === undefined) return [];
-  try {
-    const parsed = JSON.parse(String(value)) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      const result = messageAttachmentDescriptorSchema.safeParse(item);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
   }
 }
 

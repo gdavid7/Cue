@@ -211,7 +211,7 @@ async function mailbox(
 // indexed as raw markup.
 async function rebuildAsRawHtmlIndex(tx: SqlTransaction) {
   await tx.exec(
-    "DROP TABLE message_fts; DELETE FROM message_fts_keys; DELETE FROM schema_migrations WHERE id = 7;",
+    "DROP TABLE message_fts; DELETE FROM message_fts_keys; DELETE FROM schema_migrations WHERE id IN (7, 13);",
   );
   await tx.exec(RAW_HTML_FTS_SQL);
   const rows = await tx.query(

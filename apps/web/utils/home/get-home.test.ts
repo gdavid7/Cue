@@ -485,6 +485,21 @@ describe("getHomeData", () => {
     expect(home.alsoInInbox).toEqual([]);
   });
 
+  it("names the labels Cue files under, so the browser's own inbox can leave filed mail out too", async () => {
+    const home = await run(mockProvider({}));
+
+    expect(home.handledLabelIds).toEqual(["Label_Newsletter", "Label_Receipt"]);
+  });
+
+  it("names no filing labels when the labels didn't load", async () => {
+    const provider = mockProvider({});
+    provider.getLabels.mockRejectedValue(new Error("Bad request"));
+
+    const home = await run(provider);
+
+    expect(home.handledLabelIds).toEqual([]);
+  });
+
   it("counts the emails Cue checked and filed since the user's midnight, from its own records", async () => {
     checkedMessages.mockResolvedValue([
       { messageId: "m1" },

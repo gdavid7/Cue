@@ -78,6 +78,8 @@ export type ThreadRowProps = {
   insightData?: ThreadInsightData;
   /** Background of the marker naming a combined-inbox row's account. */
   accountColorClassName?: string;
+  /** The row is in its account's inbox, which its account marker then names. */
+  inInbox?: boolean;
   /** Hover actions on wide rows; touch layouts use selection instead. */
   rowActions?: ThreadRowActionHandlers;
 };
@@ -101,6 +103,7 @@ export const ThreadRow = memo(function ThreadRow({
   sentMessageOpen,
   insightData,
   accountColorClassName,
+  inInbox,
   rowActions,
 }: ThreadRowProps) {
   // Like Gmail, an unsent draft is marked on the row but doesn't stand in for
@@ -215,6 +218,7 @@ export const ThreadRow = memo(function ThreadRow({
               <AccountMarker
                 account={account}
                 colorClassName={accountColorClassName}
+                inInbox={inInbox}
               />
             ) : null
           }
@@ -405,15 +409,18 @@ export function InsightText({ line }: { line: InsightLine }) {
 export function AccountMarker({
   account,
   colorClassName,
+  inInbox = false,
 }: {
   account: { email: string };
   colorClassName?: string;
+  /** The row is the account's inbox mail, so the marker names an inbox. */
+  inInbox?: boolean;
 }) {
   const initial = account.email.trim().at(0)?.toUpperCase() || "@";
 
   return (
     <span
-      aria-label={`Inbox: ${account.email}`}
+      aria-label={`${inInbox ? "Inbox" : "Account"}: ${account.email}`}
       className={cn(
         "flex size-5 shrink-0 items-center justify-center rounded-full font-medium text-[10px] text-white",
         colorClassName ?? "bg-muted-foreground",

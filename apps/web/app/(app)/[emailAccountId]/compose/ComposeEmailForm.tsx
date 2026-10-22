@@ -665,6 +665,11 @@ function ComposeEmailFormContent({
     editorRef,
     emailAccountId: selectedEmailAccountId,
     threadId: replyingToEmail?.threadId,
+    // A forward answers no one, so it teaches no reply memories.
+    replyToMessageId:
+      draftMode === "forward"
+        ? undefined
+        : (draftKeyMessageId ?? replyingToEmail?.messageId),
     getEnvelope: () => ({
       to: getValues("to") || undefined,
       subject: getValues("subject") || undefined,
@@ -1603,11 +1608,12 @@ function ComposeEmailFormContent({
             attachments: attachmentsRef.current.flatMap(toAttachmentReference),
             online,
             threadId: readerThreadId,
-            onQueued: async () => {
+            onQueued: async (operationId) => {
               deliveryAccepted = true;
               showDraftAgain = hideSendingDraftMessages(
                 selectedEmailAccountId,
                 draftMessageIds,
+                operationId,
               );
               if (replyingToEmail?.threadId?.trim()) {
                 await mutate([

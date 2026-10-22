@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ReplyMemory } from "@/generated/prisma/client";
-import { getUserInfoPrompt } from "@/utils/ai/helpers";
+import { escapePromptTags, getUserInfoPrompt } from "@/utils/ai/helpers";
 import { createGenerateObject } from "@/utils/llms";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
@@ -146,7 +146,7 @@ export async function selectRelevantReplyMemoriesWithLlmStrict({
   emailAccount: EmailAccountWithAI;
 }): Promise<string[]> {
   const prompt = `<incoming_email>
-${truncate(emailContent, MAX_EMAIL_CONTENT_LENGTH)}
+${escapePromptTags(truncate(emailContent, MAX_EMAIL_CONTENT_LENGTH))}
 </incoming_email>
 
 <candidate_memories>

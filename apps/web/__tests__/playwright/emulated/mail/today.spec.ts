@@ -3,7 +3,12 @@ import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
-import { readLatestMailMutation, withClient } from "./mail-test-helpers";
+import {
+  openMail,
+  readLatestMailMutation,
+  waitForMetadataCoverage,
+  withClient,
+} from "./mail-test-helpers";
 
 // Seeded inbox conversations, put in Today's "Needs reply" lane by a tracker.
 const ARCHIVE_THREAD = "thr_playwright_archive";
@@ -54,6 +59,48 @@ test("archives a conversation from Today and restores it with undo", async ({
   await page.keyboard.press("z");
   await expect(option).toBeVisible();
   await expectEngineMutation(page, emailAccountId, "unarchive");
+});
+
+test("a first visit shows the inbox from local mail while Today loads", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const { emailAccountId } = await openMail(page);
+  await waitForMetadataCoverage(page);
+  // Today's answer is held, as Gmail can take seconds to give it.
+  let release = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/user/home*", async (route) => {
+    await released;
+    await route.continue();
+  });
+
+  await page.goto(`/${emailAccountId}/home`, {
+    waitUntil: "domcontentloaded",
+  });
+  const inbox = page.getByRole("listbox", { name: "Also in your inbox" });
+  await expect(inbox.getByRole("option").first()).toBeVisible({
+    timeout: 60_000,
+  });
+  const needsReply = page.getByRole("listbox", { name: "Needs reply" });
+  await expect(needsReply).toHaveCount(0);
+  await capturePlaywrightCheckpoint(page, testInfo, "today-local-inbox");
+
+  release();
+  await expect(needsReply).toBeVisible({ timeout: 60_000 });
+  // Each conversation shows once: what needs a reply leaves the rest.
+  await expect(
+    needsReply.locator(`[data-today-thread="${REPLY_THREAD}"]`),
+  ).toHaveCount(1);
+  await expect(
+    inbox.locator(`[data-today-thread="${REPLY_THREAD}"]`),
+  ).toHaveCount(0);
+  await expect(
+    inbox.locator(`[data-today-thread="${ARCHIVE_THREAD}"]`),
+  ).toHaveCount(0);
+  await expect(inbox.getByRole("option").first()).toBeVisible();
 });
 
 test("replies to a conversation from Today in the reader", async ({ page }) => {

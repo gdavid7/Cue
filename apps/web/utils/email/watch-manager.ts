@@ -451,13 +451,18 @@ export async function unwatchEmails({
   });
 }
 
-// The profile lookup adds a request per account, and the hourly renewal already
-// runs close to its time budget, so each account is checked once a day in a
-// fixed hour slot instead of on every run.
-function isEmailSyncDue(emailAccountId: string, now: Date) {
+// The profile lookup adds a request per account and /api/watch/all runs close
+// to its time budget, so each account is checked once a week on a fixed
+// weekday instead of on every run. The hour guard keeps this to one run a day
+// (and so one check a week) if the cron is ever made more frequent; it must
+// match the /api/watch/all schedule in vercel.json, which a test enforces.
+const WATCH_ALL_CRON_HOUR_UTC = 6;
+
+export function isEmailSyncDue(emailAccountId: string, now: Date) {
+  if (now.getUTCHours() !== WATCH_ALL_CRON_HOUR_UTC) return false;
   let hash = 0;
   for (const char of emailAccountId) {
     hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   }
-  return hash % 24 === now.getUTCHours();
+  return hash % 7 === now.getUTCDay();
 }

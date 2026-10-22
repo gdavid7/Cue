@@ -108,12 +108,12 @@ test("Cue found in All inboxes searches every included account and opens each ro
   await expect(cueRows).toHaveCount(2, { timeout: 60_000 });
   const rowOf = (email: string) =>
     cueRows.filter({
-      has: page.getByRole("img", { name: `Inbox: ${email}`, exact: true }),
+      has: page.getByRole("img", { name: `Account: ${email}`, exact: true }),
     });
   await expect(rowOf(primary.email)).toHaveCount(1);
   await expect(rowOf(included.email)).toHaveCount(1);
   await expect(
-    cueSection.getByRole("img", { name: `Inbox: ${excluded.email}` }),
+    cueSection.getByRole("img", { name: `Account: ${excluded.email}` }),
   ).toHaveCount(0);
   // The model reads the search once, however many accounts it covers.
   expect(intentCalls).toBe(1);

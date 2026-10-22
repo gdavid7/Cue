@@ -21,6 +21,11 @@ export const GET = withEmailAccount(
       offset,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      uncategorizedSenders: result.uncategorizedSenders.map(
+        ({ email, name }) => ({ email, name }),
+      ),
+      nextOffset: result.nextOffset,
+    } satisfies UncategorizedSendersResponse);
   },
 );

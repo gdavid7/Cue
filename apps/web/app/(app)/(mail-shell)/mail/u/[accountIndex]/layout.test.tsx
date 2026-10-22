@@ -65,9 +65,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/(app)/[emailAccountId]/mail/MailScreen", () => ({
   MailScreen: () => null,
 }));
-vi.mock("@/app/(app)/[emailAccountId]/mail/MailScreenLayout", () => ({
-  MailScreenLayout: ({ children }: { children: React.ReactNode }) => children,
-}));
 
 import { InboxPreviewSeed } from "@/app/(app)/[emailAccountId]/mail/InboxPreviewList";
 import MailRouteLayout from "./layout";
@@ -150,8 +147,8 @@ describe("MailRouteLayout", () => {
 
   // RL-1: a laptop opened after days shows its own mail at once, and the
   // engine adds the newest from the provider while it catches up.
-  it("fetches the newest inbox mail for a mailbox that fell behind, for the engine only", async () => {
-    mocks.localMailCookie = `acc_b~${syncedAgo(3 * 24 * 3_600_000)}`;
+  it("fetches the newest inbox mail for a stale Gmail mailbox, for the engine only", async () => {
+    mocks.localMailCookie = `acc_a~${syncedAgo(3 * 24 * 3_600_000)}`;
     mocks.splits = [
       { id: "all", filters: [] },
       {
@@ -160,16 +157,28 @@ describe("MailRouteLayout", () => {
       },
     ];
 
-    const layout = await renderAt("1");
+    const layout = await renderAt("0");
 
     expect(screenOf(layout).props.catchUp).toBe(true);
     await vi.waitFor(() =>
       expect(mocks.loadInboxPreview).toHaveBeenCalledWith({
-        emailAccountId: "acc_b",
-        provider: "microsoft",
+        emailAccountId: "acc_a",
+        provider: "google",
         catchUp: true,
       }),
     );
+  });
+
+  // Only Gmail's engine takes these rows, so for Outlook they would spend
+  // Graph quota and page time on mail nothing reads.
+  it("does not fetch the newest inbox mail for a stale Outlook mailbox", async () => {
+    mocks.localMailCookie = `acc_b~${syncedAgo(3 * 24 * 3_600_000)}`;
+
+    const layout = await renderAt("1");
+
+    expect(screenOf(layout).props.preview).toBeNull();
+    expect(screenOf(layout).props.catchUp).toBe(false);
+    expect(mocks.loadInboxPreview).not.toHaveBeenCalled();
   });
 
   it("catches a stale Gmail mailbox up without reading the tab settings or the style choice", async () => {
@@ -201,7 +210,7 @@ describe("MailRouteLayout", () => {
   it("treats a mailbox recorded before sync times were kept as fallen behind", async () => {
     mocks.localMailCookie = "acc_a.acc_b";
 
-    const layout = await renderAt("1");
+    const layout = await renderAt("0");
 
     expect(screenOf(layout).props.catchUp).toBe(true);
     await vi.waitFor(() => expect(mocks.loadInboxPreview).toHaveBeenCalled());

@@ -324,6 +324,7 @@
     "app/(app)/[emailAccountId]/mail/use-engine-mail-threads.ts"
   ],
   "today-inbox-switch.spec.ts": [
+    "app/(app)/(mail-shell)/layout.tsx",
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/MailShellSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/MailFrame.tsx",
@@ -342,7 +343,9 @@
     "app/(app)/[emailAccountId]/mail/ScheduledEmailList.tsx",
     "app/(app)/[emailAccountId]/mail/SnoozedThreadList.tsx",
     "hooks/useAllAccountsList.ts",
-    "hooks/useHiddenDraftMessageIds.ts"
+    "hooks/useHiddenDraftMessageIds.ts",
+    "hooks/useLabelCounts.ts",
+    "utils/mail-engine/label-count-targets.ts"
   ],
   "swipe-actions.spec.ts": [
     "app/(app)/[emailAccountId]/mail/ThreadRow.tsx",
@@ -387,5 +390,9 @@
     "utils/mail-engine/embedding-worker-client.ts",
     "utils/mail-search/semantic-embedding.ts",
     "utils/mail-search/text-embedder.ts"
+  ],
+  "wake-catch-up.spec.ts": [
+    "utils/mail-engine/wake-catch-up.ts",
+    "app/api/user/inbox-catch-up/route.ts"
   ]
 }

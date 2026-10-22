@@ -65,6 +65,30 @@ describe("swrFetcher with an expired session", () => {
     );
   });
 
+  it("keeps the page when a refreshed session lets the request through", async () => {
+    let refreshed = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("/api/auth/get-session")) {
+          refreshed = true;
+          return Response.json({ user: { id: "u1" }, session: {} });
+        }
+        if (refreshed) return Response.json({ panel: "ok" });
+        return Response.json(
+          { error: "Unauthorized", errorCode: "SESSION_EXPIRED" },
+          { status: 401 },
+        );
+      }),
+    );
+    const { swrFetcher } = await loadPage();
+
+    await expect(swrFetcher("/api/panel", undefined, "acc-1")).resolves.toEqual(
+      { panel: "ok" },
+    );
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("stops SWR from retrying a signed-out request", async () => {
     const { swrFetcher, onSWRErrorRetry } = await loadPage();
     const error = await swrFetcher("/api/panel", undefined, "acc-1").catch(
