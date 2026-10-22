@@ -12,8 +12,10 @@ import { playwrightMailProvider } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
+  activeSnoozeCount,
   conversationWithSubject,
   openMail,
+  providerConversationInInbox,
   readLatestMailMutation,
   waitForMetadataCoverage,
 } from "./mail-test-helpers";
@@ -34,6 +36,8 @@ const SEEDED_THREAD_IDS = [
   "thr_playwright_2",
   "thr_playwright_3",
 ];
+const SNOOZE_UNDO_THREAD_ID = "thr_playwright_3";
+const SNOOZE_UNDO_SUBJECT = "Second Unread Command Message";
 let emailAccountIdForCleanup: string | undefined;
 
 test.afterEach(async ({ request }) => {
@@ -278,6 +282,61 @@ test("Command K acts on highlighted and selected conversations", async ({
   await palette.getByRole("option", { name: "Snooze 2 conversations" }).click();
   await palette.getByRole("option", { name: /^Tomorrow/ }).click();
   await expect(options).toHaveCount(initialConversationCount - 2);
+});
+
+test("undoing a snooze from the list puts the conversation back, with no snooze left", async ({
+  page,
+}, testInfo) => {
+  const { conversations, emailAccountId } = await openMail(page);
+  emailAccountIdForCleanup = emailAccountId;
+  await restoreActiveSnoozes(page.request, emailAccountId);
+  const row = conversationWithSubject(page, conversations, SNOOZE_UNDO_SUBJECT);
+  await expect(row).toHaveCount(1, { timeout: 60_000 });
+
+  await row.hover();
+  await row.getByRole("button", { name: "Snooze conversation" }).click();
+  await page.getByRole("menuitem", { name: /^Tomorrow/ }).click();
+  await expect(row).toHaveCount(0);
+  const notifications = page.getByRole("region", {
+    name: "Notifications alt+T",
+  });
+  await expect(notifications.getByText(/^Snoozed until /)).toBeVisible();
+  await expect(
+    notifications.getByRole("button", { name: /^Undo/ }),
+  ).toBeVisible();
+  await attachScreenshotForChangedTest(
+    testInfo,
+    notifications,
+    "Snooze toast with Undo",
+  );
+
+  // Undone once the server has it, so undo has to take back its snooze
+  // record and the provider's archive, not just the queued command.
+  await expect
+    .poll(() => activeSnoozeCount(emailAccountId, SNOOZE_UNDO_THREAD_ID), {
+      timeout: 60_000,
+    })
+    .toBe(1);
+  await expect
+    .poll(() => providerConversationInInbox(SNOOZE_UNDO_THREAD_ID), {
+      timeout: 60_000,
+    })
+    .toBe(false);
+  const undoButton = notifications.getByRole("button", { name: /^Undo/ });
+  if (await undoButton.isVisible()) await undoButton.click();
+  else await page.keyboard.press("z");
+
+  await expect(row).toHaveCount(1, { timeout: 60_000 });
+  await expect
+    .poll(() => providerConversationInInbox(SNOOZE_UNDO_THREAD_ID), {
+      timeout: 60_000,
+    })
+    .toBe(true);
+  await expect
+    .poll(() => activeSnoozeCount(emailAccountId, SNOOZE_UNDO_THREAD_ID), {
+      timeout: 60_000,
+    })
+    .toBe(0);
 });
 
 test("Command K opens a searchable account list and switches the mailbox", async ({
