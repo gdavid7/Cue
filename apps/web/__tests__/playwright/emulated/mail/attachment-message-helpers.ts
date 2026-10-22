@@ -4,18 +4,30 @@ import { readProviderAccessToken } from "./mail-test-helpers";
 
 export const SENDER = { name: "Morgan Example", address: "morgan@example.com" };
 
-/** Delivers a message with the given files to the inbox; tests remove it afterwards. */
+/**
+ * Delivers a message with the given files to the inbox, the primary's unless
+ * `mailbox` names another; tests remove it afterwards.
+ */
 export async function insertMessageWithAttachments(
   page: Page,
-  input: { subject: string; attachments: Attachment[]; html?: string },
+  input: {
+    subject: string;
+    attachments: Attachment[];
+    html?: string;
+    mailbox?: Mailbox;
+  },
 ) {
-  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  const email = input.mailbox?.email ?? process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   const html = input.html ?? "<p>The files are attached.</p>";
+  const token = await mailboxToken(input.mailbox);
   return isMicrosoftPlaywright()
-    ? insertOutlookMessage(page, { ...input, email, html })
-    : insertGmailMessage(page, { ...input, email, html });
+    ? insertOutlookMessage(page, { ...input, email, html, token })
+    : insertGmailMessage(page, { ...input, email, html, token });
 }
+
+/** Another seeded mailbox, as createSecondEmailAccount returns it. */
+type Mailbox = { email: string; token: string };
 
 type Attachment = {
   name: string;
@@ -31,11 +43,13 @@ async function insertGmailMessage(
     subject,
     attachments,
     html,
+    token,
   }: {
     email: string;
     subject: string;
     attachments: Attachment[];
     html: string;
+    token: string;
   },
 ) {
   const boundary = "playwright-files-boundary";
@@ -68,7 +82,7 @@ async function insertGmailMessage(
     `${baseUrl("GOOGLE_BASE_URL")}/gmail/v1/users/me/messages`,
     {
       headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        Authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
       data: {
@@ -90,16 +104,19 @@ async function insertOutlookMessage(
     subject,
     attachments,
     html,
+    token,
   }: {
     email: string;
     subject: string;
     attachments: Attachment[];
     html: string;
+    token: string;
   },
 ) {
   const outlook = baseUrl("MICROSOFT_BASE_URL");
+  const headers = outlookHeaders(token);
   const created = await page.request.post(`${outlook}/v1.0/me/messages`, {
-    headers: OUTLOOK_HEADERS,
+    headers,
     data: {
       subject,
       from: { emailAddress: SENDER },
@@ -117,7 +134,7 @@ async function insertOutlookMessage(
       const attached = await page.request.post(
         `${outlook}/v1.0/me/messages/${id}/attachments`,
         {
-          headers: OUTLOOK_HEADERS,
+          headers,
           data: {
             "@odata.type": "#microsoft.graph.fileAttachment",
             name,
@@ -132,7 +149,7 @@ async function insertOutlookMessage(
   } catch (error) {
     // A half-built draft would linger in Drafts for other specs.
     await page.request.delete(`${outlook}/v1.0/me/messages/${id}`, {
-      headers: OUTLOOK_HEADERS,
+      headers,
     });
     throw error;
   }
@@ -140,7 +157,7 @@ async function insertOutlookMessage(
   const moved = await page.request.post(
     `${outlook}/v1.0/me/messages/${id}/move`,
     {
-      headers: OUTLOOK_HEADERS,
+      headers,
       data: { destinationId: "inbox" },
     },
   );
@@ -152,24 +169,38 @@ async function insertOutlookMessage(
   return { threadId: message.conversationId, messageId: message.id };
 }
 
-export async function removeMessage(page: Page, messageId: string) {
+export async function removeMessage(
+  page: Page,
+  messageId: string,
+  mailbox?: Mailbox,
+) {
+  const token = await mailboxToken(mailbox);
   if (isMicrosoftPlaywright()) {
     await page.request.delete(
       `${baseUrl("MICROSOFT_BASE_URL")}/v1.0/me/messages/${messageId}`,
-      { headers: OUTLOOK_HEADERS },
+      { headers: outlookHeaders(token) },
     );
     return;
   }
   await page.request.post(
     `${baseUrl("GOOGLE_BASE_URL")}/gmail/v1/users/me/messages/${messageId}/trash`,
-    { headers: { Authorization: `Bearer ${await readProviderAccessToken()}` } },
+    { headers: { Authorization: `Bearer ${token}` } },
   );
 }
 
-const OUTLOOK_HEADERS = {
-  Authorization: "Bearer playwright_microsoft_fixture_token",
-  "content-type": "application/json",
-};
+async function mailboxToken(mailbox: Mailbox | undefined) {
+  if (mailbox) return mailbox.token;
+  return isMicrosoftPlaywright()
+    ? "playwright_microsoft_fixture_token"
+    : readProviderAccessToken();
+}
+
+function outlookHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+}
 
 function baseUrl(name: "GOOGLE_BASE_URL" | "MICROSOFT_BASE_URL") {
   const value = process.env[name];
