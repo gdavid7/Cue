@@ -89,6 +89,14 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
+// A refused scan page waits at least the source's hint. Refusals in a row
+// mean the hint keeps missing (another lane, tab or device spends the same
+// budget), so each one waits about twice as long, jittered so scans that
+// were refused together spread out. A landed page starts over. The primary
+// scan fills the inbox someone is waiting for, so it never waits as long.
+const ENUMERATION_BACKOFF_MIN_MS = 1000;
+const ENUMERATION_BACKOFF_MAX_MS = 60_000;
+const PRIMARY_ENUMERATION_BACKOFF_MAX_MS = 15_000;
 const COMMAND_REQUEST_RETRY_MIN_MS = 1000;
 const COMMAND_REQUEST_RETRY_MAX_MS = 30_000;
 const SEARCH_PAGE_SIZE = 50;
@@ -293,6 +301,9 @@ export function createMailEngine(input: {
   // Keyed by operation, so one command stuck on a failing request does not
   // slow the retry of every other command.
   const commandRequestFailures = new Map<string, number>();
+  // Keyed by account and scope: refusals in a row since the scan last landed
+  // a page. Only bootstrap scans read it; commands and reads never wait on it.
+  const enumerationRefusals = new Map<string, number>();
   const idleCatchUpGates = new Map<string, IdleCatchUpGate>();
   const syncLanes = new Map<string, SyncLane>();
   const syncLaneRetries = new Map<
@@ -1479,6 +1490,8 @@ export function createMailEngine(input: {
     requestId: string;
     scopeId?: string;
     scope?: ScopeDescriptor;
+    /** The backfill lane's scan, which may back off further. */
+    background?: boolean;
   }) {
     const scopeId = input.scopeId ?? "primary";
     let scan = await store.readBootstrapScan({
@@ -1543,11 +1556,14 @@ export function createMailEngine(input: {
         page: scan.page,
         pageSize: 50,
       });
+      const refusalKey = `${input.session.accountId}\u0000${scan.scopeId}`;
       if (
         enumerated.status === "paused" ||
         enumerated.status === "blocked_auth"
       ) {
         const paused = enumerated.status === "paused";
+        const refusals = (enumerationRefusals.get(refusalKey) ?? 0) + 1;
+        if (paused) enumerationRefusals.set(refusalKey, refusals);
         await store.deferBootstrapScan({
           session: input.session,
           scopeId: scan.scopeId,
@@ -1555,7 +1571,13 @@ export function createMailEngine(input: {
           page: scan.page,
           nextAttemptAtMs:
             runtime.nowMs() +
-            (paused ? enumerated.retryAfterMs : idleCatchUpIntervalMs),
+            (paused
+              ? enumerationRetryDelayMs({
+                  hintMs: enumerated.retryAfterMs,
+                  refusals,
+                  background: input.background === true,
+                })
+              : idleCatchUpIntervalMs),
           errorCode: paused ? enumerated.reason : "blocked_auth",
         });
       }
@@ -1563,6 +1585,7 @@ export function createMailEngine(input: {
         await noteConnection(input.session.accountId, enumerated);
         break;
       }
+      enumerationRefusals.delete(refusalKey);
       const catchUpFrom: SyncStreamPosition | null =
         enumerated.value.catchUpFrom ?? scan.catchUpFrom;
       const repeatedCursor = enumerated.value.nextPage === scan.page;
@@ -1661,6 +1684,7 @@ export function createMailEngine(input: {
         requestId: runtime.randomId(),
         scopeId: stream.streamId,
         scope: idleGate.activeBootstrapScopes.get(stream.streamId),
+        background: true,
       });
       if (signal.aborted) return;
       await rememberBootstrapContinuation(idleGate, session, stream.streamId);
@@ -2419,4 +2443,22 @@ function defaultRandomId(): string {
  */
 function yieldToHost() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+// Equal jitter: at least half of the doubled wait, so a run of refusals still
+// grows, and never under the source's own hint.
+function enumerationRetryDelayMs(input: {
+  hintMs: number;
+  refusals: number;
+  background: boolean;
+}) {
+  const maxMs = input.background
+    ? ENUMERATION_BACKOFF_MAX_MS
+    : PRIMARY_ENUMERATION_BACKOFF_MAX_MS;
+  const doubled = Math.min(
+    maxMs,
+    ENUMERATION_BACKOFF_MIN_MS * 2 ** Math.min(30, input.refusals - 1),
+  );
+  const jittered = doubled / 2 + Math.random() * (doubled / 2);
+  return Math.max(input.hintMs, Math.ceil(jittered));
 }
