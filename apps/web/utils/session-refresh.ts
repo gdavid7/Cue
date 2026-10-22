@@ -1,8 +1,10 @@
 import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
 import {
   clearSessionExpired,
+  getArmedUserId,
   isSessionExpiredErrorBody,
   isSessionExpiredRedirectArmed,
+  leaveForOtherUser,
   notifySessionExpired,
   onSessionExpiredRedirectArmed,
 } from "@/utils/session-expired";
@@ -21,19 +23,34 @@ const REFRESH_TIMEOUT_MS = 10_000;
 // than waiting to be shown.
 const SESSION_CHANNEL = "cue-session";
 const SIGNED_IN_MESSAGE = "signed-in";
+// A check that could not reach the server is retried by the next request
+// only after this; the tab coming back or going online checks at once.
+const CHECK_RETRY_MS = 20_000;
+// Marks a 401 answered here while stopped, which no server sent.
+const ANSWERED_WHILE_STOPPED_HEADER = "x-cue-session-stopped";
 
-let refresh: { promise: Promise<boolean>; settledAt?: number } | undefined;
+type RefreshOutcome = "refreshed" | "signed-out" | "other-user" | "unknown";
+type StopReason = "signed-out" | "rejected";
+
+let refresh:
+  | { promise: Promise<RefreshOutcome>; settledAt?: number }
+  | undefined;
 // The server would not take this page's session even after a refresh. Each
 // SWR revalidation, poll and mail sync would otherwise ask again and earn
 // another 401, so nothing more is sent until the session is back.
 let sessionGone = false;
-// A check whose answer could not be had: the next request asks again.
-let checkOnNextRequest = false;
+let stopReason: StopReason | undefined;
+// A check whose answer could not be had: a request after this asks again.
+let checkRetryAt: number | undefined;
 let check: Promise<boolean> | undefined;
+// get-session named this browser's user; once a request also gets past the
+// gate, other tabs are told.
+let announceOnNextSuccess = false;
 let stopWatchingForReturn: (() => void) | undefined;
 const resetListeners = new Set<() => void>();
 
 onSessionExpiredRedirectArmed(() => {
+  // The server just rendered this page for a signed-in user.
   announceSignedIn();
   if (sessionGone) startCheck();
 });
@@ -67,37 +84,50 @@ export async function fetchWithSessionRetry(
     sessionGone &&
     !(await untilAborted(sessionCameBack(), signal))
   )
-    return sessionExpiredResponse();
+    return answeredWhileStoppedResponse();
   const replayable = sameOrigin && canReplay(input, init);
   const response = await fetch(
     replayable && input instanceof Request ? input.clone() : input,
     init,
   );
+  if (sameOrigin && response.status !== 401) noteGotThrough();
   if (response.status !== 401 || !replayable) return response;
   // Sign-out ends the session on purpose; its 401s are not worth a refresh.
   if (isSigningOut()) return response;
   if (!(await isSessionExpiredResponse(response))) return response;
-  if (!(await untilAborted(refreshSession(), signal))) return response;
+  if ((await untilAborted(refreshSession(), signal)) !== "refreshed")
+    return response;
   const retried = await fetch(input, init);
-  if (retried.status === 401 && (await isSessionExpiredResponse(retried)))
-    markSessionGone();
+  if (retried.status !== 401) noteGotThrough();
+  else if (await isSessionExpiredResponse(retried)) markSessionGone("rejected");
   return retried;
 }
 
-function refreshSession() {
+/** A 401 this module answered while stopped, which no server sent. */
+export function isAnsweredWhileStopped(response: Response) {
+  return response.headers.get(ANSWERED_WHILE_STOPPED_HEADER) === "1";
+}
+
+/** Why requests are stopped, or undefined while they are sent. */
+export function sessionStopReason() {
+  return sessionGone ? stopReason : undefined;
+}
+
+// Shares a refresh still running, or one that settled moments ago, unless
+// `fresh` asks for an answer from now.
+function refreshSession({ fresh = false } = {}) {
   if (
     refresh &&
     (refresh.settledAt === undefined ||
-      Date.now() - refresh.settledAt < REFRESH_REUSE_MS)
+      (!fresh && Date.now() - refresh.settledAt < REFRESH_REUSE_MS))
   )
     return refresh.promise;
 
-  const current: { promise: Promise<boolean>; settledAt?: number } = {
+  const current: { promise: Promise<RefreshOutcome>; settledAt?: number } = {
     promise: requestSessionRefresh()
       .then((outcome) => {
-        if (outcome === "signed-out") markSessionGone();
-        if (outcome === "refreshed") announceSignedIn();
-        return outcome === "refreshed";
+        settleOutcome(outcome);
+        return outcome;
       })
       .finally(() => {
         current.settledAt = Date.now();
@@ -109,9 +139,7 @@ function refreshSession() {
 
 // Only an answer that names no user means signed out; a failed or erroring
 // refresh says nothing about the session, so the page keeps trying.
-async function requestSessionRefresh(): Promise<
-  "refreshed" | "signed-out" | "unknown"
-> {
+async function requestSessionRefresh(): Promise<RefreshOutcome> {
   try {
     const response = await fetch(REFRESH_URL, {
       credentials: "same-origin",
@@ -121,13 +149,35 @@ async function requestSessionRefresh(): Promise<
     });
     if (response.status === 401) return "signed-out";
     if (!response.ok) return "unknown";
-    const body: unknown = await response.json();
-    const signedIn =
-      !!body && typeof body === "object" && "user" in body && !!body.user;
-    return signedIn ? "refreshed" : "signed-out";
+    const userId = readUserId(await response.json());
+    if (!userId) return "signed-out";
+    const pageUserId = getArmedUserId();
+    if (typeof window !== "undefined" && pageUserId && userId !== pageUserId)
+      return "other-user";
+    return "refreshed";
   } catch {
     return "unknown";
   }
+}
+
+// What every refresh and check answer means for this page.
+function settleOutcome(outcome: RefreshOutcome) {
+  if (outcome === "signed-out") markSessionGone("signed-out");
+  if (outcome === "refreshed") announceOnNextSuccess = true;
+  if (outcome === "other-user") {
+    markSessionGone("signed-out", { notify: false });
+    leaveForOtherUser();
+  }
+}
+
+// The one place other tabs are told this browser is signed in, besides a
+// page arming: a request got past the gate after this page doubted the
+// session. get-session alone is not enough; it can name a user the gate still
+// rejects, and waking the other tabs then would loop.
+function noteGotThrough() {
+  if (!announceOnNextSuccess) return;
+  announceOnNextSuccess = false;
+  announceSignedIn();
 }
 
 /**
@@ -135,12 +185,17 @@ async function requestSessionRefresh(): Promise<
  * mail engine's worker finds it gone, so the page stops too and its next
  * return to view checks once for both.
  */
-export function markSessionGone() {
-  notifySessionExpired();
+export function markSessionGone(
+  reason: StopReason,
+  { notify = true }: { notify?: boolean } = {},
+) {
+  if (notify) notifySessionExpired();
+  announceOnNextSuccess = false;
   if (sessionGone) return;
   // On a page (not a worker), only one rendered for a signed-in user stops.
   if (typeof window !== "undefined" && !isSessionExpiredRedirectArmed()) return;
   sessionGone = true;
+  stopReason = reason;
   stopWatchingForReturn = watchForReturn();
 }
 
@@ -152,8 +207,9 @@ export function markSessionGone() {
 export function resetSessionGone() {
   if (!sessionGone) return;
   sessionGone = false;
+  stopReason = undefined;
   refresh = undefined;
-  checkOnNextRequest = false;
+  checkRetryAt = undefined;
   stopWatchingForReturn?.();
   stopWatchingForReturn = undefined;
   clearSessionExpired();
@@ -168,32 +224,42 @@ export function onSessionGoneReset(listener: () => void) {
 }
 
 /**
- * The mail engine's worker found the session gone. Its request may have left
- * before this page found the session back, so the page asks once (sharing a
- * refresh already under way) before stopping. Returns whether the worker
- * should send again.
+ * The mail engine's worker stopped. A worker the gate rejected after its own
+ * refresh stays stopped: get-session would only name the same user again.
+ * One that found no session may have crossed the session coming back, so the
+ * page asks afresh: "send-again" means the worker should send again.
  */
-export async function workerFoundSessionGone() {
-  if (!sessionGone && (await refreshSession())) return true;
-  markSessionGone();
-  return false;
+export async function workerFoundSessionGone(
+  reason: StopReason,
+): Promise<"send-again" | "stopped" | "unknown"> {
+  if (reason === "rejected" || sessionGone) {
+    markSessionGone(reason);
+    return "stopped";
+  }
+  const outcome = await refreshSession({ fresh: true });
+  if (outcome === "refreshed") return "send-again";
+  if (outcome === "unknown") return "unknown";
+  return "stopped";
 }
 
 function sessionCameBack(): Promise<boolean> {
-  if (checkOnNextRequest) startCheck();
+  if (checkRetryAt !== undefined && Date.now() >= checkRetryAt) startCheck();
   return check ?? Promise.resolve(false);
 }
 
 // One check at a time; requests that arrive meanwhile wait on it.
 function startCheck() {
-  checkOnNextRequest = false;
+  checkRetryAt = undefined;
   if (check) return;
   const current: Promise<boolean> = requestSessionRefresh()
     .then((outcome) => {
-      if (outcome === "unknown") checkOnNextRequest = true;
-      if (outcome !== "refreshed") return false;
+      if (outcome === "unknown") checkRetryAt = Date.now() + CHECK_RETRY_MS;
+      if (outcome !== "refreshed") {
+        if (outcome === "other-user") settleOutcome(outcome);
+        return false;
+      }
       resetSessionGone();
-      announceSignedIn();
+      announceOnNextSuccess = true;
       return true;
     })
     .finally(() => {
@@ -262,15 +328,22 @@ function untilAborted<T>(
   });
 }
 
-function sessionExpiredResponse() {
+function answeredWhileStoppedResponse() {
   return Response.json(
     {
       error: "Unauthorized",
       errorCode: SESSION_EXPIRED_ERROR_CODE,
       isKnownError: true,
     },
-    { status: 401 },
+    { status: 401, headers: { [ANSWERED_WHILE_STOPPED_HEADER]: "1" } },
   );
+}
+
+function readUserId(body: unknown) {
+  if (!body || typeof body !== "object" || !("user" in body)) return;
+  const user = body.user;
+  if (!user || typeof user !== "object" || !("id" in user)) return;
+  return typeof user.id === "string" && user.id ? user.id : undefined;
 }
 
 async function isSessionExpiredResponse(response: Response) {

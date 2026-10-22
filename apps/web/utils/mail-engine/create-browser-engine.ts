@@ -264,8 +264,8 @@ async function createWorkerOwnedEngine(
       return;
     }
     if (message.type === "session_expired") {
-      workerFoundSessionGone().then((sendAgain) => {
-        if (sendAgain) postSessionReset();
+      workerFoundSessionGone(message.reason).then((answer) => {
+        if (answer === "send-again") postSessionReset();
       });
       return;
     }

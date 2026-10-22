@@ -99,8 +99,11 @@ async function createWorkerEngine(
   performance.mark("mail-engine:account-ensured");
   const ports = createRoutedBackendAdapter({
     requestFor: (accountId) =>
-      createMailHttpRequest(accountId, () => {
-        self.postMessage({ type: "session_expired" } satisfies WorkerResponse);
+      createMailHttpRequest(accountId, (reason) => {
+        self.postMessage({
+          type: "session_expired",
+          reason,
+        } satisfies WorkerResponse);
       }),
   });
   const created = createMailEngine({

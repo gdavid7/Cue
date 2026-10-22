@@ -92,6 +92,59 @@ describe("createMailHttpRequest", () => {
     expect(onSessionExpired).toHaveBeenCalledTimes(sessionExpired ? 1 : 0);
   });
 
+  it("reports a stop once, and never for the 401s it then answers itself", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.startsWith("/api/auth/get-session")
+          ? Response.json(null)
+          : Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 }),
+      ),
+    );
+    const onSessionExpired = vi.fn();
+    const request = createMailHttpRequest("acc-1", onSessionExpired);
+    const send = () =>
+      request({
+        method: "POST",
+        path: "/api/mail/v1/accounts/acc-1/changes",
+        body: {},
+        signal: new AbortController().signal,
+      });
+
+    const first = await send();
+    const second = await send();
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+    expect(onSessionExpired).toHaveBeenCalledWith("signed-out");
+    expect(first.sessionExpired).toBe(true);
+    expect(second.sessionExpired).toBe(true);
+  });
+
+  it("does not report a stop when the refresh could not reach the server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("/api/auth/get-session"))
+          throw new TypeError("Failed to fetch");
+        return Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 });
+      }),
+    );
+    const onSessionExpired = vi.fn();
+
+    const result = await createMailHttpRequest(
+      "acc-1",
+      onSessionExpired,
+    )({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/changes",
+      body: {},
+      signal: new AbortController().signal,
+    });
+
+    expect(result.sessionExpired).toBe(true);
+    expect(onSessionExpired).not.toHaveBeenCalled();
+  });
+
   it("does not treat a 401 during sign-out as an expired session", async () => {
     vi.stubGlobal(
       "fetch",

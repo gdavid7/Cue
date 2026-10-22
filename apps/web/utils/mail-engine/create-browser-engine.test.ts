@@ -53,7 +53,9 @@ describe("createBrowserMailEngine", () => {
       "fetch",
       vi.fn(async () => Response.json(null)),
     );
-    FakeWorker.startMessages = [{ type: "session_expired" }];
+    FakeWorker.startMessages = [
+      { type: "session_expired", reason: "signed-out" },
+    ];
     const engine = await startEngine();
     const worker = FakeWorker.instances[0];
 
@@ -71,7 +73,9 @@ describe("createBrowserMailEngine", () => {
       "fetch",
       vi.fn(async () => Response.json({ user: { id: "u1" }, session: {} })),
     );
-    FakeWorker.startMessages = [{ type: "session_expired" }];
+    FakeWorker.startMessages = [
+      { type: "session_expired", reason: "signed-out" },
+    ];
     const engine = await startEngine();
     const worker = FakeWorker.instances[0];
 
@@ -80,6 +84,28 @@ describe("createBrowserMailEngine", () => {
     await engine.close();
 
     expect(pageRequest.status).toBe(200);
+  });
+
+  it("keeps a worker the gate rejected stopped, though get-session names a user", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ user: { id: "u1" }, session: {} }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    FakeWorker.startMessages = [
+      { type: "session_expired", reason: "rejected" },
+    ];
+    const engine = await startEngine();
+    const worker = FakeWorker.instances[0];
+
+    await vi.waitFor(async () =>
+      expect((await fetchWithSessionRetry("/api/user/rules")).status).toBe(401),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(worker.received("session_reset")).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    resetSessionGone();
+    await engine.close();
   });
 
   it("finishes an interrupted sign-out wipe before opening the mailbox", async () => {

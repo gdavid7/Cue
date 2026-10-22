@@ -113,8 +113,11 @@ export type WorkerResponse =
   | { type: "rebuilding" }
   /** Carried work a rebuild could not restore; counts only, no content. */
   | { type: "dropped"; drop: DroppedMailWork }
-  /** A request found the app session signed out; only the page can act. */
-  | { type: "session_expired" };
+  /**
+   * The worker stopped sending: no session ("signed-out"), or the gate
+   * refused even a refreshed one ("rejected"). Only the page can act.
+   */
+  | { type: "session_expired"; reason: "signed-out" | "rejected" };
 
 export function browserMailEngineCapabilities() {
   return {
