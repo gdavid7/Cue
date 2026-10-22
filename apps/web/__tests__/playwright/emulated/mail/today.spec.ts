@@ -422,6 +422,66 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
   }
 });
 
+test("a new mailbox shows Waiting on you from local mail before Today answers, and it stays put", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000);
+  const seeded = await seedMailFromContact(page, `Ski trip ${Date.now()}`);
+  // A new mailbox: Cue hasn't read it, and Today's answer is held, as Gmail
+  // can take seconds to give it during a first sync.
+  await page.route("**/api/user/home/cue*", (route) =>
+    route.fulfill({ json: { hasReadMail: false } }),
+  );
+  let release = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/user/home*", async (route) => {
+    await released;
+    const response = await route.fetch();
+    const home = await response.json();
+    home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+    home.needsYou = [];
+    await route.fulfill({ response, json: home });
+  });
+  const waitingOnYou = page.getByRole("listbox", {
+    name: "Waiting on you",
+    exact: true,
+  });
+  const row = waitingOnYou.locator(`[data-today-thread="${seeded.threadId}"]`);
+  try {
+    const emailAccountId = await getEmailAccountId(page);
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(row).toBeVisible({ timeout: 90_000 });
+    const status = page.getByRole("main").getByRole("status");
+    // Cue's notice comes with the answer, which hasn't arrived.
+    await expect(status).toHaveCount(0);
+    const before = await row.boundingBox();
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "today-waiting-on-you-before-answer",
+    );
+
+    release();
+    await expect(status).toContainText("Cue is reading your recent mail.", {
+      timeout: 60_000,
+    });
+    await expect(row).toBeVisible();
+    // The answer's notice lands below the group, so the row doesn't move.
+    expect((await row.boundingBox())?.y).toBeCloseTo(before?.y ?? -1, 0);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "today-waiting-on-you-after-answer",
+    );
+  } finally {
+    await seeded.remove();
+  }
+});
+
 test("replies to a conversation from Today in the reader", async ({ page }) => {
   await openToday(page);
   const row = todayRow(page, REPLY_THREAD);

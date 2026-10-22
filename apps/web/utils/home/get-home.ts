@@ -436,7 +436,7 @@ async function getTodayActivity({
  * the To Reply rule is on, and it has read at least some of this mailbox.
  */
 async function getCueStatus(emailAccountId: string) {
-  const [account, firstRun, firstTracker] = await Promise.all([
+  const [account, hasReadMail] = await Promise.all([
     prisma.emailAccount.findUnique({
       where: { id: emailAccountId },
       select: {
@@ -449,6 +449,26 @@ async function getCueStatus(emailAccountId: string) {
         rules: REPLY_TRACKING_RULES,
       },
     }),
+    hasCueReadMail(emailAccountId),
+  ]);
+  const premium = account?.user.premium;
+
+  return {
+    aiAccess:
+      isPremiumRecord(premium) &&
+      hasAiAccess(getUserTier(premium), !!account?.user.aiApiKey),
+    replyTracking: isReplyTrackingOn(account?.rules),
+    hasReadMail,
+  };
+}
+
+/**
+ * Whether Cue has read any of this mailbox: run a rule on a message or
+ * tracked a conversation. Until then Needs reply can only be empty, and Cue
+ * has filed nothing.
+ */
+export async function hasCueReadMail(emailAccountId: string) {
+  const [firstRun, firstTracker] = await Promise.all([
     prisma.executedRule.findFirst({
       where: { emailAccountId },
       select: { id: true },
@@ -458,15 +478,7 @@ async function getCueStatus(emailAccountId: string) {
       select: { id: true },
     }),
   ]);
-  const premium = account?.user.premium;
-
-  return {
-    aiAccess:
-      isPremiumRecord(premium) &&
-      hasAiAccess(getUserTier(premium), !!account?.user.aiApiKey),
-    replyTracking: isReplyTrackingOn(account?.rules),
-    hasReadMail: Boolean(firstRun || firstTracker),
-  };
+  return Boolean(firstRun || firstTracker);
 }
 
 /**

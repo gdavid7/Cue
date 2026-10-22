@@ -2,7 +2,10 @@
 
 import { useEffect } from "react";
 import { recordActivationSignalAction } from "@/utils/actions/activation";
-import type { ActivationSignal } from "@/utils/actions/activation.validation";
+import type {
+  ActivationSignal,
+  ActivationSignalBody,
+} from "@/utils/actions/activation.validation";
 import { runWhenIdle } from "@/utils/analytics/summary-flush";
 import { createBrowserCache } from "@/utils/browser-cache";
 
@@ -20,11 +23,13 @@ const takenThisSession = new Set<string>();
 
 /**
  * Fire and forget: a lost signal costs one funnel count, never the user's
- * action. A failed call is tried again the next time the step happens.
+ * action. A failed call is tried again the next time the step happens, with
+ * that time's `details`.
  */
 export function reportActivationSignal(
   emailAccountId: string,
   event: ActivationSignal,
+  details?: Omit<ActivationSignalBody, "event">,
 ) {
   const key = `${emailAccountId}:${event}`;
   if (inFlight.has(key) || takenThisSession.has(key)) return;
@@ -32,7 +37,7 @@ export function reportActivationSignal(
   inFlight.add(key);
   // After the user's own server actions, not queued ahead of them.
   runWhenIdle(() => {
-    recordActivationSignalAction(emailAccountId, { event })
+    recordActivationSignalAction(emailAccountId, { ...details, event })
       .then((result) => {
         if (result?.serverError || result?.validationErrors) return;
         takenThisSession.add(key);
