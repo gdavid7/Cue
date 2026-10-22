@@ -1478,11 +1478,18 @@ export function createMailEngine(input: {
     backfillPause?: BackfillPause;
   }) {
     const scopeId = input.scopeId ?? "primary";
-    const pausedFor = (retryAfterMs: number) => {
+    // Only a throttled backfill backs off: an unavailable one (the network,
+    // the adapter) retries when it says, like the rest of sync.
+    const pausedFor = (paused: { retryAfterMs: number; reason: string }) => {
       const pause = input.backfillPause;
-      if (!pause) return retryAfterMs;
-      const delayMs = backfillPauseMs(retryAfterMs, pause.repeats, runtime);
+      if (!pause || paused.reason !== "throttled") return paused.retryAfterMs;
+      const delayMs = backfillPauseMs(
+        paused.retryAfterMs,
+        pause.repeats,
+        runtime,
+      );
       pause.repeats += 1;
+      pause.delayMs = delayMs;
       pause.untilMs = runtime.nowMs() + delayMs;
       return delayMs;
     };
@@ -1504,7 +1511,7 @@ export function createMailEngine(input: {
         windowedBackfill: true,
       });
       if (bootstrap.status !== "ok") {
-        if (bootstrap.status === "paused") pausedFor(bootstrap.retryAfterMs);
+        if (bootstrap.status === "paused") pausedFor(bootstrap);
         await noteConnection(input.session.accountId, bootstrap);
         return;
       }
@@ -1561,9 +1568,7 @@ export function createMailEngine(input: {
           page: scan.page,
           nextAttemptAtMs:
             runtime.nowMs() +
-            (paused
-              ? pausedFor(enumerated.retryAfterMs)
-              : idleCatchUpIntervalMs),
+            (paused ? pausedFor(enumerated) : idleCatchUpIntervalMs),
           errorCode: paused ? enumerated.reason : "blocked_auth",
         });
       }
@@ -1643,9 +1648,13 @@ export function createMailEngine(input: {
     stream: AccountSyncState["streams"][number];
   }) {
     const { session, idleGate, stream } = input;
-    // One pause holds all of the account's background scopes: they draw on
-    // the same budget, so a sibling asking meanwhile is only paused too.
-    if (idleGate.backfillPause.untilMs > runtime.nowMs()) return;
+    // One pause holds all of the account's background scopes (Gmail's older
+    // mail, Outlook's custom folders): they draw on the same budget, so a
+    // sibling asking meanwhile is only paused too. A pause further off than
+    // it was set for means the clock moved back, and is ignored.
+    const pause = idleGate.backfillPause;
+    const pausedForMs = pause.untilMs - runtime.nowMs();
+    if (pausedForMs > 0 && pausedForMs <= pause.delayMs) return;
     startLane(backfillLaneKey(session.accountId), async (signal) => {
       await ingestBootstrap({
         session,
@@ -2021,7 +2030,7 @@ export function createMailEngine(input: {
     if (existing?.generation === generation) return existing;
     const created: IdleCatchUpGate = {
       activeBootstrapScopes: new Map(),
-      backfillPause: { untilMs: 0, repeats: 0 },
+      backfillPause: { untilMs: 0, delayMs: 0, repeats: 0 },
       generation,
       lowPriorityStreams: new Set(),
       nextAssistantCatchUpAtMs: 0,
@@ -2375,7 +2384,7 @@ type IdleCatchUpGate = {
 
 type CheckStamp = { atMs: number; requestCount: number };
 
-type BackfillPause = { untilMs: number; repeats: number };
+type BackfillPause = { untilMs: number; delayMs: number; repeats: number };
 
 function backfillLaneKey(accountId: string) {
   return `${accountId}\u0000backfill`;
@@ -2386,7 +2395,9 @@ function backfillLaneKey(accountId: string) {
 // every other request was a pause. Waiting until the budget refills a run of
 // pages spends the same budget in a fraction of the requests. Pauses with no
 // page in between back off further, and jitter keeps engines that share an
-// account's budget (another device) from asking in step.
+// account's budget (another device) from asking in step. A server retry time
+// past the low-priority interval is held to it, so a bad answer can't park
+// the backfill for longer than its scope would otherwise wait.
 function backfillPauseMs(
   retryAfterMs: number,
   repeats: number,
@@ -2397,7 +2408,10 @@ function backfillPauseMs(
     BACKFILL_PAUSE_MAX_MS,
     backoffMs * (1 + runtime.random() / 2),
   );
-  return Math.max(retryAfterMs, jitteredMs);
+  return Math.max(
+    Math.min(retryAfterMs, LOW_PRIORITY_CATCH_UP_INTERVAL_MS),
+    jitteredMs,
+  );
 }
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {

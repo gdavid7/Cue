@@ -24,10 +24,11 @@ const CHANGES_MS = 300;
 const WAKE_EVERY_MS = 20_000;
 const HOUR_MS = 60 * 60_000;
 // Measured on the engine before backfill pauses backed off, with this file's
-// server and loop: 549 paused and 559 served backfill pages in the hour.
+// server and loop: 549 paused and 559 served backfill pages in the hour,
+// and the inbox-first scan done in 4.75 seconds.
 const PAUSED_PER_HOUR_BEFORE = 549;
 const SERVED_PER_HOUR_BEFORE = 559;
-const INBOX_FIRST_BEFORE_MS = 4800;
+const INBOX_FIRST_BEFORE_MS = 4750;
 
 describe("engine backfill pauses", () => {
   beforeEach(() => {
@@ -45,12 +46,6 @@ describe("engine backfill pauses", () => {
 
     const inboxFirstMs =
       (server.primaryDoneAtMs ?? Number.POSITIVE_INFINITY) - startedAtMs;
-    console.info("PF-12a backfill simulation, one account, one hour", {
-      pausedPerHour: server.paused.length,
-      servedPerHour: server.served.length,
-      pausedInsideKnownWindow: server.pausedInsideKnownWindow,
-      inboxFirstMs,
-    });
     expect(server.paused.length).toBeLessThanOrEqual(
       PAUSED_PER_HOUR_BEFORE * 0.3,
     );
@@ -59,8 +54,11 @@ describe("engine backfill pauses", () => {
     expect(server.served.length).toBeGreaterThanOrEqual(
       SERVED_PER_HOUR_BEFORE * 0.95,
     );
+    // A client that waits out every pause it is given never asks inside one,
+    // so the server has nothing to refuse early.
+    expect(server.pausedInsideKnownWindow).toBe(0);
     await engine.close();
-  });
+  }, 60_000);
 
   it("waits at least the server's retry time and backs off further while the budget stays shut", async () => {
     const server = budgetedServer({
@@ -75,8 +73,7 @@ describe("engine backfill pauses", () => {
       .slice(1)
       .map((pause, index) => pause.atMs - (server.paused[index]?.atMs ?? 0));
     expect(gaps.length).toBeGreaterThan(3);
-    for (const [index, gap] of gaps.entries())
-      expect(gap).toBeGreaterThanOrEqual(server.paused[index]!.retryAfterMs);
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(30_000);
     expect(gaps[1]).toBeGreaterThan(gaps[0]!);
     expect(gaps[2]).toBeGreaterThan(gaps[1]!);
     expect(Math.max(...gaps)).toBeLessThanOrEqual(5 * 60_000 + 5000);
@@ -93,6 +90,54 @@ describe("engine backfill pauses", () => {
     await drive(engine, 20_000);
 
     expect(server.paused.map((pause) => pause.scopeId)).toEqual(["older-a"]);
+    await engine.close();
+  });
+
+  it("holds the account's other background scopes when a backfill's start is paused", async () => {
+    const server = budgetedServer({
+      backfillScopes: ["older-a", "older-b"],
+      shutBackfill: true,
+      pauseBootstrap: true,
+    });
+    const { engine } = await openEngine(server.source);
+
+    await drive(engine, 20_000);
+
+    expect(server.backfillBootstraps).toBe(1);
+    await engine.close();
+  });
+
+  it("starts backing off afresh once the budget serves a page", async () => {
+    const server = budgetedServer({
+      backfillScopes: ["history"],
+      shutBackfill: true,
+    });
+    const { engine } = await openEngine(server.source);
+    await drive(engine, 3 * 60_000);
+    expect(server.paused.length).toBeGreaterThanOrEqual(3);
+    server.shut = false;
+    while (server.served.length === 0) await drive(engine, 5000);
+    server.shut = true;
+    const pausedBefore = server.paused.length;
+
+    await drive(engine, 60_000);
+
+    const [first, second] = server.paused.slice(pausedBefore);
+    expect(second!.atMs - first!.atMs).toBeLessThan(40_000);
+    await engine.close();
+  });
+
+  it("retries an unavailable backfill when the server says", async () => {
+    const server = budgetedServer({
+      backfillScopes: ["history"],
+      shutBackfill: true,
+      pauseReason: "unavailable",
+    });
+    const { engine } = await openEngine(server.source);
+
+    await drive(engine, 30_000);
+
+    expect(server.paused.length).toBeGreaterThan(5);
     await engine.close();
   });
 
@@ -154,7 +199,7 @@ async function drive(
       .finally(() => {
         settled = true;
       });
-    while (!settled) await vi.advanceTimersByTimeAsync(50);
+    while (!settled) await vi.advanceTimersToNextTimerAsync();
     await turn;
     await vi.advanceTimersByTimeAsync(250);
     if (Date.now() >= nextWakeMs) {
@@ -167,9 +212,13 @@ async function drive(
 function budgetedServer({
   backfillScopes,
   shutBackfill = false,
+  pauseBootstrap = false,
+  pauseReason = "throttled",
 }: {
   backfillScopes: string[];
   shutBackfill?: boolean;
+  pauseBootstrap?: boolean;
+  pauseReason?: "throttled" | "unavailable";
 }) {
   let tokens = BACKFILL_CAPACITY;
   let refilledAtMs = Date.now();
@@ -183,6 +232,8 @@ function budgetedServer({
     }>,
     served: [] as number[],
     pausedInsideKnownWindow: 0,
+    shut: shutBackfill,
+    backfillBootstraps: 0,
     primaryDoneAtMs: null as number | null,
     changesReads: 0,
   };
@@ -211,6 +262,11 @@ function budgetedServer({
       return { status: "ok", value: { scopes, nextPage: null } };
     },
     async beginBootstrap({ scope, session }) {
+      if (scope.id !== "primary") {
+        state.backfillBootstraps += 1;
+        if (pauseBootstrap)
+          return { status: "paused", retryAfterMs: 1000, reason: pauseReason };
+      }
       return {
         status: "ok",
         value: {
@@ -234,8 +290,8 @@ function budgetedServer({
           tokens + ((nowMs - refilledAtMs) * BACKFILL_CAPACITY) / 60_000,
         );
         refilledAtMs = nowMs;
-        if (shutBackfill || tokens < BACKFILL_PAGE_COST) {
-          const retryAfterMs = shutBackfill
+        if (state.shut || tokens < BACKFILL_PAGE_COST) {
+          const retryAfterMs = state.shut
             ? 1000
             : Math.max(
                 1000,
@@ -246,7 +302,7 @@ function budgetedServer({
           if (nowMs < knownPauseUntilMs) state.pausedInsideKnownWindow += 1;
           knownPauseUntilMs = nowMs + retryAfterMs;
           state.paused.push({ atMs: nowMs, retryAfterMs, scopeId });
-          return { status: "paused", retryAfterMs, reason: "throttled" };
+          return { status: "paused", retryAfterMs, reason: pauseReason };
         }
         tokens -= BACKFILL_PAGE_COST;
       }
