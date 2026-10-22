@@ -2,7 +2,7 @@ import { expect, type Page, type Route } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
-import { withClient } from "./mail-test-helpers";
+import { openMail, withClient } from "./mail-test-helpers";
 
 // A precise fix, which Cue should only ever store rounded.
 const HERE = { latitude: 37.774_929, longitude: -122.419_416 };
@@ -293,7 +293,10 @@ test("your day: today's meetings, the people on them, their card and the last em
   );
   const main = page.getByRole("main");
 
-  await openToday(page);
+  // Each case starts on fresh device storage: the inbox has the engine read
+  // the mailbox into this browser, as it does for someone who opened Mail.
+  await openMail(page);
+  await page.getByRole("link", { name: "Today", exact: true }).click();
   const strip = main.getByRole("region", { name: "Your day" });
   await expect(strip).toBeVisible({ timeout: 60_000 });
   await expect(strip.getByText("Now")).toBeVisible();

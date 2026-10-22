@@ -36,6 +36,9 @@ const CHIPS_SHOWN = 3;
 // Each person is one indexed read of this device's mail, as opening their
 // card is; a day's meetings stay well within that.
 const PEOPLE_READ = 24;
+// A fresh browser fills its store after Today opens; until then a person can
+// look like someone you've never written to.
+const SYNCING_REREAD_MS = 10_000;
 
 /**
  * Today's meetings, each with the people on it and the last conversation
@@ -253,6 +256,7 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
       : null,
     async () => {
       const conversations = new Map<string, PersonCardConversation[]>();
+      let syncing = false;
       // One at a time: the store answers the reader too.
       for (const email of people) {
         const { query, key } = personCardRequest(
@@ -263,12 +267,17 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
         if (!card) continue;
         mutate(key, card, { revalidate: false });
         conversations.set(email.toLowerCase(), card.conversations);
+        syncing ||= card.history.syncing;
       }
-      return conversations;
+      return { conversations, syncing };
     },
-    { revalidateOnFocus: false, shouldRetryOnError: false },
+    {
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+      refreshInterval: (latest) => (latest?.syncing ? SYNCING_REREAD_MS : 0),
+    },
   );
-  return data;
+  return data?.conversations;
 }
 
 /**

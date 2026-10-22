@@ -195,6 +195,34 @@ describe("YourDay", () => {
     });
   });
 
+  it("reads again while this device is still syncing their mail", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let synced = false;
+    mocks.queryPersonCard.mockImplementation(
+      async ({ email }: { email: string }) => ({
+        ...card(
+          email,
+          synced ? [conversation("intro", "Intro", inHours(-24))] : [],
+        ),
+        history: { syncing: !synced, sinceMs: null },
+      }),
+    );
+
+    renderDay([
+      meeting({ attendees: [{ email: "ana@partner.com", name: "Ana Silva" }] }),
+    ]);
+    await waitFor(() => expect(mocks.queryPersonCard).toHaveBeenCalled());
+    expect(screen.queryByRole("link")).toBeNull();
+
+    synced = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+
+    expect(await screen.findByRole("link", { name: /Intro/ })).toBeTruthy();
+    vi.useRealTimers();
+  });
+
   it("leaves the line out when there's no mail with them", async () => {
     renderDay([
       meeting({ attendees: [{ email: "new@partner.com", name: "New" }] }),
