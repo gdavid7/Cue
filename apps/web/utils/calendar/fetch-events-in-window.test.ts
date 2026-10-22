@@ -143,6 +143,41 @@ describe("fetchCalendarEventsInWindow", () => {
     expect(result.events.map((event) => event.id)).toEqual(["work-copy"]);
   });
 
+  it("keeps the accepted copy when the other was declined at one of the person's aliases", async () => {
+    // An Outlook invite to an alias: the alias isn't the calendar's address,
+    // only the caller's own-address set knows it is the person.
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider(
+        [
+          {
+            ...makeEvent("outlook-copy"),
+            attendees: [{ email: "me.alias@outlook.example", declined: true }],
+          },
+        ],
+        "me@outlook.example",
+      ),
+      fakeProvider(
+        [
+          {
+            ...makeEvent("gmail-copy"),
+            attendees: [{ email: "me@gmail.example" }],
+          },
+        ],
+        "me@gmail.example",
+      ),
+    ]);
+
+    const result = await fetchCalendarEventsInWindow({
+      ...fetchParams,
+      selfAddresses: Promise.resolve(
+        new Set(["me.alias@outlook.example", "me@gmail.example"]),
+      ),
+    });
+
+    expect(result.events.map((event) => event.id)).toEqual(["gmail-copy"]);
+  });
+
   it("says which calendar account each event was read from", async () => {
     vi.mocked(countConnectedCalendars).mockResolvedValue(2);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([

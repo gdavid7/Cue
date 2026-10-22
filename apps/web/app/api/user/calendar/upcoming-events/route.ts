@@ -98,26 +98,33 @@ async function getTodayData({
   const now = new Date();
   const dayStart = startOfDay(new TZDate(now, timeZone));
   const dayEnd = addDays(dayStart, 1);
-  const [calendar, addresses, calendarAccounts] = await Promise.all([
-    fetchCalendarEventsInWindow({
-      emailAccountId,
-      timeMin: dayStart,
-      timeMax: dayEnd,
-      maxResultsPerProvider: TODAY_EVENTS_PER_CALENDAR,
-      logger,
-    }),
+  const calendarAccountsRead = getCalendarAccounts(emailAccountId);
+  const selfRead = Promise.all([
     getUserOwnAddresses(userId).catch((error) => {
       logger.warn("Failed to load own addresses for today's events", {
         error,
       });
       return [];
     }),
-    getCalendarAccounts(emailAccountId),
+    calendarAccountsRead,
+  ]).then(([addresses, calendarAccounts]) =>
+    buildSelfAddresses({
+      ownAddresses: [email, ...addresses],
+      calendarAccounts,
+    }),
+  );
+  const [calendar, calendarAccounts, self] = await Promise.all([
+    fetchCalendarEventsInWindow({
+      emailAccountId,
+      timeMin: dayStart,
+      timeMax: dayEnd,
+      maxResultsPerProvider: TODAY_EVENTS_PER_CALENDAR,
+      selfAddresses: selfRead,
+      logger,
+    }),
+    calendarAccountsRead,
+    selfRead,
   ]);
-  const self = buildSelfAddresses({
-    ownAddresses: [email, ...addresses],
-    calendarAccounts,
-  });
 
   const meetings = calendar.events.filter(
     (event) =>

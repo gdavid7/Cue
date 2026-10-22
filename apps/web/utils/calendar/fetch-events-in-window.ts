@@ -28,6 +28,7 @@ export async function fetchCalendarEventsInWindow({
   timeMax,
   maxResultsPerProvider,
   ownConnectionsOnly = false,
+  selfAddresses,
   logger,
 }: {
   emailAccountId: string;
@@ -36,6 +37,12 @@ export async function fetchCalendarEventsInWindow({
   maxResultsPerProvider: number;
   /** See `calendarConnectionsWhere`: for automations that act once per calendar. */
   ownConnectionsOnly?: boolean;
+  /**
+   * The user's own addresses (`buildSelfAddresses`), so that of a meeting on
+   * two calendars the copy they didn't decline is kept by the same rule the
+   * caller filters with. Awaited only once the calendars have answered.
+   */
+  selfAddresses?: ReadonlySet<string> | Promise<ReadonlySet<string>>;
   logger: Logger;
 }): Promise<CalendarEventsInWindow> {
   logger.trace("Starting calendar event window fetch");
@@ -130,7 +137,10 @@ export async function fetchCalendarEventsInWindow({
   const events = (
     ownConnectionsOnly
       ? eventsByCalendar.flat()
-      : dropCrossCalendarDuplicates(eventsByCalendar)
+      : dropCrossCalendarDuplicates(
+          eventsByCalendar,
+          await Promise.resolve(selfAddresses).catch(() => undefined),
+        )
   ).sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
 
   const filteredEvents = events.filter(
@@ -165,10 +175,20 @@ export async function fetchCalendarEventsInWindow({
 // One meeting the person was invited to on two of their calendars (say their
 // work and personal accounts) comes back from both, under different ids. The
 // first calendar's copy is kept, unless the person declined it there and not
-// on a later one; events within one calendar are never merged.
+// on a later one. Later calendars' copies are matched against the first
+// calendar to hold the meeting; two alike events on that one are both kept.
 function dropCrossCalendarDuplicates(
   eventsByCalendar: CalendarEvent[][],
+  selfAddresses: ReadonlySet<string> | undefined,
 ): CalendarEvent[] {
+  const declined = (event: CalendarEvent) =>
+    isDeclinedByUser(
+      event,
+      new Set([
+        ...(selfAddresses ?? []),
+        ...(event.calendarEmail ? [event.calendarEmail.toLowerCase()] : []),
+      ]),
+    );
   const keptAt = new Map<string, number>();
   const kept: CalendarEvent[] = [];
   for (const calendarEvents of eventsByCalendar) {
@@ -179,24 +199,13 @@ function dropCrossCalendarDuplicates(
       if (index === undefined) {
         if (!added.has(key)) added.set(key, kept.length);
         kept.push(event);
-      } else if (
-        declinedOnItsCalendar(kept[index]) &&
-        !declinedOnItsCalendar(event)
-      ) {
+      } else if (declined(kept[index]) && !declined(event)) {
         kept[index] = event;
       }
     }
     for (const [key, index] of added) keptAt.set(key, index);
   }
   return kept;
-}
-
-// The calendar's own entry, which says whether that copy is still on for them.
-function declinedOnItsCalendar(event: CalendarEvent) {
-  return isDeclinedByUser(
-    event,
-    new Set(event.calendarEmail ? [event.calendarEmail.toLowerCase()] : []),
-  );
 }
 
 function meetingKey(event: CalendarEvent) {

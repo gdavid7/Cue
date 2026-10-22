@@ -107,8 +107,19 @@ export async function getNextUp({
   const today = startOfDay(new TZDate(now, timeZone));
   const dayAfter = addDays(today, 2);
 
-  const [calendar, deadlines, calendarAccounts, addresses] = await Promise.all([
-    upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
+  const calendarAccountsRead = getCalendarAccounts(emailAccountId);
+  const selfRead = Promise.all([ownAddresses, calendarAccountsRead]).then(
+    ([addresses, calendarAccounts]) =>
+      buildSelfAddresses({ ownAddresses: addresses, calendarAccounts }),
+  );
+  const [calendar, deadlines, calendarAccounts, self] = await Promise.all([
+    upcomingEvents({
+      emailAccountId,
+      now,
+      until: dayAfter,
+      selfAddresses: selfRead,
+      logger,
+    }),
     getDeadlines({
       emailAccountId,
       now,
@@ -116,17 +127,13 @@ export async function getNextUp({
       timeZone,
       logger,
     }),
-    getCalendarAccounts(emailAccountId),
-    ownAddresses,
+    calendarAccountsRead,
+    selfRead,
   ]);
   const suggestion = deadlines.connected
     ? null
     : await connectSuggestion({ emailAccountId, now, logger });
 
-  const self = buildSelfAddresses({
-    ownAddresses: addresses,
-    calendarAccounts,
-  });
   const meetings = calendar.events.filter(
     (event) =>
       isMeetingForUser(event, self) &&
@@ -170,11 +177,13 @@ async function upcomingEvents({
   emailAccountId,
   now,
   until,
+  selfAddresses,
   logger,
 }: {
   emailAccountId: string;
   now: Date;
   until: Date;
+  selfAddresses: Promise<ReadonlySet<string>>;
   logger: Logger;
 }): Promise<{
   connected: boolean;
@@ -189,6 +198,7 @@ async function upcomingEvents({
         timeMin: now,
         timeMax: until,
         maxResultsPerProvider: 20,
+        selfAddresses,
         logger,
       }),
       CALENDAR_TIMEOUT_MS,

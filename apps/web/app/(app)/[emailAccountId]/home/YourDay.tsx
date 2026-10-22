@@ -261,18 +261,19 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
     return [...byAddress.values()].slice(0, PEOPLE_READ);
   }, [events]);
   const { accountIds, ownAddresses, replyTracking } = scope;
-  // Reads so far, which SWR's refresh timer reads back.
-  const reads = useRef(0);
+  const key =
+    readCard && people.length
+      ? JSON.stringify({ people, accountIds, ownAddresses, replyTracking })
+      : null;
+  // Reads of this key so far, which SWR's refresh timer reads back. New
+  // people or accounts get their own couple of minutes.
+  const reads = useRef({ key, count: 0 });
+  if (reads.current.key !== key) reads.current = { key, count: 0 };
 
   const { data } = useSWR(
-    readCard && people.length
-      ? [
-          "your-day-conversations",
-          JSON.stringify({ people, accountIds, ownAddresses, replyTracking }),
-        ]
-      : null,
+    key ? ["your-day-conversations", key] : null,
     async () => {
-      reads.current++;
+      reads.current.count++;
       const conversations = new Map<string, PersonCardConversation[]>();
       let syncing = false;
       // One at a time: the store answers the reader too.
@@ -293,7 +294,7 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
       revalidateOnFocus: false,
       shouldRetryOnError: false,
       refreshInterval: (latest) =>
-        latest?.syncing && reads.current <= SYNCING_REREADS
+        latest?.syncing && reads.current.count <= SYNCING_REREADS
           ? SYNCING_REREAD_MS
           : 0,
     },

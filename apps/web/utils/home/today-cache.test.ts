@@ -219,9 +219,12 @@ describe("Today's cache", () => {
     // A newer version.
     stored({ version: 99, savedAt: NOW, timeZone: ZONE, data: home() });
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    // An older one, whose next meeting has no id.
+    stored({ version: 1, savedAt: NOW, timeZone: ZONE, data: home() });
+    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
     // The right version, missing what Today reads.
     stored({
-      version: 1,
+      version: 2,
       savedAt: NOW,
       timeZone: ZONE,
       data: { needsYou: "nope" },
@@ -229,7 +232,7 @@ describe("Today's cache", () => {
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
     // A time zone this browser can't read.
     stored({
-      version: 1,
+      version: 2,
       savedAt: NOW,
       timeZone: "Nowhere/Else",
       data: home(),

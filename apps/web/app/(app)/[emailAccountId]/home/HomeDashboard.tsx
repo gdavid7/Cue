@@ -125,9 +125,10 @@ export function HomeDashboard() {
   const dayMeetings = useMemo<DayMeetings>(
     () => ({
       ids: new Set(day?.events.map((event) => `event:${event.id}`)),
-      loading: !day && !dayError,
+      // Without an account there's no request, so nothing to wait for.
+      loading: Boolean(emailAccountId) && !day && !dayError,
     }),
-    [day, dayError],
+    [day, dayError, emailAccountId],
   );
   const greetingText = useGreeting();
   const firstName = getUserFirstName(accountsData?.emailAccounts);
