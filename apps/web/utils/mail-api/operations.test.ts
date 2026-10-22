@@ -8,6 +8,7 @@ import {
   activatePreparedSnoozedThread,
   cancelSnoozedThreadByClientMutationId,
   cancelSnoozedThreads,
+  getActiveSnoozedThreadIds,
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import {
@@ -32,6 +33,7 @@ vi.mock("@/utils/snooze/scheduler", () => ({
   activatePreparedSnoozedThread: vi.fn(),
   cancelSnoozedThreadByClientMutationId: vi.fn(),
   cancelSnoozedThreads: vi.fn(),
+  getActiveSnoozedThreadIds: vi.fn(async () => new Set()),
 }));
 
 describe("createEmailProviderOperationExecutor", () => {
@@ -90,34 +92,37 @@ describe("createEmailProviderOperationExecutor", () => {
   });
 
   it.each([
-    "archive",
-    "unarchive",
-  ] as const)("%s ends the snoozes of the conversations it moved", async (kind) => {
+    [{ kind: "archive" }, []],
+    [{ kind: "unarchive" }, ["INBOX"]],
+    [{ kind: "trash" }, ["TRASH"]],
+    [{ kind: "set_spam", spam: true }, ["SPAM"]],
+  ] as const)("%o ends the snoozes of the conversations it moved", async (change, labelIds) => {
+    vi.mocked(getActiveSnoozedThreadIds).mockResolvedValue(
+      new Set(["t-1", "t-2", "t-elsewhere"]),
+    );
+    const getMessagesBatch = vi
+      .fn()
+      // The read-back after the change misses m2...
+      .mockResolvedValueOnce([snoozeTestMessage("m1", "t-1", [...labelIds])])
+      // ...so its conversation is looked up on its own.
+      .mockResolvedValueOnce([snoozeTestMessage("m2", "t-2", [...labelIds])]);
     const executor = createEmailProviderOperationExecutor({
       accountId: "acc-1",
       provider: {
         name: "google",
         archiveMessages: vi.fn(),
         unarchiveMessages: vi.fn(),
-        getMessagesBatch: vi.fn(async () => [
-          {
-            id: "m1",
-            threadId: "t-1",
-            headers: { from: "ada@example.com", to: "me@example.com" },
-            labelIds: kind === "unarchive" ? ["INBOX"] : [],
-            snippet: "m1",
-          },
-        ]),
-        // The batched read missed m2; its conversation is read on its own.
-        getMessage: vi.fn(async (id: string) => ({ id, threadId: "t-2" })),
+        trashMessages: vi.fn(),
+        markSpam: vi.fn(),
+        getMessage: vi.fn(async (id: string) => ({ id, threadId: `t-${id}` })),
+        getMessagesBatch,
       } as unknown as EmailProvider,
     });
     const operation = metadataOperation([
       { accountId: "acc-1", messageId: "m1" },
       { accountId: "acc-1", messageId: "m2" },
     ]);
-    if (operation.intent.kind === "metadata")
-      operation.intent.change = { kind };
+    if (operation.intent.kind === "metadata") operation.intent.change = change;
 
     const result = await executor.execute({
       operation,
@@ -129,6 +134,71 @@ describe("createEmailProviderOperationExecutor", () => {
     expect(cancelSnoozedThreads).toHaveBeenCalledExactlyOnceWith({
       emailAccountId: "acc-1",
       threadIds: ["t-1", "t-2"],
+    });
+  });
+
+  it("makes no provider call for snoozes when the account has none", async () => {
+    vi.mocked(getActiveSnoozedThreadIds).mockResolvedValue(new Set());
+    const getMessagesBatch = vi.fn().mockResolvedValue([]);
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        archiveMessages: vi.fn(),
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+
+    await executor.execute({
+      operation: metadataOperation([{ accountId: "acc-1", messageId: "m1" }]),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    // Only the read-back after the archive itself.
+    expect(getMessagesBatch).toHaveBeenCalledTimes(1);
+    expect(cancelSnoozedThreads).not.toHaveBeenCalled();
+  });
+
+  it("looks up at most 100 conversations to end snoozes, and skips a failed read", async () => {
+    vi.mocked(getActiveSnoozedThreadIds).mockResolvedValue(
+      new Set(["t-never-found"]),
+    );
+    const lookedUp: string[] = [];
+    let call = 0;
+    const getMessagesBatch = vi.fn(async (ids: string[]) => {
+      call += 1;
+      // Every read-back misses, so each message would need a lookup.
+      if (call <= 13) return [];
+      lookedUp.push(...ids);
+      if (call === 14) throw new Error("rate limited");
+      return ids.map((id) => snoozeTestMessage(id, `t-${id}`, []));
+    });
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        archiveMessages: vi.fn(),
+        getMessage: vi.fn().mockRejectedValue(new Error("unreadable")),
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+    const targets = Array.from({ length: 250 }, (_, index) => ({
+      accountId: "acc-1",
+      messageId: `m${index}`,
+    }));
+
+    const result = await executor.execute({
+      operation: metadataOperation(targets),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe("confirmed");
+    expect(lookedUp).toHaveLength(100);
+    expect(cancelSnoozedThreads).toHaveBeenCalledExactlyOnceWith({
+      emailAccountId: "acc-1",
+      threadIds: [],
     });
   });
 
@@ -1119,6 +1189,16 @@ function metadataOperation(
       targets,
       change: { kind: "archive" },
     },
+  };
+}
+
+function snoozeTestMessage(id: string, threadId: string, labelIds: string[]) {
+  return {
+    id,
+    threadId,
+    headers: { from: "ada@example.com", to: "me@example.com" },
+    labelIds,
+    snippet: id,
   };
 }
 

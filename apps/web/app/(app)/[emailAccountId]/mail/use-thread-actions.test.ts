@@ -239,6 +239,43 @@ describe("useThreadActions", () => {
     );
   });
 
+  it("undoes a mixed snooze, each conversation back where it was", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const threads = [
+      createThread(["INBOX"], "in-inbox"),
+      createThread(["SENT"], "archived"),
+    ];
+    const { result } = renderActions({ threads });
+    await act(() =>
+      result.current.snooze(
+        threads.map((thread) => thread.id),
+        new Date(Date.now() + 1),
+      ),
+    );
+    mail.client.submitConversations.mockClear();
+
+    let restored: string[] = [];
+    await act(async () => {
+      restored = await result.current.undo();
+    });
+
+    expect(restored.sort()).toEqual(["archived", "in-inbox"]);
+    expect(
+      mail.client.submitConversations.mock.calls
+        .map(([command]) => ({
+          ids: command.conversations.map(
+            (conversation: { conversationId: string }) =>
+              conversation.conversationId,
+          ),
+          change: command.change,
+        }))
+        .sort((a, b) => a.ids[0].localeCompare(b.ids[0])),
+    ).toEqual([
+      { ids: ["archived"], change: { kind: "archive" } },
+      { ids: ["in-inbox"], change: { kind: "unarchive" } },
+    ]);
+  });
+
   it("cancels a snooze still waiting in the engine from the toast", async () => {
     const { result } = renderActions();
     await act(() =>

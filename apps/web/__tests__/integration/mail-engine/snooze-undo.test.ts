@@ -5,6 +5,7 @@ import {
   type MailEngine,
 } from "@inboxzero/mail-core/engine";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
+import type { OperationExecutor } from "@inboxzero/mail-core/ports/operation-executor";
 import { createNodeSqliteDriver } from "@inboxzero/mail-sqlite/node";
 import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import {
@@ -205,8 +206,12 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
           client: engine,
           accountId,
           operationId: snooze,
-          conversationIds: [conversationId],
-          compensation: { kind: "unarchive" },
+          compensations: [
+            {
+              conversationIds: [conversationId],
+              change: { kind: "unarchive" },
+            },
+          ],
         });
         await engine.runUntil(Date.now() + 6000);
 
@@ -215,6 +220,58 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
         );
         expect(activeSnoozes()).toEqual([]);
         expect(qstash.cancelledLabels).toContain(`snoozed-thread-${record.id}`);
+      });
+
+      it("undoes a snooze the server is applying when undo is pressed", async () => {
+        const accountId = `${setup.name}-snooze-undo-in-flight`;
+        running = await setup.start({
+          email: `snooze-undo-in-flight-${setup.name}@example.com`,
+          inInbox: true,
+        });
+        let reached!: () => void;
+        const atServer = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        let release!: () => void;
+        const gate: SnoozeGate = {
+          reached,
+          release: new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+        };
+        engine = await startEngine(accountId, running.provider, gate);
+        const conversationId = await onlyConversationId(engine);
+        const before = await readState(engine, running.provider, accountId);
+
+        const snooze = await submit(engine, accountId, conversationId, {
+          kind: "snooze",
+          untilMs: Date.now() + HOUR_MS,
+        });
+        const applying = engine.runUntil(Date.now() + 10_000);
+        await atServer;
+        const cancel = vi.spyOn(engine, "cancelOperation");
+        await undoConversationChange({
+          client: engine,
+          accountId,
+          operationId: snooze,
+          compensations: [
+            {
+              conversationIds: [conversationId],
+              change: { kind: "unarchive" },
+            },
+          ],
+        });
+        expect(await cancel.mock.results[0].value).toEqual({
+          status: "too_late",
+        });
+        release();
+        await applying;
+        await engine.runUntil(Date.now() + 6000);
+
+        expect(await readState(engine, running.provider, accountId)).toEqual(
+          before,
+        );
+        expect(activeSnoozes()).toEqual([]);
       });
 
       it("cancels a snooze still waiting in the engine before the server hears of it", async () => {
@@ -235,8 +292,12 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
           client: engine,
           accountId,
           operationId: snooze,
-          conversationIds: [conversationId],
-          compensation: { kind: "unarchive" },
+          compensations: [
+            {
+              conversationIds: [conversationId],
+              change: { kind: "unarchive" },
+            },
+          ],
         });
         await engine.runUntil(Date.now() + 6000);
 
@@ -245,6 +306,32 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
         );
         expect(snoozedThreads).toEqual([]);
         expect(qstash.published).toEqual([]);
+      });
+
+      it("ends the snooze when a snoozed conversation is moved to the trash", async () => {
+        const accountId = `${setup.name}-snooze-trash`;
+        running = await setup.start({
+          email: `snooze-trash-${setup.name}@example.com`,
+          inInbox: true,
+        });
+        engine = await startEngine(accountId, running.provider);
+        const conversationId = await onlyConversationId(engine);
+        await submit(engine, accountId, conversationId, {
+          kind: "snooze",
+          untilMs: Date.now() + HOUR_MS,
+        });
+        await engine.runUntil(Date.now() + 6000);
+        expect(activeSnoozes()).toHaveLength(1);
+
+        await submit(engine, accountId, conversationId, { kind: "trash" });
+        await engine.runUntil(Date.now() + 6000);
+
+        // The Gmail emulator can't read a trashed thread back, so this
+        // looks at the engine alone.
+        const [trashed] = await seededMessages(engine);
+        expect(trashed.effective.roles).toEqual(["trash"]);
+        expect(trashed.effective.snoozedUntilMs ?? null).toBeNull();
+        expect(activeSnoozes()).toEqual([]);
       });
 
       it("leaves a conversation snoozed from outside the inbox out of it", async () => {
@@ -269,8 +356,9 @@ describe.skipIf(!RUN_INTEGRATION_TESTS)(
           client: engine,
           accountId,
           operationId: snooze,
-          conversationIds: [conversationId],
-          compensation: { kind: "archive" },
+          compensations: [
+            { conversationIds: [conversationId], change: { kind: "archive" } },
+          ],
         });
         await engine.runUntil(Date.now() + 6000);
 
@@ -289,7 +377,11 @@ function activeSnoozes() {
   );
 }
 
-async function startEngine(accountId: string, provider: EmailProvider) {
+async function startEngine(
+  accountId: string,
+  provider: EmailProvider,
+  gate?: SnoozeGate,
+) {
   const store = await createSqliteMailStore(createNodeSqliteDriver());
   await store.ensureAccount({
     accountId,
@@ -299,12 +391,35 @@ async function startEngine(accountId: string, provider: EmailProvider) {
   const engine = createMailEngine({
     store,
     source: createEmailProviderMailboxSource({ logger, provider, accountId }),
-    executor: createEmailProviderOperationExecutor({ provider, accountId }),
+    executor: gated(
+      createEmailProviderOperationExecutor({ provider, accountId }),
+      gate,
+    ),
     runtime: createHostRuntime(),
   });
   await engine.requestSync([accountId]);
   await engine.runUntil(Date.now() + 8000);
   return engine;
+}
+
+type SnoozeGate = { reached: () => void; release: Promise<void> };
+
+/** Holds a snooze at the server's door until the test lets it through. */
+function gated(executor: OperationExecutor, gate?: SnoozeGate) {
+  if (!gate) return executor;
+  return {
+    ...executor,
+    async execute(input) {
+      if (
+        input.operation.intent.kind === "metadata" &&
+        input.operation.intent.change.kind === "snooze"
+      ) {
+        gate.reached();
+        await gate.release;
+      }
+      return executor.execute(input);
+    },
+  } satisfies OperationExecutor;
 }
 
 async function onlyConversationId(engine: MailEngine) {

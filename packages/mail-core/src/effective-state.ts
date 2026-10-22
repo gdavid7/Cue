@@ -38,8 +38,12 @@ export function applyMetadataChange(
       return { ...metadata, read: change.read };
     case "set_starred":
       return { ...metadata, starred: change.starred };
+    // Trash and spam end a snooze, as archive and move to inbox do.
     case "trash":
-      return withRoles(metadata, uniqueRoles(["trash"]));
+      return {
+        ...withRoles(metadata, uniqueRoles(["trash"])),
+        snoozedUntilMs: null,
+      };
     case "restore_from_trash":
       return withRoles(
         metadata,
@@ -47,7 +51,10 @@ export function applyMetadataChange(
       );
     case "set_spam":
       return change.spam
-        ? withRoles(metadata, uniqueRoles(["spam"]))
+        ? {
+            ...withRoles(metadata, uniqueRoles(["spam"])),
+            snoozedUntilMs: null,
+          }
         : withRoles(
             metadata,
             uniqueRoles([...withoutRole(metadata.roles, "spam"), "inbox"]),

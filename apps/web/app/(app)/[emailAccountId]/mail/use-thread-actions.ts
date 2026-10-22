@@ -199,16 +199,25 @@ export function useThreadActions({
       Object.values(groupBy(snapshots, (snapshot) => snapshot.mutationId)).map(
         async (snapshots) => {
           const { emailAccountId, mutationId } = snapshots[0];
-          const compensation = mutationPayloadToChange({
-            kind: UNDOABLE_COPY[batch.action].compensation(snapshots[0]),
+          const compensations = Object.values(
+            groupBy(snapshots, (snapshot) =>
+              UNDOABLE_COPY[batch.action].compensation(snapshot),
+            ),
+          ).map((group) => {
+            const change = mutationPayloadToChange({
+              kind: UNDOABLE_COPY[batch.action].compensation(group[0]),
+            });
+            if (!change) throw new Error("no_compensation");
+            return {
+              conversationIds: group.map((snapshot) => snapshot.threadId),
+              change,
+            };
           });
-          if (!compensation) throw new Error("no_compensation");
           await undoConversationChange({
             client,
             accountId: emailAccountId,
             operationId: mutationId,
-            conversationIds: snapshots.map((snapshot) => snapshot.threadId),
-            compensation,
+            compensations,
           });
           return snapshots.map((snapshot) => snapshot.key);
         },

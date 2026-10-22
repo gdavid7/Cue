@@ -33,6 +33,7 @@ import {
   activatePreparedSnoozedThread,
   cancelSnoozedThreadByClientMutationId,
   cancelSnoozedThreads,
+  getActiveSnoozedThreadIds,
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import prisma from "@/utils/prisma";
@@ -45,6 +46,9 @@ const logger = createScopedLogger("mail-api/operations");
 const HELD_SEND_POLL_MS = 2000;
 const BLOCKED_HELD_SEND_RETRY_MS = 60_000;
 const METADATA_OBSERVATION_BATCH_SIZE = 20;
+// Messages whose conversation is looked up to end a snooze, when the
+// read-back after the change missed them.
+const MAX_SNOOZE_THREAD_LOOKUPS = 100;
 type SendIntent = Extract<PreparedOperation["intent"], { kind: "send" }>;
 type PreparedMetadataOperation = PreparedOperation & {
   intent: Extract<PreparedOperation["intent"], { kind: "metadata" }>;
@@ -260,11 +264,11 @@ async function metadataResult(
       receiptId: operation.key.operationId,
     };
   }
-  const { kind } = operation.intent.change;
-  if (kind === "archive" || kind === "unarchive") {
+  const { change } = operation.intent;
+  if (endsSnooze(change)) {
     await endSnoozesOfMovedThreads(provider, accountId, targets, observations);
   }
-  if (kind === "archive") {
+  if (change.kind === "archive") {
     const messageIds = targets
       .filter((target) => target.outcome === "applied")
       .map((target) => target.key.messageId);
@@ -292,43 +296,51 @@ async function metadataResult(
   };
 }
 
-// The engine takes archive and move to inbox to end a snooze, so the server
-// does too: otherwise the scheduled return still fires, and the Snoozed view
-// still lists the conversation. This is also how a snooze is undone.
+// The engine takes archive, move to inbox, trash and spam to end a snooze, so
+// the server does too: otherwise the scheduled return still fires, and the
+// Snoozed view still lists the conversation. This is also how a snooze is
+// undone. It runs on inspect too, on purpose: a change confirmed there was
+// applied just the same.
 async function endSnoozesOfMovedThreads(
   provider: EmailProvider,
   accountId: string,
   targets: TargetOutcome[],
   observations: ProviderChange[],
 ) {
-  const threadIdByMessageId = new Map<string, string>();
-  for (const observation of observations) {
-    if (observation.kind === "message_patch") {
-      threadIdByMessageId.set(
-        observation.key.messageId,
-        observation.reference.conversationId,
-      );
-    }
-  }
-  const threadIds = new Set<string>();
-  for (const target of targets) {
-    if (target.outcome !== "applied") continue;
-    const { messageId } = target.key;
-    const observed = threadIdByMessageId.get(messageId);
-    if (observed) {
-      threadIds.add(observed);
-      continue;
-    }
-    try {
-      threadIds.add((await provider.getMessage(messageId)).threadId);
-    } catch {
-      // Unreadable now; its snooze, if any, returns it as scheduled.
-    }
-  }
   try {
+    const snoozed = await getActiveSnoozedThreadIds(accountId);
+    if (!snoozed.size) return;
+    const applied = new Set(
+      targets
+        .filter((target) => target.outcome === "applied")
+        .map((target) => target.key.messageId),
+    );
+    const ending = new Set<string>();
+    const observed = new Set<string>();
+    for (const observation of observations) {
+      if (observation.kind !== "message_patch") continue;
+      observed.add(observation.key.messageId);
+      const threadId = observation.reference.conversationId;
+      if (applied.has(observation.key.messageId) && snoozed.has(threadId)) {
+        ending.add(threadId);
+      }
+    }
+    const unresolved = [...applied]
+      .filter((messageId) => !observed.has(messageId))
+      .slice(0, MAX_SNOOZE_THREAD_LOOKUPS);
+    for (const batch of chunk(unresolved, METADATA_OBSERVATION_BATCH_SIZE)) {
+      if ([...snoozed].every((threadId) => ending.has(threadId))) break;
+      try {
+        for (const message of await provider.getMessagesBatch(batch)) {
+          if (snoozed.has(message.threadId)) ending.add(message.threadId);
+        }
+      } catch {
+        // Unreadable now; its snooze, if any, returns it as scheduled.
+      }
+    }
     await cancelSnoozedThreads({
       emailAccountId: accountId,
-      threadIds: [...threadIds],
+      threadIds: [...ending],
     });
   } catch (error) {
     logger.error("Failed to end snoozes of moved conversations", {
@@ -336,6 +348,15 @@ async function endSnoozesOfMovedThreads(
       error,
     });
   }
+}
+
+function endsSnooze(change: MetadataChange) {
+  return (
+    change.kind === "archive" ||
+    change.kind === "unarchive" ||
+    change.kind === "trash" ||
+    (change.kind === "set_spam" && change.spam)
+  );
 }
 
 function failedTargetOutcome(

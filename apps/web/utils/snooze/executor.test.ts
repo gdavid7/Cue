@@ -22,6 +22,7 @@ describe("executeSnoozedThread", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     prisma.snoozedThread.updateMany.mockResolvedValue({ count: 1 });
+    prisma.snoozedThread.findUnique.mockResolvedValue(null);
   });
 
   it("restores the thread and completes the snooze", async () => {
@@ -78,6 +79,54 @@ describe("executeSnoozedThread", () => {
 
     expect(result.success).toBe(false);
     expect(provider.unarchiveThread).toHaveBeenCalledWith("thread");
+    expect(releaseSnoozedThreadForRetry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["trash", ["TRASH"]],
+    ["spam", ["SPAM"]],
+  ])("leaves a thread now in %s where it is and ends the snooze", async (_, labelIds) => {
+    const provider = createMockEmailProvider({
+      getThreadMessages: vi.fn().mockResolvedValue([
+        { id: "received", threadId: "thread", headers: {}, labelIds },
+        { id: "sent", threadId: "thread", headers: {}, labelIds: ["SENT"] },
+      ]),
+    });
+
+    const result = await executeSnoozedThread(
+      snoozedThread,
+      provider,
+      logger,
+      leaseStartedAt,
+    );
+
+    expect(result.success).toBe(true);
+    expect(provider.unarchiveThread).not.toHaveBeenCalled();
+    expect(prisma.snoozedThread.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        id: "snooze",
+        status: SnoozedThreadStatus.EXECUTING,
+        updatedAt: leaseStartedAt,
+      },
+      data: { status: SnoozedThreadStatus.CANCELLED },
+    });
+  });
+
+  it("treats a snooze cancelled while it was being restored as done", async () => {
+    prisma.snoozedThread.updateMany.mockResolvedValue({ count: 0 });
+    prisma.snoozedThread.findUnique.mockResolvedValue({
+      status: SnoozedThreadStatus.CANCELLED,
+    } as never);
+    const provider = createMockEmailProvider();
+
+    const result = await executeSnoozedThread(
+      snoozedThread,
+      provider,
+      logger,
+      leaseStartedAt,
+    );
+
+    expect(result.success).toBe(true);
     expect(releaseSnoozedThreadForRetry).not.toHaveBeenCalled();
   });
 
