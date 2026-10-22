@@ -7,6 +7,7 @@ import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 
 const T0 = 1_800_000_000_000;
+const DAY = 86_400_000;
 const ME = "me@example.com";
 
 const stores: MailStore[] = [];
@@ -15,7 +16,7 @@ afterEach(async () => {
 });
 
 describe("readSenderHistory", () => {
-  it("finds the addresses you have written to under the same name, accents and case aside", async () => {
+  it("finds the address you most recently wrote to under the same name, accents and case aside", async () => {
     const store = await setup(["a", "b"]);
     await write(store, [
       sent("1", ["José Álvarez <jose@example.com>"], T0),
@@ -36,11 +37,8 @@ describe("readSenderHistory", () => {
     ).toEqual({
       ready: true,
       writtenTo: false,
-      sameNameAddresses: [
-        "jose@work.example",
-        "jose@b.example",
-        "jose@example.com",
-      ],
+      receivedBefore: false,
+      knownAddress: "jose@work.example",
     });
   });
 
@@ -59,7 +57,69 @@ describe("readSenderHistory", () => {
       }),
     ).toMatchObject({
       writtenTo: true,
-      sameNameAddresses: ["dana@example.com"],
+      knownAddress: "dana@example.com",
+    });
+  });
+
+  it("counts a colleague's personal address that has written to you before as known", async () => {
+    const store = await setup();
+    await write(store, [
+      sent("1", ["Dana Example <dana@work.example>"]),
+      mail("2", "Dana Example <dana@personal.example>", [ME], T0 + DAY),
+      mail("3", "Dana Example <dana@personal.example>", [ME], T0 + 2 * DAY),
+      // The message being read.
+      mail("4", "Dana Example <dana@personal.example>", [ME], T0 + 3 * DAY),
+    ]);
+    await ready(store);
+
+    expect(
+      await read(store, {
+        email: "dana@personal.example",
+        receivedAtMs: T0 + 3 * DAY,
+      }),
+    ).toMatchObject({
+      receivedBefore: true,
+      knownAddress: "dana@work.example",
+    });
+  });
+
+  it("treats a lookalike's first message as new, and its copy in another account too", async () => {
+    const store = await setup(["a", "b"]);
+    await write(store, [
+      sent("1", ["Dana Example <dana@work.example>"]),
+      // The message being read.
+      mail("2", "Dana Example <dana@lookalike.example>", [ME], T0 + DAY),
+    ]);
+    // The same message reached the other account a few seconds earlier.
+    await write(
+      store,
+      [
+        mail(
+          "b2",
+          "Dana Example <dana@lookalike.example>",
+          [ME],
+          T0 + DAY - 5000,
+        ),
+      ],
+      "b",
+    );
+    // Mail that only copied the address in doesn't count as theirs.
+    await write(store, [
+      mail("3", "Someone Else <else@example.com>", [
+        ME,
+        "dana@lookalike.example",
+      ]),
+    ]);
+    await ready(store);
+
+    expect(
+      await read(store, {
+        email: "dana@lookalike.example",
+        receivedAtMs: T0 + DAY,
+      }),
+    ).toMatchObject({
+      receivedBefore: false,
+      knownAddress: "dana@work.example",
     });
   });
 
@@ -74,7 +134,7 @@ describe("readSenderHistory", () => {
         name: "Sam Taylor",
         ownAddresses: [ME, "me@work.example"],
       }),
-    ).toMatchObject({ sameNameAddresses: [] });
+    ).toMatchObject({ knownAddress: null });
   });
 
   it("is not ready until the contact index has read every message", async () => {
@@ -105,11 +165,11 @@ describe("readSenderHistory", () => {
     await ready(store);
 
     expect(await read(store, { name: "Dana" })).toMatchObject({
-      sameNameAddresses: [],
+      knownAddress: null,
     });
     expect(
       await read(store, { email: "noreply@service.example" }),
-    ).toMatchObject({ sameNameAddresses: [] });
+    ).toMatchObject({ knownAddress: null });
   });
 });
 
@@ -158,6 +218,7 @@ function read(store: MailStore, input: Partial<SenderHistoryQuery> = {}) {
     email: "dana@new.example",
     name: "Dana Example",
     ownAddresses: [ME],
+    receivedAtMs: T0 + 30 * DAY,
     ...input,
   });
 }

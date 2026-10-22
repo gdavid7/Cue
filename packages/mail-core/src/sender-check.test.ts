@@ -15,7 +15,7 @@ describe("findSenderNotice", () => {
       check({
         name: "Dana Example",
         address: "dana.example@other.test",
-        history: history({ sameNameAddresses: ["dana@example.com"] }),
+        history: history({ knownAddress: "dana@example.com" }),
       }),
     ).toEqual({
       kind: "familiar-name",
@@ -32,7 +32,20 @@ describe("findSenderNotice", () => {
         address: "dana@personal.test",
         history: history({
           writtenTo: true,
-          sameNameAddresses: ["dana@example.com"],
+          knownAddress: "dana@example.com",
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("says nothing for an address that has written before, such as a colleague's personal one", () => {
+    expect(
+      check({
+        name: "Dana Example",
+        address: "dana@personal.test",
+        history: history({
+          receivedBefore: true,
+          knownAddress: "dana@example.com",
         }),
       }),
     ).toBeNull();
@@ -51,7 +64,7 @@ describe("findSenderNotice", () => {
         address: "dana@new.test",
         history: history({
           ready: false,
-          sameNameAddresses: ["dana@example.com"],
+          knownAddress: "dana@example.com",
         }),
       }),
     ).toBeNull();
@@ -86,7 +99,7 @@ describe("findSenderNotice", () => {
         check({
           name: "Dana Example",
           address,
-          history: history({ sameNameAddresses: ["dana@example.com"] }),
+          history: history({ knownAddress: "dana@example.com" }),
         }),
       ).toBeNull();
       expect(check({ name: "billing@bank.example", address })).toBeNull();
@@ -97,7 +110,7 @@ describe("findSenderNotice", () => {
     const input = {
       name: "Dana Example",
       address: "dana@new.test",
-      history: history({ sameNameAddresses: ["dana@example.com"] }),
+      history: history({ knownAddress: "dana@example.com" }),
     };
     const allowed = new Set([senderAllowKey("DANA  example", "Dana@New.test")]);
     expect(
@@ -173,5 +186,11 @@ function check({
 }
 
 function history(input: Partial<SenderHistory> = {}): SenderHistory {
-  return { ready: true, writtenTo: false, sameNameAddresses: [], ...input };
+  return {
+    ready: true,
+    writtenTo: false,
+    receivedBefore: false,
+    knownAddress: null,
+    ...input,
+  };
 }

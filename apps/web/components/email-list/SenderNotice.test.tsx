@@ -46,6 +46,7 @@ vi.mock("@/providers/ComposeModalProvider", () => ({
 
 const OWN = ["me@example.com"];
 const FAMILIAR = "Dana Example <dana.example@other.test>";
+const RECEIVED_AT = 1_800_000_000_000;
 
 beforeEach(() => {
   resetBrowserCacheForTesting();
@@ -64,7 +65,7 @@ beforeEach(() => {
     removeEventListener() {},
   }));
   mocks.querySenderHistory.mockResolvedValue(
-    history({ sameNameAddresses: ["dana@example.com"] }),
+    history({ knownAddress: "dana@example.com" }),
   );
   mocks.queryPersonCard.mockReturnValue(new Promise(() => {}));
 });
@@ -88,8 +89,10 @@ describe("SenderNotice", () => {
       accountIds: ["a"],
       email: "dana.example@other.test",
       name: "Dana Example",
+      receivedAtMs: RECEIVED_AT,
       ownAddresses: OWN,
     });
+    expect(screen.getByRole("note")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Show contact" }));
     await waitFor(() =>
@@ -102,7 +105,7 @@ describe("SenderNotice", () => {
   it("asks again while the contact index is still being built", async () => {
     mocks.querySenderHistory
       .mockResolvedValueOnce(history({ ready: false }))
-      .mockResolvedValue(history({ sameNameAddresses: ["dana@example.com"] }));
+      .mockResolvedValue(history({ knownAddress: "dana@example.com" }));
     renderNotice(FAMILIAR);
 
     expect(
@@ -113,7 +116,11 @@ describe("SenderNotice", () => {
 
   it("stays hidden for that name and address once marked fine, after a remount too", async () => {
     const { unmount } = renderNotice(FAMILIAR);
-    fireEvent.click(await screen.findByRole("button", { name: "It's fine" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "It's fine: Dana Example from dana.example@other.test",
+      }),
+    );
     expect(screen.queryByTestId("sender-notice")).toBeNull();
     unmount();
 
@@ -126,7 +133,7 @@ describe("SenderNotice", () => {
 
   it("shows nothing for a sender you have written to", async () => {
     mocks.querySenderHistory.mockResolvedValue(
-      history({ writtenTo: true, sameNameAddresses: ["dana@example.com"] }),
+      history({ writtenTo: true, knownAddress: "dana@example.com" }),
     );
     renderNotice(FAMILIAR);
     await waitFor(() => expect(mocks.querySenderHistory).toHaveBeenCalled());
@@ -157,12 +164,22 @@ function renderNotice(from: string) {
           onOpenConversation: vi.fn(),
         }}
       >
-        <SenderNotice emailAccountId="a" from={from} />
+        <SenderNotice
+          emailAccountId="a"
+          from={from}
+          receivedAtMs={RECEIVED_AT}
+        />
       </PersonCardScope>
     </SWRConfig>,
   );
 }
 
 function history(input: Partial<SenderHistory> = {}): SenderHistory {
-  return { ready: true, writtenTo: false, sameNameAddresses: [], ...input };
+  return {
+    ready: true,
+    writtenTo: false,
+    receivedBefore: false,
+    knownAddress: null,
+    ...input,
+  };
 }

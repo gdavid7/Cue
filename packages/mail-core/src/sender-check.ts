@@ -50,16 +50,21 @@ export function findSenderNotice({
       : { kind: "address-name", name: unquote(name), address: from };
   }
 
-  if (!personNameKey(name) || !history?.ready || history.writtenTo) return null;
-  const knownAddress = history.sameNameAddresses.find(
-    (known) => normalizeAddress(known) !== from && !isOwn(known, ownAddresses),
-  );
-  if (!knownAddress) return null;
+  // An address that has written before, such as a colleague's personal
+  // one, isn't new to the user even if they never wrote back.
+  if (
+    !personNameKey(name) ||
+    !history?.ready ||
+    history.writtenTo ||
+    history.receivedBefore ||
+    !history.knownAddress
+  )
+    return null;
   return {
     kind: "familiar-name",
     name: unquote(name),
     address: from,
-    knownAddress,
+    knownAddress: history.knownAddress,
   };
 }
 
@@ -77,6 +82,12 @@ export function needsSenderHistory(
  * A display name as the familiar-name check compares it: case, spacing,
  * punctuation and accents folded. Null for a name too short to tell people
  * apart (a lone first name, or initials) and for one that is an address.
+ *
+ * Folding only removes combining marks and case. Word order ("Smith, John"
+ * vs "John Smith"), nicknames, transliteration across scripts, letters that
+ * don't decompose (ß, ø, ł) and look-alike characters from other scripts
+ * (Cyrillic "а" for Latin "a") are not matched, so such names are treated as
+ * different people: the line stays quiet rather than guessing.
  */
 export function personNameKey(name: string): string | null {
   if (name.includes("@")) return null;
@@ -113,7 +124,8 @@ function domainOf(address: string) {
   return address.slice(address.lastIndexOf("@") + 1);
 }
 
-function normalizeAddress(address: string) {
+/** An address as every part of the sender check compares it. */
+export function normalizeAddress(address: string) {
   return address.trim().toLowerCase();
 }
 

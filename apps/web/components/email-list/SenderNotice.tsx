@@ -6,6 +6,7 @@ import type { SenderHistoryQuery } from "@inboxzero/mail-core/queries";
 import {
   findSenderNotice,
   needsSenderHistory,
+  normalizeAddress,
   type SenderNotice as SenderNoticeData,
   senderAllowKey,
 } from "@inboxzero/mail-core/sender-check";
@@ -27,7 +28,12 @@ const allowedSenders = createBrowserCache<true>({
   maxEntries: 500,
 });
 
+// While the contact index is still being built on a first sync, the line
+// asks again: often at first, then rarely, then not at all.
 const INDEX_POLL_MS = 5000;
+const INDEX_POLL_SLOW_AFTER_MS = 60_000;
+const INDEX_POLL_SLOW_MS = 30_000;
+const INDEX_POLL_STOP_AFTER_MS = 10 * 60_000;
 
 /**
  * The reader's quiet "New address, familiar name" line for a received
@@ -36,44 +42,58 @@ const INDEX_POLL_MS = 5000;
  */
 export function SenderNotice({
   from,
+  receivedAtMs,
   emailAccountId,
 }: {
   from: string;
+  /** When the message arrived; only earlier mail from the sender counts. */
+  receivedAtMs: number;
   emailAccountId: string;
 }) {
   const scope = usePersonCardScope();
   const ownAddresses = useOwnEmailAddresses();
   const client = useOptionalMailClient() ?? getActiveMailClient();
   const [allowedNow, setAllowedNow] = useState<string | null>(null);
+  const [mountedAtMs] = useState(Date.now);
   const name = extractNameFromEmail(from);
-  const address = extractEmailAddress(from).toLowerCase();
-  const isAllowed = (key: string) =>
-    key === allowedNow || Boolean(allowedSenders.get(emailAccountId, key));
+  const address = normalizeAddress(extractEmailAddress(from));
+  const allowKey = senderAllowKey(name, address);
+  // Read from storage once per sender, not on every render.
+  const storedAllowed = useMemo(
+    () => Boolean(allowedSenders.get(emailAccountId, allowKey)),
+    [emailAccountId, allowKey],
+  );
+  const allowed = storedAllowed || allowedNow === allowKey;
 
   const query = useMemo<SenderHistoryQuery>(
     () => ({
       accountIds: scope?.accountIds ?? [emailAccountId],
       email: address,
       name,
+      receivedAtMs,
       ownAddresses,
     }),
-    [scope?.accountIds, emailAccountId, address, name, ownAddresses],
+    [
+      scope?.accountIds,
+      emailAccountId,
+      address,
+      name,
+      receivedAtMs,
+      ownAddresses,
+    ],
   );
   const readHistory = client?.querySenderHistory?.bind(client);
-  const lookUp =
-    readHistory &&
-    needsSenderHistory(name, address, ownAddresses) &&
-    !isAllowed(senderAllowKey(name, address));
+  const lookUp = !allowed && needsSenderHistory(name, address, ownAddresses);
   const { data: history } = useSWR(
-    lookUp ? ["sender-history", JSON.stringify(query)] : null,
-    () => (readHistory as NonNullable<typeof readHistory>)(query),
+    readHistory && lookUp ? ["sender-history", JSON.stringify(query)] : null,
+    () => readHistory?.(query),
     {
       revalidateOnFocus: false,
       shouldRetryOnError: false,
-      // On a first sync the contact index is still being built; ask again
-      // until it is, then never.
       refreshInterval: (current) =>
-        current && !current.ready ? INDEX_POLL_MS : 0,
+        current && !current.ready
+          ? readinessPollMs(Date.now() - mountedAtMs)
+          : 0,
     },
   );
 
@@ -82,20 +102,20 @@ export function SenderNotice({
     address,
     ownAddresses,
     history,
-    isAllowed,
+    isAllowed: () => allowed,
   });
   if (!notice) return null;
 
   const allow = () => {
-    const key = senderAllowKey(notice.name, notice.address);
-    allowedSenders.set(emailAccountId, key, true);
-    setAllowedNow(key);
+    allowedSenders.set(emailAccountId, allowKey, true);
+    setAllowedNow(allowKey);
   };
 
   return (
     <p
       className="mb-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-muted-foreground text-xs"
       data-testid="sender-notice"
+      role="note"
     >
       <span className="min-w-0 break-words">{noticeText(notice)}</span>
       <span className="flex items-baseline gap-1.5">
@@ -117,6 +137,7 @@ export function SenderNotice({
           </>
         )}
         <button
+          aria-label={`It's fine: ${notice.name} from ${notice.address}`}
           className="rounded-sm text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(event) => {
             event.stopPropagation();
@@ -134,6 +155,13 @@ export function SenderNotice({
       </span>
     </p>
   );
+}
+
+function readinessPollMs(elapsedMs: number) {
+  if (elapsedMs >= INDEX_POLL_STOP_AFTER_MS) return 0;
+  return elapsedMs >= INDEX_POLL_SLOW_AFTER_MS
+    ? INDEX_POLL_SLOW_MS
+    : INDEX_POLL_MS;
 }
 
 function noticeText(notice: SenderNoticeData) {

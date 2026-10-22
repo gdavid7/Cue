@@ -453,20 +453,24 @@ export type SenderHistoryQuery = {
   email: string;
   /** The message's From display name. */
   name: string;
+  /** When the open message arrived, so only earlier mail from them counts. */
+  receivedAtMs: number;
   /** The user's addresses, which never count as someone else's. */
   ownAddresses: string[];
 };
 
 export type SenderHistory = {
-  /** False until the contact index has read every stored message. */
+  /** False until every scope is listed and the contact index has read it. */
   ready: boolean;
   /** The user has sent mail to this address. */
   writtenTo: boolean;
+  /** This address sent the user mail before the open message. */
+  receivedBefore: boolean;
   /**
-   * Other addresses the user has written to under the same full name, most
-   * recently first.
+   * The address the user most recently wrote to under the same full name,
+   * other than this one and the user's own; null when there is none.
    */
-  sameNameAddresses: string[];
+  knownAddress: string | null;
 };
 
 /** One more than the card lists, so it can leave out the open conversation. */

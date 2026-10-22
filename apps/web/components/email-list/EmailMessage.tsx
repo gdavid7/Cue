@@ -526,10 +526,15 @@ export function EmailMessage({
             </>
           )}
 
-          {!isDraftRow && (
+          {/* Mail the user sent, from any of their addresses or aliases,
+              is never checked. */}
+          {!isDraftRow && !message.labelIds?.includes(GmailLabel.SENT) && (
             <SenderNotice
               emailAccountId={emailAccountId}
               from={message.headers.from}
+              receivedAtMs={
+                Number(message.internalDate) || Date.parse(message.date) || 0
+              }
             />
           )}
 
