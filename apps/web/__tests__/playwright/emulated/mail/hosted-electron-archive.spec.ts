@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import once from "lodash/once";
 import type { Client } from "pg";
 import { test } from "../playwright-test";
 import { getEmailAccountId } from "../account-test-helpers";
@@ -273,6 +274,17 @@ test("stars a conversation from hosted Next through desktop SQLite IPC", async (
   });
 });
 
+// The assistant test launches Electron twice, which can outlast its timeout,
+// and Playwright does not run a timed-out test's finally. afterEach still
+// runs, so the archive is undone before a retry reuses the account.
+let pendingAssistantCleanup: (() => Promise<unknown[]>) | undefined;
+
+test.afterEach(async () => {
+  const cleanup = pendingAssistantCleanup;
+  pendingAssistantCleanup = undefined;
+  if (cleanup) expect(await cleanup()).toEqual([]);
+});
+
 test("applies assistant archive after hosted Electron was stopped", async ({
   page,
   baseURL,
@@ -285,7 +297,11 @@ test("applies assistant archive after hosted Electron was stopped", async ({
   const screenshotPath = testInfo.outputPath("hosted-electron-assistant.png");
   await mkdir(dirname(screenshotPath), { recursive: true });
   const userData = await mkdtemp(join(tmpdir(), "electron-hosted-assistant-"));
-  const cleanupErrors: unknown[] = [];
+  const cleanup = once(() =>
+    undoAssistantArchive(page, emailAccountId, userData),
+  );
+  pendingAssistantCleanup = cleanup;
+  let cleanupErrors: unknown[] = [];
 
   try {
     const baseline = await launchHostedElectron({
@@ -336,18 +352,8 @@ test("applies assistant archive after hosted Electron was stopped", async ({
       }),
     });
   } finally {
-    await page.request
-      .post(`/api/threads/${ASSISTANT_THREAD_ID}/unarchive`, {
-        headers: { "X-Email-Account-ID": emailAccountId },
-      })
-      .then((response) => expect(response.ok()).toBe(true))
-      .catch((error) => {
-        cleanupErrors.push(error);
-      });
-    await cleanupAssistantArchive().catch((error) => {
-      cleanupErrors.push(error);
-    });
-    await rm(userData, { recursive: true, force: true });
+    cleanupErrors = await cleanup();
+    pendingAssistantCleanup = undefined;
     for (const error of cleanupErrors) {
       testInfo.annotations.push({
         type: "cleanup-error",
@@ -886,8 +892,25 @@ async function seedAssistantArchive(emailAccountId: string) {
   });
 }
 
-async function cleanupAssistantArchive() {
-  await withClient(deleteAssistantArchive);
+async function undoAssistantArchive(
+  page: Page,
+  emailAccountId: string,
+  userData: string,
+) {
+  const errors: unknown[] = [];
+  await page.request
+    .post(`/api/threads/${ASSISTANT_THREAD_ID}/unarchive`, {
+      headers: { "X-Email-Account-ID": emailAccountId },
+    })
+    .then((response) => expect(response.ok()).toBe(true))
+    .catch((error) => {
+      errors.push(error);
+    });
+  await withClient(deleteAssistantArchive).catch((error) => {
+    errors.push(error);
+  });
+  await rm(userData, { recursive: true, force: true });
+  return errors;
 }
 
 async function deleteAssistantArchive(client: Client) {
