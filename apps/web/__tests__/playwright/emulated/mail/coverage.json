@@ -43,6 +43,11 @@
     "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx",
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx"
   ],
+  "never-read.spec.ts": [
+    "app/(app)/[emailAccountId]/home/NeverReadCard.tsx",
+    "app/(app)/[emailAccountId]/home/use-never-read-senders.ts",
+    "app/(app)/[emailAccountId]/mail/use-unsubscribe-sender.tsx"
+  ],
   "today-quiet.spec.ts": [
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
     "app/(app)/[emailAccountId]/home/AllClear.tsx",

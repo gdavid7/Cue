@@ -268,41 +268,16 @@ export function useUnsubscribeSender(
 
   const confirmUnsubscribe = useCallback(async () => {
     if (!senderEmail || !httpLink) return;
-    const manualLink = httpLink;
-    const toastId = toast.loading(`Unsubscribing from ${senderName}`);
-    const failed = () =>
-      toast.error(`Couldn't unsubscribe from ${senderName}`, {
-        id: toastId,
-        action: {
-          label: "Open page",
-          onClick: () => openUnsubscribePage(manualLink),
-        },
-      });
-
-    try {
-      const result = await unsubscribeSenderAction(emailAccountId, {
-        senderEmail,
-        unsubscribeLink,
-        listUnsubscribeHeader,
-      });
-      if (!result?.data?.unsubscribe.success) {
-        failed();
-        return;
-      }
-    } catch {
-      failed();
-      return;
-    }
-
-    toast.success(`Unsubscribed from ${senderName}`, { id: toastId });
-
-    queueArchiveSenders({ senders: [senderEmail] }).catch(() => {});
-
-    // Metering happens after the fact, and neither half changes what the user
-    // just saw: a failure here must not read as a failed unsubscribe.
-    decrementUnsubscribeCreditAction()
-      .then(() => refetchPremium())
-      .catch(() => {});
+    await unsubscribeAndArchiveSender({
+      emailAccountId,
+      senderEmail,
+      senderName,
+      unsubscribeLink,
+      listUnsubscribeHeader,
+      manualLink: httpLink,
+      queueArchiveSenders,
+      refetchPremium,
+    });
   }, [
     emailAccountId,
     httpLink,
@@ -366,6 +341,66 @@ export function UnsubscribeConfirmDialog({
   );
 }
 
-function openUnsubscribePage(link: string) {
+/**
+ * Sends the unsubscribe request, then archives the sender's mail and meters
+ * the credit, with a toast that offers the sender's own page if it fails.
+ * Resolves whether the sender was unsubscribed.
+ */
+export async function unsubscribeAndArchiveSender({
+  emailAccountId,
+  senderEmail,
+  senderName,
+  unsubscribeLink,
+  listUnsubscribeHeader,
+  manualLink,
+  queueArchiveSenders,
+  refetchPremium,
+}: {
+  emailAccountId: string;
+  senderEmail: string;
+  senderName: string;
+  unsubscribeLink?: string | null;
+  listUnsubscribeHeader?: string | null;
+  /** The page offered when the request fails. */
+  manualLink: string;
+  queueArchiveSenders: (input: { senders: string[] }) => Promise<unknown>;
+  refetchPremium: () => Promise<unknown>;
+}) {
+  const toastId = toast.loading(`Unsubscribing from ${senderName}`);
+  const failed = () => {
+    toast.error(`Couldn't unsubscribe from ${senderName}`, {
+      id: toastId,
+      action: {
+        label: "Open page",
+        onClick: () => openUnsubscribePage(manualLink),
+      },
+    });
+    return false;
+  };
+
+  try {
+    const result = await unsubscribeSenderAction(emailAccountId, {
+      senderEmail,
+      unsubscribeLink,
+      listUnsubscribeHeader,
+    });
+    if (!result?.data?.unsubscribe.success) return failed();
+  } catch {
+    return failed();
+  }
+
+  toast.success(`Unsubscribed from ${senderName}`, { id: toastId });
+
+  queueArchiveSenders({ senders: [senderEmail] }).catch(() => {});
+
+  // Metering happens after the fact, and neither half changes what the user
+  // just saw: a failure here must not read as a failed unsubscribe.
+  decrementUnsubscribeCreditAction()
+    .then(() => refetchPremium())
+    .catch(() => {});
+  return true;
+}
+
+export function openUnsubscribePage(link: string) {
   window.open(link, "_blank", "noopener,noreferrer");
 }

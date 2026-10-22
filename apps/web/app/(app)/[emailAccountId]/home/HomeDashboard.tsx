@@ -68,6 +68,7 @@ import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
+import { NeverReadCard } from "./NeverReadCard";
 import { TodayWeather } from "./TodayWeather";
 import {
   type TodayRowCorrection,
@@ -76,6 +77,7 @@ import {
 } from "./TodayThreadRow";
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
+import { useNeverReadSenders } from "./use-never-read-senders";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
@@ -166,6 +168,7 @@ export function HomeDashboard() {
     handledLabelIds,
     enabled: !data || data.pending.includes("alsoInInbox"),
   });
+  const neverRead = useNeverReadSenders({ accounts: localAccounts });
   const alsoInInbox = useMemo(() => {
     if (!localInbox) return data?.alsoInInbox ?? [];
     // Each conversation shows once on Today, as in the server's answer, and
@@ -591,6 +594,14 @@ export function HomeDashboard() {
             rowContext={rowContext}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
+            neverRead={
+              <NeverReadCard
+                accountColorIndexById={accountColorIndexById}
+                accounts={allInboxesAccounts ? localAccounts : undefined}
+                onHide={neverRead.hide}
+                senders={neverRead.senders}
+              />
+            }
             // Past the last refresh a pending lane would load forever.
             pending={gaveUp ? NO_LANES : pending}
             outdated={outdated}
@@ -636,6 +647,7 @@ function HomeLanes({
   layout,
   threadHref,
   onCorrect,
+  neverRead,
   pending,
   outdated,
 }: {
@@ -658,6 +670,11 @@ function HomeLanes({
   layout: "list" | "split";
   threadHref: (thread: { threadId: string; account?: TodayAccount }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
+  /**
+   * The first week's clean-up card. Below what needs a reply or waits on
+   * someone, which is the day's work; above the rest of the inbox.
+   */
+  neverRead: React.ReactNode;
   pending: ReadonlySet<HomeLane>;
   /** Lanes showing rows from an earlier answer that a refresh couldn't replace. */
   outdated: ReadonlySet<HomeLane>;
@@ -798,6 +815,8 @@ function HomeLanes({
           <CueChecked today={data.today} />
         </p>
       ) : null}
+
+      {neverRead}
 
       {pending.has("alsoInInbox") ? <HomeSkeleton layout={layout} /> : null}
       <AlsoInInboxSection

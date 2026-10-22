@@ -85,9 +85,7 @@ export function localInboxRows(
     now?: number;
   },
 ): TodayThread[] | null {
-  const accountIds = accounts.map((account) => account.id);
-  if (view.connection && view.connection !== "ready") return null;
-  if (getFirstSyncAccountIds(accountIds, view.coverage).length) return null;
+  if (!isLocalMailReady(view, accounts)) return null;
   const byId = new Map(accounts.map((account) => [account.id, account]));
   const handledSince = now - HANDLED_WINDOW_DAYS * 86_400_000;
   const rows = view.conversations.flatMap((conversation) => {
@@ -106,6 +104,16 @@ export function localInboxRows(
     return [named ? { ...row, account } : row];
   });
   return named ? showCopiesOnce(rows) : rows;
+}
+
+/**
+ * Whether the local store can answer for every account: the engine reaches
+ * the provider and each account's first sync has finished.
+ */
+export function isLocalMailReady(view: MailboxView, accounts: TodayAccount[]) {
+  if (view.connection && view.connection !== "ready") return false;
+  const accountIds = accounts.map((account) => account.id);
+  return getFirstSyncAccountIds(accountIds, view.coverage).length === 0;
 }
 
 /**
