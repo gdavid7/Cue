@@ -5,8 +5,8 @@ engine API. This package has no React, DOM, SQL driver, or app-framework
 dependencies.
 
 Web and desktop construct the engine with a `MailStore`, a `MailboxSource`,
-an `OperationExecutor`, and a `HostRuntime` (`nowMs`, `randomId`, `random`,
-`sha256`, `storagePressure`). Attachments live on the provider's mailbox draft, so the
+an `OperationExecutor`, and a `HostRuntime` (`nowMs`, `randomId`, `sha256`,
+`storagePressure`). Attachments live on the provider's mailbox draft, so the
 engine never holds their bytes.
 
 Screens read `observeMailbox`, `observeMailboxWindow`, `observeConversation`,
