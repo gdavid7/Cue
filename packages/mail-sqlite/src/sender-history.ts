@@ -5,6 +5,7 @@ import type {
 import { personNameKey } from "@inboxzero/mail-core/sender-check";
 import { isAutomatedAddress } from "./contact-suggestions";
 import type { SqlTransaction } from "./driver";
+import { readCoverage } from "./store-read-utils";
 
 /**
  * What the reader's "New address, familiar name" line needs about a sender,
@@ -20,7 +21,7 @@ export async function readSenderHistory(
   const email = input.email.trim().toLowerCase();
   const accountIds = [...new Set(input.accountIds)];
   const nameKey = personNameKey(input.name);
-  const ready = await isContactIndexReady(tx);
+  const ready = await isReady(tx, accountIds);
   // The index keeps no history for machine addresses, so every one would
   // look new.
   if (!accountIds.length || !nameKey || isAutomatedAddress(email))
@@ -68,9 +69,11 @@ export async function readSenderHistory(
   };
 }
 
-// Until both backfills finish, an address may look new only because its
-// mail hasn't been indexed yet.
-async function isContactIndexReady(tx: SqlTransaction) {
+// Until every scope has been listed and both backfills have read it, an
+// address may look new only because the mail to it isn't here yet.
+async function isReady(tx: SqlTransaction, accountIds: string[]) {
+  const coverage = await readCoverage(tx, accountIds);
+  if (coverage.some((scope) => scope.metadata === "partial")) return false;
   const [contacts] = await tx.query(
     "SELECT complete FROM contact_backfill_state WHERE id = 1",
   );

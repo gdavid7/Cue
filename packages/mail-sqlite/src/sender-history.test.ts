@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { SenderHistoryQuery } from "@inboxzero/mail-core/queries";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
+import type { SqliteDriver } from "./driver";
 import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 
@@ -79,7 +80,21 @@ describe("readSenderHistory", () => {
   it("is not ready until the contact index has read every message", async () => {
     const store = await setup();
     await write(store, [sent("1", ["Dana Example <dana@example.com>"])]);
+    await listed(store);
     expect(await read(store)).toMatchObject({ ready: false });
+  });
+
+  it("is not ready until every scope of the mailbox has been listed", async () => {
+    const store = await setup();
+    await write(store, [sent("1", ["Dana Example <dana@example.com>"])]);
+    await indexed(store);
+    expect(await read(store, { accountIds: ["a"] })).toMatchObject({
+      ready: false,
+    });
+    await listed(store);
+    expect(await read(store, { accountIds: ["a"] })).toMatchObject({
+      ready: true,
+    });
   });
 
   it("looks nothing up for a short name or a machine address", async () => {
@@ -98,9 +113,13 @@ describe("readSenderHistory", () => {
   });
 });
 
+const drivers = new WeakMap<MailStore, SqliteDriver>();
+
 async function setup(accountIds = ["a"]) {
-  const store = await createSqliteMailStore(createNodeSqliteDriver());
+  const driver = createNodeSqliteDriver();
+  const store = await createSqliteMailStore(driver);
   stores.push(store);
+  drivers.set(store, driver);
   for (const accountId of accountIds)
     await store.ensureAccount({
       accountId,
@@ -111,9 +130,26 @@ async function setup(accountIds = ["a"]) {
 }
 
 async function ready(store: MailStore) {
+  await indexed(store);
+  await listed(store);
+}
+
+async function indexed(store: MailStore) {
   while ((await store.indexContactBacklog()).remaining) {
     // Each call indexes one batch.
   }
+}
+
+/** Marks every account's mailbox as fully listed. */
+async function listed(store: MailStore) {
+  await drivers.get(store)?.write(async (tx) => {
+    for (const accountId of ["a", "b"])
+      await tx.execute(
+        `INSERT OR REPLACE INTO coverage(account_id, scope_id, metadata, content, indexed_content)
+         VALUES (?, 'primary', 'complete', 'partial', 'partial')`,
+        [accountId],
+      );
+  });
 }
 
 function read(store: MailStore, input: Partial<SenderHistoryQuery> = {}) {
