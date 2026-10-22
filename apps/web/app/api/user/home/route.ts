@@ -2,6 +2,7 @@ import { after, NextResponse } from "next/server";
 import { recordActiveDay } from "@/utils/analytics/activation";
 import { withEmailProvider } from "@/utils/middleware";
 import { getHomeData } from "@/utils/home/get-home";
+import { validTimeZone } from "@/utils/home/time-zone";
 import type { Logger } from "@/utils/logger";
 import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
@@ -49,14 +50,4 @@ async function ownAddresses({
     return [];
   });
   return [email, ...addresses];
-}
-
-function validTimeZone(value: string | null) {
-  if (!value) return;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value });
-    return value;
-  } catch {
-    return;
-  }
 }

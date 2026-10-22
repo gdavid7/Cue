@@ -35,7 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useAccounts } from "@/hooks/useAccounts";
-import { useHome } from "@/hooks/useHome";
+import { useHome, useHomeDeadlines } from "@/hooks/useHome";
 import {
   ALSO_IN_INBOX_LIMIT,
   removeFromCachedToday,
@@ -56,6 +56,7 @@ import {
   type TodayAgentTask,
   type TodayData,
   type TodayThread,
+  mergeNextUp,
   todayConversationKey,
 } from "@/utils/home/merge-home";
 import { AllClear, CueChecked } from "./AllClear";
@@ -97,7 +98,17 @@ export function HomeDashboard() {
   const single = useHome(allInboxesAccounts ? null : emailAccountId);
   const all = useAllAccountsHome(allInboxesAccounts);
   const { merged } = all;
-  const data: TodayData | undefined = merged ? merged.data : single.data;
+  // Apps are connected for the user, not a mailbox: one load covers every
+  // account Today shows. They append to Next up once they answer.
+  const deadlines = useHomeDeadlines(emailAccountId);
+  const home: TodayData | undefined = merged ? merged.data : single.data;
+  const data = useMemo(
+    () =>
+      home && deadlines?.length
+        ? { ...home, nextUp: mergeNextUp([home.nextUp, deadlines]) }
+        : home,
+    [home, deadlines],
+  );
   const isLoading = merged ? merged.isLoading : single.isLoading;
   const error = merged ? merged.error : single.error;
   const gaveUp = merged ? false : single.gaveUp;

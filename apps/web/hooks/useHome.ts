@@ -5,6 +5,7 @@ import useSWR, {
   unstable_serialize,
   useSWRConfig,
 } from "swr";
+import type { GetHomeDeadlinesResponse } from "@/app/api/user/home/deadlines/route";
 import {
   keepShownLanes,
   type TodayHomeData,
@@ -140,6 +141,26 @@ export function useWarmHome(
       if (key && !cache.get(discarded)?.isValidating) mutate(key);
     },
   });
+}
+
+/**
+ * Work due soon in the user's connected apps, for Today's Next up. It loads
+ * beside Today, not inside it: an app can take seconds to answer, and Today
+ * shows without it. Kept in memory only, never in Today's saved copy, so a
+ * finished task doesn't come back from an earlier visit.
+ */
+export function useHomeDeadlines(emailAccountId?: string | null) {
+  const { data } = useSWR<GetHomeDeadlinesResponse>(
+    emailAccountId
+      ? getAccountScopedKey(
+          `/api/user/home/deadlines?tz=${encodeURIComponent(browserTimeZone())}`,
+          emailAccountId,
+        )
+      : null,
+    // Each load asks every connected app, so tab switches share one.
+    { focusThrottleInterval: FOCUS_REFRESH_MIN_MS },
+  );
+  return data?.items;
 }
 
 /**

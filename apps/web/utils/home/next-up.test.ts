@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
-import { getNextUp } from "@/utils/home/next-up";
+import { getDeadlines, getNextUp } from "@/utils/home/next-up";
 import prisma from "@/utils/__mocks__/prisma";
 import { redis } from "@/utils/redis";
 import { searchCanvas } from "@/utils/thread-context/connector-context";
@@ -91,7 +91,7 @@ describe("getNextUp", () => {
   });
 });
 
-describe("getNextUp when a connected app keeps timing out", () => {
+describe("getDeadlines when a connected app keeps timing out", () => {
   const MINUTE = 60_000;
   let store: Map<string, { value: unknown; expiresAt: number }>;
   let logger: ReturnType<typeof createTestLogger>;
@@ -184,11 +184,16 @@ describe("getNextUp when a connected app keeps timing out", () => {
     expect({ slowLoads, total }).toEqual({ slowLoads: 6, total: 15_000 });
   });
 
-  /** Opens Today once and returns how long it waited, in fake milliseconds. */
+  /** Loads Today's deadlines once; returns how long that waited, in fake ms. */
   async function visit() {
     const start = Date.now();
     let done = false;
-    const loading = nextUpFor(logger).then(() => {
+    const loading = getDeadlines({
+      emailAccountId: "account",
+      timeZone: "UTC",
+      logger,
+      now: NOW,
+    }).then(() => {
       done = true;
     });
     await vi.advanceTimersByTimeAsync(0);

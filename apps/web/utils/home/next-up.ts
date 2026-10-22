@@ -14,7 +14,7 @@ import {
 } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
 import { calendarConnectionsWhere } from "@/utils/calendar/connections";
-import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
+import { sortByDue } from "@/utils/home/today-constants";
 import { redis } from "@/utils/redis";
 import {
   isAppServerError,
@@ -87,9 +87,11 @@ const DEADLINE_SOURCES: Record<
 };
 
 /**
- * What's next for the user: their next meeting, and the next few meetings and
- * deadlines from connected apps, soonest first. Every source is optional and
- * bounded by a short timeout, so Today never waits on one.
+ * What's next for the user from their calendars: their next meeting, and the
+ * next few, soonest first. Work due in connected apps isn't asked for here:
+ * an app can take seconds, so the browser loads it after Today with
+ * `getDeadlines` and merges it in. Every source is optional and bounded by a
+ * short timeout, so Today never waits on one.
  */
 export async function getNextUp({
   emailAccountId,
@@ -108,24 +110,21 @@ export async function getNextUp({
   const today = startOfDay(new TZDate(now, timeZone));
   const dayAfter = addDays(today, 2);
 
-  const [calendar, deadlines, calendarAccounts, addresses] = await Promise.all([
-    upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
-    getDeadlines({
-      emailAccountId,
-      now,
-      windowEnd: addDays(today, DEADLINE_WINDOW_DAYS + 1),
-      timeZone,
-      logger,
-    }),
-    prisma.calendarConnection.findMany({
-      where: calendarConnectionsWhere(emailAccountId),
-      select: { id: true, provider: true, email: true, isConnected: true },
-    }),
-    ownAddresses,
-  ]);
-  const suggestion = deadlines.connected
-    ? null
-    : await connectSuggestion({ emailAccountId, now, logger });
+  const [calendar, deadlineApps, calendarAccounts, addresses] =
+    await Promise.all([
+      upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
+      deadlineConnections({ emailAccountId, logger }),
+      prisma.calendarConnection.findMany({
+        where: calendarConnectionsWhere(emailAccountId),
+        select: { id: true, provider: true, email: true, isConnected: true },
+      }),
+      ownAddresses,
+    ]);
+  // Unknown isn't "none": don't suggest connecting what may be connected.
+  const suggestion =
+    !deadlineApps || deadlineApps.length > 0
+      ? null
+      : await connectSuggestion({ emailAccountId, now, logger });
 
   // Events come from all of the person's calendars, so a decline by any of
   // their connected addresses or the calendars' own addresses counts.
@@ -172,12 +171,11 @@ export async function getNextUp({
           }
         : null,
     },
-    nextUp: sortByDue([
-      ...events
+    nextUp: sortByDue(
+      events
         .slice(0, EVENTS_SHOWN)
         .map((event) => eventItem(event, labelCalendars)),
-      ...deadlines.items,
-    ]).slice(0, NEXT_UP_SHOWN),
+    ),
     suggestion,
   };
 }
@@ -246,45 +244,28 @@ async function isNewMailbox({
 }
 
 /**
- * Work due soon in the user's connected apps. Each app is cached for a few
- * minutes; one that's slow is left out of this answer but still fills the
- * cache when it finishes, so the next visit has it.
+ * Work due in the next week in the user's connected apps, soonest first, for
+ * Next up. An app that is slow or down is left out and paused for a while,
+ * longer each time it times out, so later visits don't wait on it. Nothing
+ * here is cached on the server: the items name the user's own tasks (RD-3).
  */
-async function getDeadlines({
+export async function getDeadlines({
   emailAccountId,
-  now,
-  windowEnd,
   timeZone,
   logger,
+  now,
 }: {
   emailAccountId: string;
-  now: Date;
-  windowEnd: Date;
   timeZone: string;
   logger: Logger;
-}): Promise<{ connected: boolean; items: NextUpItem[] }> {
-  const connections = await prisma.mcpConnection
-    .findMany({
-      where: {
-        isActive: true,
-        integration: { name: { in: Object.keys(DEADLINE_SOURCES) } },
-        ...ownedBySameUser(emailAccountId),
-      },
-      select: {
-        id: true,
-        needsReconnectAt: true,
-        emailAccountId: true,
-        emailAccount: { select: { email: true } },
-        integration: { select: { name: true } },
-      },
-      orderBy: { createdAt: "asc" },
-    })
-    .catch((error) => {
-      logger.warn("Failed to load connected apps for Today", { error });
-      return null;
-    });
-  // Unknown isn't "none": don't suggest connecting what may be connected.
-  if (!connections) return { connected: true, items: [] };
+  now: Date;
+}): Promise<{ items: NextUpItem[] }> {
+  const windowEnd = addDays(
+    startOfDay(new TZDate(now, timeZone)),
+    DEADLINE_WINDOW_DAYS + 1,
+  );
+  const connections = await deadlineConnections({ emailAccountId, logger });
+  if (!connections) return { items: [] };
 
   const results = await Promise.all(
     onePerIntegration(connections, emailAccountId).map(async (connection) => {
@@ -365,7 +346,37 @@ async function getDeadlines({
       }
     }),
   );
-  return { connected: connections.length > 0, items: results.flat() };
+  return { items: sortByDue(results.flat()) };
+}
+
+/** The user's connected apps that have due dates; null when unknown. */
+function deadlineConnections({
+  emailAccountId,
+  logger,
+}: {
+  emailAccountId: string;
+  logger: Logger;
+}) {
+  return prisma.mcpConnection
+    .findMany({
+      where: {
+        isActive: true,
+        integration: { name: { in: Object.keys(DEADLINE_SOURCES) } },
+        ...ownedBySameUser(emailAccountId),
+      },
+      select: {
+        id: true,
+        needsReconnectAt: true,
+        emailAccountId: true,
+        emailAccount: { select: { email: true } },
+        integration: { select: { name: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    })
+    .catch((error) => {
+      logger.warn("Failed to load connected apps for Today", { error });
+      return null;
+    });
 }
 
 /**

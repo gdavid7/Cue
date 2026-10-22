@@ -10,6 +10,8 @@ import {
   ConnectionExpiredError,
 } from "@/utils/mcp/providers/types";
 import { redis } from "@/utils/redis";
+import { mergeNextUp } from "@/utils/home/merge-home";
+import { getDeadlines } from "@/utils/home/next-up";
 import { getHomeData, priorityOf } from "./get-home";
 
 vi.mock("server-only", () => ({}));
@@ -808,9 +810,13 @@ describe("getHomeData: what's next", () => {
     );
 
     const home = await run(mockProvider({}));
+    const { items } = await deadlines();
+    const nextUp = mergeNextUp([home.nextUp, items]);
 
+    // Today itself names the meetings only; the browser merges the rest.
+    expect(home.nextUp.every((item) => item.kind === "event")).toBe(true);
     expect(
-      home.nextUp.map(({ kind, title, source }) => [kind, title, source]),
+      nextUp.map(({ kind, title, source }) => [kind, title, source]),
     ).toEqual([
       ["deadline", "Problem set 4", "Canvas"],
       ["event", "Design review", "Calendar"],
@@ -822,17 +828,47 @@ describe("getHomeData: what's next", () => {
     expect(JSON.stringify(vi.mocked(redis.set).mock.calls)).not.toContain(
       "Problem set",
     );
-    expect(home.nextUp[0]).toMatchObject({
+    expect(nextUp[0]).toMatchObject({
       at: "2026-10-13T20:00:00.000Z",
       detail: "Linear Algebra",
       url: "https://school.instructure.com/assignments/4",
     });
-    expect(home.nextUp[3]).toMatchObject({
+    expect(nextUp[3]).toMatchObject({
       allDay: true,
       url: "https://acme.atlassian.net/browse/OPS-12",
     });
     // Connected apps, so nothing to suggest.
     expect(home.suggestion).toBeNull();
+  });
+
+  it("answers without waiting on a connected app that takes 2.5 s", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      prisma.mcpConnection.findMany.mockResolvedValue([
+        connection("canvas"),
+      ] as never);
+      mocks.executeTool.mockImplementation(
+        ({ tool }: { tool: string }) =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve(TOOL_RESULTS[tool]), 2500),
+          ),
+      );
+
+      const start = Date.now();
+      let done = false;
+      const pending = run(mockProvider({})).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      while (!done) await vi.advanceTimersByTimeAsync(50);
+      await pending;
+      const waited = Date.now() - start;
+
+      // 2500 ms before deadlines moved to their own request.
+      expect(waited).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves out an app that doesn't answer in time, and shows the rest", async () => {
@@ -848,11 +884,11 @@ describe("getHomeData: what's next", () => {
           : Promise.resolve(TOOL_RESULTS[tool]),
       );
 
-      const pending = run(mockProvider({}));
+      const pending = deadlines();
       await vi.advanceTimersByTimeAsync(10_000);
-      const home = await pending;
+      const { items } = await pending;
 
-      expect(home.nextUp.map((item) => item.source)).toEqual(["Canvas"]);
+      expect(items.map((item) => item.source)).toEqual(["Canvas"]);
     } finally {
       vi.useRealTimers();
     }
@@ -875,11 +911,11 @@ describe("getHomeData: what's next", () => {
         return Promise.resolve(TOOL_RESULTS[tool]);
       });
 
-      const pending = run(mockProvider({}));
+      const pending = deadlines();
       await vi.advanceTimersByTimeAsync(10_000);
-      const home = await pending;
+      const { items } = await pending;
 
-      expect(home.nextUp).toEqual([]);
+      expect(items).toEqual([]);
       const lines = warn.mock.calls.map((args) => args.join(" "));
       expect(
         lines.filter((line) => line.includes("Connected app timed out")),
@@ -915,7 +951,7 @@ describe("getHomeData: what's next", () => {
 
     try {
       for (const _visit of [1, 2]) {
-        const pending = run(mockProvider({}));
+        const pending = deadlines();
         await vi.advanceTimersByTimeAsync(10_000);
         await pending;
       }
@@ -948,8 +984,8 @@ describe("getHomeData: what's next", () => {
     );
 
     try {
-      await run(mockProvider({}));
-      await run(mockProvider({}));
+      await deadlines();
+      await deadlines();
     } finally {
       vi.mocked(redis.get).mockImplementation(async () => null);
       vi.mocked(redis.set).mockImplementation(async () => "OK");
@@ -970,9 +1006,10 @@ describe("getHomeData: what's next", () => {
     ] as never);
 
     const home = await run(mockProvider({}));
+    const { items } = await deadlines();
 
     expect(mocks.executeTool).not.toHaveBeenCalled();
-    expect(home.nextUp).toEqual([]);
+    expect(items).toEqual([]);
     expect(home.suggestion).toBeNull();
   });
 
@@ -984,7 +1021,7 @@ describe("getHomeData: what's next", () => {
       new ConnectionExpiredError("canvas", "Invalid access token."),
     );
 
-    await run(mockProvider({}));
+    await deadlines();
 
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
       where: {
@@ -1114,6 +1151,15 @@ describe("priorityOf", () => {
     );
   });
 });
+
+function deadlines(now = NOW) {
+  return getDeadlines({
+    emailAccountId: "account-1",
+    timeZone: TIME_ZONE,
+    logger: createTestLogger(),
+    now,
+  });
+}
 
 function run(emailProvider: EmailProvider, now = NOW) {
   return getHomeData({
