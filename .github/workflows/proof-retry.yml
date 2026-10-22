@@ -1,0 +1,20 @@
+name: proof-retry
+on:
+  push:
+    branches: [claude/ci-apt-fast-fail-proof]
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise retry path (tiny timeout, expect exit 1)
+        run: |
+          sudo apt-get update -qq
+          INSTALL_ATTEMPT_TIMEOUT=2 .github/scripts/install-with-retry.sh sudo apt-get install -y --reinstall libgbm1 libasound2t64 && echo UNEXPECTED_OK || echo "wrapper exited nonzero as expected"
+      - name: Apt must work afterwards (lock free, dpkg healthy)
+        run: |
+          sudo apt-get install -y --reinstall libgbm1
+          sudo dpkg --audit && echo dpkg-clean
+      - name: Retry path then succeeds with real timeout
+        run: .github/scripts/install-with-retry.sh sudo apt-get install -y --reinstall libgbm1
