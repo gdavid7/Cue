@@ -87,7 +87,8 @@ export function AllClear({
           />
         )}
         {deadline ? (
-          <p className="text-foreground">
+          // Loads after Today, so it eases in; reduced motion just shows it.
+          <p className="text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
             Due {formatDay(deadline.at, now)}:{" "}
             {deadline.url ? (
               <ExternalLink href={deadline.url}>{deadline.title}</ExternalLink>

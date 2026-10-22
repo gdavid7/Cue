@@ -16,6 +16,7 @@ import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
+import type { NextUpItem } from "@/utils/home/next-up";
 import type {
   ConversationSummary,
   MailboxView,
@@ -34,6 +35,8 @@ const mocks = vi.hoisted(() => ({
   searchParams: new URLSearchParams(),
   emailAccounts: [] as unknown[] | undefined,
   homes: {} as Record<string, GetHomeResponse | undefined>,
+  // Work due in connected apps, which loads after Today.
+  deadlines: undefined as NextUpItem[] | undefined,
   markNeedsReply: vi.fn(),
   markNoReplyNeeded: vi.fn(),
   toastUndo: vi.fn(),
@@ -105,6 +108,7 @@ vi.mock("@/hooks/useMailHref", () => ({
 }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsLargeScreen: () => true }));
 vi.mock("@/hooks/useHome", () => ({
+  useHomeDeadlines: () => mocks.deadlines,
   // A stand-in for SWR's cache: local mutations apply, nothing revalidates.
   useHome: (emailAccountId?: string | null) => {
     const [data, setData] = useState(
@@ -347,6 +351,7 @@ describe("HomeDashboard states", () => {
     mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mocks.home.error = undefined;
     mocks.home.gaveUp = false;
+    mocks.deadlines = undefined;
   });
 
   afterEach(cleanup);
@@ -581,7 +586,9 @@ describe("HomeDashboard states", () => {
     ).toBe("/account/integrations");
   });
 
-  it("busy with deadlines: lists what's next, soonest first, each with its source", () => {
+  it("busy with deadlines: shows Today without them, then adds them to what's next, soonest first", () => {
+    const at = (hours: number) =>
+      new Date(Date.now() + hours * 3_600_000).toISOString();
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
       calendar: {
@@ -594,34 +601,59 @@ describe("HomeDashboard states", () => {
           id: "event:review",
           kind: "event",
           title: "Design review",
-          at: new Date(Date.now() + 3_600_000).toISOString(),
+          at: at(1),
           source: "Calendar",
           url: "https://calendar.example.com/review",
         },
         {
-          id: "jira:OPS-12",
-          kind: "deadline",
-          title: "OPS-12 Rotate keys",
-          at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
-          allDay: true,
-          source: "Jira",
+          id: "event:dinner",
+          kind: "event",
+          title: "Dinner",
+          at: at(30),
+          source: "Calendar",
         },
       ],
     };
+    const nextUpTitles = () =>
+      within(screen.getByRole("region", { name: "Next up" }))
+        .getAllByRole("listitem")
+        .map((item) =>
+          item.textContent?.replace(/^.*?(Design|Dinner|OPS)/, "$1"),
+        );
 
-    renderToday();
+    const { rerender } = renderToday();
+
+    // Today and its meetings show before any connected app answers.
+    expect(screen.getByText("Quarterly numbers")).toBeTruthy();
+    expect(nextUpTitles()).toEqual([
+      "Design reviewCalendar (opens in a new tab)",
+      "DinnerCalendar",
+    ]);
+
+    mocks.deadlines = [
+      {
+        id: "jira:OPS-12",
+        kind: "deadline",
+        title: "OPS-12 Rotate keys",
+        at: at(5),
+        allDay: true,
+        source: "Jira",
+      },
+    ];
+    rerender(
+      <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
+        <HomeDashboard />
+      </ShortcutsProvider>,
+    );
 
     // The meeting is in the list below, so the summary doesn't repeat it.
     expect(onlyStatus().textContent).toBe("1 needs a reply");
-    const nextUp = screen.getByRole("region", { name: "Next up" });
-    expect(
-      within(nextUp)
-        .getAllByRole("listitem")
-        .map((item) => item.textContent?.replace(/^.*?(Design|OPS)/, "$1")),
-    ).toEqual([
+    expect(nextUpTitles()).toEqual([
       "Design reviewCalendar (opens in a new tab)",
       "OPS-12 Rotate keysJira",
+      "DinnerCalendar",
     ]);
+    const nextUp = screen.getByRole("region", { name: "Next up" });
     expect(within(nextUp).getByRole("link").getAttribute("href")).toBe(
       "https://calendar.example.com/review",
     );
