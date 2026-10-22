@@ -108,6 +108,29 @@ describe("createBrowserMailEngine", () => {
     await engine.close();
   });
 
+  it("wakes the worker once the server answers, after a report it could not check at first", async () => {
+    let reachable = false;
+    const fetchMock = vi.fn(async () => {
+      if (!reachable) throw new TypeError("Failed to fetch");
+      return Response.json({ user: { id: "u1" }, session: {} });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    FakeWorker.startMessages = [
+      { type: "session_expired", reason: "signed-out" },
+    ];
+    const engine = await startEngine();
+    const worker = FakeWorker.instances[0];
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers();
+
+    reachable = true;
+    await vi.advanceTimersByTimeAsync(20_000);
+    vi.useRealTimers();
+
+    await vi.waitFor(() => expect(worker.received("session_reset")).toBe(1));
+    await engine.close();
+  });
+
   it("finishes an interrupted sign-out wipe before opening the mailbox", async () => {
     wipe.isPending.mockReturnValue(true);
     const order: string[] = [];

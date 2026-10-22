@@ -48,6 +48,8 @@ export function armSessionExpiredRedirect(userId?: string) {
   if (armedBy === 1) for (const listener of armedListeners) listener();
   return () => {
     armedBy -= 1;
+    // A public page must never act for the user who was signed in.
+    if (armedBy === 0) armedUserId = undefined;
   };
 }
 

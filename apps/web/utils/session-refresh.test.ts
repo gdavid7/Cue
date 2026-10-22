@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 
 const REFRESH_PATH = "/api/auth/get-session?disableCookieCache=true";
 const SESSION_CHANNEL = "cue-session";
@@ -341,9 +342,74 @@ describe("fetchWithSessionRetry on a signed-in page", () => {
     expect(heard).not.toHaveBeenCalled();
   });
 
+  it("does not tell other tabs when the retry comes back with a server error", async () => {
+    stubServer({ refresh: "ok", retryStatus: 500 });
+    const { fetchWithSessionRetry } = await openPage();
+    const heard = listenAsOtherTab();
+
+    await fetchWithSessionRetry("/api/a");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(heard).not.toHaveBeenCalled();
+  });
+
+  it("tells other tabs at most once a while, however many requests get through", async () => {
+    const server = stubServer({ refresh: "ok" });
+    const { fetchWithSessionRetry } = await openPage();
+    laterThanRefreshReuse();
+    const heard = listenAsOtherTab();
+
+    await fetchWithSessionRetry("/api/a");
+    // Past the reuse of the first refresh, but within the announce cooldown.
+    vi.setSystemTime(Date.now() + 6000);
+    server.expireAgain();
+    const second = await fetchWithSessionRetry("/api/b");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(second.status).toBe(200);
+    expect(server.refreshCalls()).toBe(2);
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a check, tells other tabs only once an account request gets past the gate", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, onSessionGoneReset, page } =
+      await openPage();
+    laterThanRefreshReuse();
+    const reset = vi.fn();
+    onSessionGoneReset(reset);
+    await fetchWithSessionRetry("/api/a");
+    server.signIn();
+    page.show();
+    await vi.waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    const heard = listenAsOtherTab();
+
+    await fetchWithSessionRetry("/api/public");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(heard).not.toHaveBeenCalled();
+    await fetchWithSessionRetry("/api/a", {
+      headers: { [EMAIL_ACCOUNT_HEADER]: "acc-1" },
+    });
+
+    await vi.waitFor(() => expect(heard).toHaveBeenCalledWith("signed-in"));
+  });
+
+  it("forgets the signed-in user once no page is armed, so a public page never leaves", async () => {
+    stubServer({ refresh: "ok", refreshUser: "someone-else" });
+    const { fetchWithSessionRetry, page, expired } = await openPage();
+    expired.disarm();
+
+    const response = await fetchWithSessionRetry("/api/a");
+
+    expect(response.status).toBe(200);
+    expect(page.assign).not.toHaveBeenCalled();
+  });
+
   it("tells other tabs once a request gets through after a refresh", async () => {
     stubServer({ refresh: "ok" });
     const { fetchWithSessionRetry } = await openPage();
+    // Past the while after the page's own arrival was announced.
+    laterThanRefreshReuse();
     const heard = listenAsOtherTab();
 
     await fetchWithSessionRetry("/api/a");
@@ -519,16 +585,46 @@ describe("a mail worker reporting the session gone", () => {
     expect(server.refreshCalls()).toBe(2);
   });
 
-  it("neither stops nor wakes on a report when the server cannot be reached", async () => {
+  it("keeps asking for a worker's report until the server answers, without stopping the page", async () => {
     const server = stubServer({ refresh: "unreachable" });
     const { workerFoundSessionGone, fetchWithSessionRetry, page } =
       await openPage();
 
-    await expect(workerFoundSessionGone("signed-out")).resolves.toBe("unknown");
+    const answer = workerFoundSessionGone("signed-out");
+    await vi.waitFor(() => expect(server.refreshCalls()).toBe(1));
     await fetchWithSessionRetry("/api/b");
+    server.signIn();
+    page.online();
 
+    await expect(answer).resolves.toBe("send-again");
     expect(server.callsTo("/api/b")).toBe(1);
     expect(page.assign).not.toHaveBeenCalled();
+  });
+
+  it("asks again for a worker's report after a while even if nothing happens", async () => {
+    const server = stubServer({ refresh: "unreachable" });
+    const { workerFoundSessionGone } = await openPage();
+    vi.useFakeTimers();
+
+    const answer = workerFoundSessionGone("signed-out");
+    await vi.advanceTimersByTimeAsync(10);
+    server.signIn();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await expect(answer).resolves.toBe("send-again");
+    expect(server.refreshCalls()).toBe(2);
+  });
+
+  it("stops asking for a worker's report once the engine closes", async () => {
+    stubServer({ refresh: "unreachable" });
+    const { workerFoundSessionGone } = await openPage();
+    const closed = new AbortController();
+
+    const answer = workerFoundSessionGone("signed-out", closed.signal);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    closed.abort();
+
+    await expect(answer).resolves.toBe("unknown");
   });
 
   it("says why a worker stopped", async () => {
@@ -595,11 +691,13 @@ function laterThanRefreshReuse() {
 function stubServer({
   refresh,
   refreshUser = "u1",
+  retryStatus = 200,
   alwaysExpired = false,
   plainUnauthorized = false,
 }: {
   refresh: "ok" | "signed-out" | "unreachable" | "server-error";
   refreshUser?: string;
+  retryStatus?: number;
   alwaysExpired?: boolean;
   plainUnauthorized?: boolean;
 }) {
@@ -627,7 +725,8 @@ function stubServer({
       calls.push({ url, body: init?.body });
       if (plainUnauthorized)
         return Response.json({ error: "Unauthorized" }, { status: 401 });
-      if (refreshed && !alwaysExpired) return Response.json({ ok: true });
+      if (refreshed && !alwaysExpired)
+        return Response.json({ ok: true }, { status: retryStatus });
       return Response.json(
         {
           error: "Unauthorized",
@@ -643,6 +742,10 @@ function stubServer({
     signIn: (as = "u1") => {
       mode = "ok";
       user = as;
+    },
+    // The gate rejects the session again until the next refresh.
+    expireAgain: () => {
+      refreshed = false;
     },
     setRefresh: (next: typeof refresh) => {
       mode = next;

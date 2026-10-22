@@ -1,4 +1,7 @@
-import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
+import {
+  EMAIL_ACCOUNT_HEADER,
+  SESSION_EXPIRED_ERROR_CODE,
+} from "@/utils/config";
 import {
   clearSessionExpired,
   getArmedUserId,
@@ -43,9 +46,10 @@ let stopReason: StopReason | undefined;
 // A check whose answer could not be had: a request after this asks again.
 let checkRetryAt: number | undefined;
 let check: Promise<boolean> | undefined;
-// get-session named this browser's user; once a request also gets past the
-// gate, other tabs are told.
-let announceOnNextSuccess = false;
+// A check found the session back; once an account request also gets past
+// the gate, other tabs are told.
+let announceAfterCheck = false;
+let lastAnnouncedAt: number | undefined;
 let stopWatchingForReturn: (() => void) | undefined;
 const resetListeners = new Set<() => void>();
 
@@ -90,7 +94,11 @@ export async function fetchWithSessionRetry(
     replayable && input instanceof Request ? input.clone() : input,
     init,
   );
-  if (sameOrigin && response.status !== 401) noteGotThrough();
+  // Requests for an account always pass the auth gate.
+  if (response.ok && announceAfterCheck && hasAccountHeader(input, init)) {
+    announceAfterCheck = false;
+    announceSignedIn();
+  }
   if (response.status !== 401 || !replayable) return response;
   // Sign-out ends the session on purpose; its 401s are not worth a refresh.
   if (isSigningOut()) return response;
@@ -98,8 +106,10 @@ export async function fetchWithSessionRetry(
   if ((await untilAborted(refreshSession(), signal)) !== "refreshed")
     return response;
   const retried = await fetch(input, init);
-  if (retried.status !== 401) noteGotThrough();
-  else if (await isSessionExpiredResponse(retried)) markSessionGone("rejected");
+  // The first send got the gate's 401, so this one passed the gate.
+  if (retried.ok) announceSignedIn();
+  else if (retried.status === 401 && (await isSessionExpiredResponse(retried)))
+    markSessionGone("rejected");
   return retried;
 }
 
@@ -163,21 +173,10 @@ async function requestSessionRefresh(): Promise<RefreshOutcome> {
 // What every refresh and check answer means for this page.
 function settleOutcome(outcome: RefreshOutcome) {
   if (outcome === "signed-out") markSessionGone("signed-out");
-  if (outcome === "refreshed") announceOnNextSuccess = true;
   if (outcome === "other-user") {
     markSessionGone("signed-out", { notify: false });
     leaveForOtherUser();
   }
-}
-
-// The one place other tabs are told this browser is signed in, besides a
-// page arming: a request got past the gate after this page doubted the
-// session. get-session alone is not enough; it can name a user the gate still
-// rejects, and waking the other tabs then would loop.
-function noteGotThrough() {
-  if (!announceOnNextSuccess) return;
-  announceOnNextSuccess = false;
-  announceSignedIn();
 }
 
 /**
@@ -190,7 +189,7 @@ export function markSessionGone(
   { notify = true }: { notify?: boolean } = {},
 ) {
   if (notify) notifySessionExpired();
-  announceOnNextSuccess = false;
+  announceAfterCheck = false;
   if (sessionGone) return;
   // On a page (not a worker), only one rendered for a signed-in user stops.
   if (typeof window !== "undefined" && !isSessionExpiredRedirectArmed()) return;
@@ -231,15 +230,22 @@ export function onSessionGoneReset(listener: () => void) {
  */
 export async function workerFoundSessionGone(
   reason: StopReason,
+  closed?: AbortSignal,
 ): Promise<"send-again" | "stopped" | "unknown"> {
   if (reason === "rejected" || sessionGone) {
     markSessionGone(reason);
     return "stopped";
   }
-  const outcome = await refreshSession({ fresh: true });
-  if (outcome === "refreshed") return "send-again";
-  if (outcome === "unknown") return "unknown";
-  return "stopped";
+  // The worker has no way to notice the server is back, so the page keeps
+  // asking for it until it gets an answer or the engine closes.
+  while (true) {
+    const outcome = await refreshSession({ fresh: true });
+    if (outcome === "refreshed") return "send-again";
+    if (outcome !== "unknown") return "stopped";
+    if (!(await nextChanceToAsk(closed))) return "unknown";
+    // The page stopped meanwhile; its own reset will wake the worker.
+    if (sessionGone) return "stopped";
+  }
 }
 
 function sessionCameBack(): Promise<boolean> {
@@ -259,7 +265,7 @@ function startCheck() {
         return false;
       }
       resetSessionGone();
-      announceOnNextSuccess = true;
+      announceAfterCheck = true;
       return true;
     })
     .finally(() => {
@@ -303,12 +309,51 @@ function watchForReturn() {
   };
 }
 
+// Besides a page arming, only a request that got past the gate announces:
+// get-session alone can name a user the gate still rejects, and waking the
+// other tabs on that would loop. At most once a while per tab.
 function announceSignedIn() {
   if (typeof window === "undefined" || typeof BroadcastChannel === "undefined")
     return;
+  const now = Date.now();
+  if (lastAnnouncedAt !== undefined && now - lastAnnouncedAt < CHECK_RETRY_MS)
+    return;
+  lastAnnouncedAt = now;
   const channel = new BroadcastChannel(SESSION_CHANNEL);
   channel.postMessage(SIGNED_IN_MESSAGE);
   channel.close();
+}
+
+// After a while, or sooner when the tab is shown again or back online; false
+// once `closed` aborts.
+function nextChanceToAsk(closed?: AbortSignal) {
+  return new Promise<boolean>((resolve) => {
+    if (closed?.aborted) return resolve(false);
+    const events = ["visibilitychange", "online"];
+    const page =
+      typeof window !== "undefined" &&
+      typeof window.addEventListener === "function"
+        ? window
+        : undefined;
+    const finish = (answer: boolean) => {
+      clearTimeout(timer);
+      closed?.removeEventListener("abort", onClosed);
+      for (const type of events) page?.removeEventListener(type, onEvent);
+      resolve(answer);
+    };
+    const onClosed = () => finish(false);
+    const onEvent = () => {
+      if (globalThis.document?.visibilityState !== "hidden") finish(true);
+    };
+    const timer = setTimeout(() => finish(true), CHECK_RETRY_MS);
+    closed?.addEventListener("abort", onClosed, { once: true });
+    for (const type of events) page?.addEventListener(type, onEvent);
+  });
+}
+
+function hasAccountHeader(input: string | URL | Request, init?: RequestInit) {
+  if (init?.headers) return new Headers(init.headers).has(EMAIL_ACCOUNT_HEADER);
+  return input instanceof Request && input.headers.has(EMAIL_ACCOUNT_HEADER);
 }
 
 // A caller that gives up (or a sign-out, through its signal) stops waiting on

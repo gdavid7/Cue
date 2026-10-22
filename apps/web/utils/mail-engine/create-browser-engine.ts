@@ -251,7 +251,12 @@ async function createWorkerOwnedEngine(
       type: "session_reset",
     } satisfies WorkerSessionResetRequest);
   };
-  const stopForwardingSessionReset = onSessionGoneReset(postSessionReset);
+  const forwardReset = onSessionGoneReset(postSessionReset);
+  const engineClosed = new AbortController();
+  const stopForwardingSessionReset = () => {
+    forwardReset();
+    engineClosed.abort();
+  };
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
@@ -264,9 +269,11 @@ async function createWorkerOwnedEngine(
       return;
     }
     if (message.type === "session_expired") {
-      workerFoundSessionGone(message.reason).then((answer) => {
-        if (answer === "send-again") postSessionReset();
-      });
+      workerFoundSessionGone(message.reason, engineClosed.signal).then(
+        (answer) => {
+          if (answer === "send-again") postSessionReset();
+        },
+      );
       return;
     }
     if (message.type === "snapshots") {
