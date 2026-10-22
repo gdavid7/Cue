@@ -85,6 +85,9 @@ export type WorkerPreopenRequest = {
   maxPendingOperations?: number;
 };
 
+/** The page found the app session back; the worker's requests may go out again. */
+export type WorkerSessionResetRequest = { type: "session_reset" };
+
 export type WorkerRequest =
   | { id: string; type: "start"; input: BrowserEngineStart }
   | { id: string; type: "call"; method: string; args: unknown[] }

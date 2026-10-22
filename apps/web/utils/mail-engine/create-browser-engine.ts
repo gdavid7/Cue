@@ -18,6 +18,7 @@ import {
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerSessionResetRequest,
 } from "@/utils/mail-engine/worker-protocol";
 import { MAIL_ENGINE_OWNER_LOCK } from "@/utils/mail-engine/tab-channel";
 import {
@@ -25,7 +26,7 @@ import {
   isLocalMailboxWipePending,
 } from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
-import { notifySessionExpired } from "@/utils/session-expired";
+import { markSessionGone, onSessionGoneReset } from "@/utils/session-refresh";
 import { env } from "@/env";
 
 export { browserMailEngineCapabilities };
@@ -240,6 +241,13 @@ async function createWorkerOwnedEngine(
     }
   >();
   let closing: Promise<void> | undefined;
+  // The worker keeps its own copy of the session-gone stop; only the page
+  // sees the tab come back and can tell it the session is back.
+  const stopForwardingSessionReset = onSessionGoneReset(() => {
+    worker.postMessage({
+      type: "session_reset",
+    } satisfies WorkerSessionResetRequest);
+  });
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
@@ -252,7 +260,7 @@ async function createWorkerOwnedEngine(
       return;
     }
     if (message.type === "session_expired") {
-      notifySessionExpired();
+      markSessionGone();
       return;
     }
     if (message.type === "snapshots") {
@@ -289,6 +297,7 @@ async function createWorkerOwnedEngine(
       input,
     });
   } catch (error) {
+    stopForwardingSessionReset();
     // The worker may already hold the mailbox's OPFS handles, which the
     // in-tab fallback needs.
     worker.terminate();
@@ -408,6 +417,7 @@ async function createWorkerOwnedEngine(
             type: "close",
           });
         } finally {
+          stopForwardingSessionReset();
           // SAHPool keeps OPFS handles until the worker is gone, even if the
           // graceful close RPC fails.
           worker.terminate();

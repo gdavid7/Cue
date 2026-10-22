@@ -4,6 +4,7 @@ import {
 } from "@inboxzero/mail-core/engine";
 import { startEngineLoop } from "./engine-loop";
 import { createMailHttpRequest } from "./http";
+import { resetSessionGone } from "@/utils/session-refresh";
 import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
@@ -11,6 +12,7 @@ import {
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerSessionResetRequest,
 } from "./worker-protocol";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
@@ -55,9 +57,15 @@ const host = createMailWorkerHost({
 });
 
 self.onmessage = (
-  event: MessageEvent<WorkerRequest | WorkerPreopenRequest>,
+  event: MessageEvent<
+    WorkerRequest | WorkerPreopenRequest | WorkerSessionResetRequest
+  >,
 ) => {
   const message = event.data;
+  if (message.type === "session_reset") {
+    resetSessionGone();
+    return;
+  }
   if (message.type === "preopen") {
     if (!startReceived && !preopened) preopenStore(message);
     return;

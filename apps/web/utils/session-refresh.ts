@@ -1,6 +1,7 @@
 import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
 import {
   isSessionExpiredErrorBody,
+  isSessionExpiredRedirectArmed,
   notifySessionExpired,
 } from "@/utils/session-expired";
 import { isSigningOut } from "@/utils/signing-out";
@@ -15,8 +16,14 @@ const REFRESH_REUSE_MS = 5000;
 let refresh: { promise: Promise<boolean>; settledAt?: number } | undefined;
 // The server would not take this page's session even after a refresh. Each
 // SWR revalidation, poll and mail sync would otherwise ask again and earn
-// another 401, so nothing more is sent until the page loads again.
+// another 401, so nothing more is sent until the session is back.
 let sessionGone = false;
+// The user may have signed in again elsewhere while the tab was out of view,
+// so the next request back asks the server once before anything is sent.
+let checkOnNextRequest = false;
+let check: Promise<boolean> | undefined;
+let stopWatchingForReturn: (() => void) | undefined;
+const resetListeners = new Set<() => void>();
 
 /**
  * fetch() that answers a same-origin "session expired" 401 by refreshing the
@@ -26,7 +33,9 @@ let sessionGone = false;
  * When the refresh finds no session, or the retry is rejected too, the
  * session is gone: the page is told once (notifySessionExpired), and from
  * then on same-origin requests are answered here with the same 401 instead of
- * being sent, so callers' sign-out handling runs as before.
+ * being sent, so callers' sign-out handling runs as before. When the tab is
+ * shown again, its first request asks the server once whether the session is
+ * back. Public pages, where a 401 only means signed out, never stop.
  *
  * Writes are replayed too: the session-expired code is only sent by the auth
  * gate, which rejects a request before its handler runs, so nothing happened
@@ -37,7 +46,8 @@ export async function fetchWithSessionRetry(
   init?: RequestInit,
 ): Promise<Response> {
   const sameOrigin = isSameOrigin(input);
-  if (sameOrigin && sessionGone) return sessionExpiredResponse();
+  if (sameOrigin && sessionGone && !(await sessionCameBack()))
+    return sessionExpiredResponse();
   const replayable = sameOrigin && canReplay(input, init);
   const response = await fetch(
     replayable && input instanceof Request ? input.clone() : input,
@@ -98,23 +108,75 @@ async function requestSessionRefresh(): Promise<
   }
 }
 
-function markSessionGone() {
-  if (sessionGone) return;
-  sessionGone = true;
-  // A page restored from the back/forward cache may be signed in again by
-  // then; its next 401 is worth one more refresh.
-  if (typeof window !== "undefined")
-    window.addEventListener?.(
-      "pageshow",
-      (event: Event) => {
-        if ((event as PageTransitionEvent).persisted) {
-          sessionGone = false;
-          refresh = undefined;
-        }
-      },
-      { once: true },
-    );
+/**
+ * The server will not take this session. Also called by the page when the
+ * mail engine's worker finds it gone, so the page stops too and its next
+ * return to view checks once for both.
+ */
+export function markSessionGone() {
   notifySessionExpired();
+  if (sessionGone) return;
+  // On a page (not a worker), only one rendered for a signed-in user stops.
+  if (typeof window !== "undefined" && !isSessionExpiredRedirectArmed()) return;
+  sessionGone = true;
+  stopWatchingForReturn = watchForReturn();
+}
+
+/**
+ * The session is back: send requests again. Runs on its own when this page's
+ * check finds it; the mail engine's worker is told by the page.
+ */
+export function resetSessionGone() {
+  if (!sessionGone) return;
+  sessionGone = false;
+  refresh = undefined;
+  checkOnNextRequest = false;
+  stopWatchingForReturn?.();
+  stopWatchingForReturn = undefined;
+  for (const listener of resetListeners) listener();
+}
+
+export function onSessionGoneReset(listener: () => void) {
+  resetListeners.add(listener);
+  return () => {
+    resetListeners.delete(listener);
+  };
+}
+
+// Requests that arrive together share one check.
+function sessionCameBack(): Promise<boolean> {
+  if (checkOnNextRequest) {
+    checkOnNextRequest = false;
+    check = requestSessionRefresh()
+      .then((outcome) => {
+        if (outcome !== "refreshed") return false;
+        resetSessionGone();
+        return true;
+      })
+      .finally(() => {
+        check = undefined;
+      });
+  }
+  return check ?? Promise.resolve(false);
+}
+
+// Capture listeners on the window run before SWR's own focus and visibility
+// handlers, so the revalidation they start already sees the check allowed.
+function watchForReturn() {
+  if (typeof window === "undefined" || !window.addEventListener) return;
+  const onReturn = (event: Event) => {
+    if (event.type === "pageshow" && !(event as PageTransitionEvent).persisted)
+      return;
+    if (globalThis.document?.visibilityState === "hidden") return;
+    checkOnNextRequest = true;
+  };
+  const events = ["visibilitychange", "focus", "pageshow"];
+  for (const type of events)
+    window.addEventListener(type, onReturn, { capture: true });
+  return () => {
+    for (const type of events)
+      window.removeEventListener(type, onReturn, { capture: true });
+  };
 }
 
 function sessionExpiredResponse() {

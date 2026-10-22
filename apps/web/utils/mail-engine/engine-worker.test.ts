@@ -58,6 +58,26 @@ describe("engine worker", () => {
     vi.clearAllMocks();
   });
 
+  it("sends mail requests again when the page says the session is back", async () => {
+    const { fetchWithSessionRetry } = await import("@/utils/session-refresh");
+    const fetchMock = vi.fn(async (url: string) =>
+      url.startsWith("/api/auth/get-session")
+        ? Response.json(null)
+        : Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const changes = "/api/mail/v1/accounts/acc-1/changes";
+    await fetchWithSessionRetry(changes);
+    await fetchWithSessionRetry(changes);
+
+    send({ type: "session_reset" });
+    await fetchWithSessionRetry(changes);
+
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === changes),
+    ).toHaveLength(2);
+  });
+
   it("starts on the mailbox opened early", async () => {
     const early = fakeStore();
     sqlite.createStore.mockResolvedValueOnce(early);

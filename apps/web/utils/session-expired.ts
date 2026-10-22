@@ -44,6 +44,10 @@ export function armSessionExpiredRedirect() {
   };
 }
 
+export function isSessionExpiredRedirectArmed() {
+  return armedBy > 0;
+}
+
 /**
  * Sends a signed-out browser to log in once, however many requests notice.
  * While a composer is open it asks through that composer's prompt instead, so

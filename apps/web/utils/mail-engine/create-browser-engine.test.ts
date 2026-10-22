@@ -6,6 +6,10 @@ import {
   releasePrewarmedMailEngineWorker,
 } from "./create-browser-engine";
 import { MAIL_ENGINE_OWNER_LOCK } from "./tab-channel";
+import {
+  fetchWithSessionRetry,
+  resetSessionGone,
+} from "@/utils/session-refresh";
 
 const wipe = vi.hoisted(() => ({
   finishPending: vi.fn(),
@@ -42,6 +46,23 @@ describe("createBrowserMailEngine", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it("stops the page when its worker finds the session gone, and wakes the worker when it is back", async () => {
+    FakeWorker.startMessages = [{ type: "session_expired" }];
+    const engine = await startEngine();
+    const worker = FakeWorker.instances[0];
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pageRequest = await fetchWithSessionRetry("/api/user/rules");
+    resetSessionGone();
+    await engine.close();
+    resetSessionGone();
+
+    expect(pageRequest.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(worker.received("session_reset")).toBe(1);
   });
 
   it("finishes an interrupted sign-out wipe before opening the mailbox", async () => {

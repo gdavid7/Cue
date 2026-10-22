@@ -112,20 +112,26 @@ describe("fetchWithSessionRetry", () => {
     expect(server.refreshCalls()).toBe(0);
   });
 
-  it("asks again once a page comes back from the back/forward cache", async () => {
-    const page = new EventTarget();
-    vi.stubGlobal("window", page);
-    const server = stubServer({ refresh: "signed-out" });
+  it("keeps sending when the refresh answers with a server error", async () => {
+    const server = stubServer({ refresh: "server-error" });
     const { fetchWithSessionRetry } = await import("./session-refresh");
 
     await fetchWithSessionRetry("/api/panel");
-    page.dispatchEvent(
-      Object.assign(new Event("pageshow"), { persisted: true }),
-    );
+    laterThanRefreshReuse();
     await fetchWithSessionRetry("/api/panel");
 
     expect(server.callsTo("/api/panel")).toBe(2);
     expect(server.refreshCalls()).toBe(2);
+  });
+
+  it("still sends another origin's requests once the session is gone", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry } = await import("./session-refresh");
+
+    await fetchWithSessionRetry("/api/panel");
+    await fetchWithSessionRetry("https://other.example/api");
+
+    expect(server.callsTo("https://other.example/api")).toBe(1);
   });
 
   it("replays a write the auth gate rejected before it ran", async () => {
@@ -184,6 +190,104 @@ describe("fetchWithSessionRetry", () => {
   });
 });
 
+describe("fetchWithSessionRetry on a signed-in page", () => {
+  it("asks once more after a back/forward-cache restore, even after the first load's pageshow", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, page } = await openPage();
+
+    await fetchWithSessionRetry("/api/panel");
+    page.pageshow({ persisted: false });
+    await fetchWithSessionRetry("/api/panel");
+    page.pageshow({ persisted: true });
+    server.signIn();
+    const restored = await fetchWithSessionRetry("/api/panel");
+
+    expect(restored.status).toBe(200);
+    expect(server.callsTo("/api/panel")).toBe(2);
+    expect(server.refreshCalls()).toBe(2);
+  });
+
+  it("asks the server once when the tab is shown again, and sends again after a sign-in elsewhere", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, onSessionGoneReset, page } =
+      await openPage();
+    const reset = vi.fn();
+    onSessionGoneReset(reset);
+
+    await fetchWithSessionRetry("/api/a");
+    await fetchWithSessionRetry("/api/a");
+    page.show();
+    server.signIn();
+    const responses = await Promise.all([
+      fetchWithSessionRetry("/api/a"),
+      fetchWithSessionRetry("/api/b"),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(server.refreshCalls()).toBe(2);
+    expect(server.callsTo("/api/a")).toBe(2);
+    expect(server.callsTo("/api/b")).toBe(1);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing but one check per return to the tab while the session stays gone", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry, page } = await openPage();
+
+    await fetchWithSessionRetry("/api/a");
+    page.focus();
+    page.show();
+    await Promise.all([
+      fetchWithSessionRetry("/api/a"),
+      fetchWithSessionRetry("/api/b"),
+    ]);
+    await fetchWithSessionRetry("/api/a");
+
+    expect(server.refreshCalls()).toBe(2);
+    expect(server.callsTo("/api/a")).toBe(1);
+    expect(server.callsTo("/api/b")).toBe(0);
+  });
+
+  it("never stops a public page, where a 401 only means signed out", async () => {
+    const server = stubServer({ refresh: "signed-out" });
+    const { fetchWithSessionRetry } = await openPage({ signedIn: false });
+
+    await fetchWithSessionRetry("/api/user/me");
+    laterThanRefreshReuse();
+    await fetchWithSessionRetry("/api/user/me");
+
+    expect(server.callsTo("/api/user/me")).toBe(2);
+  });
+});
+
+// A browser page: modules load first (they read server env when they see a
+// window), then the page's window and document appear.
+async function openPage({ signedIn = true } = {}) {
+  const refresh = await import("./session-refresh");
+  const expired = await import("./session-expired");
+  const window = Object.assign(new EventTarget(), {
+    location: {
+      origin: "https://app.example",
+      pathname: "/acc-1/mail",
+      search: "",
+      hash: "",
+      assign: vi.fn(),
+    },
+    sessionStorage: { getItem: () => null, setItem: () => undefined },
+  });
+  const document = { visibilityState: "visible" };
+  vi.stubGlobal("window", window);
+  vi.stubGlobal("document", document);
+  if (signedIn) expired.armSessionExpiredRedirect();
+  const page = {
+    show: () => window.dispatchEvent(new Event("visibilitychange")),
+    focus: () => window.dispatchEvent(new Event("focus")),
+    pageshow: ({ persisted }: { persisted: boolean }) =>
+      window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted })),
+  };
+  return { ...refresh, page };
+}
+
 // Past the window in which a burst's stragglers reuse a settled refresh.
 function laterThanRefreshReuse() {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -197,12 +301,13 @@ function stubServer({
   alwaysExpired = false,
   plainUnauthorized = false,
 }: {
-  refresh: "ok" | "signed-out" | "unreachable";
+  refresh: "ok" | "signed-out" | "unreachable" | "server-error";
   alwaysExpired?: boolean;
   plainUnauthorized?: boolean;
 }) {
   const calls: { url: string; body: unknown }[] = [];
   let refreshed = false;
+  let mode = refresh;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -211,8 +316,10 @@ function stubServer({
         calls.push({ url, body: undefined });
         // Let the rest of a burst reach the refresh while it is in flight.
         await new Promise((resolve) => setTimeout(resolve, 5));
-        if (refresh === "signed-out") return Response.json(null);
-        if (refresh === "unreachable") throw new TypeError("Failed to fetch");
+        if (mode === "signed-out") return Response.json(null);
+        if (mode === "unreachable") throw new TypeError("Failed to fetch");
+        if (mode === "server-error")
+          return Response.json({ error: "Internal" }, { status: 500 });
         refreshed = true;
         return Response.json({ user: { id: "u1" }, session: {} });
       }
@@ -231,6 +338,10 @@ function stubServer({
     }),
   );
   return {
+    // The user signs in again, in another tab.
+    signIn: () => {
+      mode = "ok";
+    },
     refreshCalls: () =>
       calls.filter((call) => call.url === REFRESH_PATH).length,
     callsTo: (url: string) => calls.filter((call) => call.url === url).length,
