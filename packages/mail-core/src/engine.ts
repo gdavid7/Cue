@@ -165,6 +165,11 @@ export type MailClient = {
   /** The Files view's senders, read once from the local store. */
   queryFileSenders?(accountIds: string[]): Promise<FileSender[]>;
   /**
+   * How many listed messages with attachments have no stored body yet, so
+   * the Files view can't show their files.
+   */
+  queryFilesNotOnDevice?(accountIds: string[]): Promise<number>;
+  /**
    * Finds mail by meaning, from vectors this device made of recent mail.
    * Resolves no matches while the account has none. Only hosts that run
    * the embedding model offer it.
@@ -351,6 +356,9 @@ export function createMailEngine(input: {
     },
     queryFileSenders(accountIds) {
       return store.readFileSenders(accountIds);
+    },
+    queryFilesNotOnDevice(accountIds) {
+      return store.readFilesNotOnDevice(accountIds);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);

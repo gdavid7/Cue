@@ -118,18 +118,31 @@ export function FilesView({
     readSenders ? ["mail-file-senders", JSON.stringify(accountIds)] : null,
     () => readSenders?.(accountIds) ?? [],
   );
-  // Both are read once; new mail reaching the inbox moves its unread count,
+  const readNotOnDevice = client?.queryFilesNotOnDevice?.bind(client);
+  const notOnDevice = useSWR(
+    readNotOnDevice
+      ? ["mail-files-not-on-device", JSON.stringify(accountIds)]
+      : null,
+    () => readNotOnDevice?.(accountIds) ?? 0,
+    // An older build's owner tab answers "unsupported method"; retrying can't fix that.
+    { shouldRetryOnError: false },
+  );
+  // All are read once; new mail reaching the inbox moves its unread count,
   // which is already watched cheaply, so that refreshes them.
   const inboxUnread = useInboxUnreadCount(accountIds);
   const { mutate } = pages;
   const { mutate: mutateSenders } = senders;
+  const { mutate: mutateNotOnDevice } = notOnDevice;
   const refreshedAtUnread = useRef(inboxUnread);
   useEffect(() => {
     if (refreshedAtUnread.current === inboxUnread) return;
     refreshedAtUnread.current = inboxUnread;
+    // No cheaper signal exists for bodies being stored, so the count refreshes
+    // with the list on new mail and otherwise only when the view opens.
     mutate().catch(() => undefined);
     mutateSenders().catch(() => undefined);
-  }, [inboxUnread, mutate, mutateSenders]);
+    mutateNotOnDevice().catch(() => undefined);
+  }, [inboxUnread, mutate, mutateSenders, mutateNotOnDevice]);
 
   const files = useMemo(
     () => pages.data?.flatMap((page) => page.files) ?? [],
@@ -139,6 +152,8 @@ export function FilesView({
   const loadingMore =
     pages.isValidating && pages.size > (pages.data?.length ?? 0);
   const filtered = Boolean(kind || sender || deferredName);
+  // The count covers all files, so a filtered list would misstate it.
+  const olderMessages = filtered ? 0 : (notOnDevice.data ?? 0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -310,6 +325,18 @@ export function FilesView({
           ) : null}
         </LoadingContent>
       </div>
+      <p
+        className={cn(
+          "shrink-0 text-muted-foreground text-xs",
+          olderMessages > 0 && "border-border border-t px-4 py-2",
+        )}
+        role="status"
+      >
+        {olderMessages === 1 &&
+          "1 older message with an attachment isn't on this device yet"}
+        {olderMessages > 1 &&
+          `${olderMessages} older messages with attachments aren't on this device yet`}
+      </p>
       <Dialog
         onOpenChange={(open) => !open && setPreviewing(undefined)}
         open={Boolean(previewing)}

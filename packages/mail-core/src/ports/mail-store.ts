@@ -480,6 +480,7 @@ export interface MailStore {
   }): Promise<EmbeddingSource[]>;
   readFileSenders(accountIds: string[]): Promise<FileSender[]>;
   readFiles(query: FilesQuery): Promise<FilesPage>;
+  readFilesNotOnDevice(accountIds: string[]): Promise<number>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
    * only the server can still stop.

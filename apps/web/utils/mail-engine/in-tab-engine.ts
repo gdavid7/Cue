@@ -74,6 +74,7 @@ export async function createInTabEngine(
     queryPersonCard: undefined,
     queryFiles: undefined,
     queryFileSenders: undefined,
+    queryFilesNotOnDevice: undefined,
     ensureAccount,
     requestSync: (accountIds) =>
       requestSyncUnlessOffline(pageConnectivityOnline(), () =>

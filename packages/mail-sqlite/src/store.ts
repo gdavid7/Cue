@@ -5,7 +5,7 @@ import {
   readContactSuggestions,
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
-import { readFileSenders, readFiles } from "./files";
+import { readFileSenders, readFiles, readFilesNotOnDevice } from "./files";
 import { readPersonCard } from "./person-card";
 import {
   countMessageEmbeddings,
@@ -190,6 +190,9 @@ export async function createSqliteMailStore(
       return driver.read(async (tx) =>
         readFiles(tx, query, await searchSupport(tx)),
       );
+    },
+    readFilesNotOnDevice(accountIds) {
+      return driver.read((tx) => readFilesNotOnDevice(tx, accountIds));
     },
     readFileSenders(accountIds) {
       return driver.read((tx) => readFileSenders(tx, accountIds));
