@@ -7,6 +7,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   activatePreparedSnoozedThread,
   cancelSnoozedThreadByClientMutationId,
+  cancelSnoozedThreads,
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import {
@@ -30,6 +31,7 @@ vi.mock("@/utils/snooze/scheduler", () => ({
   prepareSnoozedThread: vi.fn(),
   activatePreparedSnoozedThread: vi.fn(),
   cancelSnoozedThreadByClientMutationId: vi.fn(),
+  cancelSnoozedThreads: vi.fn(),
 }));
 
 describe("createEmailProviderOperationExecutor", () => {
@@ -84,6 +86,49 @@ describe("createEmailProviderOperationExecutor", () => {
         messageId: { in: ["archived"] },
       },
       data: { inbox: false },
+    });
+  });
+
+  it.each([
+    "archive",
+    "unarchive",
+  ] as const)("%s ends the snoozes of the conversations it moved", async (kind) => {
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        archiveMessages: vi.fn(),
+        unarchiveMessages: vi.fn(),
+        getMessagesBatch: vi.fn(async () => [
+          {
+            id: "m1",
+            threadId: "t-1",
+            headers: { from: "ada@example.com", to: "me@example.com" },
+            labelIds: kind === "unarchive" ? ["INBOX"] : [],
+            snippet: "m1",
+          },
+        ]),
+        // The batched read missed m2; its conversation is read on its own.
+        getMessage: vi.fn(async (id: string) => ({ id, threadId: "t-2" })),
+      } as unknown as EmailProvider,
+    });
+    const operation = metadataOperation([
+      { accountId: "acc-1", messageId: "m1" },
+      { accountId: "acc-1", messageId: "m2" },
+    ]);
+    if (operation.intent.kind === "metadata")
+      operation.intent.change = { kind };
+
+    const result = await executor.execute({
+      operation,
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe("confirmed");
+    expect(cancelSnoozedThreads).toHaveBeenCalledExactlyOnceWith({
+      emailAccountId: "acc-1",
+      threadIds: ["t-1", "t-2"],
     });
   });
 

@@ -32,6 +32,7 @@ import { createScopedLogger } from "@/utils/logger";
 import {
   activatePreparedSnoozedThread,
   cancelSnoozedThreadByClientMutationId,
+  cancelSnoozedThreads,
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import prisma from "@/utils/prisma";
@@ -146,7 +147,7 @@ async function executeMetadataPerTarget(
       targets.push(failedTargetOutcome(target, error));
     }
   }
-  return metadataResult(accountId, operation, targets, observations);
+  return metadataResult(provider, accountId, operation, targets, observations);
 }
 
 async function observeAppliedMetadata(
@@ -185,7 +186,7 @@ async function observeAppliedMetadata(
       targets.push({ key: target, outcome: "applied", code: null });
     }
   }
-  return metadataResult(accountId, operation, targets, observations);
+  return metadataResult(provider, accountId, operation, targets, observations);
 }
 
 // One failed read rejects a whole provider batch, so retry individually to
@@ -234,10 +235,11 @@ async function inspectMetadataOperation(
       targets.push(failedTargetOutcome(target, error));
     }
   }
-  return metadataResult(accountId, operation, targets, observations);
+  return metadataResult(provider, accountId, operation, targets, observations);
 }
 
 async function metadataResult(
+  provider: EmailProvider,
   accountId: string,
   operation: PreparedMetadataOperation,
   targets: TargetOutcome[],
@@ -258,7 +260,11 @@ async function metadataResult(
       receiptId: operation.key.operationId,
     };
   }
-  if (operation.intent.change.kind === "archive") {
+  const { kind } = operation.intent.change;
+  if (kind === "archive" || kind === "unarchive") {
+    await endSnoozesOfMovedThreads(provider, accountId, targets, observations);
+  }
+  if (kind === "archive") {
     const messageIds = targets
       .filter((target) => target.outcome === "applied")
       .map((target) => target.key.messageId);
@@ -284,6 +290,52 @@ async function metadataResult(
     observations,
     targets,
   };
+}
+
+// The engine takes archive and move to inbox to end a snooze, so the server
+// does too: otherwise the scheduled return still fires, and the Snoozed view
+// still lists the conversation. This is also how a snooze is undone.
+async function endSnoozesOfMovedThreads(
+  provider: EmailProvider,
+  accountId: string,
+  targets: TargetOutcome[],
+  observations: ProviderChange[],
+) {
+  const threadIdByMessageId = new Map<string, string>();
+  for (const observation of observations) {
+    if (observation.kind === "message_patch") {
+      threadIdByMessageId.set(
+        observation.key.messageId,
+        observation.reference.conversationId,
+      );
+    }
+  }
+  const threadIds = new Set<string>();
+  for (const target of targets) {
+    if (target.outcome !== "applied") continue;
+    const { messageId } = target.key;
+    const observed = threadIdByMessageId.get(messageId);
+    if (observed) {
+      threadIds.add(observed);
+      continue;
+    }
+    try {
+      threadIds.add((await provider.getMessage(messageId)).threadId);
+    } catch {
+      // Unreadable now; its snooze, if any, returns it as scheduled.
+    }
+  }
+  try {
+    await cancelSnoozedThreads({
+      emailAccountId: accountId,
+      threadIds: [...threadIds],
+    });
+  } catch (error) {
+    logger.error("Failed to end snoozes of moved conversations", {
+      emailAccountId: accountId,
+      error,
+    });
+  }
 }
 
 function failedTargetOutcome(
