@@ -70,7 +70,7 @@ describe("readNeverReadSenders", () => {
     ]);
   });
 
-  it("counts inbox mail only", async () => {
+  it("needs four in the inbox; archived mail doesn't make up the count", async () => {
     const { store } = await setup();
     await write(store, [
       ...series("deals", DEALS, 3),
@@ -79,6 +79,36 @@ describe("readNeverReadSenders", () => {
     ]);
 
     expect(await read(store)).toEqual([]);
+  });
+
+  it("leaves out a sender the user opened and then archived", async () => {
+    const { store } = await setup();
+    await write(store, [
+      ...series("deals", DEALS, 4),
+      ...Array.from({ length: 3 }, (_, index) =>
+        mail({
+          id: `deals-archived-${index}`,
+          from: DEALS,
+          at: NOW - (index + 5) * DAY,
+          read: true,
+          roles: [],
+        }),
+      ),
+    ]);
+
+    expect(await read(store)).toEqual([]);
+  });
+
+  it("ignores read mail in the trash, spam, drafts and sent", async () => {
+    const { store } = await setup();
+    await write(store, [
+      ...series("deals", DEALS, 4),
+      ...(["trash", "spam", "draft", "sent"] as const).map((role) =>
+        mail({ id: `deals-${role}`, from: DEALS, read: true, roles: [role] }),
+      ),
+    ]);
+
+    expect((await read(store)).map((sender) => sender.count)).toEqual([4]);
   });
 
   it("never lists the user's own addresses, whatever their case or name", async () => {
@@ -113,7 +143,7 @@ describe("readNeverReadSenders", () => {
     ]);
   });
 
-  it("lists the five with the most messages, then the newest", async () => {
+  it("lists up to the limit asked for, with the most messages, then the newest", async () => {
     const { store } = await setup();
     await write(store, [
       ...series("s1", "s1@x.example", 4, NOW - 9 * DAY),
@@ -124,13 +154,16 @@ describe("readNeverReadSenders", () => {
       ...series("s6", "s6@x.example", 4, NOW - 5 * DAY),
     ]);
 
-    expect((await read(store)).map((sender) => sender.email)).toEqual([
+    expect(
+      (await read(store, { limit: 5 })).map((sender) => sender.email),
+    ).toEqual([
       "s2@x.example",
       "s4@x.example",
       "s5@x.example",
       "s3@x.example",
       "s6@x.example",
     ]);
+    expect(await read(store, { limit: 25 })).toHaveLength(6);
   });
 
   it("reads each asked account on its own", async () => {
@@ -202,6 +235,7 @@ function read(store: MailStore, input: Partial<NeverReadSendersQuery> = {}) {
     accountIds: ["a"],
     ownAddresses: [ME],
     receivedSinceMs: SINCE,
+    limit: 25,
     ...input,
   });
 }
@@ -248,7 +282,7 @@ function mail({
   from: string;
   at?: number;
   read?: boolean;
-  roles?: ("inbox" | "trash")[];
+  roles?: ("inbox" | "trash" | "spam" | "draft" | "sent")[];
 }): ProviderChange {
   return {
     kind: "message_patch",

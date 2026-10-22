@@ -41,10 +41,9 @@ const mocks = vi.hoisted(() => ({
     status: "ready" as "ready" | "loading",
     data: null as MailboxView | null,
   },
-  user: {
-    createdAt: new Date(),
-    dismissedHints: [] as string[],
-  } as { createdAt: Date; dismissedHints: string[] } | undefined,
+  user: undefined as
+    | { id: string; createdAt: Date; dismissedHints: string[] }
+    | undefined,
   fetch: vi.fn(),
   unsubscribeSenderAction: vi.fn(),
   setSenderStatusAction: vi.fn(),
@@ -108,7 +107,11 @@ beforeEach(() => {
   resetBrowserCacheForTesting();
   mocks.inbox.status = "ready";
   mocks.inbox.data = view({ synced: true });
-  mocks.user = { createdAt: new Date(Date.now() - DAY), dismissedHints: [] };
+  mocks.user = {
+    id: "user-1",
+    createdAt: new Date(Date.now() - DAY),
+    dismissedHints: [],
+  };
   mocks.queryNeverReadSenders.mockResolvedValue([DEALS, NEWS]);
   mocks.queueArchiveSenders.mockResolvedValue(1);
 });
@@ -123,7 +126,7 @@ describe("Mail you never read", () => {
   it("lists senders from local mail, read for the user's accounts over 30 days", async () => {
     renderCard();
 
-    const list = await screen.findByRole("list", {
+    const list = await screen.findByRole("region", {
       name: "Mail you never read",
     });
     expect(within(list).getAllByRole("listitem")).toHaveLength(2);
@@ -139,6 +142,45 @@ describe("Mail you never read", () => {
     expect(query.ownAddresses).toEqual(["me@example.com"]);
     expect(Date.now() - query.receivedSinceMs).toBeGreaterThanOrEqual(
       30 * DAY - 1000,
+    );
+    expect(
+      screen.getByText(
+        "Frequent senders you haven't opened in 30 days. Counted on this device.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says since when, while this browser holds less than 30 days", async () => {
+    mocks.inbox.data = view({
+      synced: true,
+      windowStartMs: Date.now() - 10 * DAY,
+    });
+    renderCard();
+
+    expect(
+      await screen.findByText(/^Frequent senders you haven't opened since /),
+    ).toBeTruthy();
+    expect(screen.queryByText(/in 30 days/)).toBeNull();
+  });
+
+  it("fills up to five from past the hidden senders", async () => {
+    const many = Array.from({ length: 7 }, (_, index) => ({
+      ...NEWS,
+      email: `s${index}@x.example`,
+      name: `Sender ${index}`,
+    }));
+    mocks.queryNeverReadSenders.mockResolvedValue(many);
+    renderCard();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Not now for Sender 0" }),
+    );
+
+    const region = screen.getByRole("region", { name: "Mail you never read" });
+    expect(within(region).getAllByRole("listitem")).toHaveLength(5);
+    expect(within(region).getByText("Sender 5")).toBeTruthy();
+    expect(mocks.queryNeverReadSenders.mock.calls[0][0].limit).toBeGreaterThan(
+      5,
     );
   });
 
@@ -156,6 +198,7 @@ describe("Mail you never read", () => {
 
   it("shows only in the first week, and not once Get started is closed", async () => {
     mocks.user = {
+      id: "user-1",
       createdAt: new Date(Date.now() - 8 * DAY),
       dismissedHints: [],
     };
@@ -165,6 +208,7 @@ describe("Mail you never read", () => {
     unmount();
 
     mocks.user = {
+      id: "user-1",
       createdAt: new Date(Date.now() - DAY),
       dismissedHints: ["get-started:dismissed"],
     };
@@ -237,7 +281,41 @@ describe("Mail you never read", () => {
       }),
     );
     await waitFor(() => expect(screen.queryByText("Daily Deals")).toBeNull());
-    expect(mocks.fetch.mock.calls[0][0].emailAccountId).toBe("a");
+    // Focus moves on to the next sender, not back to the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", {
+          name: "Unsubscribe from news@paper.example",
+        }),
+      ),
+    );
+    expect(mocks.fetch.mock.calls[0][0]).toMatchObject({
+      url: "/api/user/stats/newsletters/unsubscribe-link?sender=deals%40shop.example",
+      emailAccountId: "a",
+    });
+  });
+
+  it("looks the link up once while a lookup is under way, and keeps focus", async () => {
+    let answer: (response: Response) => void = () => {};
+    mocks.fetch.mockReturnValue(
+      new Promise<Response>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    renderCard();
+    const button = await screen.findByRole("button", {
+      name: "Unsubscribe from Daily Deals",
+    });
+    button.focus();
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(document.activeElement).toBe(button);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    answer(stats(null));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
   });
 
   it("without an unsubscribe link says so and never blocks the sender", async () => {
@@ -262,9 +340,16 @@ describe("Mail you never read", () => {
 });
 
 function Harness() {
-  const { senders, hide } = useNeverReadSenders({ accounts: ACCOUNTS });
+  const { senders, sinceMs, hide } = useNeverReadSenders({
+    accounts: ACCOUNTS,
+  });
   return (
-    <NeverReadCard accountColorIndexById={{}} onHide={hide} senders={senders} />
+    <NeverReadCard
+      accountColorIndexById={{}}
+      onHide={hide}
+      senders={senders}
+      sinceMs={sinceMs}
+    />
   );
 }
 
@@ -282,23 +367,25 @@ async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 20));
 }
 
-function view({ synced }: { synced: boolean }): MailboxView {
+function view({
+  synced,
+  windowStartMs,
+}: {
+  synced: boolean;
+  windowStartMs?: number;
+}): MailboxView {
   return {
     conversations: [],
     coverage: [
       {
         accountId: "a",
         lastCompletedSyncAtMs: synced ? Date.now() : null,
+        windowStartMs,
       },
     ],
   } as unknown as MailboxView;
 }
 
 function stats(unsubscribeLink: string | null) {
-  return new Response(
-    JSON.stringify({
-      newsletters: [{ name: "deals@shop.example", unsubscribeLink }],
-    }),
-    { status: 200 },
-  );
+  return new Response(JSON.stringify({ unsubscribeLink }), { status: 200 });
 }

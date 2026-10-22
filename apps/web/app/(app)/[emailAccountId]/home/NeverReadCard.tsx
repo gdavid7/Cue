@@ -11,19 +11,17 @@ import {
   UnsubscribeConfirmDialog,
   unsubscribeAndArchiveSender,
 } from "@/app/(app)/[emailAccountId]/mail/use-unsubscribe-sender";
-import type { NewsletterStatsResponse } from "@/app/api/user/stats/newsletters/route";
+import type { SenderUnsubscribeLinkResponse } from "@/app/api/user/stats/newsletters/unsubscribe-link/route";
 import { Button } from "@/components/ui/button";
 import { usePremium } from "@/hooks/usePremium";
 import { useArchiveSenderQueueActions } from "@/store/archive-sender-queue";
 import { formatShortDate } from "@/utils/date";
-import { canonicalizeEmailAddress } from "@/utils/email";
 import { fetchWithAccount } from "@/utils/fetch";
 import type { TodayAccount } from "@/utils/home/merge-home";
 import {
   getHttpUnsubscribeLink,
   getUserFacingUnsubscribeLink,
 } from "@/utils/parse/unsubscribe";
-import { createSearchParams } from "@/utils/url";
 
 /**
  * Today's first-week clean-up: senders who keep mailing and are never
@@ -32,11 +30,14 @@ import { createSearchParams } from "@/utils/url";
  */
 export function NeverReadCard({
   senders,
+  sinceMs,
   onHide,
   accounts,
   accountColorIndexById,
 }: {
   senders: NeverReadSender[];
+  /** Set when this browser holds less than the whole window. */
+  sinceMs: number | null;
   onHide: (sender: NeverReadSender) => void;
   /** Across accounts: each row names its account. */
   accounts?: TodayAccount[];
@@ -44,35 +45,51 @@ export function NeverReadCard({
 }) {
   const headingId = useId();
   const detailId = useId();
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const { hasUnsubscribeAccess, mutate: refetchPremium } = usePremium();
   const { PremiumModal, openModal } = usePremiumModal();
   if (!senders.length) return null;
 
-  // Focus stays in the list, on the row that moves up into the hidden one's
-  // place, rather than falling back to the page.
-  const hide = (sender: NeverReadSender, index: number) => {
+  // Focus stays in the card, on the row that moves up into the hidden one's
+  // place or else the heading, rather than falling back to the page. After
+  // a confirmed unsubscribe it moves even if the dialog left it elsewhere.
+  const hide = (
+    sender: NeverReadSender,
+    index: number,
+    { moveFocus = false } = {},
+  ) => {
     const hadFocus = listRef.current?.contains(document.activeElement);
     onHide(sender);
-    if (!hadFocus) return;
+    if (!hadFocus && !moveFocus) return;
     requestAnimationFrame(() => {
       const rows = listRef.current?.querySelectorAll("li");
       const next = rows?.[Math.min(index, rows.length - 1)];
-      next?.querySelector("button")?.focus();
+      const target = next?.querySelector("button") ?? headingRef.current;
+      target?.focus();
     });
   };
 
   return (
     <section aria-labelledby={headingId}>
-      <h2 className="mb-1 font-title text-foreground text-lg" id={headingId}>
+      <h2
+        className="mb-1 font-title text-foreground text-lg outline-none"
+        id={headingId}
+        ref={headingRef}
+        tabIndex={-1}
+      >
         Mail you never read
       </h2>
       <p className="mb-2 text-muted-foreground text-sm" id={detailId}>
-        Frequent senders you haven't opened in 30 days. Counted on this device.
+        {sinceMs
+          ? `Frequent senders you haven't opened since ${formatShortDate(
+              new Date(sinceMs),
+              { lowercase: true },
+            )}. Counted on this device.`
+          : "Frequent senders you haven't opened in 30 days. Counted on this device."}
       </p>
       <ul
         aria-describedby={detailId}
-        aria-labelledby={headingId}
         className="-mx-4 sm:mx-0 divide-y divide-border/60 border-border/60 border-y"
         ref={listRef}
       >
@@ -90,7 +107,7 @@ export function NeverReadCard({
               }
               hasUnsubscribeAccess={hasUnsubscribeAccess}
               key={`${sender.accountId}:${sender.email}`}
-              onHide={() => hide(sender, index)}
+              onHide={(options) => hide(sender, index, options)}
               onNeedsPremium={openModal}
               refetchPremium={refetchPremium}
               sender={sender}
@@ -118,7 +135,7 @@ function NeverReadRow({
   hasUnsubscribeAccess: boolean;
   onNeedsPremium: () => void;
   refetchPremium: () => Promise<unknown>;
-  onHide: () => void;
+  onHide: (options?: { moveFocus?: boolean }) => void;
 }) {
   const { queueArchiveSenders } = useArchiveSenderQueueActions(
     sender.accountId,
@@ -130,10 +147,11 @@ function NeverReadRow({
   } | null>(null);
   const label = sender.name || sender.email;
 
-  // The sender's link is looked up only when asked for, so Today never waits
-  // on the newsletter stats. Without a link nothing else is tried: blocking
-  // would add a filter to the user's mailbox.
+  // The sender's link is looked up only when asked for, and on its own, so
+  // Today never waits on the newsletter stats. Without a link nothing else
+  // is tried: blocking would add a filter to the user's mailbox.
   const startUnsubscribe = async () => {
+    if (checking) return;
     if (!hasUnsubscribeAccess) {
       onNeedsPremium();
       return;
@@ -164,7 +182,7 @@ function NeverReadRow({
       queueArchiveSenders,
       refetchPremium,
     });
-    if (unsubscribed) onHide();
+    if (unsubscribed) onHide({ moveFocus: true });
   };
 
   return (
@@ -199,8 +217,11 @@ function NeverReadRow({
       <div className="flex shrink-0 gap-2">
         <Button
           aria-label={`Unsubscribe from ${label}`}
-          disabled={checking}
-          loading={checking}
+          // Stays focusable while the link is looked up; `loading` would
+          // disable it and drop focus.
+          aria-busy={checking}
+          aria-disabled={checking}
+          className={checking ? "cursor-progress opacity-60" : undefined}
           onClick={startUnsubscribe}
           size="sm"
           variant="outline"
@@ -209,7 +230,7 @@ function NeverReadRow({
         </Button>
         <Button
           aria-label={`Not now for ${label}`}
-          onClick={onHide}
+          onClick={() => onHide()}
           size="sm"
           variant="ghost"
         >
@@ -230,22 +251,12 @@ function NeverReadRow({
 
 /** The sender's unsubscribe link from the stats Bulk unsubscribe keeps. */
 async function readUnsubscribeLink(sender: NeverReadSender) {
-  const url = `/api/user/stats/newsletters?${createSearchParams({
-    types: [],
-    search: sender.email,
-    orderBy: "emails",
-    orderDirection: "desc",
-    includeMissingUnsubscribe: true,
-  })}`;
   const response = await fetchWithAccount({
-    url,
+    url: `/api/user/stats/newsletters/unsubscribe-link?${new URLSearchParams({ sender: sender.email })}`,
     emailAccountId: sender.accountId,
   });
-  if (!response.ok) throw new Error(`Sender stats: ${response.status}`);
-  const stats = (await response.json()) as NewsletterStatsResponse;
-  const canonical = canonicalizeEmailAddress(sender.email);
-  return (
-    stats.newsletters.find((newsletter) => newsletter.name === canonical)
-      ?.unsubscribeLink ?? null
-  );
+  if (!response.ok) throw new Error(`Unsubscribe link: ${response.status}`);
+  const { unsubscribeLink } =
+    (await response.json()) as SenderUnsubscribeLinkResponse;
+  return unsubscribeLink;
 }

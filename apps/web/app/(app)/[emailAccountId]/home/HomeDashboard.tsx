@@ -600,6 +600,7 @@ export function HomeDashboard() {
                 accounts={allInboxesAccounts ? localAccounts : undefined}
                 onHide={neverRead.hide}
                 senders={neverRead.senders}
+                sinceMs={neverRead.sinceMs}
               />
             }
             // Past the last refresh a pending lane would load forever.
