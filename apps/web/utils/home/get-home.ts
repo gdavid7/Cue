@@ -38,6 +38,7 @@ import {
   PRIORITY_ORDER,
 } from "@/utils/home/today-constants";
 import { getRuleLabel } from "@/utils/rule/consts";
+import { findReadingLabelId } from "@/utils/label/reading-label";
 import {
   getUserTier,
   hasAiAccess,
@@ -65,8 +66,6 @@ export const HANDLED_LABELS = [
   "Receipt",
   "Notification",
 ];
-/** Today's Reading lane bundles unread mail Cue filed under this label. */
-const READING_LABEL = getRuleLabel(SystemType.NEWSLETTER);
 const HIDDEN_TAGS = new Set([
   "inbox",
   "unread",
@@ -168,7 +167,7 @@ export async function getHomeData({
       // As with the rest of the inbox, filed mail can't be told apart
       // without the labels.
       if (!labels.ok) return Promise.resolve(PENDING);
-      const readingId = findLabel(labels.value, READING_LABEL)?.id;
+      const readingId = findReadingLabelId(labels.value);
       if (!readingId) return Promise.resolve({ ok: true, value: [] });
       return gmail("reading", () =>
         emailProvider
@@ -269,7 +268,7 @@ export async function getHomeData({
   const awaitingId = labelId(getRuleLabel(SystemType.AWAITING_REPLY));
   const handledLabelIds = HANDLED_LABELS.map(labelId).filter(isString);
   const handledIds = new Set(handledLabelIds);
-  const readingId = labelId(READING_LABEL);
+  const readingId = findReadingLabelId(labels);
   // Each thread shows once on Today. Recently filed mail is Cue's to handle,
   // so it isn't repeated under the rest of the inbox either.
   const shownIds = new Set(needsYou.map((t) => t.id));

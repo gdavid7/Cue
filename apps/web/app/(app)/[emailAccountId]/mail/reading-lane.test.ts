@@ -7,7 +7,8 @@ import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
 import { threadsQuery } from "@/utils/threads/validation";
 import {
-  findReadingLabelId,
+  getReadingBulkPlan,
+  getReadingRoute,
   getReadingSummary,
   inboxWithoutReadingQuery,
   readingLaneQuery,
@@ -15,19 +16,53 @@ import {
 
 const NEWSLETTER = "Label_42";
 
-describe("findReadingLabelId", () => {
-  it("finds the label Cue files newsletters under, as named in the mailbox", () => {
-    expect(
-      findReadingLabelId([
-        { id: "Label_1", name: "Receipt" },
-        { id: NEWSLETTER, name: " newsletter " },
-      ]),
-    ).toBe(NEWSLETTER);
+describe("getReadingRoute", () => {
+  const route = (overrides: Partial<Parameters<typeof getReadingRoute>[0]>) =>
+    getReadingRoute({
+      isReadingView: true,
+      isAllAccounts: false,
+      readingLabelId: NEWSLETTER,
+      labelsLoading: false,
+      labelsFailed: false,
+      ...overrides,
+    });
+
+  it("shows the lane once the Newsletter label is known", () => {
+    expect(route({})).toBe("lane");
   });
 
-  it("is undefined when the account has no such label", () => {
-    expect(findReadingLabelId([{ id: "Label_1", name: "Receipt" }])).toBe(
-      undefined,
+  it("never shows the lane's bar over the inbox it falls back to when labels fail", () => {
+    expect(route({ readingLabelId: undefined, labelsFailed: true })).toBe(
+      "failed",
+    );
+  });
+
+  it("waits while labels load", () => {
+    expect(route({ readingLabelId: undefined, labelsLoading: true })).toBe(
+      "resolving",
+    );
+  });
+
+  it("goes back to the inbox without a Newsletter label, or across accounts", () => {
+    expect(route({ readingLabelId: undefined })).toBe("redirect");
+    expect(route({ isAllAccounts: true })).toBe("redirect");
+  });
+
+  it("is off on any other view", () => {
+    expect(route({ isReadingView: false })).toBe("off");
+  });
+});
+
+describe("getReadingBulkPlan", () => {
+  it("acts on the loaded rows only when they are all of them", () => {
+    expect(getReadingBulkPlan({ hasMore: false, canMatch: true })).toBe(
+      "loaded",
+    );
+    expect(getReadingBulkPlan({ hasMore: true, canMatch: true })).toBe(
+      "matching",
+    );
+    expect(getReadingBulkPlan({ hasMore: true, canMatch: false })).toBe(
+      "drain",
     );
   });
 });

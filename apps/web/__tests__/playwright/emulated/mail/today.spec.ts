@@ -173,6 +173,12 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
       .getByRole("listbox", { name: "Conversations" })
       .getByRole("option", { name: subject });
     await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    // The keyboard carries on from the lane's first newsletter, and the lane
+    // reads as part of the inbox.
+    await expect(page.locator("[data-mail-thread-row]").first()).toBeFocused();
+    await expect(
+      page.getByRole("link", { name: /^Inbox/ }).first(),
+    ).toHaveAttribute("aria-current", "page");
     await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-lane");
 
     // Reading one marks it read, and it keeps its place in the lane.
@@ -184,8 +190,10 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
     await expect(laneRow).toBeVisible();
 
     const archiveAll = page.getByRole("button", { name: "Archive all" });
+    const back = page.getByRole("button", { name: "Back to Inbox" });
     await archiveAll.click();
     await expect(laneRow).toHaveCount(0);
+    await expect(back).toBeFocused();
     // Archive all keeps a row's undo, while its toast shows.
     await page
       .getByRole("region", { name: "Notifications alt+T" })
@@ -193,13 +201,74 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
       .click();
     await expect(laneRow).toBeVisible({ timeout: 60_000 });
 
-    await page.getByRole("button", { name: "Back to Inbox" }).click();
-    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    await back.click();
+    await expect(bundle).toBeFocused({ timeout: 60_000 });
     await bundle.click();
     await expect(laneRow).toBeVisible({ timeout: 60_000 });
     await archiveAll.click();
     await expect(page.getByText("Nothing left to read.")).toBeVisible();
     await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
+    await expect
+      .poll(
+        () =>
+          readLatestMailMutation(page, {
+            emailAccountId,
+            kind: "archive",
+            threadId: newsletter.threadId,
+          }),
+        { timeout: 60_000 },
+      )
+      .toMatchObject({ status: "succeeded" });
+
+    // All inboxes has no lane: its Reading address goes back to the inbox.
+    const allInboxesReading = new URL(page.url());
+    allInboxesReading.pathname = allInboxesReading.pathname.replace(
+      /\/type\/reading.*$/,
+      "",
+    );
+    allInboxesReading.pathname += "/all-inboxes/type/reading";
+    allInboxesReading.search = "";
+    await page.goto(allInboxesReading.toString(), {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(page).not.toHaveURL(/\/type\/reading/, { timeout: 60_000 });
+    await expect(back).toHaveCount(0);
+  } finally {
+    await newsletter.remove();
+  }
+});
+
+test("a newsletter opened by link reads, closes and archives from the reader", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const subject = `Field Notes link ${Date.now()}`;
+  const newsletter = await seedNewsletter(page, subject);
+  try {
+    const { emailAccountId } = await openMail(page);
+    await waitForMetadataCoverage(page);
+    const heading = page.getByRole("heading", { name: subject });
+    const openByLink = () =>
+      page.goto(`/${emailAccountId}/mail?thread-id=${newsletter.threadId}`, {
+        waitUntil: "domcontentloaded",
+      });
+
+    // Bundled out of the inbox list, it still opens, and closes to the inbox.
+    await openByLink();
+    await expect(heading).toBeVisible({ timeout: 60_000 });
+    await page.keyboard.press("Escape");
+    await expect(heading).toHaveCount(0);
+    await expect(
+      page.getByRole("listbox", { name: "Conversations" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Reading, from .*Field Notes/ }),
+    ).toBeVisible({ timeout: 60_000 });
+
+    await openByLink();
+    await expect(heading).toBeVisible({ timeout: 60_000 });
+    await page.keyboard.press("e");
+    await expect(heading).toHaveCount(0, { timeout: 30_000 });
     await expect
       .poll(
         () =>
