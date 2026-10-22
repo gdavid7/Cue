@@ -313,10 +313,14 @@ test("works through All inboxes, acting and undoing in each card's own account",
         .poll(() => countFor(operations, account), { timeout: 60_000 })
         .toBeGreaterThan(before);
       seen.add(account);
+      // The mailboxes share thread ids, so a card is its account and thread.
       if (step < total - 1)
         await expect
-          .poll(async () => (await currentCard(dialog)).threadId)
-          .not.toBe(card.threadId);
+          .poll(
+            async () =>
+              `${await cardAccount(dialog)}:${(await currentCard(dialog)).threadId}`,
+          )
+          .not.toBe(`${account}:${card.threadId}`);
     }
     expect([...seen].sort()).toEqual([primaryId, second.id].sort());
 
