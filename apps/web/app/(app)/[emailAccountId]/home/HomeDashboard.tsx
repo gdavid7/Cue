@@ -17,6 +17,7 @@ import type { KeyedMutator } from "swr";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { CheckIcon, FlagIcon, MailSearchIcon, PauseIcon } from "lucide-react";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
+import type { GetCalendarTodayEventsResponse } from "@/app/api/user/calendar/upcoming-events/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
@@ -35,6 +36,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useCalendarTodayEvents } from "@/hooks/useCalendarUpcomingEvents";
 import { useHome, useHomeDeadlines } from "@/hooks/useHome";
 import {
   ALSO_IN_INBOX_LIMIT,
@@ -77,6 +79,7 @@ import {
 } from "./TodayThreadRow";
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
+import { YourDay } from "./YourDay";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
@@ -124,6 +127,19 @@ export function HomeDashboard() {
         (allInboxesAccounts ?? []).map((account, index) => [account.id, index]),
       ),
     [allInboxesAccounts],
+  );
+  // Calendars are the person's, so the routed account reads every one,
+  // across accounts too.
+  const { data: day, error: dayError } = useCalendarTodayEvents(
+    emailAccountId || null,
+  );
+  const dayMeetings = useMemo<DayMeetings>(
+    () => ({
+      ids: new Set(day?.events.map((event) => `event:${event.id}`)),
+      // Without an account there's no request, so nothing to wait for.
+      loading: Boolean(emailAccountId) && !day && !dayError,
+    }),
+    [day, dayError, emailAccountId],
   );
   const greetingText = useGreeting();
   const firstName = getUserFirstName(accountsData?.emailAccounts);
@@ -299,7 +315,7 @@ export function HomeDashboard() {
   });
 
   const threadHref = useCallback(
-    (thread: { threadId: string; account?: TodayAccount }, reply = false) => {
+    (thread: { threadId: string; account?: { id: string } }, reply = false) => {
       // Across accounts a row opens in All inboxes, in its own account, so
       // the reader comes back to Today across accounts.
       const threadAccountIndex = thread.account
@@ -565,7 +581,7 @@ export function HomeDashboard() {
           </p>
         ) : data && lanes && !notice && !allClear && needsYouLoaded ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
-            {busySummary(data, lanes.needsYou.length)}
+            {busySummary(data, lanes.needsYou.length, dayMeetings)}
           </p>
         ) : null}
       </header>
@@ -591,6 +607,8 @@ export function HomeDashboard() {
         {data && lanes ? (
           <HomeLanes
             data={data}
+            day={day}
+            dayMeetings={dayMeetings}
             lanes={lanes}
             notice={notice}
             allClear={allClear}
@@ -635,6 +653,8 @@ export function HomeDashboard() {
 
 function HomeLanes({
   data,
+  day,
+  dayMeetings,
   lanes,
   notice,
   allClear,
@@ -651,6 +671,10 @@ function HomeLanes({
   outdated,
 }: {
   data: TodayData;
+  /** Today's meetings, for the Your day strip. */
+  day?: GetCalendarTodayEventsResponse;
+  /** The strip's meetings, which Next up and the All clear don't repeat. */
+  dayMeetings: DayMeetings;
   lanes: {
     needsYou: TodayThread[];
     waiting: TodayThread[];
@@ -667,7 +691,10 @@ function HomeLanes({
   accountColorIndexById: Record<string, number>;
   rowContext: TodayRowContext;
   layout: "list" | "split";
-  threadHref: (thread: { threadId: string; account?: TodayAccount }) => string;
+  threadHref: (thread: {
+    threadId: string;
+    account?: { id: string };
+  }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
   pending: ReadonlySet<HomeLane>;
   /** Lanes showing rows from an earlier answer that a refresh couldn't replace. */
@@ -683,6 +710,21 @@ function HomeLanes({
   ) => renderTodayRow(thread, rowContext, options);
   const hasFocus = (threads: TodayThread[]) =>
     threads.some((thread) => rowKey(thread) === rowContext.focusedId);
+  const nextUp = data.nextUp.filter(
+    (item) => item.kind !== "event" || !isOnDay(data, dayMeetings, item),
+  );
+  const yourDay = day?.events.length ? (
+    <Section title="Your day">
+      <YourDay
+        accountIds={accountIds}
+        events={day.events}
+        layout={layout}
+        more={day.more}
+        now={now}
+        threadHref={threadHref}
+      />
+    </Section>
+  ) : null;
 
   return (
     <>
@@ -692,6 +734,7 @@ function HomeLanes({
         <AllClear
           data={data}
           emailAccountId={emailAccountId}
+          nextShown={!isNextInDay(data, dayMeetings)}
           now={now}
           onToggleWaiting={onToggleWaiting}
           waitingOn={
@@ -708,6 +751,7 @@ function HomeLanes({
         </AllClear>
       ) : null}
       {/* What needs the user comes first; meeting news sits with what's next. */}
+      {allClear ? yourDay : null}
       {allClear ? (
         <BeforeYourMeeting
           accountIds={accountIds}
@@ -763,14 +807,15 @@ function HomeLanes({
         </Section>
       ) : null}
 
+      {allClear ? null : yourDay}
       {/* The All clear names what's next itself. */}
-      {!allClear && (data.nextUp.length > 0 || data.suggestion) ? (
+      {!allClear && (nextUp.length > 0 || data.suggestion) ? (
         <Section title="Next up">
-          {data.nextUp.length > 0 ? (
-            <NextUpList items={data.nextUp} layout={layout} now={now} />
+          {nextUp.length > 0 ? (
+            <NextUpList items={nextUp} layout={layout} now={now} />
           ) : null}
           {data.suggestion ? (
-            <div className={data.nextUp.length > 0 ? "mt-2" : undefined}>
+            <div className={nextUp.length > 0 ? "mt-2" : undefined}>
               <ConnectLine
                 emailAccountId={emailAccountId}
                 name={data.suggestion.name}
@@ -1074,18 +1119,57 @@ function HomeSkeleton({ layout }: { layout: "list" | "split" }) {
 
 /**
  * "3 need a reply · next: Design review 2:00 PM". The meeting is left to the
- * Next up list when that shows, rather than said twice.
+ * Next up list or the Your day strip when either shows, rather than said twice.
  */
-function busySummary(data: TodayData, needsReply: number) {
+function busySummary(
+  data: TodayData,
+  needsReply: number,
+  dayMeetings: DayMeetings,
+) {
   const count = formatCount(needsReply, data.stats.needsYouCapped) ?? "0";
   const status = `${count} ${needsReply === 1 ? "needs" : "need"} a reply`;
   const next = data.calendar.next;
-  if (!next || data.nextUp.length > 0) return status;
+  if (!next || data.nextUp.length > 0 || isNextInDay(data, dayMeetings))
+    return status;
   return (
     <>
       {status} · {next.tomorrow ? "tomorrow" : "next"}: {next.title}{" "}
       <span className="whitespace-nowrap">{formatTime(next.at)}</span>
     </>
+  );
+}
+
+/**
+ * Today's meetings on the Your day strip, by Next up's own `event:` ids. While
+ * the strip loads, which is shortly after Today's own answer, `loading` holds
+ * today's meetings back from Next up rather than move them once it lands.
+ */
+type DayMeetings = { ids: ReadonlySet<string>; loading: boolean };
+
+/** A meeting the Your day strip shows, or is about to. */
+function isOnDay(
+  data: TodayData,
+  day: DayMeetings,
+  meeting: { id?: string; at: string },
+) {
+  if (day.loading)
+    return (
+      data.calendar.connected &&
+      new Date(meeting.at).toDateString() === new Date().toDateString()
+    );
+  return Boolean(meeting.id && day.ids.has(meeting.id));
+}
+
+/** Today's next meeting is on the Your day strip already. */
+function isNextInDay(data: TodayData, day: DayMeetings) {
+  const next = data.calendar.next;
+  return Boolean(
+    next &&
+      !next.tomorrow &&
+      isOnDay(data, day, {
+        id: next.id ? `event:${next.id}` : undefined,
+        at: next.at,
+      }),
   );
 }
 

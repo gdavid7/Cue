@@ -2,7 +2,7 @@ import { expect, type Page, type Route } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
-import { withClient } from "./mail-test-helpers";
+import { openMail, withClient } from "./mail-test-helpers";
 
 // A precise fix, which Cue should only ever store rounded.
 const HERE = { latitude: 37.774_929, longitude: -122.419_416 };
@@ -234,6 +234,104 @@ test("a calendar read in full with nothing on it: says it's clear through tomorr
     main.getByText("Calendar clear through tomorrow."),
   ).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "today-calendar-clear");
+});
+
+test("your day: today's meetings, the people on them, their card and the last email with them", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(480_000);
+  await mockWeather(page);
+  await page.route("**/api/user/home*", async (route) => {
+    const response = await route.fetch();
+    const home = await response.json();
+    home.cue = { aiAccess: true, replyTracking: true, hasReadMail: true };
+    home.needsYou = [];
+    home.calendar = {
+      connected: true,
+      clearThroughTomorrow: false,
+      next: null,
+    };
+    home.nextUp = [];
+    await route.fulfill({ response, json: home });
+  });
+  // The emulators seed no calendar connection, and Google's one seeded event
+  // starts two hours after the server does, so today's meetings are given
+  // here. Dana is in both providers' seeded mail, which the line reads.
+  const minutes = (count: number) =>
+    new Date(Date.now() + count * 60_000).toISOString();
+  await page.route(
+    (url) =>
+      url.pathname === "/api/user/calendar/upcoming-events" &&
+      url.searchParams.get("range") === "today",
+    (route) =>
+      route.fulfill({
+        json: {
+          more: 0,
+          events: [
+            {
+              id: "standup",
+              title: "Team standup",
+              startTime: minutes(-10),
+              endTime: minutes(20),
+              attendees: [],
+            },
+            {
+              id: "review",
+              title: "Design review with Dana",
+              startTime: minutes(60),
+              endTime: minutes(90),
+              eventUrl: "https://calendar.example.com/review",
+              attendees: [
+                { email: "dana@example.com", name: "Dana Example" },
+                { email: "sam@partner.example", name: "Sam Rivera" },
+              ],
+            },
+          ],
+        },
+      }),
+  );
+  const main = page.getByRole("main");
+
+  // Each case starts on fresh device storage: the inbox has the engine read
+  // the mailbox into this browser, as it does for someone who opened Mail.
+  await openMail(page);
+  await page.getByRole("link", { name: "Today", exact: true }).click();
+  const strip = main.getByRole("region", { name: "Your day" });
+  await expect(strip).toBeVisible({ timeout: 60_000 });
+  await expect(strip.getByText("Now")).toBeVisible();
+  await expect(strip.getByText("Design review with Dana")).toBeVisible();
+  // The last conversation with them, from this browser's own mail.
+  const lastEmail = strip.getByRole("link", { name: /^Last email:/ });
+  await expect(lastEmail).toBeVisible({ timeout: 120_000 });
+
+  for (const theme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    for (const size of SIZES) {
+      await page.setViewportSize(size);
+      await expect(strip).toBeVisible();
+      await expectNoSideScroll(page, size.width);
+      await capturePlaywrightCheckpoint(
+        page,
+        testInfo,
+        `today-your-day-${theme}-${size.width}`,
+      );
+    }
+    await page.setViewportSize(SIZES[0]);
+  }
+  await page.emulateMedia({ colorScheme: "light" });
+
+  await strip.getByRole("button", { name: "Dana Example" }).click();
+  const card = page.getByTestId("person-card");
+  await expect(card).toBeVisible();
+  await expect(
+    card.getByRole("heading", { name: "Dana Example", exact: true }),
+  ).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "today-your-day-card");
+  await page.keyboard.press("Escape");
+  await expect(card).toBeHidden();
+
+  await lastEmail.click();
+  await expect(page).toHaveURL(/from=today/, { timeout: 60_000 });
 });
 
 test("weather service down: Today stays calm and the weather can be turned off", async ({

@@ -339,6 +339,8 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
           email: attendee.email || "",
           name: attendee.displayName ?? undefined,
           declined: attendee.responseStatus === "declined",
+          ...(attendee.self ? { self: true } : {}),
+          ...(attendee.resource ? { resource: true } : {}),
         })) || [],
     };
   }

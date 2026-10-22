@@ -49,6 +49,7 @@ type MicrosoftEvent = {
   attendees?: Array<{
     emailAddress?: { address?: string; name?: string };
     status?: { response?: string };
+    type?: string;
   }>;
   isOrganizer?: boolean;
   organizer?: { emailAddress?: { address?: string; name?: string } };
@@ -473,6 +474,7 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
           email: attendee.emailAddress?.address || "",
           name: attendee.emailAddress?.name ?? undefined,
           declined: attendee.status?.response === "declined",
+          ...(attendee.type === "resource" ? { resource: true } : {}),
         })) || [],
     };
   }

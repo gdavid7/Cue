@@ -55,6 +55,7 @@ describe("Today's cache", () => {
           connected: true,
           clearThroughTomorrow: false,
           next: {
+            id: "review",
             title: "Standup",
             at: iso(NOW + HOUR),
             url: undefined,
@@ -218,7 +219,7 @@ describe("Today's cache", () => {
     // A newer version.
     stored({ version: 99, savedAt: NOW, timeZone: ZONE, data: home() });
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
-    // Before deadlines loaded on their own, when Next up could hold them.
+    // Older ones: before deadlines loaded on their own, or whose next meeting has no id.
     stored({ version: 1, savedAt: NOW, timeZone: ZONE, data: home() });
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
     // The right version, missing what Today reads.

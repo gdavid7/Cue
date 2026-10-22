@@ -24,8 +24,8 @@ const PREVIEW_LENGTH = 140;
 const ENTRY_KEY = "home";
 // Bumped whenever Today's answer changes shape: a copy saved by an earlier
 // deploy is ignored rather than read as this one. 2: Next up holds meetings
-// only; deadlines load on their own and are never saved, so a finished task
-// doesn't come back from an earlier visit.
+// only (deadlines load on their own and are never saved, so a finished task
+// doesn't come back), and the next meeting has the id Your day matches it by.
 const SAVED_VERSION = 2;
 // What an earlier day's copy says of Cue: no notice and no AI actions, as it
 // is never shown until the fresh answer says what Cue can do now.

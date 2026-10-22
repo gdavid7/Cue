@@ -254,6 +254,7 @@ describe("mergeHomeData", () => {
           connected: true,
           clearThroughTomorrow: false,
           next: {
+            id: "late",
             title: "Late",
             at: "2026-10-14T15:00:00Z",
             url: undefined,
@@ -276,6 +277,7 @@ describe("mergeHomeData", () => {
           connected: false,
           clearThroughTomorrow: false,
           next: {
+            id: "early",
             title: "Early",
             at: "2026-10-14T10:00:00Z",
             url: undefined,
@@ -289,6 +291,7 @@ describe("mergeHomeData", () => {
       connected: true,
       clearThroughTomorrow: false,
       next: {
+        id: "early",
         title: "Early",
         at: "2026-10-14T10:00:00Z",
         url: undefined,
