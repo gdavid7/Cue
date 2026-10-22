@@ -158,7 +158,8 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
 
   await step(
     "thread shows reply actions",
-    async () => {
+    async (metrics) => {
+      const started = Date.now();
       await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`));
       // A seeded announcement sent to a class list, so Reply all applies.
       const row = page
@@ -170,17 +171,24 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         row,
         "the seeded multi-recipient thread is in the inbox (run the seed workflow if not)",
       ).toBeVisible({ timeout: 60_000 });
+      // Split the step so a slow run says whether the seeded row was still
+      // syncing in (row), the body was loading (open) or the buttons were late.
+      metrics.rowVisibleMs = Date.now() - started;
+      const clicked = Date.now();
       await row.click();
       const message = page.locator("[data-thread-message-id]").last();
       await expect(message, "the thread opens").toBeVisible({
         timeout: 60_000,
       });
+      metrics.threadOpenMs = Date.now() - clicked;
+      const opened = Date.now();
       for (const name of ["Reply", "Reply all", "Forward"]) {
         await expect(
           message.getByRole("button", { name, exact: true }),
           `${name} is visible`,
         ).toBeVisible();
       }
+      metrics.replyActionsMs = Date.now() - opened;
     },
     "gmail",
   );
