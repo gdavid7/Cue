@@ -55,6 +55,7 @@ describe("Today's cache", () => {
           connected: true,
           clearThroughTomorrow: false,
           next: {
+            id: "review",
             title: "Standup",
             at: iso(NOW + HOUR),
             url: undefined,

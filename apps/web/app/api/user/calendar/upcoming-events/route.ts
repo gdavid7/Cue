@@ -2,10 +2,19 @@ import { TZDate } from "@date-fns/tz";
 import { addDays, startOfDay } from "date-fns";
 import { NextResponse } from "next/server";
 import { withEmailAccount } from "@/utils/middleware";
-import { countConnectedCalendars } from "@/utils/calendar/connections";
 import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
-import type { CalendarEvent } from "@/utils/calendar/event-types";
+import type {
+  CalendarEvent,
+  CalendarEventAttendee,
+} from "@/utils/calendar/event-types";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
+import {
+  buildSelfAddresses,
+  getCalendarAccounts,
+  isMeetingForUser,
+  isOwnAttendee,
+  shouldLabelCalendars,
+} from "@/utils/calendar/meeting-rules";
 import type { Logger } from "@/utils/logger";
 import { getUserOwnAddresses } from "@/utils/user/own-addresses";
 
@@ -103,28 +112,24 @@ async function getTodayData({
       });
       return [];
     }),
-    countConnectedCalendars(emailAccountId),
+    getCalendarAccounts(emailAccountId),
   ]);
-  const own = new Set([email, ...addresses].map((a) => a.toLowerCase()));
-  const isSelf = (event: CalendarEvent, address: string) =>
-    own.has(address.toLowerCase()) ||
-    address.toLowerCase() === event.calendarEmail?.toLowerCase();
+  const self = buildSelfAddresses({
+    ownAddresses: [email, ...addresses],
+    calendarAccounts,
+  });
 
-  // All-day entries such as holidays don't fill a day, and a meeting the user
-  // declined on any of their addresses isn't on it.
   const meetings = calendar.events.filter(
     (event) =>
-      !event.allDay &&
-      !event.attendees.some(
-        (attendee) => attendee.declined && isSelf(event, attendee.email),
-      ),
+      isMeetingForUser(event, self) &&
+      // Last night's meeting that ran past midnight is today's only while
+      // it's still going.
+      !(event.startTime < dayStart && event.endTime <= now),
   );
   const shown = keepComingMeetings(meetings, now);
-  // With two calendar accounts, each meeting says whose calendar it's on.
-  const labelCalendars = calendarAccounts > 1;
+  const labelCalendars = shouldLabelCalendars(calendarAccounts);
 
   return {
-    connected: !calendar.noCalendarConnected,
     events: shown.map((event) => ({
       id: event.id,
       title: event.title,
@@ -137,9 +142,10 @@ async function getTodayData({
       attendees: event.attendees
         .filter(
           (attendee) =>
+            attendee.email.trim() &&
             !attendee.declined &&
-            !isSelf(event, attendee.email) &&
-            !isRoom(attendee.email),
+            !isOwnAttendee(attendee, self) &&
+            !isRoom(attendee),
         )
         .map((attendee) => ({
           email: attendee.email,
@@ -167,8 +173,11 @@ function keepComingMeetings(meetings: CalendarEvent[], now: Date) {
 }
 
 // Rooms and equipment are booked as attendees; they aren't people to meet.
-function isRoom(address: string) {
-  return address.toLowerCase().endsWith("@resource.calendar.google.com");
+function isRoom(attendee: CalendarEventAttendee) {
+  return (
+    Boolean(attendee.resource) ||
+    attendee.email.toLowerCase().endsWith("@resource.calendar.google.com")
+  );
 }
 
 function validTimeZone(value: string | null) {

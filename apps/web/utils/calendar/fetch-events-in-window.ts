@@ -2,6 +2,7 @@ import { createCalendarEventProviders } from "@/utils/calendar/event-provider";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 import type { Logger } from "@/utils/logger";
 import { countConnectedCalendars } from "@/utils/calendar/connections";
+import { isDeclinedByUser } from "@/utils/calendar/meeting-rules";
 
 export interface CalendarEventsInWindow {
   /**
@@ -163,20 +164,39 @@ export async function fetchCalendarEventsInWindow({
 
 // One meeting the person was invited to on two of their calendars (say their
 // work and personal accounts) comes back from both, under different ids. The
-// first calendar's copy is kept; events within one calendar are never merged.
+// first calendar's copy is kept, unless the person declined it there and not
+// on a later one; events within one calendar are never merged.
 function dropCrossCalendarDuplicates(
   eventsByCalendar: CalendarEvent[][],
 ): CalendarEvent[] {
-  const seen = new Set<string>();
+  const keptAt = new Map<string, number>();
   const kept: CalendarEvent[] = [];
   for (const calendarEvents of eventsByCalendar) {
-    const keys = calendarEvents.map(meetingKey);
-    calendarEvents.forEach((event, index) => {
-      if (!seen.has(keys[index])) kept.push(event);
-    });
-    for (const key of keys) seen.add(key);
+    const added = new Map<string, number>();
+    for (const event of calendarEvents) {
+      const key = meetingKey(event);
+      const index = keptAt.get(key);
+      if (index === undefined) {
+        if (!added.has(key)) added.set(key, kept.length);
+        kept.push(event);
+      } else if (
+        declinedOnItsCalendar(kept[index]) &&
+        !declinedOnItsCalendar(event)
+      ) {
+        kept[index] = event;
+      }
+    }
+    for (const [key, index] of added) keptAt.set(key, index);
   }
   return kept;
+}
+
+// The calendar's own entry, which says whether that copy is still on for them.
+function declinedOnItsCalendar(event: CalendarEvent) {
+  return isDeclinedByUser(
+    event,
+    new Set(event.calendarEmail ? [event.calendarEmail.toLowerCase()] : []),
+  );
 }
 
 function meetingKey(event: CalendarEvent) {

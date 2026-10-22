@@ -115,6 +115,34 @@ describe("fetchCalendarEventsInWindow", () => {
     );
   });
 
+  it("keeps the copy of a shared meeting the person didn't decline", async () => {
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider(
+        [
+          {
+            ...makeEvent("personal-copy"),
+            attendees: [{ email: "me@personal.example", declined: true }],
+          },
+        ],
+        "me@personal.example",
+      ),
+      fakeProvider(
+        [
+          {
+            ...makeEvent("work-copy"),
+            attendees: [{ email: "me@work.example", self: true }],
+          },
+        ],
+        "me@work.example",
+      ),
+    ]);
+
+    const result = await fetchCalendarEventsInWindow(fetchParams);
+
+    expect(result.events.map((event) => event.id)).toEqual(["work-copy"]);
+  });
+
   it("says which calendar account each event was read from", async () => {
     vi.mocked(countConnectedCalendars).mockResolvedValue(2);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([

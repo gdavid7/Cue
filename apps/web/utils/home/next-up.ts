@@ -8,12 +8,14 @@ import { findIntegration } from "@/utils/mcp/integrations";
 import { connectionExecutor } from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import { onePerIntegration } from "@/utils/mcp/user-connections";
-import {
-  onePerExternalAccount,
-  ownedBySameUser,
-} from "@/utils/user/owned-by-same-user";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
-import { calendarConnectionsWhere } from "@/utils/calendar/connections";
+import {
+  buildSelfAddresses,
+  getCalendarAccounts,
+  isMeetingForUser,
+  shouldLabelCalendars,
+} from "@/utils/calendar/meeting-rules";
 import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
 import { redis } from "@/utils/redis";
 import {
@@ -114,40 +116,24 @@ export async function getNextUp({
       timeZone,
       logger,
     }),
-    prisma.calendarConnection.findMany({
-      where: calendarConnectionsWhere(emailAccountId),
-      select: { id: true, provider: true, email: true, isConnected: true },
-    }),
+    getCalendarAccounts(emailAccountId),
     ownAddresses,
   ]);
   const suggestion = deadlines.connected
     ? null
     : await connectSuggestion({ emailAccountId, now, logger });
 
-  // Events come from all of the person's calendars, so a decline by any of
-  // their connected addresses or the calendars' own addresses counts.
-  const self = new Set(
-    [...addresses, ...calendarAccounts.map((account) => account.email)].map(
-      (email) => email.toLowerCase(),
-    ),
-  );
-  // Today, like the user, counts meetings they haven't declined and that have
-  // a time; all-day entries such as holidays don't fill a day.
+  const self = buildSelfAddresses({
+    ownAddresses: addresses,
+    calendarAccounts,
+  });
   const meetings = calendar.events.filter(
     (event) =>
-      !event.allDay &&
+      isMeetingForUser(event, self) &&
       event.endTime > now &&
-      event.startTime < dayAfter &&
-      !event.attendees.some(
-        (a) => a.declined && self.has(a.email.toLowerCase()),
-      ),
+      event.startTime < dayAfter,
   );
-  // With two calendar accounts, each meeting says whose calendar it is on. A
-  // disconnected one, or one connected from two mailboxes, is no second source.
-  const labelCalendars =
-    onePerExternalAccount(
-      calendarAccounts.filter((account) => account.isConnected),
-    ).length > 1;
+  const labelCalendars = shouldLabelCalendars(calendarAccounts);
   const events = meetings.filter((event) => event.startTime > now);
   const next = pickNextEvent(events, { now, today, timeZone });
 
@@ -162,6 +148,7 @@ export async function getNextUp({
         calendar.connected && calendar.complete && meetings.length === 0,
       next: next
         ? {
+            id: next.event.id,
             title: next.event.title,
             at: next.event.startTime.toISOString(),
             url: next.event.eventUrl,

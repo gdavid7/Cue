@@ -119,8 +119,16 @@ export function HomeDashboard() {
   );
   // Calendars are the person's, so the routed account reads every one,
   // across accounts too.
-  const { data: day } = useCalendarTodayEvents(emailAccountId || null);
-  const dayMeetings = useMemo(() => meetingKeys(day?.events), [day]);
+  const { data: day, error: dayError } = useCalendarTodayEvents(
+    emailAccountId || null,
+  );
+  const dayMeetings = useMemo<DayMeetings>(
+    () => ({
+      ids: new Set(day?.events.map((event) => `event:${event.id}`)),
+      loading: !day && !dayError,
+    }),
+    [day, dayError],
+  );
   const greetingText = useGreeting();
   const firstName = getUserFirstName(accountsData?.emailAccounts);
   const mailHref = useMailHref();
@@ -654,7 +662,7 @@ function HomeLanes({
   /** Today's meetings, for the Your day strip. */
   day?: GetCalendarTodayEventsResponse;
   /** The strip's meetings, which Next up and the All clear don't repeat. */
-  dayMeetings: ReadonlySet<string>;
+  dayMeetings: DayMeetings;
   lanes: {
     needsYou: TodayThread[];
     waiting: TodayThread[];
@@ -691,9 +699,7 @@ function HomeLanes({
   const hasFocus = (threads: TodayThread[]) =>
     threads.some((thread) => rowKey(thread) === rowContext.focusedId);
   const nextUp = data.nextUp.filter(
-    (item) =>
-      item.kind !== "event" ||
-      !dayMeetings.has(meetingKey(item.at, item.title)),
+    (item) => item.kind !== "event" || !isOnDay(data, dayMeetings, item),
   );
   const yourDay = day?.events.length ? (
     <Section title="Your day">
@@ -1106,7 +1112,7 @@ function HomeSkeleton({ layout }: { layout: "list" | "split" }) {
 function busySummary(
   data: TodayData,
   needsReply: number,
-  dayMeetings: ReadonlySet<string>,
+  dayMeetings: DayMeetings,
 ) {
   const count = formatCount(needsReply, data.stats.needsYouCapped) ?? "0";
   const status = `${count} ${needsReply === 1 ? "needs" : "need"} a reply`;
@@ -1122,26 +1128,36 @@ function busySummary(
 }
 
 /**
- * One meeting, as Today's calendar answer and the Your day strip both name
- * it: two calendars' copies of a meeting share its start and title, not its id.
+ * Today's meetings on the Your day strip, by Next up's own `event:` ids. While
+ * the strip loads, which is shortly after Today's own answer, `loading` holds
+ * today's meetings back from Next up rather than move them once it lands.
  */
-function meetingKey(at: string, title: string) {
-  return `${new Date(at).getTime()}|${title.trim().replace(/\s+/g, " ").toLowerCase()}`;
-}
+type DayMeetings = { ids: ReadonlySet<string>; loading: boolean };
 
-function meetingKeys(
-  events: GetCalendarTodayEventsResponse["events"] | undefined,
-): ReadonlySet<string> {
-  return new Set(
-    events?.map((event) => meetingKey(event.startTime, event.title)),
-  );
+/** A meeting the Your day strip shows, or is about to. */
+function isOnDay(
+  data: TodayData,
+  day: DayMeetings,
+  meeting: { id?: string; at: string },
+) {
+  if (day.loading)
+    return (
+      data.calendar.connected &&
+      new Date(meeting.at).toDateString() === new Date().toDateString()
+    );
+  return Boolean(meeting.id && day.ids.has(meeting.id));
 }
 
 /** Today's next meeting is on the Your day strip already. */
-function isNextInDay(data: TodayData, dayMeetings: ReadonlySet<string>) {
+function isNextInDay(data: TodayData, day: DayMeetings) {
   const next = data.calendar.next;
   return Boolean(
-    next && !next.tomorrow && dayMeetings.has(meetingKey(next.at, next.title)),
+    next &&
+      !next.tomorrow &&
+      isOnDay(data, day, {
+        id: next.id ? `event:${next.id}` : undefined,
+        at: next.at,
+      }),
   );
 }
 

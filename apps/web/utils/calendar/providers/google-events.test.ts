@@ -39,6 +39,12 @@ describe("GoogleCalendarEventProvider", () => {
                 displayName: "Busy",
                 responseStatus: "declined",
               },
+              {
+                email: "me@example.com",
+                self: true,
+                responseStatus: "accepted",
+              },
+              { email: "room@example.com", resource: true },
             ],
           },
         ],
@@ -59,6 +65,18 @@ describe("GoogleCalendarEventProvider", () => {
         attendees: [
           { email: "guest@example.com", name: "Guest", declined: false },
           { email: "busy@example.com", name: "Busy", declined: true },
+          {
+            email: "me@example.com",
+            name: undefined,
+            declined: false,
+            self: true,
+          },
+          {
+            email: "room@example.com",
+            name: undefined,
+            declined: false,
+            resource: true,
+          },
         ],
       }),
     );

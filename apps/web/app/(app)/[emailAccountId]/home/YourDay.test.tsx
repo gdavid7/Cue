@@ -106,7 +106,7 @@ describe("YourDay", () => {
     expect(within(row).getByRole("button", { name: "ben" })).toBeTruthy();
     expect(within(row).getByRole("button", { name: "Cy" })).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "Dee" })).toBeNull();
-    expect(within(row).getByText("+2")).toBeTruthy();
+    expect(within(row).getByText(/^\+2/).textContent).toBe("+2 more people");
   });
 
   it("marks the meeting going on now, and says how many more the day has", () => {
@@ -122,7 +122,9 @@ describe("YourDay", () => {
       { more: 3 },
     );
 
-    expect(screen.getByText("Now")).toBeTruthy();
+    expect(screen.getByText(/^Now/).textContent).toBe(
+      `Now, started ${formatTime(inHours(-0.25))}`,
+    );
     expect(screen.getByText("3 more today")).toBeTruthy();
   });
 
@@ -220,6 +222,27 @@ describe("YourDay", () => {
     });
 
     expect(await screen.findByRole("link", { name: /Intro/ })).toBeTruthy();
+    vi.useRealTimers();
+  });
+
+  it("stops reading again after a couple of minutes of syncing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mocks.queryPersonCard.mockImplementation(
+      async ({ email }: { email: string }) => ({
+        ...card(email, []),
+        history: { syncing: true, sinceMs: null },
+      }),
+    );
+
+    renderDay([
+      meeting({ attendees: [{ email: "ana@partner.com", name: "Ana Silva" }] }),
+    ]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+
+    expect(mocks.queryPersonCard.mock.calls.length).toBeLessThanOrEqual(13);
+    expect(mocks.queryPersonCard.mock.calls.length).toBeGreaterThan(2);
     vi.useRealTimers();
   });
 

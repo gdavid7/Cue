@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   fetchCalendarEventsInWindow: vi.fn(),
   createCalendarEventProviders: vi.fn(),
   getUserOwnAddresses: vi.fn(),
-  countConnectedCalendars: vi.fn(),
+  getCalendarAccounts: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -16,8 +16,9 @@ vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
 vi.mock("@/utils/calendar/event-provider", () => ({
   createCalendarEventProviders: mocks.createCalendarEventProviders,
 }));
-vi.mock("@/utils/calendar/connections", () => ({
-  countConnectedCalendars: mocks.countConnectedCalendars,
+vi.mock("@/utils/calendar/meeting-rules", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/calendar/meeting-rules")>()),
+  getCalendarAccounts: mocks.getCalendarAccounts,
 }));
 vi.mock("@/utils/user/own-addresses", () => ({
   getUserOwnAddresses: mocks.getUserOwnAddresses,
@@ -40,7 +41,7 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
     mocks.getUserOwnAddresses.mockResolvedValue(["user@example.com"]);
-    mocks.countConnectedCalendars.mockResolvedValue(1);
+    mocks.getCalendarAccounts.mockResolvedValue([calendarAccount("c1")]);
     mocks.fetchCalendarEventsInWindow.mockResolvedValue({
       events: [],
       complete: true,
@@ -77,6 +78,8 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
             { email: "ana@partner.com", name: "Ana Silva" },
             { email: "ben@partner.com", declined: true },
             { email: "room-1@resource.calendar.google.com", name: "Room 1" },
+            { email: "board@example.com", name: "Board room", resource: true },
+            { email: "", name: "No address" },
           ],
         }),
         event({
@@ -93,7 +96,6 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
     const body = await (await getToday()).json();
 
     expect(body).toEqual({
-      connected: true,
       more: 0,
       events: [
         {
@@ -125,9 +127,11 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
       events,
     });
 
-    mocks.countConnectedCalendars.mockResolvedValue(1);
     const one = await (await getToday()).json();
-    mocks.countConnectedCalendars.mockResolvedValue(2);
+    mocks.getCalendarAccounts.mockResolvedValue([
+      calendarAccount("c1", "user@work.example"),
+      calendarAccount("c2", "user@example.com"),
+    ]);
     const two = await (await getToday()).json();
 
     expect(
@@ -138,10 +142,13 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
     ).toEqual(["user@work.example", "user@example.com"]);
   });
 
-  it("leaves out all-day entries and meetings the user declined on any of their addresses", async () => {
+  it("leaves out all-day entries and meetings the user declined everywhere they were invited", async () => {
     mocks.getUserOwnAddresses.mockResolvedValue([
       "user@example.com",
       "user@work.example",
+    ]);
+    mocks.getCalendarAccounts.mockResolvedValue([
+      calendarAccount("c1", "cal@other.example"),
     ]);
     mocks.fetchCalendarEventsInWindow.mockResolvedValue({
       complete: true,
@@ -156,13 +163,72 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
           calendarEmail: "cal@other.example",
           attendees: [{ email: "cal@other.example", declined: true }],
         }),
+        event({
+          id: "declined-at-home-only",
+          attendees: [
+            { email: "user@example.com", declined: true },
+            { email: "user@work.example" },
+          ],
+        }),
         event({ id: "kept" }),
       ],
     });
 
     const body = await (await getToday()).json();
 
-    expect(body.events.map((e: { id: string }) => e.id)).toEqual(["kept"]);
+    expect(body.events.map((e: { id: string }) => e.id)).toEqual([
+      "declined-at-home-only",
+      "kept",
+    ]);
+  });
+
+  it("keeps last night's meeting only while it's still going", async () => {
+    mocks.fetchCalendarEventsInWindow.mockResolvedValue({
+      complete: true,
+      events: [
+        event({
+          id: "ended-overnight",
+          startTime: new Date("2026-07-14T23:00:00.000Z"),
+          endTime: new Date("2026-07-15T01:00:00.000Z"),
+        }),
+        event({
+          id: "still-going",
+          startTime: new Date("2026-07-14T23:30:00.000Z"),
+          endTime: new Date("2026-07-15T10:00:00.000Z"),
+        }),
+      ],
+    });
+
+    const body = await (await getToday()).json();
+
+    expect(body.events.map((e: { id: string }) => e.id)).toEqual([
+      "still-going",
+    ]);
+  });
+
+  it("reads a 25-hour day whole when the clocks go back", async () => {
+    // Lisbon leaves summer time at 02:00 on 25 October 2026.
+    vi.setSystemTime(new Date("2026-10-25T12:00:00.000Z"));
+
+    await getToday("Europe/Lisbon");
+
+    expect(mocks.fetchCalendarEventsInWindow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeMin: new Date("2026-10-24T23:00:00.000Z"),
+        timeMax: new Date("2026-10-26T00:00:00.000Z"),
+      }),
+    );
+  });
+
+  it("reads the day in UTC when the time zone isn't one", async () => {
+    await getToday("Mars/Olympus_Mons");
+
+    expect(mocks.fetchCalendarEventsInWindow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeMin: new Date("2026-07-15T00:00:00.000Z"),
+        timeMax: new Date("2026-07-16T00:00:00.000Z"),
+      }),
+    );
   });
 
   it("caps the day at eight, dropping meetings already over before ones to come", async () => {
@@ -193,7 +259,7 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
     expect(body.more).toBe(2);
   });
 
-  it("says when no calendar is connected", async () => {
+  it("has nothing to show when no calendar is connected", async () => {
     mocks.fetchCalendarEventsInWindow.mockResolvedValue({
       events: [],
       complete: false,
@@ -202,7 +268,7 @@ describe("GET /api/user/calendar/upcoming-events?range=today", () => {
 
     const body = await (await getToday()).json();
 
-    expect(body).toEqual({ connected: false, events: [], more: 0 });
+    expect(body).toEqual({ events: [], more: 0 });
   });
 
   it("still lists the next few upcoming events for briefs without a range", async () => {
@@ -246,4 +312,8 @@ function event(overrides: Partial<CalendarEvent>): CalendarEvent {
     attendees: [],
     ...overrides,
   };
+}
+
+function calendarAccount(id: string, email = "user@example.com") {
+  return { id, provider: "google", email, isConnected: true };
 }

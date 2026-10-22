@@ -53,7 +53,8 @@
     "hooks/useTodayWeather.ts",
     "app/(app)/[emailAccountId]/home/YourDay.tsx",
     "app/api/user/calendar/upcoming-events/route.ts",
-    "hooks/useCalendarUpcomingEvents.tsx"
+    "hooks/useCalendarUpcomingEvents.tsx",
+    "utils/calendar/meeting-rules.ts"
   ],
   "mixed-provider-accounts.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",
@@ -63,7 +64,8 @@
     "components/CommandK.tsx",
     "hooks/useCommandPaletteCommands.ts",
     "app/(app)/[emailAccountId]/clean/CleanAccountPicker.tsx",
-    "app/(app)/[emailAccountId]/home/YourDay.tsx"
+    "app/(app)/[emailAccountId]/home/YourDay.tsx",
+    "utils/calendar/meeting-rules.ts"
   ],
   "today-all-accounts.spec.ts": [
     "app/(app)/[emailAccountId]/home/HomeDashboard.tsx",

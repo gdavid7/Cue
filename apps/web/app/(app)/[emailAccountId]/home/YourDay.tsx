@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ComponentProps, useMemo } from "react";
+import { type ComponentProps, useMemo, useRef } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { MailIcon } from "lucide-react";
 import type { PersonCardConversation } from "@inboxzero/mail-core/queries";
@@ -39,6 +39,9 @@ const PEOPLE_READ = 24;
 // A fresh browser fills its store after Today opens; until then a person can
 // look like someone you've never written to.
 const SYNCING_REREAD_MS = 10_000;
+// Two minutes of asking: a store still filling after that takes longer than
+// anyone looks at Today, and the next visit reads it again.
+const SYNCING_REREADS = 12;
 
 /**
  * Today's meetings, each with the people on it and the last conversation
@@ -155,7 +158,16 @@ function MeetingRow({
           ongoing ? "font-medium text-foreground" : "text-muted-foreground",
         )}
       >
-        {ongoing ? "Now" : formatTime(event.startTime)}
+        {ongoing ? (
+          <>
+            Now
+            <span className="sr-only">
+              , started {formatTime(event.startTime)}
+            </span>
+          </>
+        ) : (
+          formatTime(event.startTime)
+        )}
       </span>
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex min-w-0 items-baseline gap-2">
@@ -204,7 +216,10 @@ function MeetingRow({
               </PersonCardTrigger>
             ))}
             {hidden > 0 ? (
-              <span className="text-muted-foreground text-xs">+{hidden}</span>
+              <span className="text-muted-foreground text-xs">
+                +{hidden}
+                <span className="sr-only"> more people</span>
+              </span>
             ) : null}
           </div>
         ) : null}
@@ -246,6 +261,8 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
     return [...byAddress.values()].slice(0, PEOPLE_READ);
   }, [events]);
   const { accountIds, ownAddresses, replyTracking } = scope;
+  // Reads so far, which SWR's refresh timer reads back.
+  const reads = useRef(0);
 
   const { data } = useSWR(
     readCard && people.length
@@ -255,6 +272,7 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
         ]
       : null,
     async () => {
+      reads.current++;
       const conversations = new Map<string, PersonCardConversation[]>();
       let syncing = false;
       // One at a time: the store answers the reader too.
@@ -274,7 +292,10 @@ function useConversationsWith(events: DayEvent[], scope: Scope) {
     {
       revalidateOnFocus: false,
       shouldRetryOnError: false,
-      refreshInterval: (latest) => (latest?.syncing ? SYNCING_REREAD_MS : 0),
+      refreshInterval: (latest) =>
+        latest?.syncing && reads.current <= SYNCING_REREADS
+          ? SYNCING_REREAD_MS
+          : 0,
     },
   );
   return data?.conversations;

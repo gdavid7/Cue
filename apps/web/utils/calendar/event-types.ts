@@ -4,6 +4,10 @@ export interface CalendarEventAttendee {
   declined?: boolean;
   email: string;
   name?: string;
+  /** A room or piece of equipment booked for the meeting, not a person. */
+  resource?: boolean;
+  /** The provider marks this entry as the connected calendar's own account. */
+  self?: boolean;
 }
 
 export interface CalendarEvent {

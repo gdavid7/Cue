@@ -266,7 +266,6 @@ test("your day: today's meetings, the people on them, their card and the last em
     (route) =>
       route.fulfill({
         json: {
-          connected: true,
           more: 0,
           events: [
             {

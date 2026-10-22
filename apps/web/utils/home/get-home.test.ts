@@ -586,6 +586,7 @@ describe("getHomeData: what's next", () => {
       connected: true,
       clearThroughTomorrow: false,
       next: {
+        id: "review",
         title: "Design review",
         at: "2026-10-13T21:00:00.000Z",
         url: "https://calendar.example.com/review",
@@ -601,7 +602,7 @@ describe("getHomeData: what's next", () => {
       events: [
         {
           ...event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z"),
-          attendees: [{ email: USER }, { email: other, declined: true }],
+          attendees: [{ email: other, declined: true }],
         },
         event("review", "Design review", "2026-10-13T21:00:00Z"),
       ],
@@ -619,6 +620,31 @@ describe("getHomeData: what's next", () => {
 
     expect(home.calendar.next?.title).toBe("Design review");
     expect(home.nextUp.map((item) => item.title)).toEqual(["Design review"]);
+  });
+
+  it("keeps a meeting declined at one of the user's addresses but accepted at another", async () => {
+    const other = "me@work.example.com";
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        {
+          ...event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z"),
+          attendees: [{ email: USER }, { email: other, declined: true }],
+        },
+      ],
+    });
+
+    const home = await getHomeData({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      ownAddresses: [USER, other],
+      emailProvider: mockProvider({}),
+      logger: createTestLogger(),
+      timeZone: TIME_ZONE,
+      now: NOW,
+    });
+
+    expect(home.calendar.next?.title).toBe("Vendor pitch");
   });
 
   it("skips a meeting declined from another of the person's calendars", async () => {

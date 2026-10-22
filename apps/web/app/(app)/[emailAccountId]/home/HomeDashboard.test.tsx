@@ -43,7 +43,8 @@ const mocks = vi.hoisted(() => ({
   localInbox: null as ConversationSummary[] | null,
   localInboxArgs: [] as Parameters<typeof useLocalInboxRows>[0][],
   // Today's meetings, as the calendar answers for the Your day strip.
-  day: undefined as GetCalendarTodayEventsResponse | undefined,
+  // `undefined` while the calendar is still being read.
+  day: { events: [], more: 0 } as GetCalendarTodayEventsResponse | undefined,
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -724,7 +725,7 @@ describe("HomeDashboard Your day", () => {
 
   afterEach(() => {
     cleanup();
-    mocks.day = undefined;
+    mocks.day = { events: [], more: 0 };
   });
 
   it("busy with meetings today: the strip lists them and Next up keeps only what it doesn't", () => {
@@ -736,6 +737,7 @@ describe("HomeDashboard Your day", () => {
         connected: true,
         clearThroughTomorrow: false,
         next: {
+          id: "review",
           title: "Design review",
           at: review,
           url: undefined,
@@ -781,6 +783,7 @@ describe("HomeDashboard Your day", () => {
         connected: true,
         clearThroughTomorrow: false,
         next: {
+          id: "review",
           title: "Design review",
           at: review,
           url: undefined,
@@ -794,6 +797,58 @@ describe("HomeDashboard Your day", () => {
     expect(onlyStatus().textContent).toContain("All clear.");
     expect(screen.getByRole("region", { name: "Your day" })).toBeTruthy();
     expect(screen.queryByText(/^Next:/)).toBeNull();
+  });
+
+  it("a different meeting with the same name and time stays in Next up", () => {
+    const at = new Date(Date.now() + 3_600_000).toISOString();
+    mocks.day = day([dayMeeting("team-sync", "Sync", at)]);
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      nextUp: [
+        {
+          id: "event:client-sync",
+          kind: "event",
+          title: "Sync",
+          at,
+          source: "Calendar",
+        },
+      ],
+    };
+
+    renderToday();
+
+    const nextUp = screen.getByRole("region", { name: "Next up" });
+    expect(within(nextUp).getByText("Sync")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Your day" })).getByText(
+        "Sync",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("while today's meetings load, holds them back rather than move them when they land", () => {
+    mocks.day = undefined;
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: {
+          id: "review",
+          title: "Design review",
+          at: soon,
+          url: undefined,
+          tomorrow: false,
+        },
+      },
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(screen.queryByText(/^Next:/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
   });
 
   it("no meetings today: no strip, and the clear line still says so", () => {
@@ -810,7 +865,7 @@ describe("HomeDashboard Your day", () => {
   });
 
   it("no calendar connected: no strip", () => {
-    mocks.day = { connected: false, events: [], more: 0 };
+    mocks.day = { events: [], more: 0 };
     mocks.home.data = {
       ...homeData([]),
       calendar: { connected: false, clearThroughTomorrow: false, next: null },
@@ -1326,6 +1381,7 @@ function lanes() {
 
 function nextEvent(tomorrow: boolean) {
   return {
+    id: "review",
     title: "Design review",
     at: new Date(Date.now() + 45 * 60_000).toISOString(),
     url: "https://calendar.example.com/review",
@@ -1349,6 +1405,7 @@ function savedYesterday() {
         connected: true,
         clearThroughTomorrow: false,
         next: {
+          id: "review",
           title: "Design review",
           at: new Date(Date.now() + 3_600_000).toISOString(),
           url: undefined,
@@ -1447,7 +1504,7 @@ function syncedView(
 function day(
   events: GetCalendarTodayEventsResponse["events"],
 ): GetCalendarTodayEventsResponse {
-  return { connected: true, events, more: 0 };
+  return { events, more: 0 };
 }
 
 function dayMeeting(
