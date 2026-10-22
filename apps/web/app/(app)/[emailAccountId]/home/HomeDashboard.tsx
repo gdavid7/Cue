@@ -269,6 +269,12 @@ export function HomeDashboard() {
       return next;
     });
   }, []);
+  // One undo stack for Today: Catch up acts through these too.
+  const threadActions = useThreadActions({
+    emailAccountId,
+    threads: actionable,
+    onRestored: showThreads,
+  });
   const {
     archive,
     moveToInbox,
@@ -277,13 +283,10 @@ export function HomeDashboard() {
     snooze,
     trash,
     undo,
-  } = useThreadActions({
-    emailAccountId,
-    threads: actionable,
-    onRestored: showThreads,
-  });
+  } = threadActions;
 
-  // Catch up acts in the routed account only, where keys are thread ids.
+  // Catch up acts in the routed account only, where keys are thread ids, and
+  // reports a conversation once its archive or snooze has been queued.
   const hideCaughtUp = useCallback(
     (threadIds: string[]) => {
       setHidden((current) => new Set([...current, ...threadIds]));
@@ -568,12 +571,12 @@ export function HomeDashboard() {
 
       {allInboxesAccounts ? null : (
         <CatchUpEntry
+          actions={threadActions}
           emailAccountId={emailAccountId}
           onRemoved={hideCaughtUp}
           onReply={(item) =>
             router.push(threadHref({ threadId: item.threadId }, true))
           }
-          onRestored={showThreads}
           query={INBOX_QUERY}
         />
       )}

@@ -200,10 +200,11 @@ async function readFilteredRows(
 ) {
   const { from, where, having, bindings } = filteredScope(query);
   const cursor = query.after ? parseMailboxCursor(query.after) : null;
+  const order = latestOrder(query.order);
   const cursorSql = cursor
-    ? `WHERE latest < ?
-       OR (latest = ? AND account_id > ?)
-       OR (latest = ? AND account_id = ? AND conversation_id > ?)`
+    ? `WHERE latest ${order.past} ?
+       OR (latest = ? AND account_id ${order.tiePast} ?)
+       OR (latest = ? AND account_id = ? AND conversation_id ${order.tiePast} ?)`
     : "";
   return tx.query(
     `WITH grouped AS (
@@ -217,7 +218,7 @@ async function readFilteredRows(
      )
      SELECT * FROM grouped
      ${cursorSql}
-     ORDER BY latest DESC, account_id ASC, conversation_id ASC
+     ORDER BY latest ${order.latest}, account_id ${order.tie}, conversation_id ${order.tie}
      LIMIT ?`,
     [
       ...bindings,
@@ -329,11 +330,12 @@ async function readIndexedRows(
 ) {
   const { where, whereBindings } = indexedScope(query, index);
   const cursor = query.after ? parseMailboxCursor(query.after) : null;
+  const order = latestOrder(query.order);
   const cursorSql = cursor
     ? `AND (
-         c.latest_at_ms < ?
-         OR (c.latest_at_ms = ? AND c.account_id > ?)
-         OR (c.latest_at_ms = ? AND c.account_id = ? AND c.conversation_id > ?)
+         c.latest_at_ms ${order.past} ?
+         OR (c.latest_at_ms = ? AND c.account_id ${order.tiePast} ?)
+         OR (c.latest_at_ms = ? AND c.account_id = ? AND c.conversation_id ${order.tiePast} ?)
        )`
     : "";
   return tx.query(
@@ -341,7 +343,7 @@ async function readIndexedRows(
      FROM ${index.source} c
      WHERE ${where}
        ${cursorSql}
-     ORDER BY c.latest_at_ms DESC, c.account_id ASC, c.conversation_id ASC
+     ORDER BY c.latest_at_ms ${order.latest}, c.account_id ${order.tie}, c.conversation_id ${order.tie}
      LIMIT ?`,
     [
       ...whereBindings,
@@ -383,6 +385,14 @@ function indexedScope(
     where: `c.account_id IN (${accountPlaceholders})`,
     whereBindings: [...index.sourceBindings, ...scope.accountIds],
   };
+}
+
+// Oldest first is newest first exactly reversed, ties included, so both walk
+// role_conversation_order without sorting: oldest first reads it backwards.
+function latestOrder(order: ConversationQuery["order"]) {
+  return order === "oldest_first"
+    ? { latest: "ASC", tie: "DESC", past: ">", tiePast: "<" }
+    : { latest: "DESC", tie: "ASC", past: "<", tiePast: ">" };
 }
 
 function parseMailboxCursor(value: string) {

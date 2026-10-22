@@ -74,6 +74,11 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       accountId: accountIdSchema.optional(),
     }),
     z.object({
+      kind: z.literal("conversation"),
+      ids: z.array(z.string().min(1).max(512)).max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
+    }),
+    z.object({
       kind: z.literal("text"),
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
@@ -118,6 +123,8 @@ export type MailPredicate =
   | { kind: "has_attachment"; value: boolean }
   /** These messages, of `accountId` alone when it is set. */
   | { kind: "message"; ids: string[]; accountId?: string }
+  /** Messages of these conversations, of `accountId` alone when it is set. */
+  | { kind: "conversation"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";
@@ -149,7 +156,11 @@ export type MailPredicate =
 export const conversationQuerySchema = z.object({
   accountIds: z.array(accountIdSchema).min(1).max(50),
   predicate: mailPredicateSchema,
-  order: z.literal("newest_first"),
+  /**
+   * Conversations by their latest matching message. Oldest first is newest
+   * first reversed, ties included.
+   */
+  order: z.enum(["newest_first", "oldest_first"]),
   pageSize: z.number().int().min(1).max(100),
   after: z.string().max(512).nullable(),
   /**

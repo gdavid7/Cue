@@ -4,9 +4,11 @@ import {
   type CatchUpItem,
   catchUpLeft,
   currentCatchUpItem,
+  type CatchUpLive,
+  reconcileCatchUp,
+  revertCatchUp,
   startCatchUp,
   toCatchUpItems,
-  undoCatchUp,
 } from "./catch-up-queue";
 import type { ConversationSummary } from "@inboxzero/mail-core/queries";
 
@@ -30,7 +32,7 @@ describe("startCatchUp", () => {
     expect(state.items.map((entry) => entry.key)).toEqual(["a", "b"]);
   });
 
-  it("stops after a batch of ten by default", () => {
+  it("stops after a batch of ten", () => {
     const state = startCatchUp(
       Array.from({ length: 25 }, (_, index) => item(`t${index}`, 1000 - index)),
     );
@@ -41,19 +43,23 @@ describe("startCatchUp", () => {
     expect(state.items.at(-1)?.key).toBe("t15");
   });
 
-  it("takes a smaller batch when asked", () => {
-    const state = startCatchUp([item("a", 1), item("b", 2), item("c", 3)], {
-      batchSize: 2,
-    });
-    expect(state.items.map((entry) => entry.key)).toEqual(["a", "b"]);
-  });
-
   it("leaves out conversations already acted on, and fills the batch past them", () => {
     const state = startCatchUp(
-      [item("a", 1), item("b", 2), item("c", 3), item("d", 4)],
-      { batchSize: 2, skip: new Set(["a", "c"]) },
+      Array.from({ length: 12 }, (_, index) => item(`t${index}`, index)),
+      new Set(["t0", "t2"]),
     );
-    expect(state.items.map((entry) => entry.key)).toEqual(["b", "d"]);
+    expect(state.items.map((entry) => entry.key)).toEqual([
+      "t1",
+      "t3",
+      "t4",
+      "t5",
+      "t6",
+      "t7",
+      "t8",
+      "t9",
+      "t10",
+      "t11",
+    ]);
   });
 });
 
@@ -84,15 +90,15 @@ describe("actOnCatchUp", () => {
   });
 });
 
-describe("undoCatchUp", () => {
+describe("revertCatchUp", () => {
   it("brings the last conversation back as the current one", () => {
     let state = startCatchUp([item("a", 1), item("b", 2), item("c", 3)]);
     state = actOnCatchUp(state, "a", "archive");
     state = actOnCatchUp(state, "b", "keep");
-    const { state: undone, undone: action } = undoCatchUp(state);
-    expect(action).toEqual({ key: "b", action: "keep" });
-    expect(currentCatchUpItem(undone)?.key).toBe("b");
-    expect(catchUpLeft(undone)).toBe(2);
+    state = revertCatchUp(state, "b");
+    expect(currentCatchUpItem(state)?.key).toBe("b");
+    expect(catchUpLeft(state)).toBe(2);
+    expect(state.history).toEqual(["a"]);
   });
 
   it("returns to the finished batch's last conversation", () => {
@@ -100,27 +106,74 @@ describe("undoCatchUp", () => {
     state = actOnCatchUp(state, "a", "archive");
     state = actOnCatchUp(state, "b", "archive");
     expect(currentCatchUpItem(state)).toBeNull();
-    const { state: undone } = undoCatchUp(state);
-    expect(currentCatchUpItem(undone)?.key).toBe("b");
+    state = revertCatchUp(state, "b");
+    expect(currentCatchUpItem(state)?.key).toBe("b");
   });
 
-  it("after an undo, acting again skips past conversations already done", () => {
+  it("takes back an action that isn't the latest, leaving later ones done", () => {
     let state = startCatchUp([item("a", 1), item("b", 2), item("c", 3)]);
     state = actOnCatchUp(state, "a", "archive");
-    state = actOnCatchUp(state, "b", "keep");
-    state = undoCatchUp(state).state;
-    state = undoCatchUp(state).state;
+    state = actOnCatchUp(state, "b", "snooze");
+    state = revertCatchUp(state, "a");
     expect(currentCatchUpItem(state)?.key).toBe("a");
-    state = actOnCatchUp(state, "a", "snooze");
-    expect(currentCatchUpItem(state)?.key).toBe("b");
-    expect(state.history).toEqual(["a"]);
+    expect(state.history).toEqual(["b"]);
+    // Acting again skips past the conversation already done.
+    state = actOnCatchUp(state, "a", "keep");
+    expect(currentCatchUpItem(state)?.key).toBe("c");
   });
 
-  it("does nothing before any action", () => {
+  it("leaves the batch alone for a conversation not acted on", () => {
     const state = startCatchUp([item("a", 1)]);
-    const result = undoCatchUp(state);
-    expect(result.state).toBe(state);
-    expect(result.undone).toBeNull();
+    expect(revertCatchUp(state, "a")).toBe(state);
+  });
+});
+
+describe("reconcileCatchUp", () => {
+  it("skips a conversation read or gone from the tab elsewhere", () => {
+    const state = startCatchUp([item("a", 1), item("b", 2), item("c", 3)]);
+    const next = reconcileCatchUp(
+      state,
+      live([
+        [item("a", 1), false],
+        [item("c", 3), true],
+      ]),
+    );
+    expect(currentCatchUpItem(next)?.key).toBe("c");
+    expect(catchUpLeft(next)).toBe(1);
+  });
+
+  it("shows the newer message of a conversation that got one", () => {
+    const state = startCatchUp([item("a", 1), item("b", 2)]);
+    const newer = {
+      ...item("a", 5),
+      latestMessageId: "a-reply",
+      preview: "New",
+    };
+    const next = reconcileCatchUp(
+      state,
+      live([
+        [newer, true],
+        [item("b", 2), true],
+      ]),
+    );
+    expect(currentCatchUpItem(next)).toEqual(newer);
+    expect(next.items.map((entry) => entry.key)).toEqual(["a", "b"]);
+  });
+
+  it("changes nothing while the mailbox agrees, or hasn't answered", () => {
+    const state = startCatchUp([item("a", 1)]);
+    expect(reconcileCatchUp(state, null)).toBe(state);
+    expect(reconcileCatchUp(state, live([[item("a", 1), true]]))).toBe(state);
+  });
+
+  it("leaves acted conversations, and one an undo brought back, to the batch", () => {
+    let state = startCatchUp([item("a", 1), item("b", 2)]);
+    state = actOnCatchUp(state, "a", "archive");
+    state = actOnCatchUp(state, "b", "keep");
+    state = revertCatchUp(state, "b");
+    // The mailbox hasn't shown the undo yet: neither card is skipped.
+    const next = reconcileCatchUp(state, live([]));
+    expect(currentCatchUpItem(next)?.key).toBe("b");
   });
 });
 
@@ -170,11 +223,18 @@ function conversation(
   };
 }
 
+function live(entries: [CatchUpItem, boolean][]): CatchUpLive {
+  return new Map(
+    entries.map(([entry, unread]) => [entry.key, { item: entry, unread }]),
+  );
+}
+
 function item(key: string, atMs: number): CatchUpItem {
   return {
     key,
     threadId: key,
     accountId: "account",
+    latestMessageId: key,
     sender: "Sender",
     subject: `Subject ${key}`,
     preview: "",

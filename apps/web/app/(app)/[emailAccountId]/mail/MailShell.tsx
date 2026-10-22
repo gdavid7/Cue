@@ -1147,6 +1147,12 @@ export function MailShell() {
     selection.selectedIds,
     navThreads,
   ]);
+  // One undo stack for the view: Catch up acts through these too.
+  const threadActions = useThreadActions({
+    emailAccountId,
+    readerTarget,
+    threads: navThreads,
+  });
   const {
     archive,
     moveToInbox,
@@ -1159,11 +1165,7 @@ export function MailShell() {
     setStarredState,
     snooze,
     undo,
-  } = useThreadActions({
-    emailAccountId,
-    readerTarget,
-    threads: navThreads,
-  });
+  } = threadActions;
   const markRead = useCallback(
     (threadKeys: string[]) => setReadState(threadKeys, true, false),
     [setReadState],
@@ -1278,17 +1280,11 @@ export function MailShell() {
     requestReaderReply();
   }, [replyRequested, openReaderThreadKey, requestReaderReply]);
 
-  // Catch up's Reply opens its conversation, then replies once it is open.
-  const [replyOnOpenKey, setReplyOnOpenKey] = useState<string | null>(null);
-  useEffect(() => {
-    if (!replyOnOpenKey || openReaderThreadKey !== replyOnOpenKey) return;
-    setReplyOnOpenKey(null);
-    requestReaderReply();
-  }, [replyOnOpenKey, openReaderThreadKey, requestReaderReply]);
+  // Catch up's Reply opens the conversation the way Today's does, asking for
+  // a reply through the address.
   const replyFromCatchUp = useStableCallback((item: CatchUpItem) => {
-    const target = { emailAccountId: item.accountId, threadId: item.threadId };
-    setReplyOnOpenKey(getThreadSelectionKey(target));
-    setOpenThread(target);
+    setPageParam(OPEN_REPLY_PARAM, "1");
+    setOpenThread({ emailAccountId: item.accountId, threadId: item.threadId });
   });
 
   const requestReaderForward = useCallback(() => {
@@ -2492,6 +2488,7 @@ export function MailShell() {
               )}
               {showSplitTabs && !isAllAccounts && !isTourOpen && (
                 <CatchUpEntry
+                  actions={threadActions}
                   className="mx-3 my-2"
                   emailAccountId={emailAccountId}
                   onReply={replyFromCatchUp}
@@ -2871,6 +2868,12 @@ const OPEN_REPLY_PARAM = "reply";
 
 function forgetOpenedFrom() {
   forgetPageParam(OPENED_FROM_PARAM);
+}
+
+function setPageParam(name: string, value: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set(name, value);
+  window.history.replaceState(null, "", url);
 }
 
 function forgetPageParam(name: string) {

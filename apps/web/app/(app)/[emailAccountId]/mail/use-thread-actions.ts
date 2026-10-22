@@ -88,18 +88,16 @@ export function useThreadActions({
     activeReaderTarget.current = readerTarget?.messageIds.length
       ? readerTarget
       : undefined;
-    for (const thread of threads) {
-      const messageIds = [...new Set(getListThreadMessageIds(thread))];
-      if (!messageIds.length) continue;
-      const key = getListThreadKey(thread);
-      listTargetsByKey.current.set(key, {
-        emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
-        key,
-        messageIds,
-        threadId: thread.id,
-      });
-    }
+    rememberTargets(listTargetsByKey.current, threads, emailAccountId);
   }, [emailAccountId, readerTarget, threads]);
+
+  // For conversations acted on from outside the list, such as Catch up's
+  // cards, which the list may not have loaded.
+  const addTargets = useCallback(
+    (extra: ActionableThread[]) =>
+      rememberTargets(listTargetsByKey.current, extra, emailAccountId),
+    [emailAccountId],
+  );
 
   const resolveTargets = useCallback(
     (threadKeys: string[]) =>
@@ -476,6 +474,7 @@ export function useThreadActions({
   );
 
   return {
+    addTargets,
     archive: useCallback(
       (threadKeys: string[]) => runUndoable("archive", threadKeys),
       [runUndoable],
@@ -528,6 +527,24 @@ const UNDOABLE_COPY: Record<
     noun: "deletion",
   },
 };
+
+function rememberTargets(
+  targets: Map<string, ThreadActionTarget>,
+  threads: ActionableThread[],
+  emailAccountId: string,
+) {
+  for (const thread of threads) {
+    const messageIds = [...new Set(getListThreadMessageIds(thread))];
+    if (!messageIds.length) continue;
+    const key = getListThreadKey(thread);
+    targets.set(key, {
+      emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
+      key,
+      messageIds,
+      threadId: thread.id,
+    });
+  }
+}
 
 function summarise(verb: string, count: number) {
   return count === 1 ? verb : `${verb} ${count} conversations`;

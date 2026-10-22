@@ -1,10 +1,22 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
+  inspectCommandIsActive,
+  inspectCommandToMutation,
+  type InspectCommand,
+} from "@/utils/playwright/mail-inspect-command";
+import {
+  createSecondEmailAccount,
+  deleteSecondEmailAccount,
+} from "./account-test-helpers";
+import {
   openMail,
+  openThreadIdFromUrl,
   readLatestMailMutation,
+  readProviderAccessToken,
   withClient,
 } from "./mail-test-helpers";
 
@@ -15,13 +27,18 @@ const DISMISSED_HINT = "get-started:dismissed";
 const KEYBOARD_HINT = "get-started:keyboard";
 
 type SavedUser = { id: string; createdAt: Date; dismissedHints: string[] };
+type Touched = { messageId: string; action: "archive" | "keep" };
+
 let saved: SavedUser | undefined;
+// Conversations each test archived or read, put back as seeded afterwards.
+let touched: Touched[] = [];
 
 test.describe.configure({ mode: "serial" });
 
 // As a person in their first week; setup closes the checklist, and with it
 // Catch up, for every other spec.
 test.beforeEach(async () => {
+  touched = [];
   saved = await withClient(async (client) => {
     const result = await client.query<SavedUser>(
       `SELECT u.id, u."createdAt", u."dismissedHints"
@@ -43,6 +60,8 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
+  await restoreTouched(touched);
+  touched = [];
   const user = saved;
   saved = undefined;
   if (!user) return;
@@ -60,8 +79,8 @@ test("works through the oldest unread mail from the keyboard, with undo", async 
   await page.setViewportSize({ width: 1280, height: 800 });
   const { emailAccountId } = await openMail(page);
 
-  const dialog = await openCatchUp(page);
-  const first = await currentThreadId(dialog);
+  let dialog = await openCatchUp(page);
+  const first = await currentCard(dialog);
   const startLeft = await leftCount(dialog);
   expect(startLeft).toBeGreaterThan(2);
   expect(startLeft).toBeLessThanOrEqual(10);
@@ -70,25 +89,17 @@ test("works through the oldest unread mail from the keyboard, with undo", async 
   await capturePlaywrightCheckpoint(page, testInfo, "catch-up-card-dark");
   await page.emulateMedia({ colorScheme: "light" });
 
-  // E archives the card's conversation, not the list's focused row.
-  await page.keyboard.press("e");
+  // E archives the card's conversation, and nothing in the list behind.
+  await press(page, "e", first, "archive");
   await expect(dialog.getByText(`${startLeft - 1} left`)).toBeVisible();
   await expect
-    .poll(
-      () =>
-        readLatestMailMutation(page, {
-          emailAccountId,
-          kind: "archive",
-          threadId: first,
-        }),
-      { timeout: 60_000 },
-    )
-    .toBeDefined();
-  const second = await currentThreadId(dialog);
-  expect(second).not.toBe(first);
+    .poll(() => archivedThreadIds(page), { timeout: 60_000 })
+    .toEqual([first.threadId]);
+  const second = await currentCard(dialog);
+  expect(second.threadId).not.toBe(first.threadId);
 
   // S keeps it: marked read, and on to the next.
-  await page.keyboard.press("s");
+  await press(page, "s", second, "keep");
   await expect(dialog.getByText(`${startLeft - 2} left`)).toBeVisible();
   await expect
     .poll(
@@ -96,26 +107,26 @@ test("works through the oldest unread mail from the keyboard, with undo", async 
         readLatestMailMutation(page, {
           emailAccountId,
           kind: "set_read_state",
-          threadId: second,
+          threadId: second.threadId,
           payload: { read: true },
         }),
       { timeout: 60_000 },
     )
     .toBeDefined();
-  expect(await currentThreadId(dialog)).not.toBe(second);
+  expect((await currentCard(dialog)).threadId).not.toBe(second.threadId);
 
   // Undo puts the kept conversation back where it was, unread again.
   await expect(dialog.getByRole("button", { name: /Undo/ })).toBeVisible();
   await page.keyboard.press("z");
   await expect(dialog.getByText(`${startLeft - 1} left`)).toBeVisible();
-  expect(await currentThreadId(dialog)).toBe(second);
+  expect((await currentCard(dialog)).threadId).toBe(second.threadId);
   await expect
     .poll(
       () =>
         readLatestMailMutation(page, {
           emailAccountId,
           kind: "set_read_state",
-          threadId: second,
+          threadId: second.threadId,
           payload: { read: false },
         }),
       { timeout: 60_000 },
@@ -123,15 +134,31 @@ test("works through the oldest unread mail from the keyboard, with undo", async 
     .toBeDefined();
   await capturePlaywrightCheckpoint(page, testInfo, "catch-up-after-undo");
 
-  // Focus never leaves the overlay, and Escape closes it.
+  // Focus never leaves the overlay, global keys stay off, and Escape closes it.
   for (let step = 0; step < 8; step++) await page.keyboard.press("Tab");
   expect(
     await dialog.evaluate((element) =>
       element.contains(document.activeElement),
     ),
   ).toBe(true);
+  await page.keyboard.press("c");
+  await expect(page.getByRole("dialog")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+  // The list kept its own conversations: still only the card was archived.
+  expect(await archivedThreadIds(page)).toEqual([first.threadId]);
+
+  // R opens the card's conversation with a reply started.
+  dialog = await openCatchUp(page);
+  const replyTo = await currentCard(dialog);
+  await page.keyboard.press("r");
+  await expect(dialog).toBeHidden();
+  await expect
+    .poll(() => openThreadIdFromUrl(page.url()))
+    .toBe(replyTo.threadId);
+  await expect(
+    page.locator('[data-testid="thread-reader"] [data-email-editor-content]'),
+  ).toBeVisible({ timeout: 60_000 });
 });
 
 test("finishes a batch from Today on a phone and counts toward Get started", async ({
@@ -149,18 +176,22 @@ test("finishes a batch from Today on a phone and counts toward Get started", asy
   await page.emulateMedia({ colorScheme: "light" });
 
   for (let left = total; left > 0; left--) {
-    const before = await currentThreadId(dialog);
-    await page.keyboard.press(left % 2 === 0 ? "e" : "s");
+    const card = await currentCard(dialog);
+    const archive = left % 2 === 0;
+    await press(page, archive ? "e" : "s", card, archive ? "archive" : "keep");
     if (left > 1)
-      await expect.poll(() => currentThreadId(dialog)).not.toBe(before);
+      await expect
+        .poll(async () => (await currentCard(dialog)).threadId)
+        .not.toBe(card.threadId);
   }
 
-  const finished = dialog.getByText(
-    total === 1
-      ? "You cleared 1 conversation."
-      : `You cleared ${total} conversations.`,
-  );
-  await expect(finished).toBeVisible();
+  await expect(
+    dialog.getByText(
+      total === 1
+        ? "You cleared 1 conversation."
+        : `You cleared ${total} conversations.`,
+    ),
+  ).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Done" })).toBeFocused();
   await capturePlaywrightCheckpoint(page, testInfo, "catch-up-finished-light");
   await page.emulateMedia({ colorScheme: "dark" });
@@ -177,6 +208,31 @@ test("finishes a batch from Today on a phone and counts toward Get started", asy
   await expect(dialog).toBeHidden();
 });
 
+test("isn't offered across accounts", async ({ page }) => {
+  const { emailAccountId } = await openMail(page);
+  await expect(page.locator("[data-catch-up-entry]")).toBeVisible({
+    timeout: 60_000,
+  });
+  const second = await createSecondEmailAccount(emailAccountId);
+  try {
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    await expect(
+      page.getByRole("listbox", { name: "Conversations" }),
+    ).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(2000);
+    await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
+
+    await page.goto(`/${emailAccountId}/home?accounts=all`);
+    await expect(
+      page.getByRole("region", { name: "Get started with Cue" }),
+    ).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(2000);
+    await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
+  } finally {
+    await deleteSecondEmailAccount(second.accountId);
+  }
+});
+
 async function openCatchUp(page: Page) {
   const entry = page.locator("[data-catch-up-entry]");
   await expect(entry).toBeVisible({ timeout: 60_000 });
@@ -189,17 +245,49 @@ async function openCatchUp(page: Page) {
   return dialog;
 }
 
-async function currentThreadId(dialog: Locator) {
-  const id = await dialog
-    .locator("[data-catch-up-card]")
-    .getAttribute("data-catch-up-card");
-  if (!id) throw new Error("No Catch up card is showing");
-  return id;
+/** Presses a card key, noting the conversation for the cleanup. */
+async function press(
+  page: Page,
+  key: string,
+  card: { messageId: string },
+  action: Touched["action"],
+) {
+  touched.push({ messageId: card.messageId, action });
+  await page.keyboard.press(key);
+}
+
+async function currentCard(dialog: Locator) {
+  const card = dialog.locator("[data-catch-up-card]");
+  const threadId = await card.getAttribute("data-catch-up-card");
+  const messageId = await card.getAttribute("data-catch-up-message");
+  if (!threadId || !messageId) throw new Error("No Catch up card is showing");
+  return { threadId, messageId };
 }
 
 async function leftCount(dialog: Locator) {
   const text = await dialog.getByText(/^\d+ left$/).textContent();
   return Number(text?.match(/\d+/)?.[0]);
+}
+
+/** Every conversation the mail engine has an archive queued or sent for. */
+async function archivedThreadIds(page: Page) {
+  const commands = await page.evaluate(async () => {
+    const inspect = window.__inboxZeroMailInspect;
+    if (!inspect?.read) return [];
+    const diagnostics = (await inspect.read()) as {
+      commands?: InspectCommand[];
+    };
+    return diagnostics.commands ?? [];
+  });
+  return [
+    ...new Set(
+      commands
+        .filter(inspectCommandIsActive)
+        .map(inspectCommandToMutation)
+        .filter((mutation) => mutation.kind === "archive")
+        .map((mutation) => mutation.threadId),
+    ),
+  ];
 }
 
 async function hasHint(hintId: string) {
@@ -212,4 +300,50 @@ async function hasHint(hintId: string) {
     );
     return result.rows[0]?.has ?? false;
   });
+}
+
+// Back in the inbox and unread, as seeded, for a retry or a later spec.
+async function restoreTouched(entries: Touched[]) {
+  if (!entries.length) return;
+  if (isMicrosoftPlaywright()) {
+    const headers = {
+      Authorization: "Bearer playwright_microsoft_fixture_token",
+      "content-type": "application/json",
+    };
+    for (const { messageId, action } of entries) {
+      let id = messageId;
+      if (action === "archive") {
+        const moved = await fetch(
+          `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${id}/move`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ destinationId: "inbox" }),
+          },
+        );
+        if (moved.ok) id = ((await moved.json()) as { id: string }).id;
+      }
+      const read = await fetch(
+        `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${id}`,
+        { method: "PATCH", headers, body: JSON.stringify({ isRead: false }) },
+      );
+      expect(read.ok).toBe(true);
+    }
+    return;
+  }
+  const response = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/batchModify`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ids: entries.map((entry) => entry.messageId),
+        addLabelIds: ["INBOX", "UNREAD"],
+      }),
+    },
+  );
+  expect(response.ok).toBe(true);
 }

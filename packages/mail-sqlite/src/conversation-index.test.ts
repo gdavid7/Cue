@@ -332,6 +332,110 @@ describe("transactional conversation index", () => {
     }
   });
 
+  it("pages oldest first, from the role index and the unindexed filter alike", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      await store.ensureAccount({
+        accountId: "a",
+        provider: "google",
+        generation: "g",
+      });
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "c1", 30, 0);
+        await insertMessage(tx, "m2", "c2", 10, 0);
+        await insertMessage(tx, "m3", "c3", 20, 1);
+        await insertMessage(tx, "m4", "c4", 20, 0);
+      });
+      const inbox = { kind: "role" as const, role: "inbox" as const };
+      for (const predicate of [
+        inbox,
+        { kind: "all" as const, predicates: [inbox] },
+      ]) {
+        const query = {
+          accountIds: ["a"],
+          predicate,
+          order: "oldest_first" as const,
+          pageSize: 2,
+          after: null,
+        };
+        const first = await store.readMailboxView(query);
+        expect(
+          first.view.conversations.map((row) => row.key.conversationId),
+        ).toEqual(["c2", "c4"]);
+        expect(first.view.nextPage).not.toBeNull();
+        const second = await store.readMailboxView({
+          ...query,
+          after: first.view.nextPage,
+        });
+        expect(
+          second.view.conversations.map((row) => row.key.conversationId),
+        ).toEqual(["c3", "c1"]);
+        expect(second.view.nextPage).toBeNull();
+      }
+
+      const unread = await store.readMailboxView({
+        accountIds: ["a"],
+        predicate: {
+          kind: "all",
+          predicates: [inbox, { kind: "read", value: false }],
+        },
+        order: "oldest_first",
+        pageSize: 10,
+        after: null,
+      });
+      expect(
+        unread.view.conversations.map((row) => row.key.conversationId),
+      ).toEqual(["c2", "c4", "c1"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("reads named conversations, of one account, through other conditions", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      for (const accountId of ["a", "b"])
+        await store.ensureAccount({
+          accountId,
+          provider: "google",
+          generation: "g",
+        });
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "c1", 10, 1);
+        await insertMessage(tx, "m2", "c1", 20, 0);
+        await insertMessage(tx, "m3", "c2", 30, 1);
+        await insertMessage(tx, "m4", "c3", 40, 0);
+        await insertMessage(tx, "m5", "c1", 50, 0, { account: "b" });
+      });
+      const view = await store.readMailboxView({
+        accountIds: ["a", "b"],
+        predicate: {
+          kind: "all",
+          predicates: [
+            { kind: "role", role: "inbox" },
+            { kind: "read", value: false },
+            { kind: "conversation", ids: ["c1", "c2"], accountId: "a" },
+          ],
+        },
+        order: "oldest_first",
+        pageSize: 10,
+        after: null,
+      });
+      // c2 has nothing unread, c3 isn't named, and b's c1 is another account's.
+      expect(
+        view.view.conversations.map((row) => [
+          row.key.accountId,
+          row.key.conversationId,
+          row.latestMessageAtMs,
+        ]),
+      ).toEqual([["a", "c1", 20]]);
+    } finally {
+      await store.close();
+    }
+  });
+
   it("does not count archived unread mail as inbox unread", async () => {
     const driver = createNodeSqliteDriver();
     const store = await createSqliteMailStore(driver);
