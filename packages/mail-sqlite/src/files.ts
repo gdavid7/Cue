@@ -229,18 +229,19 @@ export async function readFilesNotOnDevice(
 ): Promise<number> {
   const ids = [...new Set(accountIds)];
   if (!ids.length) return 0;
-  const rows = await tx.query(
-    `SELECT COUNT(*) AS missing
+  const rows = await tx.query(filesNotOnDeviceSql(ids.length), ids);
+  return Number(rows[0]?.missing ?? 0);
+}
+
+export function filesNotOnDeviceSql(accountCount: number) {
+  return `SELECT COUNT(*) AS missing
      FROM effective_messages e
-     WHERE ${FILE_MESSAGES} AND e.account_id IN (${placeholders(ids)})
+     WHERE ${FILE_MESSAGES} AND +e.account_id IN (${placeholders(Array.from({ length: accountCount }))})
        AND NOT EXISTS (
          SELECT 1 FROM message_content c
          WHERE c.account_id = e.account_id AND c.message_id = e.message_id
            AND c.attachments_json IS NOT NULL
-       )`,
-    ids,
-  );
-  return Number(rows[0]?.missing ?? 0);
+       )`;
 }
 
 /**

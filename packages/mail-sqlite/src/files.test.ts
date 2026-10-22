@@ -5,6 +5,7 @@ import type { FilesQuery } from "@inboxzero/mail-core/queries";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { clearSearchIndex } from "./message-search-index";
 import { createNodeSqliteDriver } from "./node-sqlite";
+import { filesNotOnDeviceSql } from "./files";
 import { createSqliteMailStore } from "./store";
 
 type Seed = {
@@ -545,6 +546,69 @@ describe("readFilesNotOnDevice", () => {
     expect(await store.readFilesNotOnDevice(["acc-1", "acc-2"])).toBe(0);
     expect(await store.readFilesNotOnDevice([])).toBe(0);
     await store.close();
+  });
+});
+
+describe("readFilesNotOnDevice, stored bodies", () => {
+  async function countWith(attachmentsJson: string | null) {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    await store.applySyncPage({
+      ownerId: "owner",
+      page: {
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "bootstrap",
+        from: { streamId: "primary", generation: "g1", checkpoint: null },
+        to: { streamId: "primary", generation: "g1", checkpoint: "1" },
+        changes: [messagePatch("acc-1", { id: "m", attachments: [] }, 0)],
+        requiredHydration: [],
+        roundComplete: true,
+      },
+      bodies: [
+        {
+          key: { accountId: "acc-1", messageId: "m" },
+          version: "1",
+          text: "x",
+          html: null,
+          attachments: [],
+        },
+      ],
+    });
+    await driver.write((tx) =>
+      tx.execute("UPDATE message_content SET attachments_json = ?", [
+        attachmentsJson,
+      ]),
+    );
+    const count = await store.readFilesNotOnDevice(["acc-1"]);
+    await store.close();
+    return count;
+  }
+
+  it("doesn't count a stored body whose attachment list is empty", async () => {
+    expect(await countWith("[]")).toBe(0);
+  });
+
+  // A body stored before attachment details were kept has NULL and nothing
+  // backfills it, so it counts as not on this device although it is stored.
+  it("counts a stored body with no attachment details", async () => {
+    expect(await countWith(null)).toBe(1);
+  });
+
+  it("reads the count through the files index without scanning the table", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    const plan = await driver.read((tx) =>
+      tx.query(`EXPLAIN QUERY PLAN ${filesNotOnDeviceSql(1)}`, ["acc-1"]),
+    );
+    await store.close();
+    const detail = plan.map((row) => String(row.detail)).join("\n");
+    expect(detail).toContain("effective_files_order");
+    expect(detail).not.toMatch(/SCAN (e|effective_messages)\b(?! USING)/);
   });
 });
 

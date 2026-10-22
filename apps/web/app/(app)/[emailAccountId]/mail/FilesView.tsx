@@ -124,6 +124,8 @@ export function FilesView({
       ? ["mail-files-not-on-device", JSON.stringify(accountIds)]
       : null,
     () => readNotOnDevice?.(accountIds) ?? 0,
+    // An older build's owner tab answers "unsupported method"; retrying can't fix that.
+    { shouldRetryOnError: false },
   );
   // All are read once; new mail reaching the inbox moves its unread count,
   // which is already watched cheaply, so that refreshes them.
@@ -135,6 +137,8 @@ export function FilesView({
   useEffect(() => {
     if (refreshedAtUnread.current === inboxUnread) return;
     refreshedAtUnread.current = inboxUnread;
+    // No cheaper signal exists for bodies being stored, so the count refreshes
+    // with the list on new mail and otherwise only when the view opens.
     mutate().catch(() => undefined);
     mutateSenders().catch(() => undefined);
     mutateNotOnDevice().catch(() => undefined);
@@ -147,8 +151,9 @@ export function FilesView({
   const hasMore = Boolean(pages.data?.at(-1)?.nextPage);
   const loadingMore =
     pages.isValidating && pages.size > (pages.data?.length ?? 0);
-  const olderMessages = notOnDevice.data ?? 0;
   const filtered = Boolean(kind || sender || deferredName);
+  // The count covers all files, so a filtered list would misstate it.
+  const olderMessages = filtered ? 0 : (notOnDevice.data ?? 0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -320,16 +325,18 @@ export function FilesView({
           ) : null}
         </LoadingContent>
       </div>
-      {olderMessages > 0 ? (
-        <p
-          className="shrink-0 border-border border-t px-4 py-2 text-muted-foreground text-xs"
-          role="status"
-        >
-          {olderMessages === 1
-            ? "1 older message with an attachment isn't on this device yet"
-            : `${olderMessages} older messages with attachments aren't on this device yet`}
-        </p>
-      ) : null}
+      <p
+        className={cn(
+          "shrink-0 text-muted-foreground text-xs",
+          olderMessages > 0 && "border-border border-t px-4 py-2",
+        )}
+        role="status"
+      >
+        {olderMessages === 1 &&
+          "1 older message with an attachment isn't on this device yet"}
+        {olderMessages > 1 &&
+          `${olderMessages} older messages with attachments aren't on this device yet`}
+      </p>
       <Dialog
         onOpenChange={(open) => !open && setPreviewing(undefined)}
         open={Boolean(previewing)}

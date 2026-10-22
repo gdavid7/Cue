@@ -110,8 +110,28 @@ describe("FilesView", () => {
     await screen.findByText("budget.xlsx");
 
     expect(mocks.queryFilesNotOnDevice).toHaveBeenCalledWith(["a"]);
-    expect(screen.queryByText(/aren't on this device yet/)).toBeNull();
-    expect(screen.queryByText(/isn't on this device yet/)).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("leaves the note out while a filter is on, since the count covers every file", async () => {
+    mocks.queryFilesNotOnDevice.mockResolvedValue(4);
+    renderView();
+    await screen.findByText(/4 older messages/);
+
+    fireEvent.click(screen.getByRole("button", { name: "PDFs" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe(""),
+    );
+  });
+
+  it("doesn't retry a count the engine can't answer", async () => {
+    mocks.queryFilesNotOnDevice.mockRejectedValue(new Error("unsupported"));
+    renderView();
+    await screen.findByText("budget.xlsx");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(mocks.queryFilesNotOnDevice).toHaveBeenCalledTimes(1);
   });
 
   it("notes how many older messages with attachments aren't on this device yet", async () => {
