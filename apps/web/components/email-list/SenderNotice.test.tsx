@@ -99,6 +99,18 @@ describe("SenderNotice", () => {
     );
   });
 
+  it("asks again while the contact index is still being built", async () => {
+    mocks.querySenderHistory
+      .mockResolvedValueOnce(history({ ready: false }))
+      .mockResolvedValue(history({ sameNameAddresses: ["dana@example.com"] }));
+    renderNotice(FAMILIAR);
+
+    expect(
+      await screen.findByTestId("sender-notice", undefined, { timeout: 8000 }),
+    ).toBeTruthy();
+    expect(mocks.querySenderHistory).toHaveBeenCalledTimes(2);
+  }, 10_000);
+
   it("stays hidden for that name and address once marked fine, after a remount too", async () => {
     const { unmount } = renderNotice(FAMILIAR);
     fireEvent.click(await screen.findByRole("button", { name: "It's fine" }));

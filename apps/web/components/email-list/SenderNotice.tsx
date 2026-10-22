@@ -27,6 +27,8 @@ const allowedSenders = createBrowserCache<true>({
   maxEntries: 500,
 });
 
+const INDEX_POLL_MS = 5000;
+
 /**
  * The reader's quiet "New address, familiar name" line for a received
  * message. It compares the From name and address with the user's own mail
@@ -65,7 +67,14 @@ export function SenderNotice({
   const { data: history } = useSWR(
     lookUp ? ["sender-history", JSON.stringify(query)] : null,
     () => (readHistory as NonNullable<typeof readHistory>)(query),
-    { revalidateOnFocus: false, shouldRetryOnError: false },
+    {
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+      // On a first sync the contact index is still being built; ask again
+      // until it is, then never.
+      refreshInterval: (current) =>
+        current && !current.ready ? INDEX_POLL_MS : 0,
+    },
   );
 
   const notice = findSenderNotice({
