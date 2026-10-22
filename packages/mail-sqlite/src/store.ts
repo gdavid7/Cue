@@ -6,6 +6,7 @@ import {
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
 import { readFileSenders, readFiles, readFilesNotOnDevice } from "./files";
+import { readNeverReadSenders } from "./never-read-senders";
 import { readPersonCard } from "./person-card";
 import { readWaitingOnYou } from "./waiting-on-you";
 import {
@@ -189,6 +190,9 @@ export async function createSqliteMailStore(
     },
     readPersonCard(query) {
       return driver.read((tx) => readPersonCard(tx, query));
+    },
+    readNeverReadSenders(query) {
+      return driver.read((tx) => readNeverReadSenders(tx, query));
     },
     readFiles(query) {
       return driver.read(async (tx) =>

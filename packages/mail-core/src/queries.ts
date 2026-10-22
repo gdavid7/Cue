@@ -539,3 +539,31 @@ export type WaitingOnYouConversation = {
   unread: boolean;
   starred: boolean;
 };
+
+/**
+ * Senders who mail often and are never opened, read from the local store
+ * alone, with no model: mail received since `receivedSinceMs` in each
+ * account, grouped by sender address.
+ */
+export type NeverReadSendersQuery = {
+  accountIds: string[];
+  /** The user's own addresses, which are never listed. */
+  ownAddresses: string[];
+  receivedSinceMs: number;
+  /** The most to list; read past what will show, so hidden ones can be skipped. */
+  limit: number;
+};
+
+/** Most inbox messages first, then the newest. */
+export type NeverReadSender = {
+  accountId: string;
+  email: string;
+  /** The name their newest message is shown with, if any. */
+  name: string | null;
+  /** Their messages in the inbox, none of which, nor any other, was read. */
+  count: number;
+  lastReceivedAtMs: number;
+};
+
+/** Fewer messages than this say little about whether they're wanted. */
+export const NEVER_READ_MIN_MESSAGES = 4;

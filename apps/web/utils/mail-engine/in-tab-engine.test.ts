@@ -35,5 +35,6 @@ describe("createInTabEngine", () => {
     // The assistant searches Gmail instead, and autocomplete stays off.
     expect(engine.searchMessages).toBeUndefined();
     expect(engine.queryContactSuggestions).toBeUndefined();
+    expect(engine.queryNeverReadSenders).toBeUndefined();
   });
 });

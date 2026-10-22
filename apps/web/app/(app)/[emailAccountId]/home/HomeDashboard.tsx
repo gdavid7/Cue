@@ -81,6 +81,7 @@ import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatSenders, formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
+import { NeverReadCard } from "./NeverReadCard";
 import { TodayWeather } from "./TodayWeather";
 import {
   type TodayRowCorrection,
@@ -91,6 +92,7 @@ import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
 import { useWaitingOnYou } from "./use-waiting-on-you";
+import { useNeverReadSenders } from "./use-never-read-senders";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
@@ -229,6 +231,7 @@ export function HomeDashboard() {
       (thread) => !waiting.has(rowKey(thread)),
     );
   }, [data, waitingOnYou.threads]);
+  const neverRead = useNeverReadSenders({ accounts: localAccounts });
   const alsoInInbox = useMemo(() => {
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
@@ -741,6 +744,15 @@ export function HomeDashboard() {
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
             onDismissWaitingOnYou={dismissWaitingOnYou}
+            neverRead={
+              <NeverReadCard
+                accountColorIndexById={accountColorIndexById}
+                accounts={allInboxesAccounts ? localAccounts : undefined}
+                onHide={neverRead.hide}
+                senders={neverRead.senders}
+                sinceMs={neverRead.sinceMs}
+              />
+            }
             // Past the last refresh a pending lane would load forever.
             pending={gaveUp ? NO_LANES : pending}
             outdated={outdated}
@@ -792,6 +804,7 @@ function HomeLanes({
   threadHref,
   onCorrect,
   onDismissWaitingOnYou,
+  neverRead,
   pending,
   outdated,
 }: {
@@ -828,6 +841,11 @@ function HomeLanes({
   }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
   onDismissWaitingOnYou: (thread: TodayThread) => void;
+  /**
+   * The first week's clean-up card. Below what needs a reply or waits on
+   * someone, which is the day's work; above the rest of the inbox.
+   */
+  neverRead: React.ReactNode;
   pending: ReadonlySet<HomeLane>;
   /** Lanes showing rows from an earlier answer that a refresh couldn't replace. */
   outdated: ReadonlySet<HomeLane>;
@@ -1016,6 +1034,8 @@ function HomeLanes({
           <CueChecked today={data.today} />
         </p>
       ) : null}
+
+      {neverRead}
 
       {pending.has("alsoInInbox") ? <HomeSkeleton layout={layout} /> : null}
       <AlsoInInboxSection

@@ -66,12 +66,13 @@ export async function createInTabEngine(
   return {
     ...engine,
     // Local autocomplete, the person card, the Files view, Today's Waiting on
-    // you and the assistant's message search stay off the UI thread if
-    // dedicated workers fail; before indexing completes a search can scan the
-    // mailbox, so the assistant searches Gmail instead.
+    // you and "Mail you never read", and the assistant's message search stay
+    // off the UI thread if dedicated workers fail; before indexing completes a
+    // search can scan the mailbox, so the assistant searches Gmail instead.
     queryContactSuggestions: undefined,
     searchMessages: undefined,
     queryPersonCard: undefined,
+    queryNeverReadSenders: undefined,
     queryFiles: undefined,
     queryFileSenders: undefined,
     queryFilesNotOnDevice: undefined,

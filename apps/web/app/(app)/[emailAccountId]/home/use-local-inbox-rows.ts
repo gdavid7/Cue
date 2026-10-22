@@ -107,6 +107,16 @@ export function localInboxRows(
 }
 
 /**
+ * Whether the local store can answer for every account: the engine reaches
+ * the provider and each account's first sync has finished.
+ */
+export function isLocalMailReady(view: MailboxView, accounts: TodayAccount[]) {
+  if (view.connection && view.connection !== "ready") return false;
+  const accountIds = accounts.map((account) => account.id);
+  return getFirstSyncAccountIds(accountIds, view.coverage).length === 0;
+}
+
+/**
  * A message in two of the user's mailboxes shows once, newest copy first, and
  * says where else it is, as Today's merge of the server's rows does.
  */
@@ -124,16 +134,6 @@ function showCopiesOnce(rows: TodayThread[]) {
       first.alsoIn = [...(first.alsoIn ?? []), row.account];
     return false;
   });
-}
-
-/**
- * Whether the local store can answer for every account: the engine reaches
- * the provider and each account's first sync has finished.
- */
-export function isLocalMailReady(view: MailboxView, accounts: TodayAccount[]) {
-  if (view.connection && view.connection !== "ready") return false;
-  const accountIds = accounts.map((account) => account.id);
-  return getFirstSyncAccountIds(accountIds, view.coverage).length === 0;
 }
 
 function toTodayThread(

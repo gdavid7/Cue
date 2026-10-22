@@ -48,6 +48,12 @@
     "app/(app)/[emailAccountId]/mail/use-reading-bulk.ts",
     "utils/label/reading-label.ts"
   ],
+  "never-read.spec.ts": [
+    "app/(app)/[emailAccountId]/home/NeverReadCard.tsx",
+    "app/(app)/[emailAccountId]/home/use-never-read-senders.ts",
+    "app/(app)/[emailAccountId]/mail/use-unsubscribe-sender.tsx",
+    "app/api/user/stats/newsletters/unsubscribe-link/route.ts"
+  ],
   "today-quiet.spec.ts": [
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
     "app/(app)/[emailAccountId]/home/AllClear.tsx",
