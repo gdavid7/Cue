@@ -254,9 +254,19 @@ test("in All inboxes, lists every account's files, each naming its account", asy
   test.setTimeout(300_000);
   const { emailAccountId } = await openMail(page);
   const { pdf } = requireSeeded();
-  // Reads the primary's mailbox, so the file seeded there reached both.
-  const second = await createSecondEmailAccount(emailAccountId, {
-    mailbox: "primary",
+  const second = await createSecondEmailAccount(emailAccountId);
+  // The second account reads a mailbox of its own, so the file reaches it as
+  // its own email. A copy of one email would be listed once in All inboxes.
+  const mailbox = second.accessToken
+    ? { email: second.email, token: second.accessToken }
+    : undefined;
+  if (!mailbox) throw new Error("The second account has no mailbox of its own");
+  const copy = await insertMessageWithAttachments(page, {
+    subject: requireSeeded().subject,
+    attachments: [
+      { name: pdf, type: "application/pdf", bytes: PDF, inline: false },
+    ],
+    mailbox,
   });
   try {
     await page.goto(`/${emailAccountId}/mail?accountScope=all`, {
@@ -269,8 +279,8 @@ test("in All inboxes, lists every account's files, each naming its account", asy
       .click();
     await expect(page).toHaveURL(/\/all-inboxes\/files(\?|$)/);
     const files = page.getByRole("list", { name: "Files" });
-    // Both accounts read the same seeded mailbox, so the file is listed once
-    // for each; the second account was never opened here and syncs now.
+    // The file is listed once for each account; the second account was never
+    // opened here and syncs now.
     await expect(row(files, pdf)).toHaveCount(2, { timeout: 180_000 });
     await expect(
       row(files, pdf).filter({
@@ -279,6 +289,7 @@ test("in All inboxes, lists every account's files, each naming its account", asy
     ).toHaveCount(1);
     await capturePlaywrightCheckpoint(page, testInfo, "files-view-all-inboxes");
   } finally {
+    await removeMessage(page, copy.messageId, mailbox);
     await deleteSecondEmailAccount(second.accountId);
   }
 });
