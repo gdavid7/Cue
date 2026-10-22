@@ -97,6 +97,26 @@ export function openSenderPersonCard() {
   (selected ?? triggers.at(-1))?.click();
 }
 
+/**
+ * What a card for `email` reads, and the cache key it reads under, so a view
+ * that reads a card ahead (Today's meetings) opens the same card at once.
+ */
+export function personCardRequest(
+  scope: Pick<
+    PersonCardScopeValue,
+    "accountIds" | "ownAddresses" | "replyTracking"
+  >,
+  email: string,
+) {
+  const query: PersonCardQuery = {
+    accountIds: scope.accountIds,
+    email,
+    ownAddresses: scope.ownAddresses,
+    replyTracking: scope.replyTracking,
+  };
+  return { query, key: ["person-card", JSON.stringify(query)] as const };
+}
+
 /** The labels Cue's reply tracking puts on an account's conversations. */
 export function getReplyTrackingLabels(
   accountId: string,
@@ -265,20 +285,23 @@ function PersonCardBody({
 }) {
   const client = useOptionalMailClient() ?? getActiveMailClient();
   const { composeTo } = useComposeModal();
-  const query = useMemo<PersonCardQuery>(
-    () => ({
-      accountIds: scope.accountIds,
-      email,
-      ownAddresses: scope.ownAddresses,
-      replyTracking: scope.replyTracking,
-    }),
+  const { query, key } = useMemo(
+    () =>
+      personCardRequest(
+        {
+          accountIds: scope.accountIds,
+          ownAddresses: scope.ownAddresses,
+          replyTracking: scope.replyTracking,
+        },
+        email,
+      ),
     [email, scope.accountIds, scope.ownAddresses, scope.replyTracking],
   );
   const readCard = client?.queryPersonCard?.bind(client);
   // Read from this device's mail store only: opening a card never asks
   // Gmail or Outlook for anything.
   const { data, error, isLoading } = useSWR(
-    readCard ? ["person-card", JSON.stringify(query)] : null,
+    readCard ? key : null,
     () => (readCard as NonNullable<typeof readCard>)(query),
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );

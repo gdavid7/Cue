@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GetCalendarTodayEventsResponse } from "@/app/api/user/calendar/upcoming-events/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
@@ -41,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   // The browser's own inbox, as the mail engine lists it.
   localInbox: null as ConversationSummary[] | null,
   localInboxArgs: [] as Parameters<typeof useLocalInboxRows>[0][],
+  // Today's meetings, as the calendar answers for the Your day strip.
+  day: undefined as GetCalendarTodayEventsResponse | undefined,
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -152,6 +155,9 @@ vi.mock("./use-local-inbox-rows", async (importOriginal) => {
     },
   };
 });
+vi.mock("@/hooks/useCalendarUpcomingEvents", () => ({
+  useCalendarTodayEvents: () => ({ data: mocks.day }),
+}));
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -706,6 +712,114 @@ describe("HomeDashboard states", () => {
 
     expect(lanes()).toEqual(["Needs reply"]);
     expect(screen.queryByText("Couldn't load this")).toBeNull();
+  });
+});
+
+describe("HomeDashboard Your day", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.day = undefined;
+  });
+
+  it("busy with meetings today: the strip lists them and Next up keeps only what it doesn't", () => {
+    const review = new Date(Date.now() + 3_600_000).toISOString();
+    mocks.day = day([dayMeeting("review", "Design review", review)]);
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: {
+          title: "Design review",
+          at: review,
+          url: undefined,
+          tomorrow: false,
+        },
+      },
+      nextUp: [
+        {
+          id: "event:review",
+          kind: "event",
+          title: "Design review",
+          at: review,
+          source: "Calendar",
+        },
+        {
+          id: "jira:OPS-12",
+          kind: "deadline",
+          title: "OPS-12 Rotate keys",
+          at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+          allDay: true,
+          source: "Jira",
+        },
+      ],
+    };
+
+    renderToday();
+
+    const strip = screen.getByRole("region", { name: "Your day" });
+    expect(within(strip).getByText("Design review")).toBeTruthy();
+    // Said once: not again in Next up or the summary.
+    expect(screen.getAllByText(/Design review/)).toHaveLength(1);
+    expect(onlyStatus().textContent).toBe("1 needs a reply");
+    const nextUp = screen.getByRole("region", { name: "Next up" });
+    expect(within(nextUp).getByText("OPS-12 Rotate keys")).toBeTruthy();
+  });
+
+  it("all clear with a meeting today: the strip names it instead of the Next line", () => {
+    const review = new Date(Date.now() + 45 * 60_000).toISOString();
+    mocks.day = day([dayMeeting("review", "Design review", review)]);
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: {
+          title: "Design review",
+          at: review,
+          url: undefined,
+          tomorrow: false,
+        },
+      },
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(screen.getByRole("region", { name: "Your day" })).toBeTruthy();
+    expect(screen.queryByText(/^Next:/)).toBeNull();
+  });
+
+  it("no meetings today: no strip, and the clear line still says so", () => {
+    mocks.day = day([]);
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: true, clearThroughTomorrow: true, next: null },
+    };
+
+    renderToday();
+
+    expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
+    expect(screen.getByText("Calendar clear through tomorrow.")).toBeTruthy();
+  });
+
+  it("no calendar connected: no strip", () => {
+    mocks.day = { connected: false, events: [], more: 0 };
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: false, clearThroughTomorrow: false, next: null },
+    };
+
+    renderToday();
+
+    expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Connect Calendar" })).toBeTruthy();
   });
 });
 
@@ -1327,6 +1441,26 @@ function syncedView(
       lastCompletedSyncAtMs: 1,
     })),
     connection: "ready",
+  };
+}
+
+function day(
+  events: GetCalendarTodayEventsResponse["events"],
+): GetCalendarTodayEventsResponse {
+  return { connected: true, events, more: 0 };
+}
+
+function dayMeeting(
+  id: string,
+  title: string,
+  startTime: string,
+): GetCalendarTodayEventsResponse["events"][number] {
+  return {
+    id,
+    title,
+    startTime,
+    endTime: new Date(new Date(startTime).getTime() + 1_800_000).toISOString(),
+    attendees: [],
   };
 }
 

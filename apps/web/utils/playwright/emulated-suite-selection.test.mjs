@@ -380,7 +380,7 @@ describe("emulated Playwright suite selection", () => {
     const selection = selectChangedPlaywrightTargets(
       [
         "apps/web/utils/mail-engine/reply-drafts.test.ts",
-        "apps/web/hooks/useCalendarUpcomingEvents.tsx",
+        "apps/web/hooks/useMeetingBriefs.ts",
       ].join("\n"),
       appRoot,
     );
