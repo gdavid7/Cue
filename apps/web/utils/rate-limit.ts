@@ -25,9 +25,12 @@ type RateLimitResult =
 
 export async function checkRateLimit({
   rule,
+  cost,
   logger,
 }: {
   rule: RateLimitRule;
+  /** Units this request uses, for a limit counted in units; one by default. */
+  cost?: number;
   logger?: Logger;
 }): Promise<RateLimitResult> {
   if (!isRedisRateLimitConfigured()) {
@@ -43,7 +46,9 @@ export async function checkRateLimit({
       await redis.eval<string[], number>(
         INCREMENT_RATE_LIMIT_SCRIPT,
         [rule.key],
-        [rule.windowSeconds.toString()],
+        cost === undefined
+          ? [rule.windowSeconds.toString()]
+          : [rule.windowSeconds.toString(), cost.toString()],
       ),
     );
 
@@ -82,12 +87,15 @@ export async function assertWithinUserRateLimit({
   userId,
   limit,
   windowSeconds,
+  cost,
   logger,
 }: {
   scope: string;
   userId: string;
   limit: number;
   windowSeconds: number;
+  /** Units this request uses, for a limit counted in units; one by default. */
+  cost?: number;
   logger?: Logger;
 }) {
   const result = await checkRateLimit({
@@ -96,6 +104,7 @@ export async function assertWithinUserRateLimit({
       limit,
       windowSeconds,
     },
+    cost,
     logger,
   });
   if (result.limited) {
@@ -152,9 +161,11 @@ function getRateLimitHashSecret() {
   return secret;
 }
 
+// The window starts with the first increment, whatever its cost.
 const INCREMENT_RATE_LIMIT_SCRIPT = `
-local count = redis.call("INCR", KEYS[1])
-if count == 1 then
+local cost = tonumber(ARGV[2] or "1")
+local count = redis.call("INCRBY", KEYS[1], cost)
+if count == cost then
   redis.call("EXPIRE", KEYS[1], tonumber(ARGV[1]))
 end
 return count

@@ -37,9 +37,13 @@ import { getEmailAccountWithAi } from "@/utils/user/get";
 const MAX_NEW_PER_REQUEST = 25;
 const EXTRACT_CONCURRENCY = 4;
 const MEETING_WINDOW_DAYS = 14;
-// Only a request with uncached emails is charged, and it can make up to
-// MAX_NEW_PER_REQUEST model calls, so this sits below the per-call limits.
-const NEW_INSIGHT_REQUESTS_PER_WINDOW = 30;
+// Charged per new email, as each is one model call: the rows go ten at a
+// time (PF-9v), so a limit on requests ran out in an ordinary scroll. The
+// ceiling on model calls is the one 30 requests of 25 had.
+const NEW_INSIGHTS_PER_WINDOW = 750;
+// The open conversation has a limit of its own, so the rows' traffic never
+// refuses the note someone is waiting on (D-086). One email a request.
+const OPEN_THREAD_INSIGHTS_PER_WINDOW = 120;
 const RATE_LIMIT_WINDOW_SECONDS = 5 * 60;
 const SKIP_LABELS = ["SPAM", "TRASH", "DRAFT"];
 // Kept by the browser with each insight for a month; a mailing's full
@@ -81,6 +85,7 @@ export async function getInboxInsights({
   items,
   known = [],
   withEvents = false,
+  openThread = false,
   emailProvider,
   logger,
   now = new Date(),
@@ -93,6 +98,8 @@ export async function getInboxInsights({
   known?: string[];
   /** The browser holds people to match against meetings. */
   withEvents?: boolean;
+  /** The one conversation on screen, rather than the rows. */
+  openThread?: boolean;
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
@@ -113,10 +120,13 @@ export async function getInboxInsights({
   // A page the browser already holds costs no model call and is not charged.
   if (missing.length) {
     await assertWithinUserRateLimit({
-      scope: "inbox-insights",
+      scope: openThread ? "inbox-insights-open" : "inbox-insights",
       userId,
-      limit: NEW_INSIGHT_REQUESTS_PER_WINDOW,
+      limit: openThread
+        ? OPEN_THREAD_INSIGHTS_PER_WINDOW
+        : NEW_INSIGHTS_PER_WINDOW,
       windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+      cost: missing.length,
       logger,
     });
   }

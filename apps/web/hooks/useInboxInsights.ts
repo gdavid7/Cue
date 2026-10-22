@@ -456,11 +456,16 @@ function pump(queue: Queue) {
       queue.failures = 0;
       queue.deferrals = 0;
       queue.error = undefined;
+      // The server's retry time is capped and spread like a deferral's, so
+      // a long one can't stall the rows and every browser isn't back at once.
+      const hint = deferred
+        ? getRetryHint({ status: 503, retryAfterMs: deferred.retryAfterMs }, 1)
+        : null;
       queue.nextAtMs =
         Date.now() +
         Math.max(
           queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0,
-          deferred?.retryAfterMs ?? 0,
+          hint?.kind === "wait" ? hint.ms : 0,
         );
     })
     .catch((error: unknown) => {
@@ -668,12 +673,17 @@ function placeOnScreen(index: number, visible: VisibleRows | undefined) {
 }
 
 /**
- * The rows on screen and the screenful after them go in a request of their
- * own, up to MAX_NEW_PER_REQUEST; the rest, nearest first, a few at a time.
+ * The rows on screen and the screenful after them go first, up to
+ * MAX_NEW_PER_REQUEST, with the nearest rows off it filling a request of
+ * fewer than BACKGROUND_NEW_PER_REQUEST; the rest, nearest first, that many
+ * at a time.
  */
 function requestSize(onScreenCount: number) {
   return onScreenCount
-    ? Math.min(MAX_NEW_PER_REQUEST, onScreenCount)
+    ? Math.min(
+        MAX_NEW_PER_REQUEST,
+        Math.max(onScreenCount, BACKGROUND_NEW_PER_REQUEST),
+      )
     : BACKGROUND_NEW_PER_REQUEST;
 }
 

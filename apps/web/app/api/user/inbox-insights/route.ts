@@ -83,6 +83,7 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
       items,
       known,
       withEvents: searchParams.get("events") === "1",
+      openThread: isOpenThread,
       emailProvider: request.emailProvider,
       logger: request.logger,
     });

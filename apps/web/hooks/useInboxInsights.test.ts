@@ -605,7 +605,7 @@ describe("useInboxInsights when the server answers part of the rows", () => {
     vi.useRealTimers();
   });
 
-  it("keeps what was built and asks again, after the retry time, for only what was left", async () => {
+  it("keeps what was built and asks again, after a bounded wait, for only what was left", async () => {
     // Builds the first email of each request and leaves the rest.
     const fetcher = vi.fn(async ([url]: [string, string]) => {
       const [first, ...rest] = threadIdsIn(url);
@@ -613,7 +613,7 @@ describe("useInboxInsights when the server answers part of the rows", () => {
         ...fromServer({ [first as string]: extraction(first as string) }),
         deferred: {
           messageIds: rest.map((threadId) => `${threadId}-latest`),
-          retryAfterMs: 20_000,
+          retryAfterMs: 10 * 60_000,
         },
       };
     });
@@ -625,10 +625,11 @@ describe("useInboxInsights when the server answers part of the rows", () => {
     });
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
 
-    // Not on the rows' 15 s spacing: the server said 20 s.
-    await act(() => vi.advanceTimersByTimeAsync(16_000));
+    // The server's ten minutes is capped like any retry time, so the rest
+    // are asked for on the rows' 15 s spacing.
+    await act(() => vi.advanceTimersByTimeAsync(14_000));
     expect(fetcher).toHaveBeenCalledTimes(1);
-    await act(() => vi.advanceTimersByTimeAsync(5000));
+    await act(() => vi.advanceTimersByTimeAsync(2000));
     expect(fetcher).toHaveBeenCalledTimes(2);
 
     await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
@@ -766,6 +767,24 @@ describe("useInboxInsights and the rows on screen", () => {
     vi.useRealTimers();
   });
 
+  // A few rows on screen don't go alone while the rest wait the rows' spacing.
+  it("fills a request for a few rows on screen with the nearest rows off it, on-screen first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(30);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 4, end: 6 }));
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toHaveLength(10);
+    expect(asked(0).slice(0, 4)).toEqual(threadIdsOf(rows.slice(4, 8)));
+    vi.useRealTimers();
+  });
+
   it("asks next about the rows the reader scrolled to, then the rest nearest first", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mail.settled = false;
@@ -808,11 +827,11 @@ describe("useInboxInsights and the rows on screen", () => {
     const { result } = renderHook(() => useInboxInsights(rows), {
       wrapper: wrapperFor(fetcher),
     });
-    act(() => result.current.setVisibleRows({ start: 0, end: 4 }));
+    act(() => result.current.setVisibleRows({ start: 0, end: 8 }));
     act(() => mail.settle());
 
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
-    expect(asked(0)).toEqual(threadIdsOf(rows.filter((row) => row.index < 8)));
+    expect(asked(0)).toEqual(threadIdsOf(rows.filter((row) => row.index < 16)));
     vi.useRealTimers();
   });
 
