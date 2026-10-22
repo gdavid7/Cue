@@ -21,6 +21,7 @@ import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -51,6 +52,7 @@ import { getActionErrorMessage } from "@/utils/error";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import type { HomeLane, HomeThread } from "@/utils/home/get-home";
+import type { ThreadsQuery } from "@/utils/threads/validation";
 import type {
   TodayAccount,
   TodayAgentTask,
@@ -77,6 +79,7 @@ import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
+const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
 
@@ -279,6 +282,15 @@ export function HomeDashboard() {
     threads: actionable,
     onRestored: showThreads,
   });
+
+  // Catch up acts in the routed account only, where keys are thread ids.
+  const hideCaughtUp = useCallback(
+    (threadIds: string[]) => {
+      setHidden((current) => new Set([...current, ...threadIds]));
+      removeFromCachedToday(emailAccountId, threadIds);
+    },
+    [emailAccountId],
+  );
 
   const threadHref = useCallback(
     (thread: { threadId: string; account?: TodayAccount }, reply = false) => {
@@ -553,6 +565,18 @@ export function HomeDashboard() {
       </header>
 
       <GetStartedChecklist />
+
+      {allInboxesAccounts ? null : (
+        <CatchUpEntry
+          emailAccountId={emailAccountId}
+          onRemoved={hideCaughtUp}
+          onReply={(item) =>
+            router.push(threadHref({ threadId: item.threadId }, true))
+          }
+          onRestored={showThreads}
+          query={INBOX_QUERY}
+        />
+      )}
 
       <LoadingContent
         hasData={Boolean(data)}

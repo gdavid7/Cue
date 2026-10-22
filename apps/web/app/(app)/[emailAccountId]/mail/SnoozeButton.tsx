@@ -18,6 +18,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 
 /**
  * The reader's snooze control: the same presets as `h` in the command palette,
@@ -69,6 +70,9 @@ export function SnoozeButton({
         align="end"
         aria-label="Snooze until"
         className="w-72 p-1"
+        // Portaled out of whatever opened it, so without this `e` pressed on
+        // a preset would archive the conversation behind it.
+        {...{ [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" }}
         onEscapeKeyDown={(event) => event.stopPropagation()}
         role="dialog"
       >

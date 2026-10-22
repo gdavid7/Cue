@@ -86,6 +86,8 @@ import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
+import { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useTranslateThread } from "@/app/(app)/[emailAccountId]/mail/use-thread-translation";
@@ -1275,6 +1277,19 @@ export function MailShell() {
     forgetPageParam(OPEN_REPLY_PARAM);
     requestReaderReply();
   }, [replyRequested, openReaderThreadKey, requestReaderReply]);
+
+  // Catch up's Reply opens its conversation, then replies once it is open.
+  const [replyOnOpenKey, setReplyOnOpenKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (!replyOnOpenKey || openReaderThreadKey !== replyOnOpenKey) return;
+    setReplyOnOpenKey(null);
+    requestReaderReply();
+  }, [replyOnOpenKey, openReaderThreadKey, requestReaderReply]);
+  const replyFromCatchUp = useStableCallback((item: CatchUpItem) => {
+    const target = { emailAccountId: item.accountId, threadId: item.threadId };
+    setReplyOnOpenKey(getThreadSelectionKey(target));
+    setOpenThread(target);
+  });
 
   const requestReaderForward = useCallback(() => {
     const messageId = composeTargetMessageId;
@@ -2474,6 +2489,14 @@ export function MailShell() {
               )}
               {!isAllAccounts && (
                 <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
+              )}
+              {showSplitTabs && !isAllAccounts && !isTourOpen && (
+                <CatchUpEntry
+                  className="mx-3 my-2"
+                  emailAccountId={emailAccountId}
+                  onReply={replyFromCatchUp}
+                  query={query}
+                />
               )}
               {!isAllAccounts && (
                 <NotificationsOffHint ready={!isTourOpen && !isFirstSync} />

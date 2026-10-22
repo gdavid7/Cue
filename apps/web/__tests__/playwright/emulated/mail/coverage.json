@@ -376,6 +376,12 @@
     "utils/web-notifications/permission.ts",
     "hooks/useInboxUnreadCount.ts"
   ],
+  "catch-up.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/CatchUp.tsx",
+    "app/(app)/[emailAccountId]/mail/catch-up-queue.ts",
+    "app/(app)/[emailAccountId]/mail/SnoozeButton.tsx",
+    "utils/get-started/client-steps.ts"
+  ],
   "notifications-off-hint.spec.ts": [
     "app/(app)/[emailAccountId]/mail/NotificationsOffHint.tsx",
     "utils/web-notifications/preference.ts",
