@@ -344,6 +344,8 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "searchMessages", [query]),
     queryPersonCard: (query) =>
       callWorker(worker, pending, "queryPersonCard", [query]),
+    queryWaitingOnYou: (query) =>
+      callWorker(worker, pending, "queryWaitingOnYou", [query]),
     searchSemantic: (query) =>
       callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),

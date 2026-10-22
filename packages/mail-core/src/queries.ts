@@ -441,3 +441,32 @@ export type PersonCard = {
 
 /** One more than the card lists, so it can leave out the open conversation. */
 export const PERSON_CARD_CONVERSATION_LIMIT = 6;
+
+/**
+ * Conversations that may wait on the user's reply, read from the local store
+ * alone, with no model: the newest message is someone else's, it is in the
+ * inbox's main tab, and nothing the user sent follows it. The sender must be
+ * someone the user has written to, or the user must have written in the
+ * conversation, so mailing lists and strangers stay out.
+ */
+export type WaitingOnYouQuery = {
+  accountIds: string[];
+  /** Mail received before this is left out. */
+  receivedSinceMs: number;
+  /** Per account, labels or categories whose mail is left out. */
+  excludedLabelIds?: Record<string, string[]>;
+  limit: number;
+};
+
+/** Newest first; the message is the conversation's newest. */
+export type WaitingOnYouConversation = {
+  accountId: string;
+  conversationId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  preview: string;
+  receivedAtMs: number;
+  unread: boolean;
+  starred: boolean;
+};

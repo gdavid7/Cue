@@ -6,6 +6,7 @@ import {
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
 import { readPersonCard } from "./person-card";
+import { readWaitingOnYou } from "./waiting-on-you";
 import {
   countMessageEmbeddings,
   deleteAccountMessageEmbeddings,
@@ -184,6 +185,9 @@ export async function createSqliteMailStore(
     },
     readPersonCard(query) {
       return driver.read((tx) => readPersonCard(tx, query));
+    },
+    readWaitingOnYou(query) {
+      return driver.read((tx) => readWaitingOnYou(tx, query));
     },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);

@@ -38,7 +38,8 @@
     "app/(app)/[emailAccountId]/home/TodayThreadRow.tsx",
     "utils/home/get-home.ts",
     "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx",
-    "app/(app)/[emailAccountId]/home/TodayWeather.tsx"
+    "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
+    "app/(app)/[emailAccountId]/home/use-waiting-on-you.ts"
   ],
   "today-quiet.spec.ts": [
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",

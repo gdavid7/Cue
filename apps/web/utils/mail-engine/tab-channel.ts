@@ -312,6 +312,7 @@ export function createTabFollowerClient(input: {
     // provider search if that tab can't.
     searchMessages: (query) => call("searchMessages", [query]) as never,
     queryPersonCard: (query) => call("queryPersonCard", [query]) as never,
+    queryWaitingOnYou: (query) => call("queryWaitingOnYou", [query]) as never,
     searchSemantic: (query) => call("searchSemantic", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),

@@ -36,6 +36,8 @@ import type {
   MessageSearchQuery,
   PersonCard,
   PersonCardQuery,
+  WaitingOnYouConversation,
+  WaitingOnYouQuery,
   QuerySnapshot,
   SemanticMatch,
 } from "../queries";
@@ -513,6 +515,9 @@ export interface MailStore {
     limit: number;
     minSimilarity: number;
   }): Promise<SemanticMatch[]>;
+  readWaitingOnYou(
+    query: WaitingOnYouQuery,
+  ): Promise<WaitingOnYouConversation[]>;
   /** Resolves `true` when the stored connection state changed. */
   recordConnection(input: {
     accountId: string;

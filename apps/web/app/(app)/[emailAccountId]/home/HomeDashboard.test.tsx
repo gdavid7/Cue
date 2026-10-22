@@ -41,6 +41,9 @@ const mocks = vi.hoisted(() => ({
   // The browser's own inbox, as the mail engine lists it.
   localInbox: null as ConversationSummary[] | null,
   localInboxArgs: [] as Parameters<typeof useLocalInboxRows>[0][],
+  // What Waiting on you reads from local mail.
+  waitingOnYou: [] as HomeThread[],
+  dismissWaitingOnYou: vi.fn(),
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -152,6 +155,12 @@ vi.mock("./use-local-inbox-rows", async (importOriginal) => {
     },
   };
 });
+vi.mock("./use-waiting-on-you", () => ({
+  useWaitingOnYou: ({ enabled }: { enabled: boolean }) => ({
+    threads: enabled ? mocks.waitingOnYou : [],
+    dismiss: mocks.dismissWaitingOnYou,
+  }),
+}));
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -706,6 +715,71 @@ describe("HomeDashboard states", () => {
 
     expect(lanes()).toEqual(["Needs reply"]);
     expect(screen.queryByText("Couldn't load this")).toBeNull();
+  });
+});
+
+describe("HomeDashboard Waiting on you", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.waitingOnYou = [thread("asked", "Lunch on Friday?")];
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.waitingOnYou = [];
+  });
+
+  it("new mailbox: lists local mail that may need a reply while Cue reads, each conversation once", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+      alsoInInbox: [
+        thread("asked", "Lunch on Friday?"),
+        thread("b", "Dentist"),
+      ],
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("Cue is reading");
+    expect(lanes()).toEqual(["Waiting on you", "Also in your inbox"]);
+    expect(screen.getByText("From your mail, not checked by AI")).toBeTruthy();
+    expect(optionFor("asked").textContent).toContain("May need a reply");
+    expect(
+      within(lane("Also in your inbox")).queryByText("Lunch on Friday?"),
+    ).toBeNull();
+  });
+
+  it("hides once Needs reply has conversations of its own", () => {
+    mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply"]);
+  });
+
+  it("waits for Needs reply to load rather than showing beside its placeholder", () => {
+    mocks.home.data = { ...homeData([]), pending: ["needsYou"] };
+
+    renderToday();
+
+    expect(lanes()).not.toContain("Waiting on you");
+  });
+
+  it("dismisses a conversation", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+    fireEvent.click(
+      within(rowFor("asked")).getAllByRole("button", { name: "Dismiss" })[0],
+    );
+
+    expect(mocks.dismissWaitingOnYou).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "asked" }),
+    );
   });
 });
 
