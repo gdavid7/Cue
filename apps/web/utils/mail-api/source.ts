@@ -89,9 +89,10 @@ const GMAIL_FIRST_PAGE_SIZE = 12;
 // A first sync's backfill lists the inbox before the rest of its window, so
 // older inbox rows arrive before archived mail of the same weeks. Its first
 // couple of hundred inbox messages read at sync, once the primary scan is
-// done: the inbox someone is looking at fills in a minute or so, and the
-// long tail stays background. Both still draw on the backfill's share of the
-// account's sync envelope, so this moves units earlier rather than adding any.
+// done, and the long tail stays background. Both still draw on the
+// backfill's share of the account's sync envelope, 5,000 units a minute, so
+// this moves units earlier rather than adding any: 200 messages are about
+// 12,000 units, about 2.4 minutes at that share (less from a full bucket).
 const GMAIL_FIRST_INBOX_SYNC_MESSAGES = 200;
 
 const SUPPORTED_CHANGES = [
@@ -130,6 +131,13 @@ type BootstrapToken = {
    * window's other mail. A backfill begun without one lists both in one query.
    */
   phase?: "inbox" | "rest";
+  /**
+   * A phased backfill's Gmail cursor, valid only for its phase's query. It
+   * never goes in `pageToken`: a server from before phases reads only that,
+   * so it restarts its one combined query from the window start rather than
+   * resume it with a cursor minted for another query, which could skip mail.
+   */
+  phasePageToken?: string;
   /** Inbox messages the backfill has listed at sync priority so far. */
   synced?: number;
 };
@@ -244,6 +252,7 @@ export function createEmailProviderMailboxSource(input: {
       try {
         const token = JSON.parse(page) as BootstrapToken;
         isBackfill = isGmail && token.scopeId === GMAIL_HISTORY_SCOPE_ID;
+        const pageToken = token.phase ? token.phasePageToken : token.pageToken;
         const isPrimaryGmailScan = isGmail && !isBackfill;
         if (isPrimaryGmailScan) await setGmailInitialSync(accountId, true);
         // The backfill only fills in older mail, so it yields to everything
@@ -263,7 +272,7 @@ export function createEmailProviderMailboxSource(input: {
         const maxResults = Math.min(
           pageSize,
           maxPageSize,
-          isGmail && !token.pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
+          isGmail && !pageToken ? GMAIL_FIRST_PAGE_SIZE : maxPageSize,
           isGmail ? gmailScanPageSize(priority) : maxPageSize,
         );
         const listPage = () =>
@@ -273,7 +282,7 @@ export function createEmailProviderMailboxSource(input: {
             }),
             maxResults,
             folderId: token.folderId ?? undefined,
-            pageToken: token.pageToken,
+            pageToken,
             includeDrafts: true,
             ...(token.receivedAfterMs != null && {
               after: new Date(token.receivedAfterMs),
@@ -320,7 +329,11 @@ export function createEmailProviderMailboxSource(input: {
         const synced = inboxFirst
           ? (token.synced ?? 0) + syncPage.messages.length
           : token.synced;
-        let next: Pick<BootstrapToken, "pageToken" | "phase"> | null = null;
+        // The rest phase is another query, so it starts without a cursor.
+        let next: {
+          pageToken?: string;
+          phase: BootstrapToken["phase"];
+        } | null = null;
         if (syncPage.nextPageToken)
           next = { pageToken: syncPage.nextPageToken, phase: token.phase };
         else if (token.phase === "inbox") next = { phase: "rest" };
@@ -337,7 +350,9 @@ export function createEmailProviderMailboxSource(input: {
                 afterMs: token.afterMs ?? 0,
                 catchUpFrom: token.catchUpFrom ?? null,
                 folderId: token.folderId ?? null,
-                pageToken: next.pageToken,
+                ...(next.phase
+                  ? { phasePageToken: next.pageToken }
+                  : { pageToken: next.pageToken }),
                 receivedAfterMs: token.receivedAfterMs,
                 receivedBeforeMs: token.receivedBeforeMs,
                 scopeId: token.scopeId ?? "primary",

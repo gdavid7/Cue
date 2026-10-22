@@ -76,6 +76,8 @@ export function createFakeGmail({
   inboxEvery?: number;
 } = {}) {
   const calls: FakeGmailCall[] = [];
+  // Like Gmail's, a list cursor belongs to the query that minted it.
+  const mismatchedPageTokens: string[] = [];
 
   function charge(units: number) {
     const now = Date.now();
@@ -114,7 +116,14 @@ export function createFakeGmail({
     const path = url.pathname.replace(/^.*\/gmail\/v1\/users\/[^/]+/, "");
     const q = url.searchParams.get("q") ?? "";
     const max = Number(url.searchParams.get("maxResults") || 100);
-    const pageToken = Number(url.searchParams.get("pageToken") || 0);
+    const cursor = url.searchParams.get("pageToken");
+    const queryKey = Buffer.from(q).toString("base64url");
+    const [mintedFor, offset] = cursor ? cursor.split(".") : [queryKey, "0"];
+    if (mintedFor !== queryKey) {
+      mismatchedPageTokens.push(q);
+      throw new InvalidPageTokenError();
+    }
+    const pageToken = Number(offset);
     if (path === "/profile")
       return {
         emailAddress: "me@example.com",
@@ -164,7 +173,9 @@ export function createFakeGmail({
       });
       const ids = pool.slice(pageToken, pageToken + max);
       const next =
-        pageToken + max < pool.length ? String(pageToken + max) : undefined;
+        pageToken + max < pool.length
+          ? `${queryKey}.${pageToken + max}`
+          : undefined;
       return path === "/messages"
         ? {
             messages: ids.map((i) => ({ id: `m${i}`, threadId: `t${i}` })),
@@ -225,7 +236,23 @@ export function createFakeGmail({
         status: 403,
         headers: { "content-type": "application/json" },
       });
-    const json = JSON.stringify(handle(url));
+    let body: unknown;
+    try {
+      body = handle(url);
+    } catch (error) {
+      if (!(error instanceof InvalidPageTokenError)) throw error;
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 400,
+            message: "Invalid pageToken",
+            status: "INVALID_ARGUMENT",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+    const json = JSON.stringify(body);
     const response = new Response(json, {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -286,6 +313,10 @@ export function createFakeGmail({
     limitedCalls() {
       return calls.filter((call) => call.limited);
     },
+    /** Queries a list cursor was sent with other than the one that minted it. */
+    mismatchedPageTokens() {
+      return mismatchedPageTokens;
+    },
   };
 }
 
@@ -322,3 +353,5 @@ function message(i: number) {
     },
   };
 }
+
+class InvalidPageTokenError extends Error {}

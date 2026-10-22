@@ -615,6 +615,8 @@ export type GmailQuotaTicket = {
   emailAccountId: string | undefined;
   caller: string;
   priority: GmailQuotaPriority;
+  /** Sync held behind the primary scan, which a refusal treats as background. */
+  afterInitialSync?: boolean;
 };
 
 export async function admitGmailCall({
@@ -629,7 +631,13 @@ export async function admitGmailCall({
   const context = currentGmailQuotaContext();
   const priority = priorityOverride ?? context.priority;
   context.onAdmit?.();
-  const ticket = { emailAccountId, caller: context.caller, priority };
+  const afterInitialSync = priority === "sync" && !!context.afterInitialSync;
+  const ticket: GmailQuotaTicket = {
+    emailAccountId,
+    caller: context.caller,
+    priority,
+    ...(afterInitialSync && { afterInitialSync }),
+  };
   const admitted = () => {
     if (context.stats) context.stats.admittedCost += cost;
     return ticket;
@@ -646,21 +654,26 @@ export async function admitGmailCall({
   rememberUnsummarizedAccount(emailAccountId);
   gateStats.calls += 1;
   const keys = accountKeys(emailAccountId);
-  const afterInitialSync = priority === "sync" && context.afterInitialSync;
   const scanHold =
     context.caller === ENGINE_SCAN_CALLER
       ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
       : { key: keys.initialSync };
   const blockers = {
     interactive: [{ key: keys.interactivePause }],
+    // After a refusal it stands back as background does, which is all its
+    // own refusal pauses.
     sync: afterInitialSync
-      ? [{ key: keys.syncPause }, scanHold]
+      ? [{ key: keys.syncPause }, scanHold, { key: keys.backgroundPause }]
       : [{ key: keys.syncPause }],
     background: [scanHold, { key: keys.backgroundPause }],
   }[priority];
   const blockerReasons: GmailDeferralReason[] = {
     interactive: ["interactive_pause" as const],
-    sync: ["sync_pause" as const, "initial_sync_scan" as const],
+    sync: [
+      "sync_pause" as const,
+      "initial_sync_scan" as const,
+      "background_pause" as const,
+    ],
     background: ["initial_sync_scan" as const, "background_pause" as const],
   }[priority];
   const { stats, maxTotalWaitMs } = context;
@@ -866,7 +879,10 @@ export async function noteGmailQuotaRefusal(
       },
     ]),
   ];
-  if (ticket.priority !== "background")
+  // A first sync's older inbox reads at sync but stands back like the
+  // backfill it is: its refusal must not hold webhooks and live changes for
+  // up to a refusal's retry time.
+  if (ticket.priority !== "background" && !ticket.afterInitialSync)
     writes.push(
       gmailQuotaStore.block({
         key: keys.syncPause,

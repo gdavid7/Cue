@@ -664,7 +664,8 @@ describe("Gmail quota on a first load", () => {
     });
     // The first older inbox row lands within seconds of the recent scan, and
     // two hundred of them in about the minute their 12,000 units take at the
-    // account's budget. Read as background, mixed with the archived mail of
+    // account's budget (the engine's backfill share, not modelled here,
+    // stretches that to about 2.4 minutes). Read as background, mixed with the archived mail of
     // the same weeks, the first took 24 s and a hundred never came within
     // four minutes.
     expect(olderInboxRowMs(1)).toBeLessThanOrEqual(15_000);
@@ -674,6 +675,8 @@ describe("Gmail quota on a first load", () => {
     // the account's budget and the bucket saved before it, any second within
     // the gate's highest cap.
     expect(gmail.limitedCalls()).toEqual([]);
+    // Each phase pages with its own query's cursors.
+    expect(gmail.mismatchedPageTokens()).toEqual([]);
     expect(gmail.peakMinuteUnits()).toBeLessThanOrEqual(
       GMAIL_USER_UNITS_PER_MINUTE * 0.8 + 2000,
     );

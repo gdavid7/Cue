@@ -1874,6 +1874,8 @@ describe("createEmailProviderMailboxSource", () => {
       "in:inbox|inbox-2": undefined,
       rest: undefined,
     };
+    const mintedFor = new Map<string, string | undefined>();
+    const tokens: string[] = [];
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
@@ -1885,10 +1887,20 @@ describe("createEmailProviderMailboxSource", () => {
           pageToken?: string;
         }) {
           listed.push(options);
+          // Like Gmail's, a cursor only continues the query that minted it.
+          if (
+            options.pageToken &&
+            mintedFor.get(options.pageToken) !== options.query
+          )
+            throw Object.assign(new Error("Invalid pageToken"), {
+              status: 400,
+            });
           const key = options.query?.startsWith("in:inbox")
             ? `in:inbox|${options.pageToken ?? ""}`
             : "rest";
-          return { messages: [], nextPageToken: pages[key] };
+          const nextPageToken = pages[key];
+          if (nextPageToken) mintedFor.set(nextPageToken, options.query);
+          return { messages: [], nextPageToken };
         },
         getMailboxSyncPage: vi.fn(async () => ({
           cursor: null,
@@ -1914,6 +1926,7 @@ describe("createEmailProviderMailboxSource", () => {
     let page: string | null = begun.value.enumerationToken;
     let windowStartMs: number | undefined;
     for (let i = 0; page && i < 5; i++) {
+      tokens.push(page);
       const result = await source.enumerate({
         ...context,
         bootstrapId: begun.value.bootstrapId,
@@ -1944,6 +1957,30 @@ describe("createEmailProviderMailboxSource", () => {
       expect(options.before?.getTime()).toBeLessThan(Date.now());
     // The scan still reports the window it covered.
     expect(windowStartMs).toBeGreaterThan(0);
+
+    // A server rolled back to before phases reads only `pageToken`, so on
+    // every token this scan wrote it starts its one combined query from the
+    // window start: more reads, but nothing an inbox cursor would skip.
+    for (const token of tokens) {
+      expect(readAsBeforePhases(token)).toEqual({
+        query: expect.stringMatching(/^\{in:inbox is:starred in:drafts /),
+        pageToken: undefined,
+      });
+    }
+    // And this code never carries a cursor across phases, even one left in
+    // `pageToken`.
+    listed.length = 0;
+    const stray = await source.enumerate({
+      ...context,
+      bootstrapId: begun.value.bootstrapId,
+      page: JSON.stringify({
+        ...JSON.parse(tokens.at(-1) ?? "{}"),
+        pageToken: "inbox-2",
+      }),
+      pageSize: 50,
+    });
+    expect(stray.status).toBe("ok");
+    expect(listed.map((options) => options.pageToken)).toEqual([undefined]);
   });
 
   it("reads a first sync's first inbox backfill pages at sync behind the primary scan, and the rest at background", async () => {
@@ -2013,6 +2050,44 @@ describe("createEmailProviderMailboxSource", () => {
     // It draws on the backfill's own share of the account's sync envelope
     // throughout, so it moves work earlier without spending more per minute.
     expect(new Set(budgets)).toEqual(new Set(["backfill"]));
+  });
+
+  it("starts the primary stream's catch-up over all time, so old mail moved into the inbox mid-backfill still arrives", async () => {
+    const getMailboxSyncPage = vi.fn(async (options: { after: Date }) => ({
+      cursor: encodeMailboxSyncCursor({
+        version: 1,
+        provider: "google",
+        phase: "delta",
+        historyId: "42",
+        after: options.after.toISOString(),
+      }),
+      upsertedMessages: [],
+      deletedMessageIds: [],
+      hasMore: false,
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMailboxSyncPage,
+      } as unknown as EmailProvider,
+    });
+    const begun = await source.beginBootstrap({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      scope: { id: "primary", kind: "account", folderId: null },
+      afterMs: null,
+      initial: true,
+    });
+    if (begun.status !== "ok") throw new Error("expected ok");
+    const checkpoint = begun.value.catchUpFrom.checkpoint;
+    if (!checkpoint) throw new Error("expected a checkpoint");
+    // The delta read drops any message older than its cursor's `after`.
+    expect(decodeMailboxSyncCursor(checkpoint, "google")).toMatchObject({
+      after: new Date(0).toISOString(),
+    });
   });
 
   it("keeps a backfill begun before inbox-first paging on its one combined query", async () => {
@@ -3607,3 +3682,19 @@ describe("typed search", () => {
     }
   });
 });
+
+// How `enumerate` read a backfill token before inbox-first phases (2d841e2):
+// one combined query over the window, resumed by `pageToken`.
+function readAsBeforePhases(page: string) {
+  const token = JSON.parse(page) as {
+    windowStartMs?: number;
+    pageToken?: string;
+  };
+  return {
+    query:
+      token.windowStartMs == null
+        ? undefined
+        : `{in:inbox is:starred in:drafts after:${Math.floor(token.windowStartMs / 1000) - 1}}`,
+    pageToken: token.pageToken,
+  };
+}
