@@ -23,6 +23,7 @@ import { FilesView } from "@/app/(app)/[emailAccountId]/mail/FilesView";
 const mocks = vi.hoisted(() => ({
   queryFiles: vi.fn(),
   queryFileSenders: vi.fn(),
+  queryFilesNotOnDevice: vi.fn(),
   preview: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => ({
     queryFiles: mocks.queryFiles,
     queryFileSenders: mocks.queryFileSenders,
+    queryFilesNotOnDevice: mocks.queryFilesNotOnDevice,
   }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -86,6 +88,7 @@ describe("FilesView", () => {
     mocks.queryFileSenders.mockResolvedValue([
       { email: "ana@example.com", name: "Ana Lima", files: 2 },
     ]);
+    mocks.queryFilesNotOnDevice.mockResolvedValue(0);
   });
   afterEach(() => {
     cleanup();
@@ -100,6 +103,37 @@ describe("FilesView", () => {
     expect(mocks.queryFiles).toHaveBeenCalledWith(
       expect.objectContaining({ accountIds: ["a"], kind: null, after: null }),
     );
+  });
+
+  it("says nothing about older mail when every message with files is on this device", async () => {
+    renderView();
+    await screen.findByText("budget.xlsx");
+
+    expect(mocks.queryFilesNotOnDevice).toHaveBeenCalledWith(["a"]);
+    expect(screen.queryByText(/aren't on this device yet/)).toBeNull();
+    expect(screen.queryByText(/isn't on this device yet/)).toBeNull();
+  });
+
+  it("notes how many older messages with attachments aren't on this device yet", async () => {
+    mocks.queryFilesNotOnDevice.mockResolvedValue(12);
+    renderView();
+
+    expect(
+      await screen.findByText(
+        "12 older messages with attachments aren't on this device yet",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses the singular for one older message", async () => {
+    mocks.queryFilesNotOnDevice.mockResolvedValue(1);
+    renderView();
+
+    expect(
+      await screen.findByText(
+        "1 older message with an attachment isn't on this device yet",
+      ),
+    ).toBeTruthy();
   });
 
   it("narrows the list to one kind of file", async () => {

@@ -15,6 +15,8 @@ type Seed = {
   subject?: string;
   roles?: ("inbox" | "trash" | "spam" | "draft" | "sent")[];
   attachments: MessageAttachmentDescriptor[];
+  /** Listed with attachments, but its body was never downloaded. */
+  bodyless?: boolean;
 };
 
 const MAILBOX: Seed[] = [
@@ -519,6 +521,33 @@ describe("readFileSenders", () => {
   });
 });
 
+describe("readFilesNotOnDevice", () => {
+  const mailbox: Seed[] = [
+    ...MAILBOX,
+    { id: "old-1", attachments: [], bodyless: true },
+    { id: "old-2", attachments: [], bodyless: true },
+    { id: "old-trash", roles: ["trash"], attachments: [], bodyless: true },
+    { id: "old-draft", roles: ["draft"], attachments: [], bodyless: true },
+    { id: "old-work", account: "acc-2", attachments: [], bodyless: true },
+  ];
+
+  it("counts listed messages with attachments whose body isn't stored, leaving out what Files never lists", async () => {
+    const store = await filesMailbox({ mailbox });
+
+    expect(await store.readFilesNotOnDevice(["acc-1"])).toBe(2);
+    expect(await store.readFilesNotOnDevice(["acc-1", "acc-2"])).toBe(3);
+    await store.close();
+  });
+
+  it("is zero once every body is stored", async () => {
+    const store = await filesMailbox();
+
+    expect(await store.readFilesNotOnDevice(["acc-1", "acc-2"])).toBe(0);
+    expect(await store.readFilesNotOnDevice([])).toBe(0);
+    await store.close();
+  });
+});
+
 async function names(store: MailStore, filters: Partial<FilesQuery>) {
   const page = await store.readFiles(query(filters));
   return page.files.map((entry) => entry.attachment.filename);
@@ -567,13 +596,15 @@ async function filesMailbox({
         requiredHydration: [],
         roundComplete: true,
       },
-      bodies: seeds.map((seed) => ({
-        key: { accountId, messageId: seed.id },
-        version: "1",
-        text: "See attached",
-        html: null,
-        attachments: seed.attachments,
-      })),
+      bodies: seeds
+        .filter((seed) => !seed.bodyless)
+        .map((seed) => ({
+          key: { accountId, messageId: seed.id },
+          version: "1",
+          text: "See attached",
+          html: null,
+          attachments: seed.attachments,
+        })),
     });
   }
   if (indexed)

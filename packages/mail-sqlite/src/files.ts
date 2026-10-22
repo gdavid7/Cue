@@ -219,6 +219,31 @@ export async function readFiles(
 }
 
 /**
+ * How many messages the store lists as having attachments whose body, and so
+ * attachment details, isn't stored yet: files the Files view can't show until
+ * they are. Read from the list's own has-attachments flag.
+ */
+export async function readFilesNotOnDevice(
+  tx: SqlTransaction,
+  accountIds: string[],
+): Promise<number> {
+  const ids = [...new Set(accountIds)];
+  if (!ids.length) return 0;
+  const rows = await tx.query(
+    `SELECT COUNT(*) AS missing
+     FROM effective_messages e
+     WHERE ${FILE_MESSAGES} AND e.account_id IN (${placeholders(ids)})
+       AND NOT EXISTS (
+         SELECT 1 FROM message_content c
+         WHERE c.account_id = e.account_id AND c.message_id = e.message_id
+           AND c.attachments_json IS NOT NULL
+       )`,
+    ids,
+  );
+  return Number(rows[0]?.missing ?? 0);
+}
+
+/**
  * Everyone whose mail the Files view lists, for its sender filter. One
  * address shown with several names counts once, under its most used name.
  */

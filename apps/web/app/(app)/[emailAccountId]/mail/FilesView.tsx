@@ -118,18 +118,27 @@ export function FilesView({
     readSenders ? ["mail-file-senders", JSON.stringify(accountIds)] : null,
     () => readSenders?.(accountIds) ?? [],
   );
-  // Both are read once; new mail reaching the inbox moves its unread count,
+  const readNotOnDevice = client?.queryFilesNotOnDevice?.bind(client);
+  const notOnDevice = useSWR(
+    readNotOnDevice
+      ? ["mail-files-not-on-device", JSON.stringify(accountIds)]
+      : null,
+    () => readNotOnDevice?.(accountIds) ?? 0,
+  );
+  // All are read once; new mail reaching the inbox moves its unread count,
   // which is already watched cheaply, so that refreshes them.
   const inboxUnread = useInboxUnreadCount(accountIds);
   const { mutate } = pages;
   const { mutate: mutateSenders } = senders;
+  const { mutate: mutateNotOnDevice } = notOnDevice;
   const refreshedAtUnread = useRef(inboxUnread);
   useEffect(() => {
     if (refreshedAtUnread.current === inboxUnread) return;
     refreshedAtUnread.current = inboxUnread;
     mutate().catch(() => undefined);
     mutateSenders().catch(() => undefined);
-  }, [inboxUnread, mutate, mutateSenders]);
+    mutateNotOnDevice().catch(() => undefined);
+  }, [inboxUnread, mutate, mutateSenders, mutateNotOnDevice]);
 
   const files = useMemo(
     () => pages.data?.flatMap((page) => page.files) ?? [],
@@ -138,6 +147,7 @@ export function FilesView({
   const hasMore = Boolean(pages.data?.at(-1)?.nextPage);
   const loadingMore =
     pages.isValidating && pages.size > (pages.data?.length ?? 0);
+  const olderMessages = notOnDevice.data ?? 0;
   const filtered = Boolean(kind || sender || deferredName);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -310,6 +320,16 @@ export function FilesView({
           ) : null}
         </LoadingContent>
       </div>
+      {olderMessages > 0 ? (
+        <p
+          className="shrink-0 border-border border-t px-4 py-2 text-muted-foreground text-xs"
+          role="status"
+        >
+          {olderMessages === 1
+            ? "1 older message with an attachment isn't on this device yet"
+            : `${olderMessages} older messages with attachments aren't on this device yet`}
+        </p>
+      ) : null}
       <Dialog
         onOpenChange={(open) => !open && setPreviewing(undefined)}
         open={Boolean(previewing)}
