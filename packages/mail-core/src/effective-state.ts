@@ -89,40 +89,50 @@ export function applyMetadataChange(
  * The messages of one conversation that a conversation command changes. On a
  * folder-based provider, a change that moves mail between folders leaves the
  * user's own Sent and Drafts copies where they are, as the provider's own
- * conversation actions do, unless nothing else is left to move, as when the
- * user deletes their own sent message. A message with no stored copy
- * (`roles: null`) can't be told apart from the user's own mail, so it is left
- * out there.
+ * conversation actions do, unless nothing else is left to move. Moving mail
+ * away doesn't count what is already in Trash or Spam, so deleting a
+ * conversation that is only your reply and old deleted mail still deletes the
+ * reply. A message with no stored copy (`roles: null`) can't be told apart
+ * from the user's own mail, so it is left out there.
  */
 export function conversationTargets<T extends { roles: MailboxRole[] | null }>(
   messages: T[],
   change: MetadataChange,
   provider: Provider | null,
 ): T[] {
-  if (!leavesOwnMailInPlace(change, provider)) return messages;
-  const known = messages.filter((message) => message.roles !== null);
-  const others = known.filter(
-    ({ roles }) =>
-      roles !== null &&
-      !isOwnMail(roles) &&
-      !roles.includes("trash") &&
-      !roles.includes("spam"),
+  const direction = folderMove(change);
+  if (!provider || !PROVIDER_CAPABILITIES[provider].folderBasedRoles) {
+    return messages;
+  }
+  if (!direction) return messages;
+  const known = messages.filter(
+    (message): message is T & { roles: MailboxRole[] } =>
+      message.roles !== null,
   );
-  return others.length > 0
-    ? known.filter(({ roles }) => roles !== null && !isOwnMail(roles))
-    : known;
+  const others = known.filter(({ roles }) => !isOwnMail(roles));
+  const moving =
+    direction === "away"
+      ? others.filter(
+          ({ roles }) => !roles.includes("trash") && !roles.includes("spam"),
+        )
+      : others;
+  return moving.length > 0 ? others : known;
 }
 
 /** Whether `change` on a conversation leaves the user's Sent and Drafts copies alone. */
 export function leavesOwnMailInPlace(
   change: MetadataChange,
-  provider: Provider | null,
+  provider: Provider,
 ): boolean {
   return (
-    provider !== null &&
     PROVIDER_CAPABILITIES[provider].folderBasedRoles &&
-    movesBetweenFolders(change)
+    folderMove(change) !== null
   );
+}
+
+/** Whether `change` moves mail between folders on a folder-based provider. */
+export function movesBetweenFolders(change: MetadataChange): boolean {
+  return folderMove(change) !== null;
 }
 
 export function deriveEffectiveMessage(
@@ -208,23 +218,25 @@ function setMembership(ids: string[], id: string, present: boolean): string[] {
   return ids.filter((candidate) => candidate !== id);
 }
 
-// Spam and snooze also move mail, but the server still applies them to the
-// whole Outlook conversation, so the local state follows it until the server
-// acts per message.
-function movesBetweenFolders(change: MetadataChange): boolean {
+// Spam, snooze and folder moves also move mail, but the server still applies
+// them to the whole Outlook conversation, so the local state follows it until
+// the server acts per message. Integrating FT-13a's per-message folder move
+// adds "move" back as "away".
+function folderMove(change: MetadataChange): "away" | "back" | null {
   switch (change.kind) {
     case "archive":
-    case "unarchive":
     case "trash":
+      return "away";
+    case "unarchive":
     case "restore_from_trash":
+      return "back";
     case "move":
-      return true;
     case "set_spam":
     case "snooze":
     case "set_read":
     case "set_starred":
     case "set_membership":
-      return false;
+      return null;
     default: {
       const exhaustive: never = change;
       return exhaustive;

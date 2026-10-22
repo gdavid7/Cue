@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
+import { useRoutedAccountProviders } from "@/app/(app)/[emailAccountId]/mail/use-account-providers";
 import { useCueMembership } from "@/hooks/useCueMembership";
 import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
 import { useLabels } from "@/hooks/useLabels";
@@ -11,7 +12,6 @@ import {
   type SearchQueryContext,
   searchProvider,
 } from "@/utils/mail-search/search-query-predicate";
-import { engineProvider } from "@/utils/mail-engine/engine-accounts";
 import {
   threadsQueryToPredicate,
   threadsQueryUsesCue,
@@ -62,10 +62,7 @@ export function useMailThreads({
     }
     return;
   }, [query, usesCue, cueMembership, hiddenDraftMessageIds]);
-  const providers = useMemo(
-    () => new Map(provider ? [[emailAccountId, engineProvider(provider)]] : []),
-    [emailAccountId, provider],
-  );
+  const providers = useRoutedAccountProviders(emailAccountId);
   const threads = useEngineMailThreads({
     emailAccountId,
     providers,

@@ -1,5 +1,9 @@
 import type { MetadataChange } from "./commands";
-import { applyMetadataChange, leavesOwnMailInPlace } from "./effective-state";
+import {
+  applyMetadataChange,
+  leavesOwnMailInPlace,
+  movesBetweenFolders,
+} from "./effective-state";
 import type { Provider } from "./identities";
 import type { MessageMetadata } from "./messages";
 import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
@@ -126,13 +130,14 @@ export function conversationIsUnread(
  * to every message in it, as conversation triage does. True or false when the
  * change alone decides it; null when the answer also depends on what the
  * change leaves alone, such as a label or the sender, or on which messages
- * the change reaches, as for Sent on a folder-based `provider`. Lets a view
+ * the change reaches, as for Sent on a folder-based `provider`. A null
+ * `provider` is one not known yet, which might be folder-based. Lets a view
  * drop or keep a row before the engine has written the change.
  */
 export function conversationMatchesAfterChange(
   predicate: MailPredicate,
   change: MetadataChange,
-  provider: Provider | null = null,
+  provider: Provider | null,
 ): boolean | null {
   switch (predicate.kind) {
     case "all": {
@@ -182,9 +187,10 @@ export function conversationMatchesAfterChange(
     case "read":
     case "starred":
     case "membership": {
-      if (leavesOwnMailInPlace(change, provider) && namesOwnMail(predicate)) {
-        return null;
-      }
+      const mayLeaveOwnMail = provider
+        ? leavesOwnMailInPlace(change, provider)
+        : movesBetweenFolders(change);
+      if (mayLeaveOwnMail && namesOwnMail(predicate)) return null;
       // The change sets the same value on every message. Applied to a message
       // with every flag set and to one with none, it decides the predicate
       // only where both give the same answer.

@@ -118,7 +118,11 @@ export type SqliteMailStoreOptions = {
   runtime?: Pick<HostRuntime, "randomId" | "sha256" | "nowMs">;
   /** Defaults to the Compression Streams API; Node hosts pass zlib. */
   bodyCodec?: MessageBodyCodec;
+  /** Debug notes about the store's own decisions. Fields carry ids only. */
+  debug?: StoreDebug;
 };
+
+type StoreDebug = (message: string, fields: Record<string, string>) => void;
 
 export async function createSqliteMailStore(
   driver: SqliteDriver,
@@ -130,6 +134,7 @@ export async function createSqliteMailStore(
   const runtime = resolveStoreRuntime(options.runtime);
   const digest = (value: unknown) => hashCanonical(value, runtime.sha256);
   const bodyCodec = options.bodyCodec ?? streamBodyCodec;
+  const debug: StoreDebug = options.debug ?? (() => {});
   await driver.write(async (tx) => {
     await migrateMailbox(tx, runtime.randomId());
     // A content fetch claimed by the engine that last had this store open (a
@@ -402,7 +407,7 @@ export async function createSqliteMailStore(
           await applyChange(tx, change, read);
         }
         newTargets.push(
-          ...(await narrowConversationTargets(tx, {
+          ...(await narrowConversationTargets(tx, debug, {
             accountId: input.accountId,
             commandId: input.commandId,
             conversationId: input.page.conversation.conversationId,
@@ -927,7 +932,7 @@ export async function createSqliteMailStore(
         }
         for (const row of preparing) {
           newTargets.push(
-            ...(await narrowConversationTargets(tx, {
+            ...(await narrowConversationTargets(tx, debug, {
               accountId,
               commandId: String(row.command_id),
               conversationId,
@@ -3147,6 +3152,7 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
 // folders. Returns the dropped keys so their effective state is redone.
 async function narrowConversationTargets(
   tx: SqlTransaction,
+  debug: StoreDebug,
   input: {
     accountId: string;
     commandId: string;
@@ -3173,12 +3179,20 @@ async function narrowConversationTargets(
     ),
   );
   const dropped: MessageKey[] = [];
-  for (const { messageId } of targeted) {
+  for (const { messageId, roles } of targeted) {
     if (kept.has(messageId)) continue;
     await tx.execute(
       "DELETE FROM operation_targets WHERE account_id = ? AND command_id = ? AND message_id = ?",
       [input.accountId, input.commandId, messageId],
     );
+    if (roles === null) {
+      debug("Left a listed message with no stored copy out of a command", {
+        accountId: input.accountId,
+        commandId: input.commandId,
+        conversationId: input.conversationId,
+        messageId,
+      });
+    }
     dropped.push({ accountId: input.accountId, messageId });
   }
   return dropped;
@@ -3530,7 +3544,7 @@ function confirmedFromRow(
         : inboxSection(String(row.inbox_section)),
     labelIds: JSON.parse(String(row.label_ids_json)) as string[],
     categoryIds: JSON.parse(String(row.category_ids_json)) as string[],
-    roles: JSON.parse(String(row.roles_json)) as MessageMetadata["roles"],
+    roles: parseRoles(row.roles_json),
     hasAttachments: Number(row.has_attachments) === 1,
     snoozedUntilMs:
       row.snoozed_until_ms == null ? null : Number(row.snoozed_until_ms),

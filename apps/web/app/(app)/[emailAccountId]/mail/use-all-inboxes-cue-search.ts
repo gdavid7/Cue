@@ -43,6 +43,7 @@ import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engi
 import type { GetSearchIntentResponse } from "@/app/api/user/search-intent/route";
 import { useLabels } from "@/hooks/useLabels";
 import type { EmailLabels } from "@/providers/email-label-types";
+import { engineProvider } from "@/utils/mail-engine/engine-accounts";
 import { swrFetcher } from "@/providers/swr-fetcher";
 import { readableSearch } from "@/utils/mail-search/generated-search";
 import { looksLikeNaturalLanguage } from "@/utils/mail-search/natural-language-search";
@@ -334,10 +335,21 @@ export function useAllInboxesCueSearch({
     () => Object.fromEntries(accounts.map((account) => [account.id, account])),
     [accounts],
   );
+  const providers = useMemo(
+    () =>
+      new Map(
+        accounts.map((account) => [
+          account.id,
+          engineProvider(account.provider),
+        ]),
+      ),
+    [accounts],
+  );
   const state = useEngineMailThreads({
     emailAccountId,
     accountIds: searchedIds.length ? searchedIds : [emailAccountId],
     accounts: accountsById,
+    providers,
     query: PREDICATE_ONLY_QUERY,
     predicate,
     enabled: natural && Boolean(predicate),
@@ -374,6 +386,7 @@ export function useAllInboxesCueSearch({
     emailAccountId,
     accountIds: widenedIds.length ? widenedIds : [emailAccountId],
     accounts: accountsById,
+    providers,
     query: PREDICATE_ONLY_QUERY,
     predicate: widenedPredicate,
     enabled: natural && Boolean(widenedPredicate),

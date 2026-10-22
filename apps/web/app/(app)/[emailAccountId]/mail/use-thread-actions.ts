@@ -19,7 +19,13 @@ import {
   mutationPayloadToChange,
   type ThreadMutationPayload,
 } from "@/utils/mail-engine/mutation-change";
-import { submitConversationChanges } from "@/utils/mail-engine/submit-conversations";
+import {
+  submitConversationChanges,
+  submitMessagesInView,
+} from "@/utils/mail-engine/submit-conversations";
+import { leavesOwnMailInPlace } from "@inboxzero/mail-core/effective-state";
+import type { MessageKey, Provider } from "@inboxzero/mail-core/identities";
+import type { MailboxRole } from "@inboxzero/mail-core/messages";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 import {
   observeRumConfirmation,
@@ -45,6 +51,14 @@ type ThreadSnapshot = {
   messageIds: string[];
   mutationId: string;
   threadId: string;
+  /** The messages the command named, when it named messages. */
+  messageTargets?: MessageKey[];
+};
+
+/** A view of the user's own mail, and each account's provider. */
+type OwnMailView = {
+  role: Extract<MailboxRole, "sent" | "draft">;
+  providers: ReadonlyMap<string, Provider>;
 };
 
 type ThreadActionTarget = Omit<ThreadSnapshot, "mutationId">;
@@ -61,11 +75,17 @@ export function useThreadActions({
   emailAccountId,
   readerTarget,
   threads,
+  ownMailView,
   onRestored,
 }: {
   emailAccountId: string;
   readerTarget?: ThreadActionTarget;
   threads: ActionableThread[];
+  /**
+   * Set in Sent and Drafts. On a folder-based provider a move made there
+   * reaches only the messages the view shows.
+   */
+  ownMailView?: OwnMailView;
   /**
    * Called with the keys an undo brought back, for a list that hides removed
    * rows itself rather than following the mail engine's views.
@@ -136,12 +156,28 @@ export function useThreadActions({
       for (const [accountId, accountTargets] of Object.entries(
         groupBy(targets, (target) => target.emailAccountId),
       )) {
-        const result = await submitConversationChanges({
-          accountId,
-          change,
-          client,
-          conversationIds: accountTargets.map((target) => target.threadId),
-        });
+        const conversationIds = accountTargets.map((target) => target.threadId);
+        const provider = ownMailView?.providers.get(accountId);
+        let result: Awaited<ReturnType<typeof submitConversationChanges>>;
+        let messageTargets: MessageKey[] | undefined;
+        if (ownMailView && provider && leavesOwnMailInPlace(change, provider)) {
+          const inView = await submitMessagesInView({
+            accountId,
+            change,
+            client,
+            conversationIds,
+            role: ownMailView.role,
+          });
+          result = inView;
+          messageTargets = inView.targets;
+        } else {
+          result = await submitConversationChanges({
+            accountId,
+            change,
+            client,
+            conversationIds,
+          });
+        }
         rejectionCodes.push(...result.rejectionCodes);
         const commandIds = new Map(
           result.accepted.map((item) => [item.conversationId, item.commandId]),
@@ -160,7 +196,13 @@ export function useThreadActions({
         }
         for (const target of accountTargets) {
           const mutationId = commandIds.get(target.threadId);
-          if (mutationId) snapshots.push({ ...target, mutationId });
+          if (mutationId) {
+            snapshots.push({
+              ...target,
+              mutationId,
+              ...(messageTargets ? { messageTargets } : {}),
+            });
+          }
         }
       }
       if (rumAction && rejectionCodes.length) {
@@ -168,7 +210,7 @@ export function useThreadActions({
       }
       return { snapshots, rejectionCodes };
     },
-    [client],
+    [client, ownMailView],
   );
 
   // A retry or another tab taking over can replace the engine, and an undo
@@ -189,7 +231,7 @@ export function useThreadActions({
     const results = await Promise.allSettled(
       Object.values(groupBy(snapshots, (snapshot) => snapshot.mutationId)).map(
         async (snapshots) => {
-          const { emailAccountId, mutationId } = snapshots[0];
+          const { emailAccountId, messageTargets, mutationId } = snapshots[0];
           const cancelled =
             (
               await client.cancelOperation({
@@ -197,7 +239,17 @@ export function useThreadActions({
                 operationId: mutationId,
               })
             ).status === "cancelled";
-          if (!cancelled) {
+          if (!cancelled && messageTargets) {
+            const admission = await client.submitMetadata({
+              accountId: emailAccountId,
+              commandId: randomUuid(),
+              targets: messageTargets,
+              change: compensation,
+            });
+            if (admission.status === "rejected") {
+              throw new Error(admission.code);
+            }
+          } else if (!cancelled) {
             const diagnostics = await client.getDiagnostics(emailAccountId);
             const admission = await client.submitConversations({
               accountId: emailAccountId,

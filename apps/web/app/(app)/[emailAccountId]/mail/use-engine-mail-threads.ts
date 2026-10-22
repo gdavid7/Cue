@@ -33,14 +33,13 @@ const EMPTY_THREADS: ListThread[] = [];
 const NO_CONVERSATIONS: ConversationSummary[] = [];
 const NO_ACCOUNT_IDS: string[] = [];
 const NO_LABELS_BY_ACCOUNT: Record<string, EmailLabels> = {};
-const NO_PROVIDERS: ReadonlyMap<string, Provider> = new Map();
 const NO_PROVIDER_SEARCHES: NonNullable<MailboxView["providerSearch"]> = [];
 
 export function useEngineMailThreads({
   emailAccountId,
   accountIds,
   accounts,
-  providers = NO_PROVIDERS,
+  providers,
   query,
   predicate,
   search,
@@ -51,7 +50,7 @@ export function useEngineMailThreads({
   accountIds?: string[];
   accounts?: Record<string, CombinedListThread["account"]>;
   /** Each account's provider, which decides what triage reaches in Sent. */
-  providers?: ReadonlyMap<string, Provider>;
+  providers: ReadonlyMap<string, Provider>;
   query: ThreadsQuery;
   predicate?: MailPredicate;
   /** How to read a typed search: the account's labels and syntax. */

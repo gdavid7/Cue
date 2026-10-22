@@ -16,8 +16,10 @@ const mail = vi.hoisted(() => ({
   client: {
     cancelOperation: vi.fn(),
     getDiagnostics: vi.fn(),
+    observeConversation: vi.fn(),
     observeOperation: vi.fn(),
     submitConversations: vi.fn(),
+    submitMetadata: vi.fn(),
   },
 }));
 
@@ -33,6 +35,13 @@ describe("useThreadActions", () => {
     mail.started = true;
     mail.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mail.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mail.client.submitMetadata.mockResolvedValue({ status: "queued" });
+    mail.client.observeConversation.mockReturnValue(
+      conversationHandle([
+        { messageId: "received", roles: ["trash"] },
+        { messageId: "reply", roles: ["sent"] },
+      ]),
+    );
     mail.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
   });
 
@@ -332,7 +341,10 @@ describe("useThreadActions", () => {
     const nextClient = {
       cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
       getDiagnostics: vi.fn(),
+      observeConversation: vi.fn(),
+      observeOperation: vi.fn(),
       submitConversations: vi.fn(),
+      submitMetadata: vi.fn(),
     };
     mail.client = nextClient;
     try {
@@ -370,7 +382,10 @@ describe("useThreadActions", () => {
     const nextClient = {
       cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
       getDiagnostics: vi.fn(),
+      observeConversation: vi.fn(),
+      observeOperation: vi.fn(),
       submitConversations: vi.fn(),
+      submitMetadata: vi.fn(),
     };
     mail.client = nextClient;
     try {
@@ -384,6 +399,54 @@ describe("useThreadActions", () => {
     } finally {
       mail.client = closedClient;
     }
+  });
+
+  // Outlook files the user's own copies in Sent and Drafts, so a delete made
+  // there reaches them, and undo brings back exactly those.
+  it("deletes the Sent copies from an Outlook Sent view and undoes exactly those", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const { result } = renderActions({
+      ownMailView: {
+        role: "sent",
+        providers: new Map([["account", "microsoft"]]),
+      },
+    });
+
+    await act(() => result.current.trash(["thread"]));
+
+    expect(mail.client.submitConversations).not.toHaveBeenCalled();
+    expect(mail.client.submitMetadata).toHaveBeenCalledWith({
+      accountId: "account",
+      commandId: expect.any(String),
+      targets: [{ accountId: "account", messageId: "reply" }],
+      change: { kind: "trash" },
+    });
+
+    await act(() => result.current.undo());
+
+    expect(mail.client.submitConversations).not.toHaveBeenCalled();
+    expect(mail.client.submitMetadata).toHaveBeenLastCalledWith({
+      accountId: "account",
+      commandId: expect.any(String),
+      targets: [{ accountId: "account", messageId: "reply" }],
+      change: { kind: "restore_from_trash" },
+    });
+  });
+
+  it("acts on the whole conversation from a Gmail Sent view", async () => {
+    const { result } = renderActions({
+      ownMailView: {
+        role: "sent",
+        providers: new Map([["account", "google"]]),
+      },
+    });
+
+    await act(() => result.current.trash(["thread"]));
+
+    expect(mail.client.submitMetadata).not.toHaveBeenCalled();
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ change: { kind: "trash" } }),
+    );
   });
 
   it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {
@@ -410,15 +473,36 @@ describe("useThreadActions", () => {
 
 function renderActions({
   threads = [createThread(["INBOX", "UNREAD"])],
+  ownMailView,
 }: {
   threads?: ListThread[];
+  ownMailView?: Parameters<typeof useThreadActions>[0]["ownMailView"];
 } = {}) {
   return renderHook(() =>
     useThreadActions({
       emailAccountId: "account",
       threads,
+      ownMailView,
     }),
   );
+}
+
+function conversationHandle(
+  messages: Array<{ messageId: string; roles: string[] }>,
+) {
+  return {
+    getSnapshot: () => ({
+      status: "ready",
+      data: {
+        messages: messages.map(({ messageId, roles }) => ({
+          key: { accountId: "account", messageId },
+          metadata: { roles },
+        })),
+      },
+    }),
+    subscribe: () => () => {},
+    close: vi.fn(),
+  };
 }
 
 function createThread(labelIds: string[], id = "thread"): ListThread {

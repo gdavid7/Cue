@@ -27,7 +27,6 @@ type TriageStore = {
 };
 
 const NO_ENTRIES: readonly OptimisticTriage[] = [];
-const NO_PROVIDERS: ReadonlyMap<string, Provider> = new Map();
 const stores = new WeakMap<MailClient, TriageStore>();
 let nextId = 0;
 
@@ -94,13 +93,14 @@ export function useOptimisticTriage(client: MailClient | null) {
  * and a conversation the change takes out of the view is left out. A row the
  * change cannot decide stays until the engine's own view settles it.
  * `providers` names each account's provider, which decides whether a change
- * reaches the user's own Sent and Drafts copies.
+ * reaches the user's own Sent and Drafts copies; an account missing from it
+ * leaves those views to the engine.
  */
 export function applyOptimisticTriage(
   conversations: ConversationSummary[],
   predicate: MailPredicate,
   entries: readonly OptimisticTriage[],
-  providers: ReadonlyMap<string, Provider> = NO_PROVIDERS,
+  providers: ReadonlyMap<string, Provider>,
 ): ConversationSummary[] {
   if (!entries.length) return conversations;
   let changed = false;

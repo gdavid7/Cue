@@ -6,6 +6,7 @@ import type {
 import { applyOptimisticTriage } from "./optimistic-triage";
 
 const inbox: MailPredicate = { kind: "mailbox", mailbox: "inbox" };
+const GMAIL = new Map([["acc-1", "google" as const]]);
 const label: MailPredicate = {
   kind: "membership",
   membership: "label",
@@ -16,13 +17,16 @@ describe("applyOptimisticTriage", () => {
   const rows = [summary("one"), summary("two"), summary("three")];
 
   it("hands back the engine's own list while nothing is pending", () => {
-    expect(applyOptimisticTriage(rows, inbox, [])).toBe(rows);
+    expect(applyOptimisticTriage(rows, inbox, [], GMAIL)).toBe(rows);
   });
 
   it("drops an archived conversation from the inbox at once", () => {
-    const shown = applyOptimisticTriage(rows, inbox, [
-      entry(["two"], { kind: "archive" }),
-    ]);
+    const shown = applyOptimisticTriage(
+      rows,
+      inbox,
+      [entry(["two"], { kind: "archive" })],
+      GMAIL,
+    );
 
     expect(shown.map((row) => row.key.conversationId)).toEqual([
       "one",
@@ -32,9 +36,12 @@ describe("applyOptimisticTriage", () => {
   });
 
   it("keeps an archived conversation in a view the change cannot decide", () => {
-    const shown = applyOptimisticTriage(rows, label, [
-      entry(["two"], { kind: "archive" }),
-    ]);
+    const shown = applyOptimisticTriage(
+      rows,
+      label,
+      [entry(["two"], { kind: "archive" })],
+      GMAIL,
+    );
 
     expect(shown.map((row) => row.key.conversationId)).toEqual([
       "one",
@@ -44,10 +51,15 @@ describe("applyOptimisticTriage", () => {
   });
 
   it("shows read and star changes on the row", () => {
-    const shown = applyOptimisticTriage(rows, inbox, [
-      entry(["one"], { kind: "set_read", read: true }),
-      entry(["one", "three"], { kind: "set_starred", starred: true }),
-    ]);
+    const shown = applyOptimisticTriage(
+      rows,
+      inbox,
+      [
+        entry(["one"], { kind: "set_read", read: true }),
+        entry(["one", "three"], { kind: "set_starred", starred: true }),
+      ],
+      GMAIL,
+    );
 
     expect(shown[0]).toMatchObject({ unread: false, starred: true });
     expect(shown[1]).toBe(rows[1]);
@@ -55,9 +67,12 @@ describe("applyOptimisticTriage", () => {
   });
 
   it("only touches the account the change was made in", () => {
-    const shown = applyOptimisticTriage(rows, inbox, [
-      { ...entry(["one"], { kind: "archive" }), accountId: "other" },
-    ]);
+    const shown = applyOptimisticTriage(
+      rows,
+      inbox,
+      [{ ...entry(["one"], { kind: "archive" }), accountId: "other" }],
+      GMAIL,
+    );
 
     expect(shown).toHaveLength(3);
   });
@@ -76,6 +91,17 @@ describe("applyOptimisticTriage", () => {
     }
   });
 
+  it("leaves Sent to the engine while the account's provider is not known", () => {
+    const shown = applyOptimisticTriage(
+      rows,
+      { kind: "mailbox", mailbox: "sent" },
+      [entry(["two"], { kind: "trash" })],
+      new Map(),
+    );
+
+    expect(shown.map((row) => row.key.conversationId)).toContain("two");
+  });
+
   it("drops a Gmail conversation from Sent at once when it is deleted", () => {
     const shown = applyOptimisticTriage(
       rows,
@@ -88,10 +114,15 @@ describe("applyOptimisticTriage", () => {
   });
 
   it("follows the latest of several changes to one conversation", () => {
-    const shown = applyOptimisticTriage(rows, inbox, [
-      entry(["one"], { kind: "archive" }),
-      entry(["one"], { kind: "unarchive" }),
-    ]);
+    const shown = applyOptimisticTriage(
+      rows,
+      inbox,
+      [
+        entry(["one"], { kind: "archive" }),
+        entry(["one"], { kind: "unarchive" }),
+      ],
+      GMAIL,
+    );
 
     expect(shown.map((row) => row.key.conversationId)).toContain("one");
   });

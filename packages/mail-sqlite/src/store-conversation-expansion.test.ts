@@ -17,22 +17,83 @@ const session = { accountId: "acc-1", generation: "g1" };
 // conversation actions leave them there; Gmail's labels mean every message
 // in the conversation is a target.
 describe("conversation expansion", () => {
-  it.each([
-    { change: { kind: "archive" } as MetadataChange, view: null },
-    { change: { kind: "trash" } as MetadataChange, view: "trash" as Role },
-  ])("on Outlook, $change.kind leaves the user's Sent reply in Sent", async ({
-    change,
-    view,
-  }) => {
+  it("on Outlook, archiving from the Inbox leaves the user's Sent reply in Sent", async () => {
     const store = await repliedThreadStore("microsoft");
-    await admitAndPrepare(store, "op-1", change, ["m-in", "m-sent"]);
+    await admitAndPrepare(store, "op-1", { kind: "archive" }, [
+      "m-in",
+      "m-sent",
+    ]);
 
     expect(await targetsOf(store, "op-1")).toEqual(["m-in"]);
     expect(await executableTargetsOf(store, "op-1")).toEqual(["m-in"]);
     expect(await effectiveRoles(store, "m-sent")).toEqual(["sent"]);
     expect(await listed(store, "inbox")).toEqual([]);
     expect(await listed(store, "sent")).toEqual(["c1"]);
-    if (view) expect(await listed(store, view)).toEqual(["c1"]);
+    await store.close();
+  });
+
+  it("on Outlook, deleting from the Inbox leaves the user's Sent reply in Sent", async () => {
+    const store = await repliedThreadStore("microsoft");
+    await admitAndPrepare(store, "op-1", { kind: "trash" }, ["m-in", "m-sent"]);
+
+    expect(await executableTargetsOf(store, "op-1")).toEqual(["m-in"]);
+    expect(await effectiveRoles(store, "m-sent")).toEqual(["sent"]);
+    expect(await listed(store, "trash")).toEqual(["c1"]);
+    expect(await listed(store, "sent")).toEqual(["c1"]);
+    await store.close();
+  });
+
+  // The Sent view names the messages it shows, so its delete reaches them.
+  it("on Outlook, deleting from Sent trashes the Sent copy", async () => {
+    const store = await repliedThreadStore("microsoft");
+    const admission = await store.admitMetadata({
+      accountId: "acc-1",
+      commandId: "op-1",
+      targets: [{ accountId: "acc-1", messageId: "m-sent" }],
+      change: { kind: "trash" },
+    });
+
+    expect(admission.status).toBe("queued");
+    expect(await effectiveRoles(store, "m-sent")).toEqual(["trash"]);
+    expect(await effectiveRoles(store, "m-in")).toEqual(["inbox"]);
+    expect(await listed(store, "sent")).toEqual([]);
+    await store.close();
+  });
+
+  it("on Outlook, restoring a confirmed delete brings back only what was deleted", async () => {
+    const store = await repliedThreadStore("microsoft");
+    await admitAndPrepare(store, "op-1", { kind: "trash" }, ["m-in", "m-sent"]);
+    await confirmTrash(store, "op-1", "m-in");
+    expect(await effectiveRoles(store, "m-in")).toEqual(["trash"]);
+
+    const restore = await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "undo-1",
+      conversations: [{ accountId: "acc-1", conversationId: "c1" }],
+      change: { kind: "restore_from_trash" },
+      observedRevision: await store.readRevision(),
+    });
+
+    expect(restore.status).toBe("queued");
+    expect(await targetsOf(store, "undo-1")).toEqual(["m-in"]);
+    expect(await effectiveRoles(store, "m-sent")).toEqual(["sent"]);
+    await store.close();
+  });
+
+  it("on Outlook, moving a conversation to the Inbox leaves its Sent reply when the rest is in Trash", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({ ...session, provider: "microsoft" });
+    await syncMessages(store, [
+      messagePatch("m-in", "c1", 1000, ["trash"], "microsoft"),
+      messagePatch("m-sent", "c1", 2000, ["sent"], "microsoft"),
+    ]);
+    await admitAndPrepare(store, "op-1", { kind: "unarchive" }, [
+      "m-in",
+      "m-sent",
+    ]);
+
+    expect(await targetsOf(store, "op-1")).toEqual(["m-in"]);
+    expect(await effectiveRoles(store, "m-sent")).toEqual(["sent"]);
     await store.close();
   });
 
@@ -186,6 +247,7 @@ describe("conversation expansion", () => {
   it.each([
     { kind: "set_spam", spam: true } as MetadataChange,
     { kind: "snooze", untilMs: 4_102_444_800_000 } as MetadataChange,
+    { kind: "move", folderId: "folder-1" } as MetadataChange,
   ])("on Outlook, $kind still targets every message in the conversation", async (change) => {
     const store = await repliedThreadStore("microsoft");
     await admitAndPrepare(store, "op-1", change, ["m-in", "m-sent"]);
@@ -214,7 +276,10 @@ describe("conversation expansion", () => {
   });
 
   it("on Outlook, a listed message the store has no copy of does not decide what Sent keeps", async () => {
-    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    const dropped: unknown[] = [];
+    const store = await createSqliteMailStore(createNodeSqliteDriver(), {
+      debug: (message, fields) => dropped.push({ message, fields }),
+    });
     await store.ensureAccount({ ...session, provider: "microsoft" });
     await syncMessages(store, [
       messagePatch("m-sent", "c1", 1000, ["sent"], "microsoft"),
@@ -225,6 +290,17 @@ describe("conversation expansion", () => {
     ]);
 
     expect(await targetsOf(store, "op-1")).toEqual(["m-sent"]);
+    expect(dropped).toEqual([
+      {
+        message: expect.any(String),
+        fields: {
+          accountId: "acc-1",
+          commandId: "op-1",
+          conversationId: "c1",
+          messageId: "m-unknown",
+        },
+      },
+    ]);
     await store.close();
   });
 
@@ -313,6 +389,42 @@ async function admitAndPrepare(
   expect(queued.status).toBe("queued");
 }
 
+async function confirmTrash(
+  store: MailStore,
+  operationId: string,
+  messageId: string,
+) {
+  const work = await store.claimWork({
+    ownerId: "owner",
+    nowMs: Date.now(),
+    leaseMs: 30_000,
+  });
+  if (
+    work?.kind !== "command" ||
+    work.operation.key.operationId !== operationId
+  )
+    throw new Error("expected the trash command");
+  await store.settleAttempt({
+    attemptId: work.attemptId,
+    operation: work.operation,
+    result: {
+      status: "confirmed",
+      receiptId: "receipt-1",
+      observations: [
+        messagePatch(messageId, "c1", 1000, ["trash"], "microsoft", "2"),
+      ],
+      bodies: [],
+      targets: [
+        {
+          key: { accountId: "acc-1", messageId },
+          outcome: "applied",
+          code: null,
+        },
+      ],
+    },
+  });
+}
+
 async function targetsOf(store: MailStore, operationId: string) {
   return (await store.inspect()).operationTargets
     .filter((target) => target.operationId === operationId)
@@ -368,11 +480,12 @@ function messagePatch(
   receivedAtMs: number,
   roles: Role[],
   provider: Provider,
+  version = "1",
 ): Extract<ProviderChange, { kind: "message_patch" }> {
   return {
     kind: "message_patch",
     key: { accountId: "acc-1", messageId },
-    reference: { provider, messageId, conversationId, version: "1" },
+    reference: { provider, messageId, conversationId, version },
     fields: {
       subject: conversationId,
       preview: messageId,

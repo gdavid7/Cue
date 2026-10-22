@@ -210,6 +210,8 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { useTeamCommentsAvailable } from "@/components/team-comments/use-team-comments-available";
 import { getEmailMessageCellActions } from "@/components/EmailMessageCellActions";
 import type { ThreadsQuery } from "@/utils/threads/validation";
+import type { Provider } from "@inboxzero/mail-core/identities";
+import { engineProvider } from "@/utils/mail-engine/engine-accounts";
 import {
   SearchProviderNotice,
   searchOnEnterHint,
@@ -456,6 +458,16 @@ export function MailShell() {
     () => getAllInboxesAccounts(accountsData?.emailAccounts ?? []),
     [accountsData?.emailAccounts],
   );
+  const accountProviders = useMemo(() => {
+    const providers = new Map<string, Provider>(
+      combinedAccounts.map((account) => [
+        account.id,
+        engineProvider(account.provider),
+      ]),
+    );
+    if (provider) providers.set(emailAccountId, engineProvider(provider));
+    return providers;
+  }, [combinedAccounts, emailAccountId, provider]);
   const accountColorIndexById = useMemo(
     () =>
       Object.fromEntries(
@@ -561,6 +573,11 @@ export function MailShell() {
   const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
   // Files are read from the local mailbox's stored attachment details.
   const isFilesView = !searchQuery && scopeType === MAIL_FILES_TYPE;
+  // Sent and Drafts show the user's own copies, which a move made there reaches.
+  const ownMailView = useMemo(() => {
+    const role = searchQuery ? null : ownMailRole(scopeType);
+    return role ? { role, providers: accountProviders } : undefined;
+  }, [accountProviders, scopeType, searchQuery]);
   const isDatabaseView = isScheduledView || isSnoozedView || isFilesView;
   const allInboxesMailboxType =
     isAllInboxesView &&
@@ -1161,6 +1178,7 @@ export function MailShell() {
     emailAccountId,
     readerTarget,
     threads: navThreads,
+    ownMailView,
   });
   const markRead = useCallback(
     (threadKeys: string[]) => setReadState(threadKeys, true, false),
@@ -2892,4 +2910,12 @@ function getListPlaceholderMessage({
   if (isAllAccounts) return allInboxesFirstSyncMessage ?? "Loading your mail…";
   if (isFirstSync) return "Getting your last 3 days of mail first…";
   return `Loading your mail from ${isOutlook ? "Outlook" : "Gmail"}…`;
+}
+
+function ownMailRole(
+  scopeType: string | null | undefined,
+): "sent" | "draft" | null {
+  if (scopeType === "sent") return "sent";
+  if (scopeType === "draft") return "draft";
+  return null;
 }
