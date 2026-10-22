@@ -222,6 +222,8 @@ export type ReplyingToEmail = {
   references?: string;
   /** Everyone on the message being replied to, to tell who a reply adds. */
   participants?: string;
+  /** Addresses the user wrote from in the thread, which can be send-as aliases. */
+  sentFrom?: string;
   /** Recipients a rule the user set up chose for this reply. */
   ruleRecipients?: string;
   subject: string;
@@ -1403,7 +1405,10 @@ function ComposeEmailFormContent({
             chosenAddresses: replyingToEmail?.ruleRecipients
               ? [replyingToEmail.ruleRecipients]
               : [],
-            ownEmails,
+            ownEmails: [
+              ...ownEmails,
+              ...extractEmailAddresses(replyingToEmail?.sentFrom ?? ""),
+            ],
           },
         );
         const shown = warnings.map((warning) => warning.message).join("\n");

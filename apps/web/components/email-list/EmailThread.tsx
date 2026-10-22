@@ -597,6 +597,7 @@ export function EmailThread({
                     : undefined
                 }
                 replyAnchor={outgoing ? replyAnchor : undefined}
+                threadMessages={earlierMessages ? undefined : messages}
                 composerSessionMessageId={
                   sendOperationId ? `outgoing:${sendOperationId}` : undefined
                 }
