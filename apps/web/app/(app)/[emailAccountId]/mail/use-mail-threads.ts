@@ -11,6 +11,7 @@ import {
   type SearchQueryContext,
   searchProvider,
 } from "@/utils/mail-search/search-query-predicate";
+import { engineProvider } from "@/utils/mail-engine/engine-accounts";
 import {
   threadsQueryToPredicate,
   threadsQueryUsesCue,
@@ -61,8 +62,13 @@ export function useMailThreads({
     }
     return;
   }, [query, usesCue, cueMembership, hiddenDraftMessageIds]);
+  const providers = useMemo(
+    () => new Map(provider ? [[emailAccountId, engineProvider(provider)]] : []),
+    [emailAccountId, provider],
+  );
   const threads = useEngineMailThreads({
     emailAccountId,
+    providers,
     query,
     predicate,
     search,

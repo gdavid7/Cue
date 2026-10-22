@@ -181,6 +181,53 @@ describe("conversation expansion", () => {
     await store.close();
   });
 
+  // The server still acts on the whole Outlook conversation for these, so
+  // the local state must too until it acts per message.
+  it.each([
+    { kind: "set_spam", spam: true } as MetadataChange,
+    { kind: "snooze", untilMs: 4_102_444_800_000 } as MetadataChange,
+  ])("on Outlook, $kind still targets every message in the conversation", async (change) => {
+    const store = await repliedThreadStore("microsoft");
+    await admitAndPrepare(store, "op-1", change, ["m-in", "m-sent"]);
+
+    expect(await targetsOf(store, "op-1")).toEqual(["m-in", "m-sent"]);
+    await store.close();
+  });
+
+  it("on Outlook, deletes the Sent reply of a conversation whose other mail is already in Trash", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({ ...session, provider: "microsoft" });
+    await syncMessages(store, [
+      messagePatch("m-old", "c1", 1000, ["trash"], "microsoft"),
+      messagePatch("m-junk", "c1", 1500, ["spam"], "microsoft"),
+      messagePatch("m-sent", "c1", 2000, ["sent"], "microsoft"),
+    ]);
+    await admitAndPrepare(store, "op-1", { kind: "trash" }, [
+      "m-old",
+      "m-junk",
+      "m-sent",
+    ]);
+
+    expect(await targetsOf(store, "op-1")).toContain("m-sent");
+    expect(await effectiveRoles(store, "m-sent")).toEqual(["trash"]);
+    await store.close();
+  });
+
+  it("on Outlook, a listed message the store has no copy of does not decide what Sent keeps", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({ ...session, provider: "microsoft" });
+    await syncMessages(store, [
+      messagePatch("m-sent", "c1", 1000, ["sent"], "microsoft"),
+    ]);
+    await admitAndPrepare(store, "op-1", { kind: "trash" }, [
+      "m-sent",
+      "m-unknown",
+    ]);
+
+    expect(await targetsOf(store, "op-1")).toEqual(["m-sent"]);
+    await store.close();
+  });
+
   it.each([
     { kind: "archive" } as MetadataChange,
     { kind: "trash" } as MetadataChange,

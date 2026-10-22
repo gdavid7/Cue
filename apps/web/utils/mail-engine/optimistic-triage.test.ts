@@ -62,6 +62,31 @@ describe("applyOptimisticTriage", () => {
     expect(shown).toHaveLength(3);
   });
 
+  it("keeps an Outlook conversation in Sent and Drafts when it is deleted", () => {
+    const outlook = new Map([["acc-1", "microsoft" as const]]);
+    for (const mailbox of ["sent", "drafts"] as const) {
+      const shown = applyOptimisticTriage(
+        rows,
+        { kind: "mailbox", mailbox },
+        [entry(["two"], { kind: "trash" })],
+        outlook,
+      );
+
+      expect(shown.map((row) => row.key.conversationId)).toContain("two");
+    }
+  });
+
+  it("drops a Gmail conversation from Sent at once when it is deleted", () => {
+    const shown = applyOptimisticTriage(
+      rows,
+      { kind: "mailbox", mailbox: "sent" },
+      [entry(["two"], { kind: "trash" })],
+      new Map([["acc-1", "google" as const]]),
+    );
+
+    expect(shown.map((row) => row.key.conversationId)).not.toContain("two");
+  });
+
   it("follows the latest of several changes to one conversation", () => {
     const shown = applyOptimisticTriage(rows, inbox, [
       entry(["one"], { kind: "archive" }),

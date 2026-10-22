@@ -943,8 +943,8 @@ export async function createSqliteMailStore(
              ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
             [accountId, conversationId],
           );
-          // The commands now target every message, so this read resolves
-          // their membership too and they skip their own.
+          // The commands now target every message their change reaches, so
+          // this read resolves their membership too and they skip their own.
           for (const row of preparing) {
             const commandId = String(row.command_id);
             await tx.execute(
@@ -2392,13 +2392,11 @@ async function admitConversations(
       "SELECT message_id, roles_json FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
       [conversation.accountId, conversation.conversationId],
     );
-    const targets = provider
-      ? conversationTargets(
-          messages.map((row) => ({ row, roles: parseRoles(row.roles_json) })),
-          input.change,
-          provider,
-        ).map(({ row }) => row)
-      : messages;
+    const targets = conversationTargets(
+      messages.map((row) => ({ row, roles: parseRoles(row.roles_json) })),
+      input.change,
+      provider,
+    ).map(({ row }) => row);
     knownTargets.push(
       ...targets.map((row) => ({
         accountId: conversation.accountId,
@@ -3157,7 +3155,6 @@ async function narrowConversationTargets(
   },
 ): Promise<MessageKey[]> {
   const provider = await accountProvider(tx, input.accountId);
-  if (!provider) return [];
   const rows = await tx.query(
     `SELECT t.message_id, m.roles_json
      FROM operation_targets t
@@ -3168,7 +3165,7 @@ async function narrowConversationTargets(
   );
   const targeted = rows.map((row) => ({
     messageId: String(row.message_id),
-    roles: row.roles_json == null ? [] : parseRoles(row.roles_json),
+    roles: row.roles_json == null ? null : parseRoles(row.roles_json),
   }));
   const kept = new Set(
     conversationTargets(targeted, input.change, provider).map(
@@ -3227,9 +3224,7 @@ async function queuePreparedOperation(
   if (remaining.length > 0) return false;
   const operation = await loadOperation(tx, accountId, commandId);
   if (operation?.status !== "preparing") return false;
-  const payload = JSON.parse(String(operation.payload_json)) as {
-    change: SubmitMetadataCommand["change"];
-  };
+  const change = operationChange(operation);
   const targets = await tx.query(
     `SELECT message_id FROM operation_targets
      WHERE account_id = ? AND command_id = ?`,
@@ -3242,7 +3237,7 @@ async function queuePreparedOperation(
   const executable = {
     kind: "metadata" as const,
     targets: messageTargets,
-    change: payload.change,
+    change,
   };
   await tx.execute(
     `UPDATE operations
