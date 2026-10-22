@@ -60,6 +60,7 @@ import {
 import {
   getReadingRoute,
   getReadingSummary,
+  inboxWithoutReadingMatchingScope,
   inboxWithoutReadingQuery,
   isReadingMailView,
   MAIL_READING_TYPE,
@@ -235,6 +236,7 @@ const NO_LABELS = {};
 const NO_SLUGS: MailSlugs = { labels: new Map(), folders: new Map() };
 const INBOX_VIEW: MailUrlView = { kind: "inbox" };
 const INBOX_THREADS_QUERY: ThreadsQuery = { type: "inbox" };
+const LABELS_WAIT_MS = 1500;
 
 /**
  * Owns the mail screen's URL, thread list, selection, and triage state, and
@@ -243,8 +245,14 @@ const INBOX_THREADS_QUERY: ThreadsQuery = { type: "inbox" };
  * referentially stable and only the parts whose inputs changed re-render.
  */
 export function MailShell() {
-  const { emailAccount, emailAccountId, userEmail, provider, accountIds } =
-    useAccount();
+  const {
+    emailAccount,
+    emailAccountId,
+    userEmail,
+    provider,
+    accountIds,
+    providerRateLimit,
+  } = useAccount();
   const { data: accountsData } = useAccounts();
   const { hasAiAccess } = usePremium();
   useRumAppOpen({
@@ -350,11 +358,11 @@ export function MailShell() {
     isAllAccounts: Boolean(mailLocation.allInboxes),
     readingLabelId,
     labelsLoading,
-    labelsFailed: Boolean(labelsError),
+    // Labels aren't asked for while the provider is rate limited, which is a
+    // failure to load them, not an account without the label.
+    labelsFailed: Boolean(labelsError) || Boolean(providerRateLimit),
   });
-  // Only the lane itself shows Reading: its bar and actions never act on a
-  // list that stands in for it.
-  const inReadingLane = readingRoute === "lane";
+  const readingLaneRoute = readingRoute === "lane";
   // Until names load, a slug can't be told from an id, so nothing is fetched.
   // If they fail to load, the slug can't be resolved at all: the inbox shows
   // instead, with a note, rather than a placeholder that never fills.
@@ -562,11 +570,11 @@ export function MailShell() {
     if (scopeFolderId) return { folderId: scopeFolderId };
     // Anywhere but the lane itself, Reading goes back to the inbox.
     if (scopeType === MAIL_READING_TYPE)
-      return inReadingLane ? readingQuery : null;
+      return readingLaneRoute ? readingQuery : null;
     if (scopeType && scopeType !== "inbox")
       return mailTypeToThreadsQuery(scopeType);
     return null;
-  }, [scopeFolderId, scopeLabelId, scopeType, inReadingLane, readingQuery]);
+  }, [scopeFolderId, scopeLabelId, scopeType, readingLaneRoute, readingQuery]);
   // All inboxes merges only the views every account has, each in full.
   const isAllInboxesView =
     isAllAccounts && !!scopeType && ALL_INBOXES_VIEW_TYPES.has(scopeType);
@@ -724,8 +732,19 @@ export function MailShell() {
     activeSplit?.id !== OTHER_SPLIT_ID;
   const bundlesReading = isPlainInbox && Boolean(readingLabelId);
   // Until the labels say which mail is a newsletter, the plain inbox waits
-  // rather than showing newsletters that then leave the list under the cursor.
-  const inboxAwaitsLabels = isPlainInbox && labelsLoading;
+  // rather than showing newsletters that then leave the list under the cursor;
+  // but only briefly, as a slow labels request must never hold the inbox.
+  const labelsPending = isPlainInbox && labelsLoading;
+  const [labelWaitOver, setLabelWaitOver] = useState(false);
+  useEffect(() => {
+    if (!labelsPending || labelWaitOver) return;
+    const timer = setTimeout(() => setLabelWaitOver(true), LABELS_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [labelsPending, labelWaitOver]);
+  const inboxAwaitsLabels = labelsPending && !labelWaitOver;
+  // Only the lane itself shows Reading: its bar and actions never act on a
+  // list that stands in for it, such as a search typed while in it.
+  const inReadingLane = readingLaneRoute && !searchQuery;
   const query: ThreadsQuery = useMemo(() => {
     // Search overrides split/scope and covers the whole mailbox, matching
     // what Gmail's and Outlook's own search boxes do by default.
@@ -1262,20 +1281,34 @@ export function MailShell() {
         ? combinedAccounts.map((account) => ({ id: account.id, scope }))
         : null;
     }
-    // A whole-inbox job would also reach the newsletters the Reading row
-    // stands in for, which the user never saw selected, so it stays per page.
-    if (bundlesReading) return null;
+    // A whole-inbox job must not reach the newsletters the Reading row stands
+    // in for, which the user never saw selected. Gmail can leave them out by
+    // search; elsewhere select all stays per page.
+    if (bundlesReading) {
+      const name = allLabels.find((label) => label.id === readingLabelId)?.name;
+      return isGoogle && name
+        ? [
+            {
+              id: emailAccountId,
+              scope: inboxWithoutReadingMatchingScope(name),
+            },
+          ]
+        : null;
+    }
     const scope = getMatchingScope(query, provider);
     return scope ? [{ id: emailAccountId, scope }] : null;
   }, [
     activeSplit?.filters.length,
     allInboxesMailboxType,
+    allLabels,
     bundlesReading,
     combinedAccounts,
     emailAccountId,
     isAllAccounts,
+    isGoogle,
     provider,
     query,
+    readingLabelId,
     searchQuery,
   ]);
   const refreshAfterMatching = useStableCallback(() => {
@@ -1744,22 +1777,22 @@ export function MailShell() {
         .map(getListThreadKey)
     : [];
   const readingBackRef = useRef<HTMLButtonElement>(null);
+  // Archived newsletters leave the lane, so a reader open on one closes and
+  // the selection clears, whichever way the action reached them.
+  const finishReadingArchive = useStableCallback((archivedKeys: string[]) => {
+    if (openThreadKey && archivedKeys.includes(openThreadKey))
+      setOpenThread(null);
+    selection.clear();
+  });
   const applyReadingBulk = useStableCallback(
     async (action: "read" | "archive", capped: boolean) => {
       if (!inReadingLane) return;
-      const lane = readingThreadState.threads;
       if (action === "read") {
-        await setReadState(
-          lane
-            .filter((thread) => isThreadUnread(thread.messages))
-            .map(getListThreadKey),
-          true,
-        );
+        await setReadState(readingUnreadKeys, true);
       } else {
-        const queued = await archive(lane.map(getListThreadKey));
-        if (openThreadKey && queued.includes(openThreadKey))
-          setOpenThread(null);
-        selection.clear();
+        finishReadingArchive(
+          await archive(readingThreadState.threads.map(getListThreadKey)),
+        );
       }
       if (capped)
         toast.message(
@@ -1767,8 +1800,10 @@ export function MailShell() {
         );
     },
   );
-  const syncAfterReadingJob = useStableCallback(() => {
+  const finishReadingJob = useStableCallback((action: "read" | "archive") => {
     client?.requestSync([emailAccountId]).catch(() => undefined);
+    if (action === "archive")
+      finishReadingArchive(readingThreadState.threads.map(getListThreadKey));
   });
   const readingBulk = useReadingBulk({
     emailAccountId,
@@ -1778,7 +1813,7 @@ export function MailShell() {
     isLoadingMore: readingThreadState.isLoadingMore,
     loadMore: readingThreadState.loadMore,
     applyLoaded: applyReadingBulk,
-    onServerJobFinished: syncAfterReadingJob,
+    onServerJobFinished: finishReadingJob,
   });
   const archiveAllReading = useStableCallback(() => {
     // Its rows are leaving, so focus stays in the lane rather than dropping
@@ -2198,17 +2233,29 @@ export function MailShell() {
     const pending = pendingReadingFocus.current;
     const section = listSectionRef.current;
     if (!pending || !section) return;
-    if (pending === "lane") {
-      if (!inReadingLane) return;
-      const row = section.querySelector<HTMLElement>("[data-mail-thread-row]");
-      if (!row && threads.length) return;
+    // A lane that won't open leaves nothing to hand focus to.
+    if (readingRoute === "redirect" || readingRoute === "failed") {
       pendingReadingFocus.current = null;
-      (row ?? readingBackRef.current)?.focus();
       return;
     }
-    if (inReadingLane || !bundlesReading) return;
+    const firstRow = section.querySelector<HTMLElement>(
+      "[data-mail-thread-row]",
+    );
+    if (pending === "lane") {
+      if (!inReadingLane) return;
+      if (!firstRow && threads.length) return;
+      pendingReadingFocus.current = null;
+      (firstRow ?? readingBackRef.current)?.focus();
+      return;
+    }
+    if (readingLaneRoute) return;
+    // Once the lane is empty there is no Reading row to come back to, so the
+    // inbox's first row takes focus.
+    const target =
+      section.querySelector<HTMLElement>("[data-reading-bundle]") ?? firstRow;
+    if (!target && (isLoading || inboxAwaitsLabels || threads.length)) return;
     pendingReadingFocus.current = null;
-    section.querySelector<HTMLElement>("[data-reading-bundle]")?.focus();
+    target?.focus();
   });
   // All inboxes, or an account with nothing filed as Newsletter, has no lane.
   useEffect(() => {

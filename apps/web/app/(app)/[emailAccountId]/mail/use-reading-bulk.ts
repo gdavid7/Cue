@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import {
   getReadingBulkPlan,
   MAX_READING_DRAIN_PAGES,
@@ -13,12 +14,18 @@ import type { ThreadsQuery } from "@/utils/threads/validation";
 type ReadingBulkAction = "read" | "archive";
 
 const NO_SELECTION: ReadonlySet<string> = new Set();
+const ACTION_NAMES: Record<ReadingBulkAction, string> = {
+  read: "Mark all read",
+  archive: "Archive all",
+};
 
 /**
  * "Mark all read" and "Archive all" for the Reading lane, over every
  * newsletter in it rather than the page loaded so far (see
  * `getReadingBulkPlan`). `applyLoaded` acts on the lane's loaded rows through
- * the engine; `capped` says some were still left past the page limit.
+ * the engine, and `capped` says some were still left past the page limit;
+ * `onServerJobFinished` runs once a server job over the lane has finished.
+ * `readingQuery` is null outside the lane, which stops a load in progress.
  */
 export function useReadingBulk({
   emailAccountId,
@@ -37,7 +44,7 @@ export function useReadingBulk({
   isLoadingMore: boolean;
   loadMore: () => Promise<void>;
   applyLoaded: (action: ReadingBulkAction, capped: boolean) => void;
-  onServerJobFinished: () => void;
+  onServerJobFinished: (action: ReadingBulkAction) => void;
 }) {
   // Where the provider can list the whole lane, as Gmail can.
   const accounts = useMemo(() => {
@@ -52,32 +59,48 @@ export function useReadingBulk({
     selection: NO_SELECTION,
     allPageSelected: false,
     hasMore: false,
-    onFinished: onServerJobFinished,
+    onFinished: () => undefined,
   });
+  const [jobRunning, setJobRunning] = useState(false);
   const [drain, setDrain] = useState<{
     action: ReadingBulkAction;
-    loaded: boolean;
+    pages: number;
   } | null>(null);
 
-  // The pages are in once the last load has rendered; only then are the rows
-  // to act on all there.
+  // One page at a time, each once the last (or a scroll's own load) has
+  // rendered, so a page in flight is waited for rather than counted.
   useEffect(() => {
-    if (!drain?.loaded || isLoadingMore) return;
+    if (!drain) return;
+    if (!readingQuery) {
+      setDrain(null);
+      toast.message(
+        `${ACTION_NAMES[drain.action]} stopped when you left Reading.`,
+      );
+      return;
+    }
+    if (isLoadingMore) return;
+    if (hasMore && drain.pages < MAX_READING_DRAIN_PAGES) {
+      setDrain({ ...drain, pages: drain.pages + 1 });
+      loadMore().catch(() => undefined);
+      return;
+    }
     setDrain(null);
     applyLoaded(drain.action, hasMore);
-  }, [drain, isLoadingMore, hasMore, applyLoaded]);
+  }, [drain, readingQuery, isLoadingMore, hasMore, loadMore, applyLoaded]);
 
   const run = useStableCallback(async (action: ReadingBulkAction) => {
-    if (drain) return;
+    if (drain || jobRunning) return;
     const plan = getReadingBulkPlan({ hasMore, canMatch: Boolean(accounts) });
     if (plan === "loaded") return applyLoaded(action, false);
-    if (plan === "matching")
-      return matching.run(action === "read" ? "mark_read" : "archive");
-    setDrain({ action, loaded: false });
-    // A load with nothing left returns at once, so this stops early.
-    for (let page = 0; page < MAX_READING_DRAIN_PAGES; page++) await loadMore();
-    setDrain({ action, loaded: true });
+    if (plan === "drain") return setDrain({ action, pages: 0 });
+    setJobRunning(true);
+    try {
+      await matching.run(action === "read" ? "mark_read" : "archive");
+    } finally {
+      setJobRunning(false);
+      onServerJobFinished(action);
+    }
   });
 
-  return { run, busy: Boolean(drain) };
+  return { run, busy: Boolean(drain) || jobRunning };
 }

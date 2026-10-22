@@ -99,6 +99,63 @@ describe("listGmailMatchingMessages", () => {
   });
 });
 
+describe("listGmailMatchingMessages over a label's view", () => {
+  // A digest conversation: only its first message carries the label.
+  const thread = {
+    messages: [
+      { id: "m1", threadId: "t1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
+      { id: "m2", threadId: "t1", labelIds: ["INBOX", "UNREAD"] },
+      { id: "m3", threadId: "t1", labelIds: [] },
+    ],
+  };
+  const gmailFor = () => {
+    const list = vi.fn().mockResolvedValue({
+      data: { messages: [{ id: "m1", threadId: "t1" }] },
+    });
+    const get = vi.fn().mockResolvedValue({ data: thread });
+    const gmail = {
+      users: { messages: { list }, threads: { get } },
+    } as unknown as gmail_v1.Gmail;
+    return { gmail, get };
+  };
+
+  it("archives the whole conversation, not just its labelled messages", async () => {
+    const { gmail, get } = gmailFor();
+    const result = await listGmailMatchingMessages({
+      gmail,
+      scope: { labelIds: ["INBOX", "Label_42"] },
+      only: { inInbox: true },
+    });
+    expect(result.messages).toEqual([
+      { id: "m1", threadId: "t1" },
+      { id: "m2", threadId: "t1" },
+    ]);
+    expect(get).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t1", format: "minimal" }),
+    );
+  });
+
+  it("marks the whole conversation read", async () => {
+    const { gmail } = gmailFor();
+    const result = await listGmailMatchingMessages({
+      gmail,
+      scope: { labelIds: ["INBOX", "Label_42"] },
+      only: { unread: true },
+    });
+    expect(result.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("leaves a system view's listing per message", async () => {
+    const { gmail, get } = gmailFor();
+    await listGmailMatchingMessages({
+      gmail,
+      scope: { type: "inbox" },
+      only: { inInbox: true },
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+});
+
 describe("countGmailMatchingConversations", () => {
   it("reads a single-label view's conversation count from the label", async () => {
     const get = vi

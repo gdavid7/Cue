@@ -181,6 +181,19 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
     ).toHaveAttribute("aria-current", "page");
     await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-lane");
 
+    // A search typed in the lane takes over: its bar and actions step aside
+    // rather than act on the search's rows.
+    const search = page.getByPlaceholder("Search mail or ask Cue");
+    await search.fill(subject);
+    await expect(page.getByRole("button", { name: "Archive all" })).toHaveCount(
+      0,
+    );
+    await search.fill("");
+    await expect(
+      page.getByRole("button", { name: "Archive all" }),
+    ).toBeVisible();
+    await expect(laneRow).toBeVisible();
+
     // Reading one marks it read, and it keeps its place in the lane.
     await laneRow.click();
     await expect(page.getByRole("heading", { name: subject })).toBeVisible({
@@ -209,8 +222,8 @@ test("Mail bundles newsletters into one Reading row whose lane reads through the
     await expect(page.getByText("Nothing left to read.")).toBeVisible();
     await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
     await expect
-      .poll(() => newsletter.inInbox(), { timeout: 60_000 })
-      .toBe(false);
+      .poll(() => newsletter.folderOf(), { timeout: 60_000 })
+      .toBe("archive");
 
     // All inboxes has no lane: its Reading address goes back to the inbox.
     const allInboxesReading = new URL(page.url());
@@ -259,14 +272,14 @@ test("a newsletter opened by link reads, closes and archives from the reader", a
 
     await openByLink();
     await expect(heading).toBeVisible({ timeout: 60_000 });
-    expect(await newsletter.inInbox()).toBe(true);
+    expect(await newsletter.folderOf()).toBe("inbox");
     await page.keyboard.press("e");
     // Off the list, the reader moves on to the inbox's own next row.
     await expect(heading).toHaveCount(0, { timeout: 30_000 });
     // The newsletter itself left the inbox, not a row the list had focused.
     await expect
-      .poll(() => newsletter.inInbox(), { timeout: 60_000 })
-      .toBe(false);
+      .poll(() => newsletter.folderOf(), { timeout: 60_000 })
+      .toBe("archive");
   } finally {
     await newsletter.remove();
   }
@@ -655,26 +668,43 @@ async function seedNewsletter(page: Page, subject: string) {
     const message = (await moved.json()) as {
       id: string;
       conversationId: string;
+      internetMessageId?: string;
+    };
+    const isThisMessage = (candidate: {
+      internetMessageId?: string;
+      subject?: string;
+    }) =>
+      message.internetMessageId
+        ? candidate.internetMessageId === message.internetMessageId
+        : candidate.subject === subject;
+    // Found by its message identity in the folder itself: archiving moves it,
+    // which in Graph gives it a new id, and a deleted message is in neither.
+    const locate = async () => {
+      for (const folder of ["inbox", "archive"] as const) {
+        const listed = await page.request.get(
+          `${base}/mailFolders/${folder}/messages?$top=500`,
+          { headers },
+        );
+        expect(listed.ok(), await listed.text()).toBe(true);
+        const { value } = (await listed.json()) as {
+          value: { id: string; internetMessageId?: string; subject?: string }[];
+        };
+        const found = value.find(isThisMessage);
+        if (found) return { folder, id: found.id };
+      }
+      return null;
     };
     return {
       threadId: message.conversationId,
-      // Archiving moves the message, which in Graph gives it a new id.
-      inInbox: async () => {
-        const [current, inbox] = await Promise.all([
-          page.request.get(`${base}/messages/${message.id}`, { headers }),
-          page.request.get(`${base}/mailFolders/inbox`, { headers }),
-        ]);
-        if (!current.ok() || !inbox.ok()) return false;
-        const { parentFolderId } = (await current.json()) as {
-          parentFolderId?: string;
-        };
-        const { id } = (await inbox.json()) as { id: string };
-        return parentFolderId === id || parentFolderId === "inbox";
+      folderOf: async (): Promise<NewsletterFolder> =>
+        (await locate())?.folder ?? "missing",
+      remove: async () => {
+        const current = await locate();
+        await page.request.post(
+          `${base}/messages/${current?.id ?? message.id}/permanentDelete`,
+          { headers },
+        );
       },
-      remove: () =>
-        page.request.post(`${base}/messages/${message.id}/permanentDelete`, {
-          headers,
-        }),
     };
   }
 
@@ -708,13 +738,18 @@ async function seedNewsletter(page: Page, subject: string) {
   const message = (await inserted.json()) as { id: string; threadId: string };
   return {
     threadId: message.threadId,
-    inInbox: async () => {
+    folderOf: async (): Promise<NewsletterFolder> => {
       const current = await page.request.get(`${base}/messages/${message.id}`, {
         headers,
       });
-      if (!current.ok()) return false;
-      const { labelIds } = (await current.json()) as { labelIds?: string[] };
-      return Boolean(labelIds?.includes("INBOX"));
+      if (current.status() === 404) return "missing";
+      expect(current.ok(), await current.text()).toBe(true);
+      const { labelIds = [] } = (await current.json()) as {
+        labelIds?: string[];
+      };
+      if (labelIds.includes("TRASH") || labelIds.includes("SPAM"))
+        return "missing";
+      return labelIds.includes("INBOX") ? "inbox" : "archive";
     },
     remove: () =>
       page.request.delete(`${base}/messages/${message.id}`, { headers }),
@@ -893,3 +928,6 @@ async function openNeedsReplyTrackers(
     return result.rowCount ?? 0;
   });
 }
+
+/** Where a seeded newsletter is: "missing" when deleted, trashed or gone. */
+type NewsletterFolder = "inbox" | "archive" | "missing";

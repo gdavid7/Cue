@@ -3,12 +3,18 @@ import type {
   MatchingFilter,
   MatchingScope,
 } from "@/utils/actions/mail-bulk-matching.validation";
-import { getGmailViewLabelIds, GmailLabel } from "@/utils/gmail/label";
+import {
+  GMAIL_SYSTEM_LABELS,
+  getGmailViewLabelIds,
+  GmailLabel,
+} from "@/utils/gmail/label";
+import { mapWithConcurrency } from "@/utils/async";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import { searchReachesSpamOrTrash } from "@/utils/mail-search/search-query-predicate";
 
 // The most messages.list returns in one page.
 const MATCHING_PAGE_SIZE = 500;
+const CONVERSATION_CONCURRENCY = 5;
 
 /** The messages.list arguments for every message a scope holds. */
 export function gmailMatchingListQuery(
@@ -59,12 +65,15 @@ export async function listGmailMatchingMessages({
     }),
   );
 
+  const messages = (response.data.messages ?? []).flatMap((message) =>
+    message.id && message.threadId
+      ? [{ id: message.id, threadId: message.threadId }]
+      : [],
+  );
   return {
-    messages: (response.data.messages ?? []).flatMap((message) =>
-      message.id && message.threadId
-        ? [{ id: message.id, threadId: message.threadId }]
-        : [],
-    ),
+    messages: actsOnConversations(scope, only)
+      ? await withConversationMessages({ gmail, messages, only })
+      : messages,
     nextPageToken: response.data.nextPageToken ?? undefined,
   };
 }
@@ -100,4 +109,59 @@ function scopeLabelIds(scope: MatchingScope) {
   // A search covers the whole mailbox, as Gmail's own search box does.
   if (scope.q && !scope.type) return [];
   return getGmailViewLabelIds(scope.type);
+}
+
+/**
+ * A label's view holds conversations, as Gmail's own select-all treats it:
+ * archiving or changing read state reaches every message of each one, not
+ * just those carrying the label, or a digest whose replies lack it would stay
+ * behind. System views and searches stay per message.
+ */
+function actsOnConversations(scope: MatchingScope, only: MatchingFilter) {
+  const changesState = only.inInbox || only.unread !== undefined;
+  const namesUserLabel = (scopeLabelIds(scope) ?? []).some(
+    (labelId) => !GMAIL_SYSTEM_LABELS.includes(labelId),
+  );
+  return Boolean(changesState && namesUserLabel);
+}
+
+/** The page's conversations' messages the action would change, each once. */
+async function withConversationMessages({
+  gmail,
+  messages,
+  only,
+}: {
+  gmail: gmail_v1.Gmail;
+  messages: { id: string; threadId: string }[];
+  only: MatchingFilter;
+}) {
+  const threadIds = [...new Set(messages.map((message) => message.threadId))];
+  const threads = await mapWithConcurrency(
+    threadIds,
+    CONVERSATION_CONCURRENCY,
+    (threadId) =>
+      withGmailRetry(() =>
+        gmail.users.threads.get({
+          userId: "me",
+          id: threadId,
+          format: "minimal",
+          fields: "messages(id,threadId,labelIds)",
+        }),
+      ),
+  );
+  const changes = (labelIds: string[]) => {
+    if (only.inInbox && !labelIds.includes(GmailLabel.INBOX)) return false;
+    if (only.unread === true) return labelIds.includes(GmailLabel.UNREAD);
+    if (only.unread === false) return !labelIds.includes(GmailLabel.UNREAD);
+    return true;
+  };
+  const seen = new Set<string>();
+  return threads.flatMap((thread) =>
+    (thread.data.messages ?? []).flatMap((message) => {
+      if (!message.id || !message.threadId || seen.has(message.id)) return [];
+      if (!changes(message.labelIds ?? [])) return [];
+      seen.add(message.id);
+      return [{ id: message.id, threadId: message.threadId }];
+    }),
+  );
 }

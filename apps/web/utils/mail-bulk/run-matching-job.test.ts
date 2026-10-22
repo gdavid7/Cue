@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { gmail_v1 } from "@googleapis/gmail";
 import type { EmailProvider } from "@/utils/email/types";
 import type {
   MatchingFilter,
@@ -8,6 +9,7 @@ import {
   GmailCallDeferredError,
   currentGmailQuotaContext,
 } from "@/utils/gmail/quota";
+import { listGmailMatchingMessages } from "@/utils/gmail/matching";
 import { createScopedLogger } from "@/utils/logger";
 import {
   ACTIVE_MAIL_BULK_JOB_STATUSES,
@@ -90,6 +92,52 @@ describe("runMailBulkJobStep", () => {
       expect.objectContaining({ only: { unread: true } }),
     );
     expect(provider.markMessagesReadState).toHaveBeenCalledWith(["m1"], true);
+  });
+
+  it("archives and marks read a label view's whole conversations, labels split across messages", async () => {
+    // Only the digest's first message carries the label; its reply doesn't.
+    const thread = {
+      messages: [
+        { id: "m1", threadId: "t1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
+        { id: "m2", threadId: "t1", labelIds: ["INBOX", "UNREAD"] },
+      ],
+    };
+    const gmail = {
+      users: {
+        messages: {
+          list: vi.fn().mockResolvedValue({
+            data: { messages: [{ id: "m1", threadId: "t1" }] },
+          }),
+        },
+        threads: { get: vi.fn().mockResolvedValue({ data: thread }) },
+      },
+    } as unknown as gmail_v1.Gmail;
+    const scope: MatchingScope = { labelIds: ["INBOX", "Label_42"] };
+
+    for (const action of ["archive", "mark_read"] as const) {
+      const store = createStore();
+      await store.create(JOB_ID, newJob({ action }));
+      const provider = createProvider({ pages: [] });
+      vi.mocked(provider.listMatchingMessages).mockImplementation(
+        ({ only, pageToken }) =>
+          listGmailMatchingMessages({ gmail, scope, only, pageToken }),
+      );
+
+      await runStep({ store, provider, listings: createListings({ scope }) });
+
+      if (action === "archive")
+        expect(provider.archiveMessages).toHaveBeenCalledWith(["m1", "m2"]);
+      else
+        expect(provider.markMessagesReadState).toHaveBeenCalledWith(
+          ["m1", "m2"],
+          true,
+        );
+      await expect(store.get(JOB_ID)).resolves.toMatchObject({
+        status: "done",
+        total: 2,
+        conversations: 1,
+      });
+    }
   });
 
   it("trashes and reports spam once per conversation", async () => {
