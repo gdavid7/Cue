@@ -2,6 +2,7 @@
 
 import {
   type ComponentProps,
+  type DragEvent,
   type FormEvent,
   type MouseEvent,
   type ReactNode,
@@ -10,6 +11,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -72,6 +74,15 @@ import {
 } from "./pending-navigation";
 import { splitLabelsByListVisibility } from "./label-visibility";
 import { getMailSidebarFolders } from "./outlook-folder-list";
+import {
+  isMailDragEvent,
+  MAIL_DRAG_TYPE,
+  type MailDrag,
+  useDragPresence,
+  useMailDrag,
+  useSetMailDrag,
+} from "./mail-drag";
+import { resolveSidebarDrop, type SidebarDropTarget } from "./sidebar-drop";
 import {
   MailboxItemContextMenu,
   type MailboxItemColorOption,
@@ -137,12 +148,19 @@ export type MailSidebarProps = {
   showSidebarToggle?: boolean;
   /** Each account's own labels and folders, shown in their place in All inboxes. */
   accountSections?: ReactNode;
+  /**
+   * The account whose labels these rows are, set where dropped mail can be
+   * labelled the way the label picker labels it.
+   */
+  dropAccountId?: string;
   className?: string;
 };
 
 type SystemItem = {
   name: string;
   type: string;
+  /** Dragged mail dropped on the row goes here. */
+  dropTarget?: SidebarDropTarget;
   /** null means the row never shows a count (a "sent unread" number is noise). */
   countId: string | null;
   Icon: LucideIcon;
@@ -177,8 +195,20 @@ const PRIMARY_MAILBOX_ITEMS: SystemItem[] = [
 
 /** The rest of the mailbox. Visited rarely enough to stay behind More. */
 const MORE_MAILBOX_ITEMS: SystemItem[] = [
-  { name: "Archived", type: "archive", countId: null, Icon: ArchiveIcon },
-  { name: "Starred", type: "starred", countId: null, Icon: StarIcon },
+  {
+    name: "Archived",
+    type: "archive",
+    countId: null,
+    Icon: ArchiveIcon,
+    dropTarget: { kind: "archive" },
+  },
+  {
+    name: "Starred",
+    type: "starred",
+    countId: null,
+    Icon: StarIcon,
+    dropTarget: { kind: "starred" },
+  },
   {
     name: "Important",
     type: "important",
@@ -198,9 +228,27 @@ const MORE_MAILBOX_ITEMS: SystemItem[] = [
     countId: null,
     Icon: Clock3Icon,
   },
-  { name: "All Mail", type: "all", countId: null, Icon: MailsIcon },
-  { name: "Spam", type: "spam", countId: null, Icon: ShieldAlertIcon },
-  { name: "Trash", type: "trash", countId: null, Icon: Trash2Icon },
+  {
+    name: "All Mail",
+    type: "all",
+    countId: null,
+    Icon: MailsIcon,
+    dropTarget: { kind: "archive" },
+  },
+  {
+    name: "Spam",
+    type: "spam",
+    countId: null,
+    Icon: ShieldAlertIcon,
+    dropTarget: { kind: "spam" },
+  },
+  {
+    name: "Trash",
+    type: "trash",
+    countId: null,
+    Icon: Trash2Icon,
+    dropTarget: { kind: "trash" },
+  },
 ];
 
 /** The display name of a `?type=` mailbox view, such as "Sent" for `sent`. */
@@ -294,6 +342,7 @@ function MailSidebarContent({
   toolLinks,
   showSidebarToggle = true,
   accountSections,
+  dropAccountId,
   className,
 }: MailSidebarProps) {
   // Views All inboxes merges beyond its inbox, in one account's order.
@@ -328,8 +377,53 @@ function MailSidebarContent({
   const [storedShowMailboxes, setShowMailboxes] = useStoredDisclosure(
     "cue.mail-sidebar.more-open",
   );
+  // Mail held over More opens it for that drag, as Gmail does, so Trash and
+  // Spam can be reached without letting go. Only after a pause: opening as
+  // the pointer passes would push the labels below out from under it.
+  const drag = useMailDrag();
+  const [moreRevealedFor, setMoreRevealedFor] = useState<MailDrag | null>(null);
+  const dragRevealsMore = drag !== null && moreRevealedFor === drag;
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelReveal = () => {
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  };
+  const overMore = useDragPresence(drag, (present) => {
+    if (!present) return cancelReveal();
+    if (revealTimer.current || !drag) return;
+    revealTimer.current = setTimeout(() => {
+      revealTimer.current = null;
+      setMoreRevealedFor(drag);
+    }, MORE_REVEAL_DELAY_MS);
+  });
+  // The toggle button inside the heading takes the pointer too, so each
+  // dragover counts, not just the heading's own enter.
+  const holdOverMore = drag
+    ? {
+        onDragEnter: (event: DragEvent) => {
+          if (isMailDragEvent(event.dataTransfer)) overMore.enter();
+        },
+        onDragOver: (event: DragEvent) => {
+          if (isMailDragEvent(event.dataTransfer)) overMore.over();
+        },
+        onDragLeave: (event: DragEvent) => {
+          if (isMailDragEvent(event.dataTransfer)) overMore.leave();
+        },
+      }
+    : undefined;
+  useEffect(() => {
+    if (drag || !revealTimer.current) return;
+    clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  }, [drag]);
+  useEffect(
+    () => () => {
+      if (revealTimer.current) clearTimeout(revealTimer.current);
+    },
+    [],
+  );
   // The open view's own row is never hidden behind a closed group.
-  const showMailboxes = storedShowMailboxes || isMoreActive;
+  const showMailboxes = storedShowMailboxes || isMoreActive || dragRevealsMore;
   const showMailboxRows = collapsed ? isMoreActive : showMailboxes;
   const [showTools, setShowTools] = useStoredDisclosure(
     "cue.mail-sidebar.tools-open",
@@ -402,6 +496,8 @@ function MailSidebarContent({
               name="All inboxes"
               count={null}
               collapsed={collapsed}
+              // Combined, it is every account's inbox.
+              dropTarget={unified ? INBOX_DROP_TARGET : undefined}
             />
           ) : null}
           {unified ? null : (
@@ -415,6 +511,7 @@ function MailSidebarContent({
               count={displayCount(countsById.get("INBOX"))}
               emphasizeCount
               collapsed={collapsed}
+              dropTarget={INBOX_DROP_TARGET}
               // Off the mail screen the inbox is a route away; fetched ahead,
               // it opens without waiting on the server.
               prefetch={activeType === "today" ? true : undefined}
@@ -433,7 +530,7 @@ function MailSidebarContent({
               onIntentEnd={onTodayIntentEnd}
             />
           ) : null}
-          {unifiedViews.map(({ name, type, countId, Icon }) => (
+          {unifiedViews.map(({ name, type, countId, Icon, dropTarget }) => (
             <NavRow
               key={type}
               href={hrefFor({ kind: "type", type })}
@@ -442,6 +539,7 @@ function MailSidebarContent({
               name={name}
               count={countId ? displayCount(countsById.get(countId)) : null}
               collapsed={collapsed}
+              dropTarget={dropTarget}
             />
           ))}
           {unified
@@ -465,6 +563,7 @@ function MailSidebarContent({
               collapsed={collapsed}
               expanded={showMailboxes}
               onToggle={() => setShowMailboxes(!showMailboxes)}
+              dragHandlers={holdOverMore}
             >
               More
             </GroupHeading>
@@ -474,19 +573,22 @@ function MailSidebarContent({
                 aria-label="More mailboxes"
                 className="flex flex-col gap-px"
               >
-                {moreMailboxItems.map(({ name, type, countId, Icon }) => (
-                  <NavRow
-                    key={type}
-                    href={hrefFor({ kind: "type", type })}
-                    active={isTypeActive(type)}
-                    icon={<Icon className="size-4 shrink-0" />}
-                    name={name}
-                    count={
-                      countId ? displayCount(countsById.get(countId)) : null
-                    }
-                    collapsed={collapsed}
-                  />
-                ))}
+                {moreMailboxItems.map(
+                  ({ name, type, countId, Icon, dropTarget }) => (
+                    <NavRow
+                      key={type}
+                      href={hrefFor({ kind: "type", type })}
+                      active={isTypeActive(type)}
+                      icon={<Icon className="size-4 shrink-0" />}
+                      name={name}
+                      count={
+                        countId ? displayCount(countsById.get(countId)) : null
+                      }
+                      collapsed={collapsed}
+                      dropTarget={dropTarget}
+                    />
+                  ),
+                )}
               </div>
             )}
           </>
@@ -548,6 +650,7 @@ function MailSidebarContent({
             labelEditMode={labelEditMode}
             supportsLabelVisibility={supportsLabelVisibility}
             collapsed={collapsed}
+            dropAccountId={dropAccountId}
             editing={{
               labelColorOptions,
               onCreateLabel,
@@ -642,6 +745,7 @@ type LabelRowProps = Pick<
   editing?: MailboxEditing;
   /** Rows open another account, which loads fresh like the account switcher does. */
   reloadDocument?: boolean;
+  dropAccountId?: string;
 };
 
 /** An account's own folders and labels: the single-account sidebar's lower half. */
@@ -751,6 +855,7 @@ export function MailboxGroups({
                   name={folder.displayName}
                   count={displayCount(countsById.get(folder.id))}
                   collapsed={collapsed}
+                  dropTarget={FOLDER_DROP_TARGET}
                 />
               </EditableMailboxItem>
             ))}
@@ -980,6 +1085,15 @@ function LabelBranch({
             count={displayCount(props.countsById.get(label.id))}
             nested={hasNestedLabels && !collapsed}
             collapsed={collapsed}
+            dropTarget={
+              props.dropAccountId
+                ? {
+                    kind: "label",
+                    accountId: props.dropAccountId,
+                    labelId: label.id,
+                  }
+                : undefined
+            }
           />
         </div>
       </EditableMailboxItem>
@@ -1005,19 +1119,28 @@ function GroupHeading({
   action,
   expanded,
   onToggle,
+  dragHandlers,
   collapsed,
 }: {
   children: ReactNode;
   action?: ReactNode;
   expanded?: boolean;
   onToggle?: () => void;
+  /** Mail dragged over the heading, which may open the group. */
+  dragHandlers?: Pick<
+    ComponentProps<"div">,
+    "onDragEnter" | "onDragOver" | "onDragLeave"
+  >;
   collapsed?: boolean;
 }) {
   // A heading can't fit in the rail, so groups are separated by a rule instead.
   if (collapsed) return <div className="mx-auto my-2 h-px w-6 bg-border" />;
 
   return (
-    <div className="flex items-center gap-1 px-2.5 pt-4 pb-1.5">
+    <div
+      className="flex items-center gap-1 px-2.5 pt-4 pb-1.5"
+      {...dragHandlers}
+    >
       {onToggle ? (
         <button
           type="button"
@@ -1066,7 +1189,9 @@ function NavRow({
   prefetch,
   onIntent,
   onIntentEnd,
+  dropTarget,
 }: {
+  dropTarget?: SidebarDropTarget;
   href?: string;
   reloadDocument?: boolean;
   /** Overrides the default: mail views of the open mail screen skip it. */
@@ -1100,7 +1225,19 @@ function NavRow({
     nested,
     collapsed,
   });
-  const className = cn(presentation.className);
+  const { dragging, dropProps: drop } = useDropTarget({
+    target: dropTarget,
+    active,
+  });
+  const className = cn(
+    presentation.className,
+    // Only while dragging, so hover and selection stay instant; under
+    // reduced motion the color change alone carries it.
+    dragging &&
+      "motion-safe:transition-[background-color,box-shadow,opacity] motion-safe:duration-100",
+    "data-[drop=target]:bg-primary/10 data-[drop=target]:text-foreground data-[drop=target]:ring-2 data-[drop=target]:ring-primary/60 data-[drop=target]:ring-inset",
+    "data-[drop=blocked]:opacity-50",
+  );
   // The account a page opens follows its name, quieter, where there's room.
   const content =
     detail && !collapsed ? (
@@ -1121,6 +1258,7 @@ function NavRow({
         href={href}
         aria-current={active ? "page" : undefined}
         className={className}
+        {...drop}
       >
         {content}
       </a>
@@ -1130,6 +1268,7 @@ function NavRow({
         aria-current={active ? "page" : undefined}
         data-highlighted={highlighted || undefined}
         className={className}
+        {...drop}
         // Views of the open mail screen change on the client, so fetching
         // them from the server ahead of time would be wasted. Other pages
         // wait until the mail engine has started, so they don't compete with
@@ -1161,7 +1300,11 @@ function NavRow({
       </Link>
     )
   ) : (
-    <div aria-current={active ? "page" : undefined} className={className}>
+    <div
+      aria-current={active ? "page" : undefined}
+      className={className}
+      {...drop}
+    >
       {content}
     </div>
   );
@@ -1173,6 +1316,77 @@ function NavRow({
       {row}
     </RailTooltip>
   );
+}
+
+const INBOX_DROP_TARGET: SidebarDropTarget = { kind: "inbox" };
+const FOLDER_DROP_TARGET: SidebarDropTarget = { kind: "folder" };
+const MORE_REVEAL_DELAY_MS = 600;
+
+/**
+ * Lets mail dragged from the list drop on a row. A row that can take the drop
+ * highlights while the pointer is over it; one that can't (the open view, or
+ * a label the mail's account lacks) dims and the browser shows a no-drop
+ * cursor.
+ */
+function useDropTarget({
+  target,
+  active,
+}: {
+  target: SidebarDropTarget | undefined;
+  active: boolean;
+}) {
+  const drag = useMailDrag();
+  const setDrag = useSetMailDrag();
+  // Keyed to the drag, so a drag that ended elsewhere leaves no highlight.
+  const [hoveredBy, setHoveredBy] = useState<MailDrag | null>(null);
+  const presence = useDragPresence(drag, (present) =>
+    setHoveredBy(present ? drag : null),
+  );
+  if (!drag || !target) return { dragging: drag !== null, dropProps: {} };
+  const action = resolveSidebarDrop({
+    target,
+    conversations: drag.conversations,
+    isCurrentView: active,
+  });
+  const dropEffect =
+    action?.kind === "label" || action?.kind === "star" ? "copy" : "move";
+  // Files, text and links dragged in from elsewhere are none of the row's
+  // business, whatever drag this tab remembers.
+  const acceptDrag = (event: DragEvent) => {
+    if (!isMailDragEvent(event.dataTransfer)) return false;
+    if (action) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = dropEffect;
+    } else event.dataTransfer.dropEffect = "none";
+    return true;
+  };
+
+  return {
+    dragging: true,
+    dropProps: {
+      "data-drop":
+        hoveredBy === drag ? (action ? "target" : "blocked") : undefined,
+      onDragEnter: (event: DragEvent) => {
+        if (acceptDrag(event)) presence.enter();
+      },
+      onDragOver: (event: DragEvent) => {
+        if (acceptDrag(event)) presence.over();
+      },
+      onDragLeave: (event: DragEvent) => {
+        if (isMailDragEvent(event.dataTransfer)) presence.leave();
+      },
+      onDrop: (event: DragEvent) => {
+        if (!isMailDragEvent(event.dataTransfer)) return;
+        event.preventDefault();
+        presence.reset();
+        setHoveredBy(null);
+        // Another tab's mail drag carries the same type but not this nonce.
+        if (event.dataTransfer.getData(MAIL_DRAG_TYPE) !== drag.nonce) return;
+        setDrag(null);
+        if (action) drag.onDrop(action);
+      },
+    },
+  };
 }
 
 const PendingNavigationContext = createContext<{

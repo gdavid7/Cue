@@ -291,6 +291,9 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           />
         ) : undefined
       }
+      // Dropped mail is labelled as the label picker does, for the
+      // providers it offers labels for.
+      dropAccountId={isGoogle || isOutlook ? emailAccountId : undefined}
       todayHref={todayHref}
       onTodayIntent={todayIntent.begin}
       onTodayIntentEnd={todayIntent.end}

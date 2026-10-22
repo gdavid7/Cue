@@ -139,6 +139,7 @@ const featureGroups = [
       "mail/assistant-catch-up.spec.ts",
       "mail/starring.spec.ts",
       "mail/swipe-actions.spec.ts",
+      "mail/drag-to-sidebar.spec.ts",
     ],
   },
   {

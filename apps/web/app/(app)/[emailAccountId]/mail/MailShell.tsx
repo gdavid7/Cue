@@ -5,6 +5,7 @@ import type { ListThread } from "./types";
 import { MailPanelErrorBoundary } from "@/app/(app)/[emailAccountId]/mail/MailPanelErrorBoundary";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
 import {
+  type DragEvent,
   type ReactNode,
   useCallback,
   useDeferredValue,
@@ -80,6 +81,20 @@ import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemC
 import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSenderCommands";
 import { extractEmailAddress } from "@/utils/email";
 import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPickerDialog";
+import {
+  applyEngineLabels,
+  getLabelAppliedMessage,
+} from "@/app/(app)/[emailAccountId]/mail/apply-engine-labels";
+import {
+  MAIL_DRAG_TYPE,
+  setConversationDragImage,
+  useSetMailDrag,
+} from "@/app/(app)/[emailAccountId]/mail/mail-drag";
+import type {
+  DraggedConversation,
+  SidebarDropAction,
+} from "@/app/(app)/[emailAccountId]/mail/sidebar-drop";
+import { randomUuid } from "@/utils/uuid";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
@@ -104,6 +119,7 @@ import {
   resolveThreadActionTargets,
 } from "@/app/(app)/[emailAccountId]/mail/thread-list-behavior";
 import {
+  getListThreadEmailAccountId,
   getListThreadKey,
   getListThreadSelection,
   getRepliedThreadEmailAccountId,
@@ -1401,10 +1417,15 @@ export function MailShell() {
       removeFromList: boolean,
       autoAdvanceReader = false,
       advanceDirection: "next" | "previous" = "next",
+      // Rows dragged onto the sidebar, rather than the usual targets.
+      keys?: string[],
     ) => {
-      const ids = actionTargets.map((target) => target.key);
+      const ids = keys ?? actionTargets.map((target) => target.key);
       if (!ids.length) return [];
-      const hadSelection = selection.hasSelection;
+      // A single row dragged from outside the selection leaves it alone.
+      const hadSelection = keys
+        ? keys.some((key) => selection.selectedIds.has(key))
+        : selection.hasSelection;
       const queuedThreadKeys = await action(ids);
       if (!queuedThreadKeys.length) return [];
       if (
@@ -1420,7 +1441,7 @@ export function MailShell() {
           setOpenThread(null);
         }
       }
-      selection.clear();
+      if (!keys || hadSelection) selection.clear();
       if (hadSelection && queuedThreadKeys.length < ids.length) {
         const queued = new Set(queuedThreadKeys);
         for (const id of ids) {
@@ -2342,6 +2363,131 @@ export function MailShell() {
       </EmailAccountScopeProvider>
     ) : null;
 
+  const afterLabelsApplied = useStableCallback(
+    (accountId: string, threadIds: string[], mode: "label" | "move") => {
+      const keys = threadIds.map((threadId) =>
+        isAllAccounts ? `${accountId}:${threadId}` : threadId,
+      );
+      // Also refreshes the sidebar's label counts.
+      client?.requestSync([accountId]).catch(() => undefined);
+      refetchOpenThread();
+      refetchThreadList();
+      if (mode === "move") {
+        if (openThreadKey && keys.includes(openThreadKey)) {
+          advanceReaderPast(openThreadKey, keys);
+        }
+        selection.clear();
+      }
+      mutateLabels();
+    },
+  );
+  const labelDropped = useStableCallback(
+    async (threadIds: string[], accountId: string, labelId: string) => {
+      if (!threadIds.length) return;
+      if (!client) {
+        toast.error("Mail is still starting. Try again in a moment.");
+        return;
+      }
+      const { succeededThreadIds, failedThreadIds } = await applyEngineLabels({
+        client,
+        emailAccountId: accountId,
+        threadIds,
+        labelId,
+        removeFromInbox: false,
+      });
+      if (succeededThreadIds.length) {
+        afterLabelsApplied(accountId, succeededThreadIds, "label");
+        toast.success(
+          getLabelAppliedMessage("label", succeededThreadIds.length),
+        );
+      }
+      if (failedThreadIds.length)
+        toast.error("Couldn't apply label. Please try again.");
+    },
+  );
+  // The same actions, toasts and Undo as the toolbar and the label picker.
+  const dropOnSidebar = useStableCallback(
+    async (conversations: DraggedConversation[], action: SidebarDropAction) => {
+      if (!conversations.length) return;
+      const keys = conversations.map((conversation) => conversation.key);
+      switch (action.kind) {
+        case "archive":
+          return runOn(archive, true, true, "next", keys);
+        case "move_to_inbox":
+          return runOn(moveToInbox, true, true, "next", keys);
+        case "restore":
+          return runOn(restoreFromTrash, true, true, "next", keys);
+        case "not_spam":
+          return runOn(markNotSpam, true, true, "next", keys);
+        case "trash":
+          return runOn(trash, true, true, "next", keys);
+        case "spam":
+          return runOn(markSpam, true, true, "next", keys);
+        case "star":
+          return runOn(
+            async (ids) => {
+              const starred = await setStarredState(ids, true);
+              // The star on the row is easy to miss after a drop.
+              if (starred.length)
+                toast.success(
+                  starred.length === 1
+                    ? "Starred"
+                    : `Starred ${starred.length} conversations`,
+                );
+              return starred;
+            },
+            false,
+            false,
+            "next",
+            keys,
+          );
+        case "label":
+          return labelDropped(
+            conversations.map((conversation) => conversation.threadId),
+            action.accountId,
+            action.labelId,
+          );
+      }
+    },
+  );
+  const setMailDrag = useSetMailDrag();
+  // Gmail's drag: a selected row brings the whole selection, any other row
+  // only itself. Every match past the page can't come along, so that waits.
+  const canDragRows = isLargeScreen && !matching.active;
+  const startRowDrag = useStableCallback(
+    (plainIndex: number, event: DragEvent<HTMLElement>) => {
+      const thread = navThreads[plainIndex + cueRowCount];
+      if (!thread) return;
+      const key = getListThreadKey(thread);
+      const dragged = selection.selectedIds.has(key)
+        ? navThreads.filter((row) =>
+            selection.selectedIds.has(getListThreadKey(row)),
+          )
+        : [thread];
+      const conversations = dragged.map((row) => ({
+        key: getListThreadKey(row),
+        threadId: row.id,
+        accountId: getListThreadEmailAccountId(row, emailAccountId),
+        messages: row.messages,
+      }));
+      // Only a nonce goes in the drag's data: other pages can read it, and
+      // the drop matches it to this drag.
+      const nonce = randomUuid();
+      event.dataTransfer.clearData();
+      event.dataTransfer.effectAllowed = "copyMove";
+      event.dataTransfer.setData(MAIL_DRAG_TYPE, nonce);
+      setConversationDragImage(event.dataTransfer, dragged.length);
+      setMailDrag({
+        nonce,
+        conversations,
+        onDrop: (action) => {
+          dropOnSidebar(conversations, action);
+        },
+      });
+    },
+  );
+  const endRowDrag = useCallback(() => setMailDrag(null), [setMailDrag]);
+
   const labelPickerDialog =
     labelPicker && pickerAccount ? (
       <EmailAccountScopeProvider emailAccount={pickerAccount}>
@@ -2354,22 +2500,9 @@ export function MailShell() {
               : undefined
           }
           onClose={() => setLabelPicker(null)}
-          onApplied={(threadIds, _labelId) => {
-            const keys = threadIds.map((threadId) =>
-              isAllAccounts ? `${pickerAccount.id}:${threadId}` : threadId,
-            );
-            // Also refreshes the sidebar's label counts.
-            client?.requestSync([pickerAccount.id]).catch(() => undefined);
-            refetchOpenThread();
-            refetchThreadList();
-            if (labelPicker.mode === "move") {
-              if (openThreadKey && keys.includes(openThreadKey)) {
-                advanceReaderPast(openThreadKey, keys);
-              }
-              selection.clear();
-            }
-            mutateLabels();
-          }}
+          onApplied={(threadIds) =>
+            afterLabelsApplied(pickerAccount.id, threadIds, labelPicker.mode)
+          }
         />
       </EmailAccountScopeProvider>
     ) : null;
@@ -2698,6 +2831,8 @@ export function MailShell() {
                           ? `all-accounts:${searchQuery ?? allInboxesMailboxType ?? displayedActiveSplitId}`
                           : JSON.stringify(query)
                       }
+                      onRowDragStart={canDragRows ? startRowDrag : undefined}
+                      onRowDragEnd={endRowDrag}
                     />
                   </LoadingContent>
                 )}

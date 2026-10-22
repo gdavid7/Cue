@@ -19,7 +19,10 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/utils/analytics/rum-actions", () => ({
   markRumRowsShown: vi.fn(),
 }));
-vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+vi.mock("@/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
+  useIsCoarsePointer: () => false,
+}));
 vi.mock("@/hooks/useInboxInsights", () => ({
   useInboxInsights: () => ({ data: undefined }),
 }));
