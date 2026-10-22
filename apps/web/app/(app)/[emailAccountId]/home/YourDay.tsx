@@ -192,7 +192,7 @@ function MeetingRow({
                 name={attendee.name ?? ""}
               >
                 <Badge
-                  className="max-w-40 transition-colors hover:bg-muted/70 active:bg-border"
+                  className="max-w-40 transition-colors hover:bg-muted/70 active:bg-border max-sm:min-h-7"
                   size="sm"
                   variant="muted"
                 >
@@ -207,7 +207,7 @@ function MeetingRow({
         ) : null}
         {thread ? (
           <Link
-            className="flex min-w-0 items-center gap-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-w-0 items-center gap-1.5 rounded text-muted-foreground text-xs transition-colors max-sm:min-h-7 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             href={threadHref(thread)}
           >
             <MailIcon aria-hidden className="size-3.5 shrink-0" />
