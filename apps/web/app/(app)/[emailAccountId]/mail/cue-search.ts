@@ -1,4 +1,7 @@
-import type { MailPredicate } from "@inboxzero/mail-core/queries";
+import type {
+  MailPredicate,
+  SemanticMatch,
+} from "@inboxzero/mail-core/queries";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -198,6 +201,26 @@ export function localOnly(predicate: MailPredicate): MailPredicate {
     default:
       return predicate;
   }
+}
+
+/**
+ * What several searches by meaning found, as one: each conversation once, at
+ * the closest any of them found it, closest first, up to `limit`. The
+ * similarities come from one model, so they compare across searches.
+ */
+export function fuseSemanticMatches(
+  lists: SemanticMatch[][],
+  limit: number,
+): SemanticMatch[] {
+  const closest = new Map<string, SemanticMatch>();
+  for (const match of lists.flat()) {
+    const found = closest.get(match.conversationId);
+    if (!found || match.similarity > found.similarity)
+      closest.set(match.conversationId, match);
+  }
+  return [...closest.values()]
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit);
 }
 
 export type SearchAnswerRequest = { query: string; searches?: string[] };
