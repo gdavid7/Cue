@@ -47,6 +47,9 @@ const CONNECTOR_SOURCE_LABEL = {
   contact: "Contact",
 } as const;
 const MAX_SOURCE_TEXT = 2000;
+// Names only, never content; the line counts against the message's text cap.
+const MAX_ATTACHMENT_NAMES = 5;
+const MAX_ATTACHMENT_NAME_LENGTH = 80;
 const WEB_SEARCH_RESULTS = 3;
 // Everything Relevant context shows, so a fact the user can see there can back the reply.
 const MAX_CONTEXT_SOURCES = 8;
@@ -247,7 +250,10 @@ export async function suggestReply({
     getReplyMemoriesForPrompt({
       emailAccount,
       senderEmail: extractEmailAddress(latest.headers.from),
-      emailContent: messageText(latest, emailAccount.timezone),
+      // Memory selection is a separate model call; its input stays the message text alone.
+      emailContent: messageText(latest, emailAccount.timezone, {
+        withAttachments: false,
+      }),
       logger,
     }),
   ]);
@@ -399,6 +405,7 @@ ${learnedWritingStyle}
 The sources are the conversation's messages (m1, m2, ...), related items (c1, c2, ...): emails, meetings, files and messages from the user's connected apps, and public web pages, and reply memories (r1, r2, ...): facts and procedures the user taught by editing earlier replies.
 Follow a reply memory only when this message matches it; ignore memories that don't fit.
 Suggest a reply only if the sources state every fact the reply needs. A reply that commits the user to something, gives a number, date, price, time or decision, or answers a question needs a source that states it. Never fill a gap with a plausible guess.
+Acknowledging the latest message itself (that it arrived or was read) needs no other source; cite that message. Confirming receipt of anything else, such as files, needs a source that shows it arrived.
 If the sources don't settle what the user should say, set enoughEvidence to false and say what is missing instead.
 For each fact in the reply, cite the source and copy the exact words that state it.
 Keep the reply short and in the user's voice.
@@ -645,15 +652,30 @@ function memorySource(
   };
 }
 
-function messageText(m: ParsedMessage, timezone: string | null) {
+function messageText(
+  m: ParsedMessage,
+  timezone: string | null,
+  { withAttachments = true }: { withAttachments?: boolean } = {},
+) {
+  const attachments = withAttachments ? attachmentsLine(m) : "";
   const body = (m.textPlain ? parseReply(m.textPlain) : m.snippet || "")
     .trim()
-    .slice(0, MAX_SOURCE_TEXT);
+    .slice(0, MAX_SOURCE_TEXT - attachments.length);
   return `Subject: ${m.headers.subject}
 From: ${m.headers.from}
 Date: ${formatTime(new Date(getMessageTimestamp(m)).toISOString(), timezone)}
-
+${attachments}
 ${body}`;
+}
+
+/** What came attached, by filename only, so a reply can confirm a file arrived. */
+function attachmentsLine(m: ParsedMessage) {
+  const names = (m.attachments ?? [])
+    .map((a) => a.filename.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, MAX_ATTACHMENT_NAMES)
+    .map((name) => name.slice(0, MAX_ATTACHMENT_NAME_LENGTH));
+  return names.length ? `Attachments: ${names.join(", ")}\n` : "";
 }
 
 export function renderSource(source: Source) {
