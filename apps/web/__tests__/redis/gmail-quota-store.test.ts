@@ -438,14 +438,30 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
           field: `interactive:${name}`,
         })),
       });
-      // 30 + 30 + 30 fit the second's 100; a fourth 30 would not.
+      // 30 + 30 + 30 fit the second's 100; a fourth 30 would not, and the
+      // result says what it would be told, as asking itself does.
       expect(result).toEqual({
         waitMs: 0,
         defer: false,
         queued: 2,
         ahead: 0,
         reservation: null,
+        nextWait: {
+          waitMs: expect.any(Number),
+          held: {
+            gate: "pace",
+            blocker: 0,
+            availableUnits: expect.any(Number),
+            neededUnits: 230,
+            paceUnits: 90,
+          },
+        },
       });
+      const asked = await admit({ cost: 30, floor: 200, paceCap: 100 });
+      expect(asked.held).toEqual(result.nextWait?.held);
+      expect(asked.waitMs).toBeGreaterThan(0);
+      expect(asked.waitMs).toBeLessThanOrEqual(result.nextWait!.waitMs);
+      expect(result.nextWait!.waitMs - asked.waitMs).toBeLessThan(50);
       expect(
         await take({ cost: 20, floor: 200, paceCap: 100 }),
       ).toBeGreaterThan(0);
