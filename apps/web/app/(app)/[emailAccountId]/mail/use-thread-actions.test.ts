@@ -21,6 +21,11 @@ const mail = vi.hoisted(() => ({
   },
 }));
 
+const activation = vi.hoisted(() => ({ report: vi.fn() }));
+
+vi.mock("@/hooks/useActivationSignal", () => ({
+  reportActivationSignal: activation.report,
+}));
 vi.mock("sonner", () => ({ toast: notifications }));
 vi.mock("@/components/Toast", () => ({ toastUndo: vi.fn() }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
@@ -46,6 +51,31 @@ describe("useThreadActions", () => {
       change: { kind: "archive" },
       observedRevision: 1,
     });
+  });
+
+  it("reports a first triage action for each account archived or snoozed", async () => {
+    const threads = [
+      { ...createThread(["INBOX"], "shared"), account: { id: "work" } },
+      { ...createThread(["INBOX"], "shared"), account: { id: "home" } },
+    ] as unknown as ListThread[];
+    const { result } = renderActions({ threads });
+
+    await act(() => result.current.archive(["work:shared", "home:shared"]));
+    await act(() => result.current.snooze(["work:shared"], new Date()));
+
+    expect(activation.report.mock.calls).toEqual([
+      ["work", "first_triage_action"],
+      ["home", "first_triage_action"],
+      ["work", "first_triage_action"],
+    ]);
+  });
+
+  it("reports no triage action when nothing was queued or the change is not a triage", async () => {
+    const { result } = renderActions();
+    await act(() => result.current.archive(["missing-thread"]));
+    await act(() => result.current.setReadState(["thread"], true));
+
+    expect(activation.report).not.toHaveBeenCalled();
   });
 
   it("watches one operation per account for a bulk archive, and survives a watcher that fails", async () => {

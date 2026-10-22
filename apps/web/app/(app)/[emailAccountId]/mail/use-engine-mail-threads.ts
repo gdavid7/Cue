@@ -183,6 +183,15 @@ export function useEngineMailThreads({
       !mailbox.data?.coverage.some(
         (coverage) => coverage.lastCompletedSyncAtMs != null,
       ),
+    /** A sync of this mailbox has finished, so the engine holds its mail. */
+    hasCompletedSync:
+      enabled &&
+      Boolean(client) &&
+      Boolean(
+        mailbox.data?.coverage.some(
+          (coverage) => coverage.lastCompletedSyncAtMs != null,
+        ),
+      ),
     /**
      * When the mailbox last finished catching up: its primary stream's last
      * round where there is one, as Gmail's other scopes finish rounds that

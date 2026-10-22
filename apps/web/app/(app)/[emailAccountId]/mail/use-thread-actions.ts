@@ -13,6 +13,7 @@ import {
   getListThreadKey,
   getListThreadMessageIds,
 } from "./types";
+import { reportActivationSignal } from "@/hooks/useActivationSignal";
 import { useStableCallback } from "./use-stable-callback";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import {
@@ -165,6 +166,12 @@ export function useThreadActions({
       }
       if (rumAction && rejectionCodes.length) {
         recordRumAction(`${rumAction}_confirmed`, startedAt, "error");
+      }
+      if (payload.kind === "archive" || payload.kind === "snooze") {
+        for (const accountId of new Set(
+          snapshots.map((snapshot) => snapshot.emailAccountId),
+        ))
+          reportActivationSignal(accountId, "first_triage_action");
       }
       return { snapshots, rejectionCodes };
     },

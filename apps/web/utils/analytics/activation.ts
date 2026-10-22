@@ -17,6 +17,9 @@ export const ACTIVATION_EVENTS = {
   firstSignIn: "activation.first_sign_in",
   needsReplyFirstItem: "activation.needs_reply_first_item",
   firstSuggestedReplySent: "activation.first_suggested_reply_sent",
+  firstSyncReady: "activation.first_sync_ready",
+  firstThreadOpened: "activation.first_thread_opened",
+  firstTriageAction: "activation.first_triage_action",
   activeDay: "activation.active_day",
   firstHourHealth: "activation.first_hour_health",
 } as const;
@@ -99,6 +102,49 @@ export async function recordFirstSuggestedReplySent(emailAccountId: string) {
   }
 }
 
+/** The mail engine finished a first sync of the mailbox, reported by the client. */
+export async function recordFirstSyncReady(emailAccountId: string) {
+  try {
+    if (!(await claimOnce(`activation:first-sync-ready:${emailAccountId}`)))
+      return;
+    const emailAccount = await prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { createdAt: true },
+    });
+    if (!emailAccount) return;
+    const now = new Date();
+    logger.info(ACTIVATION_EVENTS.firstSyncReady, {
+      emailAccountId,
+      at: now.toISOString(),
+      firstSignInAt: emailAccount.createdAt.toISOString(),
+      msSinceFirstSignIn: now.getTime() - emailAccount.createdAt.getTime(),
+    });
+  } catch (error) {
+    logger.warn("Failed to record activation event", {
+      event: ACTIVATION_EVENTS.firstSyncReady,
+      error,
+    });
+  }
+}
+
+/** The first thread opened in the reader, reported by the client. */
+export async function recordFirstThreadOpened(emailAccountId: string) {
+  await recordFirstClientEvent(
+    ACTIVATION_EVENTS.firstThreadOpened,
+    `activation:first-thread-opened:${emailAccountId}`,
+    emailAccountId,
+  );
+}
+
+/** The first archive, snooze or reply done from Cue, reported by the client. */
+export async function recordFirstTriageAction(emailAccountId: string) {
+  await recordFirstClientEvent(
+    ACTIVATION_EVENTS.firstTriageAction,
+    `activation:first-triage-action:${emailAccountId}`,
+    emailAccountId,
+  );
+}
+
 /** At most once per mailbox per UTC day. */
 export async function recordActiveDay(emailAccountId: string) {
   try {
@@ -121,6 +167,19 @@ export async function recordActiveDay(emailAccountId: string) {
       event: ACTIVATION_EVENTS.activeDay,
       error,
     });
+  }
+}
+
+async function recordFirstClientEvent(
+  event: string,
+  key: string,
+  emailAccountId: string,
+) {
+  try {
+    if (!(await claimOnce(key))) return;
+    logger.info(event, { emailAccountId, at: new Date().toISOString() });
+  } catch (error) {
+    logger.warn("Failed to record activation event", { event, error });
   }
 }
 
