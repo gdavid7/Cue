@@ -172,6 +172,7 @@ const featureGroups = [
     name: "mail-accounts",
     specs: [
       "mail/account-removal-routing.spec.ts",
+      "mail/account-switch-no-reload.spec.ts",
       "mail/compose-from-switch.spec.ts",
       "mail/reply-from-owning-account.spec.ts",
       "mail/team-comments.spec.ts",

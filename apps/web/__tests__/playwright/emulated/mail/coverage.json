@@ -85,6 +85,11 @@
     "hooks/useDisplayedEmail.ts"
   ],
   "account-removal-routing.spec.ts": ["providers/EmailAccountProvider.tsx"],
+  "account-switch-no-reload.spec.ts": [
+    "app/api/user/last-email-account/route.ts",
+    "utils/last-email-account.ts",
+    "providers/EmailAccountProvider.tsx"
+  ],
   "account-selection.spec.ts": [
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/use-combined-mail-threads.ts"
