@@ -22,10 +22,24 @@ const POLLING_SCOPES = new Set([
   "user/scheduled-emails",
 ]);
 
+// The AI routes a person waits on while reading, sampled higher so their
+// latency and gate waits can be measured from more than the slow tail
+// (PF-9w). Each is paced by a person (a thread opened, a search typed) or by
+// the rows' 15 s spacing, so even at this rate they add far fewer lines than
+// the polling scopes do.
+const READER_AI_REQUEST_SAMPLE_RATE = 0.5;
+const READER_AI_SCOPES = new Set([
+  "user/inbox-insights",
+  "user/thread-brief",
+  "user/thread-context",
+  "user/search-answer",
+]);
+
 export function getFastRequestSampleRate(scope: string | undefined) {
-  return scope && POLLING_SCOPES.has(scope)
-    ? POLLING_REQUEST_SAMPLE_RATE
-    : FAST_REQUEST_SAMPLE_RATE;
+  if (!scope) return FAST_REQUEST_SAMPLE_RATE;
+  if (POLLING_SCOPES.has(scope)) return POLLING_REQUEST_SAMPLE_RATE;
+  if (READER_AI_SCOPES.has(scope)) return READER_AI_REQUEST_SAMPLE_RATE;
+  return FAST_REQUEST_SAMPLE_RATE;
 }
 
 export function isFastRequestSampled(samplingId: string, rate: number) {

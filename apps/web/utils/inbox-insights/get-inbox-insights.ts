@@ -21,7 +21,10 @@ import {
 import type { Logger } from "@/utils/logger";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
-import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import {
+  type GmailCallDeferredError,
+  getGmailCallDeferredError,
+} from "@/utils/gmail/quota";
 import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import { canWriteRequestedReplies } from "@/utils/rule/draft-replies-enabled";
 import { getReadySuggestionMessageIds } from "@/utils/reply-tracker/ready-suggestions";
@@ -99,6 +102,11 @@ export async function getInboxInsights({
   draftRepliesEnabled: boolean;
   /** Of the items' messages, those with a reply Cue wrote waiting in Cue. */
   draftedMessageIds: string[];
+  /**
+   * New messages left for a later request because the account's Gmail
+   * budget ran out partway, and when to ask again. Not tries that failed.
+   */
+  deferred: { messageIds: string[]; retryAfterMs: number } | null;
 }> {
   const missing = selectNewInsightItems(items, known);
 
@@ -113,7 +121,7 @@ export async function getInboxInsights({
     });
   }
 
-  const fresh = missing.length
+  const { fresh, deferred } = missing.length
     ? await extractMissing({
         emailAccountId,
         userEmail,
@@ -122,7 +130,7 @@ export async function getInboxInsights({
         logger,
         now,
       })
-    : new Map<string, InboxInsightExtraction>();
+    : { fresh: new Map<string, InboxInsightExtraction>(), deferred: null };
 
   const needsEvents =
     withEvents || [...fresh.values()].some((entry) => entry.people.length);
@@ -151,6 +159,7 @@ export async function getInboxInsights({
     // drafting is on.
     draftRepliesEnabled: canWriteRequestedReplies(settings.draftReplies),
     draftedMessageIds: [...drafted],
+    deferred,
   };
 }
 
@@ -191,11 +200,19 @@ async function extractMissing({
     : false;
   const aiAccount = hasAi ? emailAccount : null;
 
-  let deferred: unknown = null;
+  // Set from inside the workers, which control flow can't see.
+  let deferral = null as GmailCallDeferredError | null;
+  const deferredIds: string[] = [];
   const results = await mapWithConcurrency(
     items,
     EXTRACT_CONCURRENCY,
     async ({ messageId }) => {
+      // Once one read is deferred the rest would be too: they are left for
+      // the next request rather than each asking the gate again.
+      if (deferral) {
+        deferredIds.push(messageId);
+        return null;
+      }
       try {
         const message = await emailProvider.getMessage(messageId);
         const needsLook =
@@ -217,8 +234,10 @@ async function extractMissing({
         };
         return [messageId, entry] as const;
       } catch (error) {
-        if (isGmailCallDeferredError(error)) {
-          deferred ??= error;
+        const deferredError = getGmailCallDeferredError(error);
+        if (deferredError) {
+          deferral ??= deferredError;
+          deferredIds.push(messageId);
           return null;
         }
         logger.warn("Failed to build inbox insight", { error });
@@ -228,9 +247,14 @@ async function extractMissing({
   );
   // Insights wait for spare Gmail quota. With nothing built, failing the
   // request lets the client retry; what was built goes back so the browser
-  // keeps it, and the rest is asked for when the rows next change.
-  if (deferred && !results.some(Boolean)) throw deferred;
-  return new Map(results.filter((r) => r !== null));
+  // keeps it, and the deferred rest is named so it is asked for again.
+  if (deferral && !results.some(Boolean)) throw deferral;
+  return {
+    fresh: new Map(results.filter((r) => r !== null)),
+    deferred: deferral
+      ? { messageIds: deferredIds, retryAfterMs: deferral.retryAfterMs }
+      : null,
+  };
 }
 
 async function upcomingEvents({

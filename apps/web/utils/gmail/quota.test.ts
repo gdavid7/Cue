@@ -22,6 +22,11 @@ import {
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
+import {
+  createRequestMetrics,
+  getRequestMetricsFields,
+  runWithRequestMetrics,
+} from "@/utils/request-metrics";
 import { isFastRequestSampled } from "@/utils/request-sampling";
 import { sleep } from "@/utils/sleep";
 
@@ -1302,6 +1307,33 @@ describe("Gmail quota gate", () => {
     expect(deferredAt - startedAt).toBeLessThanOrEqual(
       OPEN_THREAD_GMAIL_WAIT_MS,
     );
+  });
+
+  // PF-9w: the request's "Request completed" line says it was deferred.
+  it("counts each deferred call on the request's metrics", async () => {
+    const account = "account-request-metrics";
+    const read = (cost: number) =>
+      meterGmailCall({ emailAccountId: account, cost }, async () => undefined);
+    await runWithGmailQuota(
+      { caller: "test/other", priority: "interactive" },
+      () => read(2000),
+    );
+    const metrics = createRequestMetrics();
+    const outcome = runWithRequestMetrics(metrics, () =>
+      runWithAuditContext({ source: "user/thread-brief" }, () =>
+        runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, async () => {
+          await read(600);
+          await read(600);
+          await read(600);
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(await outcome).toBeInstanceOf(GmailCallDeferredError);
+    const fields = getRequestMetricsFields(metrics);
+    expect(fields.gmailDeferredCalls).toBe(1);
+    expect(fields.waitMs).toBeGreaterThan(0);
   });
 
   it("never puts the account in rate-limit mode for the gate's own deferral", async () => {

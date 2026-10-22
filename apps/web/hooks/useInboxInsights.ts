@@ -21,7 +21,12 @@ import { keptSuggestionFor } from "@/utils/thread-context/suggested-reply-store"
 
 const CHUNK_SIZE = 50;
 // What the server reads in one request; the rest wait for the next one.
+// The rows on screen go together up to this many, as someone is looking at
+// them.
 const MAX_NEW_PER_REQUEST = 25;
+// Rows off screen go a few at a time, so each request holds the account's
+// Gmail budget only briefly ahead of a thread someone opens (PF-9v).
+const BACKGROUND_NEW_PER_REQUEST = 10;
 // Each email is asked about at most this many times per page load, so
 // deferrals end in a few spaced retries rather than a request per render.
 const MAX_ATTEMPTS = 6;
@@ -353,6 +358,13 @@ function pump(queue: Queue) {
   }
   const { emailAccountId, fetcher } = queue;
   if (!fetcher) return;
+  // Nor with the open conversation's note, which someone is waiting on
+  // (D-086): the rows go once it has its answer.
+  if (
+    queue.lane === "rows" &&
+    queues.get(queueKey(emailAccountId, "open"))?.inflight
+  )
+    return;
   const wanted = byScreenPriority(queue.readers);
   const pending = wanted.filter(
     (item) =>
@@ -377,10 +389,7 @@ function pump(queue: Queue) {
   const batch = pending.length
     ? pending.slice(
         0,
-        firstRequestSize(
-          pending.length,
-          pending.filter((item) => item.onScreen).length,
-        ),
+        requestSize(pending.filter((item) => item.onScreen).length),
       )
     : kept.slice(0, CHUNK_SIZE);
   // Only the meeting list and settings are wanted when every email is kept;
@@ -419,9 +428,11 @@ function pump(queue: Queue) {
         else accountDrafted.delete(item.messageId);
       }
       drafted.set(emailAccountId, accountDrafted);
+      let answeredAny = false;
       for (const item of batch) {
         const fresh = response.insights[item.threadId];
         if (fresh?.messageId === item.messageId) {
+          answeredAny = true;
           answered.set(attemptKey({ emailAccountId, ...item }), fresh);
           (fresh.withAi ? extractions : extractionsWithoutAi).set(
             emailAccountId,
@@ -430,11 +441,27 @@ function pump(queue: Queue) {
           );
         }
       }
+      // The server ran out of Gmail budget partway: the emails it left get
+      // their tries back, as a deferred request's do, and are asked for once
+      // the budget is back. Only alongside an answer, so every such request
+      // settles at least one email and the retries end.
+      const deferred = response.deferred;
+      if (deferred && answeredAny) {
+        const left = new Set(deferred.messageIds);
+        for (const item of batch) {
+          if (left.has(item.messageId))
+            refundAttempt({ emailAccountId, ...item });
+        }
+      }
       queue.failures = 0;
       queue.deferrals = 0;
       queue.error = undefined;
       queue.nextAtMs =
-        Date.now() + (queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0);
+        Date.now() +
+        Math.max(
+          queue.lane === "rows" ? ROW_REQUEST_SPACING_MS : 0,
+          deferred?.retryAfterMs ?? 0,
+        );
     })
     .catch((error: unknown) => {
       const status = (error as { status?: number } | null)?.status;
@@ -482,6 +509,9 @@ function pump(queue: Queue) {
       queue.inflight = false;
       notify();
       pump(queue);
+      // The rows held back for the open conversation go now.
+      const rows = queues.get(queueKey(emailAccountId, "rows"));
+      if (queue.lane === "open" && rows) pump(rows);
     });
 }
 
@@ -638,20 +668,13 @@ function placeOnScreen(index: number, visible: VisibleRows | undefined) {
 }
 
 /**
- * The rows on screen go in a request of their own size when that costs no
- * extra request: each request also reads the account's calendar and counts
- * against its rate limit, so the page still takes as many requests as it
- * did in pages of MAX_NEW_PER_REQUEST.
+ * The rows on screen and the screenful after them go in a request of their
+ * own, up to MAX_NEW_PER_REQUEST; the rest, nearest first, a few at a time.
  */
-function firstRequestSize(pendingCount: number, onScreenCount: number) {
-  if (!onScreenCount) return MAX_NEW_PER_REQUEST;
-  const requests = Math.ceil(pendingCount / MAX_NEW_PER_REQUEST);
-  const smallestWithoutExtraRequest =
-    pendingCount - MAX_NEW_PER_REQUEST * (requests - 1);
-  return Math.min(
-    MAX_NEW_PER_REQUEST,
-    Math.max(onScreenCount, smallestWithoutExtraRequest),
-  );
+function requestSize(onScreenCount: number) {
+  return onScreenCount
+    ? Math.min(MAX_NEW_PER_REQUEST, onScreenCount)
+    : BACKGROUND_NEW_PER_REQUEST;
 }
 
 function startsWith(keys: string[], prefix: string[]) {
