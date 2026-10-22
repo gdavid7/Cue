@@ -293,9 +293,18 @@ test("undoing a snooze from the list puts the conversation back, with no snooze 
   const row = conversationWithSubject(page, conversations, SNOOZE_UNDO_SUBJECT);
   await expect(row).toHaveCount(1, { timeout: 60_000 });
 
-  await row.hover();
-  await row.getByRole("button", { name: "Snooze conversation" }).click();
-  await page.getByRole("menuitem", { name: /^Tomorrow/ }).click();
+  await row
+    .getByRole("checkbox", {
+      name: "Select conversation with Carol Example",
+      includeHidden: true,
+    })
+    .click();
+  await page.keyboard.press("KeyH");
+  const palette = page.getByRole("dialog");
+  await expect(
+    palette.getByPlaceholder("When should it return? Try Friday at 3pm"),
+  ).toBeFocused();
+  await palette.getByRole("option", { name: /^Tomorrow/ }).click();
   await expect(row).toHaveCount(0);
   const notifications = page.getByRole("region", {
     name: "Notifications alt+T",
