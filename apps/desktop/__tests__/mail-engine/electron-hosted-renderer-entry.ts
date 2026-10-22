@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import {
   app,
   BrowserWindow,
@@ -115,7 +117,16 @@ async function runHostedMail() {
     });
     return { status: "ok" };
   });
-  const mailUrl = new URL(`/${accountId}/mail`, appOrigin).toString();
+  let mailUrl = new URL(`/${accountId}/mail`, appOrigin).toString();
+  // DEBUG(OP-4): stall the first assistant reopen with a server that never answers.
+  const stallMarker = join(tmpdir(), "op4-forced-stall");
+  if (PROOF === "assistant-reopen" && !existsSync(stallMarker)) {
+    writeFileSync(stallMarker, "1");
+    const server = createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    mailUrl = `http://127.0.0.1:${port}/stall`;
+  }
   try {
     await loadPage(window, mailUrl);
     const transport = await waitForTransport(window, "desktop-ipc");
