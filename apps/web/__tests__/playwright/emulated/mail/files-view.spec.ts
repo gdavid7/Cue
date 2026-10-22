@@ -3,17 +3,20 @@ import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
+  insertMessageWithAttachments,
+  removeMessage,
+  SENDER,
+} from "./attachment-message-helpers";
+import {
   createSecondEmailAccount,
   deleteSecondEmailAccount,
 } from "./account-test-helpers";
 import {
   openMail,
   openThreadIdFromUrl,
-  readProviderAccessToken,
   requestMailSync,
 } from "./mail-test-helpers";
 
-const SENDER = { name: "Morgan Example", address: "morgan@example.com" };
 // A real PDF, so the preview renders rather than reporting a broken file.
 const PDF = Buffer.from(
   "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n",
@@ -48,7 +51,21 @@ test.beforeEach(async ({ page }, testInfo) => {
     token,
     subject,
     ...files,
-    ...(await insertMessage(page, { subject, ...files })),
+    ...(await insertMessageWithAttachments(page, {
+      subject,
+      html: '<p>The files are attached.</p><img src="cid:files-logo">',
+      attachments: [
+        { name: files.pdf, type: "application/pdf", bytes: PDF, inline: false },
+        {
+          name: files.sheet,
+          // Senders often label files generically; the name says what it is.
+          type: "application/octet-stream",
+          bytes: Buffer.from("PK\u0003\u0004sheet"),
+          inline: false,
+        },
+        { name: files.logo, type: "image/png", bytes: PNG, inline: true },
+      ],
+    })),
   };
 });
 
@@ -247,166 +264,4 @@ function row(files: Locator, filename: string) {
 function requireSeeded() {
   if (!seeded) throw new Error("No message was inserted");
   return seeded;
-}
-
-async function insertMessage(
-  page: Page,
-  input: { subject: string; pdf: string; sheet: string; logo: string },
-) {
-  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
-  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
-  const attachments = [
-    { name: input.pdf, type: "application/pdf", bytes: PDF, inline: false },
-    {
-      name: input.sheet,
-      // Senders often label files generically; the name says what it is.
-      type: "application/octet-stream",
-      bytes: Buffer.from("PK\u0003\u0004sheet"),
-      inline: false,
-    },
-    { name: input.logo, type: "image/png", bytes: PNG, inline: true },
-  ];
-  return isMicrosoftPlaywright()
-    ? insertOutlookMessage(page, { email, subject: input.subject, attachments })
-    : insertGmailMessage(page, { email, subject: input.subject, attachments });
-}
-
-type Attachment = {
-  name: string;
-  type: string;
-  bytes: Buffer;
-  inline: boolean;
-};
-
-async function insertGmailMessage(
-  page: Page,
-  {
-    email,
-    subject,
-    attachments,
-  }: { email: string; subject: string; attachments: Attachment[] },
-) {
-  const boundary = "playwright-files-boundary";
-  const mime = [
-    `From: ${SENDER.name} <${SENDER.address}>`,
-    `To: ${email}`,
-    `Subject: ${subject}`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    "",
-    '<p>The files are attached.</p><img src="cid:files-logo">',
-    ...attachments.flatMap(({ name, type, bytes, inline }) => [
-      `--${boundary}`,
-      `Content-Type: ${type}; name="${name}"`,
-      inline
-        ? `Content-Disposition: inline; filename="${name}"`
-        : `Content-Disposition: attachment; filename="${name}"`,
-      ...(inline ? ["Content-ID: <files-logo>"] : []),
-      "Content-Transfer-Encoding: base64",
-      "",
-      bytes.toString("base64"),
-    ]),
-    `--${boundary}--`,
-    "",
-  ].join("\r\n");
-  const response = await page.request.post(
-    `${baseUrl("GOOGLE_BASE_URL")}/gmail/v1/users/me/messages`,
-    {
-      headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
-        "content-type": "application/json",
-      },
-      data: {
-        raw: Buffer.from(mime, "utf8").toString("base64url"),
-        labelIds: ["INBOX", "UNREAD"],
-        internalDate: String(Date.now()),
-      },
-    },
-  );
-  expect(response.ok(), await response.text()).toBe(true);
-  const message = (await response.json()) as { id: string; threadId: string };
-  return { threadId: message.threadId, messageId: message.id };
-}
-
-async function insertOutlookMessage(
-  page: Page,
-  {
-    email,
-    subject,
-    attachments,
-  }: { email: string; subject: string; attachments: Attachment[] },
-) {
-  const outlook = baseUrl("MICROSOFT_BASE_URL");
-  const created = await page.request.post(`${outlook}/v1.0/me/messages`, {
-    headers: OUTLOOK_HEADERS,
-    data: {
-      subject,
-      from: { emailAddress: SENDER },
-      body: {
-        contentType: "html",
-        content: '<p>The files are attached.</p><img src="cid:files-logo">',
-      },
-      toRecipients: [{ emailAddress: { address: email } }],
-    },
-  });
-  expect(created.ok(), await created.text()).toBe(true);
-  const { id } = (await created.json()) as { id: string };
-  for (const { name, type, bytes, inline } of attachments) {
-    const attached = await page.request.post(
-      `${outlook}/v1.0/me/messages/${id}/attachments`,
-      {
-        headers: OUTLOOK_HEADERS,
-        data: {
-          "@odata.type": "#microsoft.graph.fileAttachment",
-          name,
-          contentType: type,
-          contentBytes: bytes.toString("base64"),
-          ...(inline ? { isInline: true, contentId: "files-logo" } : {}),
-        },
-      },
-    );
-    expect(attached.ok(), await attached.text()).toBe(true);
-  }
-  // Created messages start as drafts; moving one to the inbox delivers it.
-  const moved = await page.request.post(
-    `${outlook}/v1.0/me/messages/${id}/move`,
-    {
-      headers: OUTLOOK_HEADERS,
-      data: { destinationId: "inbox" },
-    },
-  );
-  expect(moved.ok(), await moved.text()).toBe(true);
-  const message = (await moved.json()) as {
-    id: string;
-    conversationId: string;
-  };
-  return { threadId: message.conversationId, messageId: message.id };
-}
-
-async function removeMessage(page: Page, messageId: string) {
-  if (isMicrosoftPlaywright()) {
-    await page.request.delete(
-      `${baseUrl("MICROSOFT_BASE_URL")}/v1.0/me/messages/${messageId}`,
-      { headers: OUTLOOK_HEADERS },
-    );
-    return;
-  }
-  await page.request.post(
-    `${baseUrl("GOOGLE_BASE_URL")}/gmail/v1/users/me/messages/${messageId}/trash`,
-    { headers: { Authorization: `Bearer ${await readProviderAccessToken()}` } },
-  );
-}
-
-const OUTLOOK_HEADERS = {
-  Authorization: "Bearer playwright_microsoft_fixture_token",
-  "content-type": "application/json",
-};
-
-function baseUrl(name: "GOOGLE_BASE_URL" | "MICROSOFT_BASE_URL") {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is missing`);
-  return value;
 }
