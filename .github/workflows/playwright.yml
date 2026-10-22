@@ -297,20 +297,8 @@ jobs:
       - name: Apply database migrations
         run: pnpm -F inbox-zero-ai exec prisma migrate deploy
 
-      # The apt mirror occasionally stalls to a few kB/s for minutes. Fail a
-      # stalled fetch fast and retry instead of spending the job budget on it.
       - name: Install Playwright browser
-        timeout-minutes: 12
-        run: |
-          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "3";\n' |
-            sudo tee /etc/apt/apt.conf.d/99-ci-fast-fail > /dev/null
-          for attempt in 1 2 3; do
-            if timeout 240 pnpm -F inbox-zero-ai exec playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "Playwright install attempt $attempt failed or timed out"
-          done
-          exit 1
+        run: pnpm -F inbox-zero-ai exec playwright install --with-deps chromium
 
       - name: Download browser app
         uses: actions/download-artifact@v4
