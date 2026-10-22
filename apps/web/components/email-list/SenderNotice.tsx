@@ -117,9 +117,14 @@ export function SenderNotice({
           </>
         )}
         <button
-          className="text-primary hover:underline"
+          className="rounded-sm text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(event) => {
             event.stopPropagation();
+            // The line goes away with this button; keep keyboard focus on
+            // the message rather than dropping it to the page.
+            event.currentTarget
+              .closest<HTMLElement>("li[data-thread-message-id]")
+              ?.focus({ preventScroll: true });
             allow();
           }}
           type="button"
