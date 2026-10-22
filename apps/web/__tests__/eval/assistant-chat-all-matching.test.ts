@@ -408,7 +408,8 @@ function toParsed(message: FixtureMessage) {
   };
 }
 
-// Gmail's own search, roughly: an exact sender and after: dates, newest first.
+// Gmail's own search, roughly: an exact sender, newsletters and after:
+// dates, newest first.
 function searchFixture({
   query = "",
   pageToken,
@@ -423,9 +424,12 @@ function searchFixture({
   const afterMs = after
     ? Date.UTC(Number(after[1]), Number(after[2]) - 1, Number(after[3]))
     : null;
+  // Newsletter searches find the promotional senders, as Gmail would.
+  const promotional = /newsletter|unsubscribe|category:promotions/i.test(query);
   const matches = mailbox.filter(
     (message) =>
       (!from || message.from.toLowerCase().includes(from)) &&
+      (!promotional || message.categoryIds.includes("CATEGORY_PROMOTIONS")) &&
       (afterMs === null || message.receivedAtMs >= afterMs),
   );
   const start = pageToken ? Number(pageToken) || 0 : 0;
