@@ -413,5 +413,9 @@
   "wake-catch-up.spec.ts": [
     "utils/mail-engine/wake-catch-up.ts",
     "app/api/user/inbox-catch-up/route.ts"
+  ],
+  "drag-to-sidebar.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/sidebar-drop.ts",
+    "app/(app)/[emailAccountId]/mail/mail-drag.tsx"
   ]
 }
