@@ -183,6 +183,22 @@ const CASES: {
     expected:
       "field trip words, with school as a word or a from: guess; no invented address or date",
   },
+  // The mail the user wants never uses their word, so the search must carry
+  // the words that kind of mail does.
+  {
+    name: "a flight whose confirmation never says flight",
+    query: "what time is my flight to Denver?",
+    expected:
+      'Must find this email, which never says "flight": subject "Your Skyline Air confirmation — SFO to DEN, Apr 24", body "Confirmation code: Q4ZT8R. Passenger: Alex Rivera. Depart San Francisco (SFO) Apr 24, 8:40 AM, arrive Denver 12:10 PM. Return Apr 27." FAIL if any group needs a word that email lacks, e.g. a group of only flight words.',
+    isQuestion: true,
+  },
+  {
+    name: "concert tickets in an order confirmation",
+    query: "where are my tickets for the Phoebe Bridgers concert?",
+    expected:
+      'Must find this email, which never says "ticket" or "concert": subject "Your order is confirmed: Phoebe Bridgers at The Greek Theatre", body "Order #48213 for 2 General Admission. Doors 6:30 PM, Sat Nov 7. Show this QR code at entry." FAIL if any group needs a word that email lacks.',
+    isQuestion: true,
+  },
   {
     name: "an interview link for tomorrow",
     query: "the zoom link for tomorrow's interview",

@@ -615,7 +615,8 @@ export async function contextSources({
   );
 }
 
-function messageSource(
+/** A message of the conversation as a source; exported so evals render real messages. */
+export function messageSource(
   m: ParsedMessage,
   index: number,
   timezone: string | null,
