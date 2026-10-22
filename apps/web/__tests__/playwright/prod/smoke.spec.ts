@@ -490,7 +490,9 @@ async function checkSuggestionText(
       {
         subject,
         from: { name: "Jonas Weber", address: "jonas.weber@example.com" },
-        text: "Hi,\n\nCan you confirm Q3's numbers & send them over? A quick yes or no on timing is fine.\n\nThanks,\nJonas",
+        // Answerable from its own text, so Cue confirms every fact and the
+        // step sees a reply shown. The "&" is for the escaped-HTML check.
+        text: "Hi,\n\nThanks for sending the notes & slides — could you reply to confirm you got them?\n\nThanks,\nJonas",
         messageId: `<cue-qa-suggestion-${tag}@cue-qa.invalid>`,
       },
     ]);
