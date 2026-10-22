@@ -7,6 +7,7 @@ import {
 import { readMessageSearch } from "./message-search";
 import { readFileSenders, readFiles } from "./files";
 import { readPersonCard } from "./person-card";
+import { readSenderHistory } from "./sender-history";
 import {
   countMessageEmbeddings,
   deleteAccountMessageEmbeddings,
@@ -185,6 +186,9 @@ export async function createSqliteMailStore(
     },
     readPersonCard(query) {
       return driver.read((tx) => readPersonCard(tx, query));
+    },
+    readSenderHistory(query) {
+      return driver.read((tx) => readSenderHistory(tx, query));
     },
     readFiles(query) {
       return driver.read(async (tx) =>

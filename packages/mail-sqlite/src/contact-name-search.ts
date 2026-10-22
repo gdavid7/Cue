@@ -1,5 +1,6 @@
 import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
+import { foldPersonName } from "@inboxzero/mail-core/sender-check";
 import type { SqlTransaction, SqlValue } from "./driver";
 import type { SearchSupport } from "./queries";
 
@@ -94,7 +95,7 @@ export async function replaceContactNameTokens(
     const name = String(row.name);
     // A name that is an address says nothing about the person.
     if (name.includes("@")) continue;
-    for (const token of foldName(name).split(/[^\p{L}\p{N}]+/u))
+    for (const token of foldPersonName(name).split(/[^\p{L}\p{N}]+/u))
       if (token) tokens.add(token);
   }
   for (const token of tokens)
@@ -224,10 +225,6 @@ function collectNameWords(predicate: MailPredicate, words: Set<string>) {
 // One word of a name as the index keeps it; a single letter would match
 // most of the address book.
 function nameToken(word: string): string | null {
-  const token = foldName(word);
+  const token = foldPersonName(word);
   return /^[\p{L}\p{N}]{2,}$/u.test(token) ? token : null;
-}
-
-function foldName(value: string) {
-  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }

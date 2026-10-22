@@ -60,6 +60,7 @@ import { EmailDetails } from "@/components/email-list/EmailDetails";
 import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
 import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
+import { SenderNotice } from "@/components/email-list/SenderNotice";
 import { PersonCardTrigger } from "@/components/person-card/PersonCard";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
@@ -523,6 +524,13 @@ export function EmailMessage({
                 </Button>
               )}
             </>
+          )}
+
+          {!isDraftRow && (
+            <SenderNotice
+              emailAccountId={emailAccountId}
+              from={message.headers.from}
+            />
           )}
 
           {isCalendarInvitationMessage(message) && (

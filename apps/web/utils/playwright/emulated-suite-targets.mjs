@@ -128,6 +128,7 @@ const featureGroups = [
       "mail/thread-states.spec.ts",
       "mail/reader-transition.spec.ts",
       "mail/person-card.spec.ts",
+      "mail/sender-notice.spec.ts",
     ],
   },
   {

@@ -39,6 +39,8 @@ import type {
   FilesQuery,
   PersonCard,
   PersonCardQuery,
+  SenderHistory,
+  SenderHistoryQuery,
   QuerySnapshot,
   SemanticMatch,
 } from "../queries";
@@ -518,6 +520,7 @@ export interface MailStore {
     limit: number;
     minSimilarity: number;
   }): Promise<SemanticMatch[]>;
+  readSenderHistory(query: SenderHistoryQuery): Promise<SenderHistory>;
   /** Resolves `true` when the stored connection state changed. */
   recordConnection(input: {
     accountId: string;
