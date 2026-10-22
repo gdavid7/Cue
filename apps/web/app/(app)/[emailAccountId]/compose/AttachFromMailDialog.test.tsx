@@ -11,11 +11,13 @@ import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileEntry, FilesQuery } from "@inboxzero/mail-core/queries";
 import { AttachFromMailDialog } from "@/app/(app)/[emailAccountId]/compose/AttachFromMailDialog";
+import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 
 const mocks = vi.hoisted(() => ({
   queryFiles: vi.fn(),
   fetchAttachment: vi.fn(),
   toastError: vi.fn(),
+  AttachmentTooLargeError: class extends Error {},
   accounts: [] as Array<{
     id: string;
     email: string;
@@ -31,6 +33,7 @@ vi.mock("@/hooks/useAccounts", () => ({
 }));
 vi.mock("@/utils/attachments/download", () => ({
   fetchAttachment: mocks.fetchAttachment,
+  AttachmentTooLargeError: mocks.AttachmentTooLargeError,
   getAttachmentUrl: ({
     accountId,
     messageId,
@@ -256,6 +259,58 @@ describe("AttachFromMailDialog", () => {
     expect(onAttach).not.toHaveBeenCalled();
   });
 
+  it("stops a download that outgrows the room left and says it's too large", async () => {
+    // The stored size can be missing or wrong, so only the cap catches it.
+    mocks.queryFiles.mockResolvedValue({
+      files: [
+        {
+          ...entry("scan.pdf", "pdf", "m1", "Ana <ana@example.com>"),
+          attachment: {
+            attachmentId: "att-m1",
+            filename: "scan.pdf",
+            mimeType: "application/pdf",
+            size: 0,
+            inline: false,
+          },
+        },
+      ],
+      nextPage: null,
+    });
+    mocks.fetchAttachment.mockRejectedValue(
+      new mocks.AttachmentTooLargeError("too large"),
+    );
+    const { onAttach } = renderDialog({
+      senders: [],
+      maxBytes: 100,
+      checkFits: (attachment) =>
+        attachment.size > 100
+          ? `${attachment.filename} wasn't attached. Too large.`
+          : undefined,
+    });
+
+    fireEvent.click(await screen.findByRole("option", { name: /scan\.pdf/ }));
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith({
+        description: "scan.pdf wasn't attached. Too large.",
+      }),
+    );
+    expect(mocks.fetchAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({ maxBytes: 100 }),
+    );
+    expect(onAttach).not.toHaveBeenCalled();
+  });
+
+  it("keeps mail shortcuts off while the picker has focus", async () => {
+    renderDialog({ senders: [] });
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Attach from mail",
+    });
+    // It is portaled out of the composer, so it opts out on its own.
+    expect(dialog.closest(`[${MAIL_SHORTCUTS_OFF_ATTRIBUTE}]`)).toBe(dialog);
+  });
+
   it("reports a download that fails and stays open", async () => {
     mocks.fetchAttachment.mockRejectedValue(new Error("offline"));
     const { onAttach, onOpenChange } = renderDialog({ senders: [] });
@@ -289,9 +344,11 @@ describe("AttachFromMailDialog", () => {
 function renderDialog({
   senders,
   checkFits = () => undefined,
+  maxBytes = 10_000_000,
 }: {
   senders: Array<{ email: string; label: string }>;
-  checkFits?: () => string | undefined;
+  checkFits?: (attachment: FileEntry["attachment"]) => string | undefined;
+  maxBytes?: number;
 }) {
   const onAttach = vi.fn();
   const onOpenChange = vi.fn();
@@ -301,6 +358,7 @@ function renderDialog({
       <AttachFromMailDialog
         checkFits={checkFits}
         emailAccountId="a"
+        maxBytes={maxBytes}
         onAttach={onAttach}
         onOpenChange={onOpenChange}
         open={open}

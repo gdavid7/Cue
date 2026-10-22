@@ -38,7 +38,11 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { useAccounts } from "@/hooks/useAccounts";
 import { cn } from "@/utils";
-import { fetchAttachment } from "@/utils/attachments/download";
+import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
+import {
+  AttachmentTooLargeError,
+  fetchAttachment,
+} from "@/utils/attachments/download";
 import { formatShortDate } from "@/utils/date";
 import { extractNameFromEmail } from "@/utils/email";
 
@@ -65,7 +69,12 @@ export function AttachFromMailDialog({
 } & Omit<PickerProps, "onClose">) {
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="flex max-h-[min(40rem,90dvh)] max-w-lg flex-col gap-0 overflow-hidden p-0 motion-reduce:animate-none">
+      <DialogContent
+        className="flex max-h-[min(40rem,90dvh)] max-w-lg flex-col gap-0 overflow-hidden p-0 motion-reduce:animate-none"
+        // Portaled out of the composer, so mail shortcuts would otherwise
+        // act on keys pressed on the type chips.
+        {...{ [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: "" }}
+      >
         <DialogHeader className="px-4 pt-4 pb-3 text-left">
           <DialogTitle>Attach from mail</DialogTitle>
         </DialogHeader>
@@ -88,6 +97,8 @@ type PickerProps = {
   senders: AttachFromMailSender[];
   /** Why the composer would refuse a file of this size, before downloading it. */
   checkFits: (attachment: FileEntry["attachment"]) => string | undefined | null;
+  /** Room left under the composer's attachment limit; the download stops past it. */
+  maxBytes: number;
   onAttach: (file: File) => void;
   onClose: () => void;
 };
@@ -96,6 +107,7 @@ function AttachFromMailPicker({
   emailAccountId,
   senders,
   checkFits,
+  maxBytes,
   onAttach,
   onClose,
 }: PickerProps) {
@@ -237,6 +249,7 @@ function AttachFromMailPicker({
         url: fileAttachmentUrl(file),
         emailAccountId: file.accountId,
         signal: controller.signal,
+        maxBytes: Math.max(0, Math.floor(maxBytes)),
         onProgress: (receivedBytes) =>
           setAttaching((current) =>
             current?.key === key ? { key, receivedBytes } : current,
@@ -245,10 +258,15 @@ function AttachFromMailPicker({
       if (controller.signal.aborted) return;
       onAttach(toComposeFile(blob, file.attachment));
       onClose();
-    } catch {
+    } catch (error) {
       if (controller.signal.aborted) return;
+      // The stored size was wrong; refuse it as the composer would.
+      const tooLarge =
+        error instanceof AttachmentTooLargeError &&
+        checkFits({ ...file.attachment, size: maxBytes + 1 });
       toastError({
-        description: `Could not attach ${file.attachment.filename}.`,
+        description:
+          tooLarge || `Could not attach ${file.attachment.filename}.`,
       });
     } finally {
       if (abortRef.current === controller) {

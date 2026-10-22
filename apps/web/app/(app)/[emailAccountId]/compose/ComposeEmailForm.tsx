@@ -2587,6 +2587,7 @@ function ComposeEmailFormContent({
               <AttachFromMailDialog
                 checkFits={refuseFileFromMail}
                 emailAccountId={selectedEmailAccountId}
+                maxBytes={attachmentLimitBytes - attachmentTotalBytes}
                 onAttach={(file) => {
                   addFiles({ attachments: [file] }).catch(() =>
                     toastError({
