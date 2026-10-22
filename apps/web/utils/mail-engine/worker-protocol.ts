@@ -85,6 +85,9 @@ export type WorkerPreopenRequest = {
   maxPendingOperations?: number;
 };
 
+/** The page found the app session back; the worker's requests may go out again. */
+export type WorkerSessionResetRequest = { type: "session_reset" };
+
 export type WorkerRequest =
   | { id: string; type: "start"; input: BrowserEngineStart }
   | { id: string; type: "call"; method: string; args: unknown[] }
@@ -110,8 +113,11 @@ export type WorkerResponse =
   | { type: "rebuilding" }
   /** Carried work a rebuild could not restore; counts only, no content. */
   | { type: "dropped"; drop: DroppedMailWork }
-  /** A request found the app session signed out; only the page can act. */
-  | { type: "session_expired" };
+  /**
+   * The worker stopped sending: no session ("signed-out"), or the gate
+   * refused even a refreshed one ("rejected"). Only the page can act.
+   */
+  | { type: "session_expired"; reason: "signed-out" | "rejected" };
 
 export function browserMailEngineCapabilities() {
   return {

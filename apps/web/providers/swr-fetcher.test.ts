@@ -45,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -63,6 +64,27 @@ describe("swrFetcher with an expired session", () => {
     expect(assign).toHaveBeenCalledWith(
       `/login?next=${encodeURIComponent("/acc-1/mail?view=inbox")}`,
     );
+  });
+
+  it("signs out once and sends nothing more when later revalidations come in", async () => {
+    const { swrFetcher } = await loadPage();
+    const burst = () =>
+      Promise.allSettled(
+        Array.from({ length: 6 }, (_, index) =>
+          swrFetcher(`/api/panel-${index}`, undefined, "acc-1"),
+        ),
+      );
+
+    await burst();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    const later = await burst();
+
+    expect(later.every((result) => result.status === "rejected")).toBe(true);
+    expect(later[0]).toMatchObject({ reason: { status: 401 } });
+    // Six requests and one refresh; the later burst never left the page.
+    expect(fetch).toHaveBeenCalledTimes(7);
+    expect(assign).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the page when a refreshed session lets the request through", async () => {
@@ -151,6 +173,44 @@ describe("swrFetcher with an expired session", () => {
 
     finishSave();
     await vi.waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+  });
+
+  it("takes back a held sign-in prompt when the session comes back, and stays when the composer closes", async () => {
+    const { swrFetcher, holdSessionExpiredRedirect, resetSessionGone } =
+      await loadPage();
+    const prompt = vi.fn();
+    const dismiss = vi.fn();
+    const beforeRedirect = vi.fn(async () => undefined);
+    const release = holdSessionExpiredRedirect({
+      prompt,
+      dismiss,
+      beforeRedirect,
+    });
+    await swrFetcher("/api/a", undefined, "acc-1").catch(() => undefined);
+    expect(prompt).toHaveBeenCalledTimes(1);
+
+    resetSessionGone();
+    release();
+    await Promise.resolve();
+
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(beforeRedirect).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("sends a later expiry to log in after the session came back", async () => {
+    stored.set("session-expired-redirected-at", String(Date.now() - 2000));
+    const { swrFetcher, resetSessionGone } = await loadPage();
+    // The loop guard keeps this first one on the page.
+    await swrFetcher("/api/a", undefined, "acc-1").catch(() => undefined);
+    expect(assign).not.toHaveBeenCalled();
+
+    resetSessionGone();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    await swrFetcher("/api/a", undefined, "acc-1").catch(() => undefined);
+
+    expect(assign).toHaveBeenCalledTimes(1);
   });
 
   it("never sends a public page's signed-out visitor to log in", async () => {
@@ -379,6 +439,7 @@ async function loadPage({ signedIn = true } = {}) {
     "@/utils/error"
   );
   const session = await import("@/utils/session-expired");
+  const { resetSessionGone } = await import("@/utils/session-refresh");
   if (signedIn) session.armSessionExpiredRedirect();
   // Only now: the modules above read server env when they see a window.
   vi.stubGlobal("window", {
@@ -396,6 +457,7 @@ async function loadPage({ signedIn = true } = {}) {
     onSWRErrorRetry,
     assertActionSucceeded,
     getActionErrorMessage,
+    resetSessionGone,
     ...session,
   };
 }

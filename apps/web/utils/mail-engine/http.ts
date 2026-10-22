@@ -1,16 +1,22 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { isSessionExpiredErrorBody } from "@/utils/session-expired";
-import { fetchWithSessionRetry } from "@/utils/session-refresh";
+import {
+  fetchWithSessionRetry,
+  isAnsweredWhileStopped,
+  sessionStopReason,
+} from "@/utils/session-refresh";
 import { isSigningOut } from "@/utils/signing-out";
 
 /**
  * onSessionExpired runs where the request ran, which may be a worker with no
- * page to redirect, so the engine's host decides how to reach the page.
+ * page to redirect, so the engine's host decides how to reach the page. It
+ * runs once requests stop, with why; not for the 401s answered here while
+ * stopped, nor when a refresh could not tell whether the session is gone.
  */
 export function createMailHttpRequest(
   accountId: string,
-  onSessionExpired: () => void,
+  onSessionExpired: (reason: "signed-out" | "rejected") => void,
 ): MailHttpRequestFn {
   return async ({ method, path, body, signal, accept }) => {
     const encoded = encodeRequestBody(body);
@@ -42,7 +48,10 @@ export function createMailHttpRequest(
       !isSigningOut() &&
       isSessionExpiredErrorBody(json)
     ) {
-      onSessionExpired();
+      const reason = isAnsweredWhileStopped(response)
+        ? undefined
+        : sessionStopReason();
+      if (reason) onSessionExpired(reason);
       return { status: response.status, json, sessionExpired: true };
     }
     return { status: response.status, json };

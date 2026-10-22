@@ -18,6 +18,7 @@ import {
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerSessionResetRequest,
 } from "@/utils/mail-engine/worker-protocol";
 import { MAIL_ENGINE_OWNER_LOCK } from "@/utils/mail-engine/tab-channel";
 import {
@@ -25,7 +26,10 @@ import {
   isLocalMailboxWipePending,
 } from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
-import { notifySessionExpired } from "@/utils/session-expired";
+import {
+  onSessionGoneReset,
+  workerFoundSessionGone,
+} from "@/utils/session-refresh";
 import { env } from "@/env";
 
 export { browserMailEngineCapabilities };
@@ -240,6 +244,19 @@ async function createWorkerOwnedEngine(
     }
   >();
   let closing: Promise<void> | undefined;
+  // The worker keeps its own copy of the session-gone stop; only the page
+  // sees the tab come back and can tell it the session is back.
+  const postSessionReset = () => {
+    worker.postMessage({
+      type: "session_reset",
+    } satisfies WorkerSessionResetRequest);
+  };
+  const forwardReset = onSessionGoneReset(postSessionReset);
+  const engineClosed = new AbortController();
+  const stopForwardingSessionReset = () => {
+    forwardReset();
+    engineClosed.abort();
+  };
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
@@ -252,7 +269,11 @@ async function createWorkerOwnedEngine(
       return;
     }
     if (message.type === "session_expired") {
-      notifySessionExpired();
+      workerFoundSessionGone(message.reason, engineClosed.signal).then(
+        (answer) => {
+          if (answer === "send-again") postSessionReset();
+        },
+      );
       return;
     }
     if (message.type === "snapshots") {
@@ -289,6 +310,7 @@ async function createWorkerOwnedEngine(
       input,
     });
   } catch (error) {
+    stopForwardingSessionReset();
     // The worker may already hold the mailbox's OPFS handles, which the
     // in-tab fallback needs.
     worker.terminate();
@@ -413,6 +435,7 @@ async function createWorkerOwnedEngine(
             type: "close",
           });
         } finally {
+          stopForwardingSessionReset();
           // SAHPool keeps OPFS handles until the worker is gone, even if the
           // graceful close RPC fails.
           worker.terminate();
