@@ -74,7 +74,14 @@ import {
 } from "./pending-navigation";
 import { splitLabelsByListVisibility } from "./label-visibility";
 import { getMailSidebarFolders } from "./outlook-folder-list";
-import { type MailDrag, useMailDrag, useSetMailDrag } from "./mail-drag";
+import {
+  isMailDragEvent,
+  MAIL_DRAG_TYPE,
+  type MailDrag,
+  useDragPresence,
+  useMailDrag,
+  useSetMailDrag,
+} from "./mail-drag";
 import { resolveSidebarDrop, type SidebarDropTarget } from "./sidebar-drop";
 import {
   MailboxItemContextMenu,
@@ -141,12 +148,13 @@ export type MailSidebarProps = {
   showSidebarToggle?: boolean;
   /** Each account's own labels and folders, shown in their place in All inboxes. */
   accountSections?: ReactNode;
-  /** The account whose labels and folders these rows are, for dropping mail on. */
-  dropAccount?: DropAccount;
+  /**
+   * The account whose labels these rows are, set where dropped mail can be
+   * labelled the way the label picker labels it.
+   */
+  dropAccountId?: string;
   className?: string;
 };
-
-type DropAccount = { id: string; provider: string };
 
 type SystemItem = {
   name: string;
@@ -334,7 +342,7 @@ function MailSidebarContent({
   toolLinks,
   showSidebarToggle = true,
   accountSections,
-  dropAccount,
+  dropAccountId,
   className,
 }: MailSidebarProps) {
   // Views All inboxes merges beyond its inbox, in one account's order.
@@ -380,23 +388,40 @@ function MailSidebarContent({
     if (revealTimer.current) clearTimeout(revealTimer.current);
     revealTimer.current = null;
   };
+  const overMore = useDragPresence(drag, (present) => {
+    if (!present) return cancelReveal();
+    if (revealTimer.current || !drag) return;
+    revealTimer.current = setTimeout(() => {
+      revealTimer.current = null;
+      setMoreRevealedFor(drag);
+    }, MORE_REVEAL_DELAY_MS);
+  });
+  // The toggle button inside the heading takes the pointer too, so each
+  // dragover counts, not just the heading's own enter.
   const holdOverMore = drag
     ? {
-        onDragEnter: () => {
-          if (revealTimer.current) return;
-          revealTimer.current = setTimeout(() => {
-            revealTimer.current = null;
-            setMoreRevealedFor(drag);
-          }, MORE_REVEAL_DELAY_MS);
+        onDragEnter: (event: DragEvent) => {
+          if (isMailDragEvent(event.dataTransfer)) overMore.enter();
         },
-        onDragLeave: cancelReveal,
+        onDragOver: (event: DragEvent) => {
+          if (isMailDragEvent(event.dataTransfer)) overMore.over();
+        },
+        onDragLeave: (event: DragEvent) => {
+          if (isMailDragEvent(event.dataTransfer)) overMore.leave();
+        },
       }
-    : {};
+    : undefined;
   useEffect(() => {
     if (drag || !revealTimer.current) return;
     clearTimeout(revealTimer.current);
     revealTimer.current = null;
   }, [drag]);
+  useEffect(
+    () => () => {
+      if (revealTimer.current) clearTimeout(revealTimer.current);
+    },
+    [],
+  );
   // The open view's own row is never hidden behind a closed group.
   const showMailboxes = storedShowMailboxes || isMoreActive || dragRevealsMore;
   const showMailboxRows = collapsed ? isMoreActive : showMailboxes;
@@ -538,7 +563,7 @@ function MailSidebarContent({
               collapsed={collapsed}
               expanded={showMailboxes}
               onToggle={() => setShowMailboxes(!showMailboxes)}
-              {...holdOverMore}
+              dragHandlers={holdOverMore}
             >
               More
             </GroupHeading>
@@ -625,7 +650,7 @@ function MailSidebarContent({
             labelEditMode={labelEditMode}
             supportsLabelVisibility={supportsLabelVisibility}
             collapsed={collapsed}
-            dropAccount={dropAccount}
+            dropAccountId={dropAccountId}
             editing={{
               labelColorOptions,
               onCreateLabel,
@@ -720,7 +745,7 @@ type LabelRowProps = Pick<
   editing?: MailboxEditing;
   /** Rows open another account, which loads fresh like the account switcher does. */
   reloadDocument?: boolean;
-  dropAccount?: DropAccount;
+  dropAccountId?: string;
 };
 
 /** An account's own folders and labels: the single-account sidebar's lower half. */
@@ -744,7 +769,6 @@ export function MailboxGroups({
     labelEditMode,
     editing,
     reloadDocument,
-    dropAccount,
   } = rowProps;
   const [isAddingLabel, setIsAddingLabel] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
@@ -831,15 +855,7 @@ export function MailboxGroups({
                   name={folder.displayName}
                   count={displayCount(countsById.get(folder.id))}
                   collapsed={collapsed}
-                  dropTarget={
-                    dropAccount
-                      ? {
-                          kind: "folder",
-                          accountId: dropAccount.id,
-                          folderId: folder.id,
-                        }
-                      : undefined
-                  }
+                  dropTarget={FOLDER_DROP_TARGET}
                 />
               </EditableMailboxItem>
             ))}
@@ -1070,12 +1086,11 @@ function LabelBranch({
             nested={hasNestedLabels && !collapsed}
             collapsed={collapsed}
             dropTarget={
-              props.dropAccount
+              props.dropAccountId
                 ? {
                     kind: "label",
-                    accountId: props.dropAccount.id,
+                    accountId: props.dropAccountId,
                     labelId: label.id,
-                    provider: props.dropAccount.provider,
                   }
                 : undefined
             }
@@ -1104,8 +1119,7 @@ function GroupHeading({
   action,
   expanded,
   onToggle,
-  onDragEnter,
-  onDragLeave,
+  dragHandlers,
   collapsed,
 }: {
   children: ReactNode;
@@ -1113,8 +1127,10 @@ function GroupHeading({
   expanded?: boolean;
   onToggle?: () => void;
   /** Mail dragged over the heading, which may open the group. */
-  onDragEnter?: () => void;
-  onDragLeave?: () => void;
+  dragHandlers?: Pick<
+    ComponentProps<"div">,
+    "onDragEnter" | "onDragOver" | "onDragLeave"
+  >;
   collapsed?: boolean;
 }) {
   // A heading can't fit in the rail, so groups are separated by a rule instead.
@@ -1123,15 +1139,7 @@ function GroupHeading({
   return (
     <div
       className="flex items-center gap-1 px-2.5 pt-4 pb-1.5"
-      onDragEnter={onDragEnter}
-      onDragLeave={(event) => {
-        if (
-          event.relatedTarget instanceof Node &&
-          event.currentTarget.contains(event.relatedTarget)
-        )
-          return;
-        onDragLeave?.();
-      }}
+      {...dragHandlers}
     >
       {onToggle ? (
         <button
@@ -1217,11 +1225,16 @@ function NavRow({
     nested,
     collapsed,
   });
-  const drop = useDropTarget({ target: dropTarget, active });
+  const { dragging, dropProps: drop } = useDropTarget({
+    target: dropTarget,
+    active,
+  });
   const className = cn(
     presentation.className,
-    // Instant under reduced motion; the color change alone carries it.
-    "motion-safe:transition-[background-color,box-shadow,opacity] motion-safe:duration-100",
+    // Only while dragging, so hover and selection stay instant; under
+    // reduced motion the color change alone carries it.
+    dragging &&
+      "motion-safe:transition-[background-color,box-shadow,opacity] motion-safe:duration-100",
     "data-[drop=target]:bg-primary/10 data-[drop=target]:text-foreground data-[drop=target]:ring-2 data-[drop=target]:ring-primary/60 data-[drop=target]:ring-inset",
     "data-[drop=blocked]:opacity-50",
   );
@@ -1306,6 +1319,7 @@ function NavRow({
 }
 
 const INBOX_DROP_TARGET: SidebarDropTarget = { kind: "inbox" };
+const FOLDER_DROP_TARGET: SidebarDropTarget = { kind: "folder" };
 const MORE_REVEAL_DELAY_MS = 600;
 
 /**
@@ -1325,7 +1339,10 @@ function useDropTarget({
   const setDrag = useSetMailDrag();
   // Keyed to the drag, so a drag that ended elsewhere leaves no highlight.
   const [hoveredBy, setHoveredBy] = useState<MailDrag | null>(null);
-  if (!drag || !target) return {};
+  const presence = useDragPresence(drag, (present) =>
+    setHoveredBy(present ? drag : null),
+  );
+  if (!drag || !target) return { dragging: drag !== null, dropProps: {} };
   const action = resolveSidebarDrop({
     target,
     conversations: drag.conversations,
@@ -1333,36 +1350,41 @@ function useDropTarget({
   });
   const dropEffect =
     action?.kind === "label" || action?.kind === "star" ? "copy" : "move";
-  const allowDrop = (event: DragEvent) => {
-    if (!action) {
-      event.dataTransfer.dropEffect = "none";
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = dropEffect;
+  // Files, text and links dragged in from elsewhere are none of the row's
+  // business, whatever drag this tab remembers.
+  const acceptDrag = (event: DragEvent) => {
+    if (!isMailDragEvent(event.dataTransfer)) return false;
+    if (action) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = dropEffect;
+    } else event.dataTransfer.dropEffect = "none";
+    return true;
   };
 
   return {
-    "data-drop":
-      hoveredBy === drag ? (action ? "target" : "blocked") : undefined,
-    onDragEnter: (event: DragEvent) => {
-      setHoveredBy(drag);
-      allowDrop(event);
-    },
-    onDragOver: allowDrop,
-    onDragLeave: (event: DragEvent) => {
-      if (
-        event.relatedTarget instanceof Node &&
-        event.currentTarget.contains(event.relatedTarget)
-      )
-        return;
-      setHoveredBy(null);
-    },
-    onDrop: (event: DragEvent) => {
-      event.preventDefault();
-      setHoveredBy(null);
-      setDrag(null);
-      if (action) drag.onDrop(action);
+    dragging: true,
+    dropProps: {
+      "data-drop":
+        hoveredBy === drag ? (action ? "target" : "blocked") : undefined,
+      onDragEnter: (event: DragEvent) => {
+        if (acceptDrag(event)) presence.enter();
+      },
+      onDragOver: (event: DragEvent) => {
+        if (acceptDrag(event)) presence.over();
+      },
+      onDragLeave: (event: DragEvent) => {
+        if (isMailDragEvent(event.dataTransfer)) presence.leave();
+      },
+      onDrop: (event: DragEvent) => {
+        if (!isMailDragEvent(event.dataTransfer)) return;
+        event.preventDefault();
+        presence.reset();
+        setHoveredBy(null);
+        // Another tab's mail drag carries the same type but not this nonce.
+        if (event.dataTransfer.getData(MAIL_DRAG_TYPE) !== drag.nonce) return;
+        setDrag(null);
+        if (action) drag.onDrop(action);
+      },
     },
   };
 }

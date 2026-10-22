@@ -3,21 +3,17 @@ import {
   isThreadOnlyIn,
 } from "@/app/(app)/[emailAccountId]/mail/read-state";
 import { isThreadStarred } from "@/app/(app)/[emailAccountId]/mail/star-state";
-import {
-  isGoogleProvider,
-  isMicrosoftProvider,
-} from "@/utils/email/provider-types";
 import { GmailLabel } from "@/utils/gmail/label";
 
 /** A sidebar row conversations can be dropped on. */
 export type SidebarDropTarget =
-  | { kind: "inbox" | "archive" | "trash" | "spam" | "starred" }
-  /** A label or category belongs to one account, whose provider labels it. */
-  | { kind: "label"; accountId: string; labelId: string; provider: string }
-  | { kind: "folder"; accountId: string; folderId: string };
+  | { kind: "inbox" | "archive" | "trash" | "spam" | "starred" | "folder" }
+  /** A Gmail label or Outlook category, which belongs to one account. */
+  | { kind: "label"; accountId: string; labelId: string };
 
 export type DraggedConversation = {
   key: string;
+  threadId: string;
   accountId: string;
   messages: readonly { labelIds?: string[] | null }[];
 };
@@ -88,12 +84,6 @@ export function resolveSidebarDrop({
         ? null
         : { kind: "star" };
     case "label": {
-      // Gmail labels and Outlook categories, as the picker offers them.
-      if (
-        !isGoogleProvider(target.provider) &&
-        !isMicrosoftProvider(target.provider)
-      )
-        return null;
       // A label id names one account's label; other accounts don't have it.
       if (!all((conversation) => conversation.accountId === target.accountId))
         return null;

@@ -5,9 +5,6 @@ import {
   type SidebarDropTarget,
 } from "./sidebar-drop";
 
-const GOOGLE = "google";
-const MICROSOFT = "microsoft";
-
 describe("resolveSidebarDrop", () => {
   it("never drops on the view the conversations are in", () => {
     expect(
@@ -167,20 +164,16 @@ describe("resolveSidebarDrop", () => {
   });
 
   describe("labels", () => {
-    const projectLabel = (provider: string): SidebarDropTarget => ({
+    const projectLabel: SidebarDropTarget = {
       kind: "label",
       accountId: "acc-1",
       labelId: "Label_project",
-      provider,
-    });
+    };
 
-    it.each([
-      GOOGLE,
-      MICROSOFT,
-    ])("applies a %s label or category the way the picker does", (provider) => {
+    it("applies the label the way the picker does", () => {
       expect(
         resolveSidebarDrop({
-          target: projectLabel(provider),
+          target: projectLabel,
           conversations: [conversation("a", ["INBOX"])],
           isCurrentView: false,
         }),
@@ -191,20 +184,10 @@ describe("resolveSidebarDrop", () => {
       });
     });
 
-    it("refuses a provider the picker can't label for", () => {
-      expect(
-        resolveSidebarDrop({
-          target: projectLabel("imap"),
-          conversations: [conversation("a", ["INBOX"])],
-          isCurrentView: false,
-        }),
-      ).toBeNull();
-    });
-
     it("refuses when every conversation already has the label", () => {
       expect(
         resolveSidebarDrop({
-          target: projectLabel(GOOGLE),
+          target: projectLabel,
           conversations: [conversation("a", ["INBOX", "Label_project"])],
           isCurrentView: false,
         }),
@@ -214,7 +197,7 @@ describe("resolveSidebarDrop", () => {
     it("allows an All inboxes drop when every conversation's account has the label", () => {
       expect(
         resolveSidebarDrop({
-          target: projectLabel(GOOGLE),
+          target: projectLabel,
           conversations: [
             conversation("acc-1:a", ["INBOX"], "acc-1"),
             conversation("acc-1:b", ["INBOX"], "acc-1"),
@@ -231,7 +214,7 @@ describe("resolveSidebarDrop", () => {
     it("refuses an All inboxes drop when any conversation's account lacks the label", () => {
       expect(
         resolveSidebarDrop({
-          target: projectLabel(GOOGLE),
+          target: projectLabel,
           conversations: [
             conversation("acc-1:a", ["INBOX"], "acc-1"),
             conversation("acc-2:b", ["INBOX"], "acc-2"),
@@ -258,7 +241,7 @@ describe("resolveSidebarDrop", () => {
   it("refuses Outlook folders, which have no move the picker offers", () => {
     expect(
       resolveSidebarDrop({
-        target: { kind: "folder", accountId: "acc-1", folderId: "folder-1" },
+        target: { kind: "folder" },
         conversations: [conversation("a", ["INBOX"])],
         isCurrentView: false,
       }),
@@ -271,5 +254,5 @@ function conversation(
   labelIds: string[],
   accountId = "acc-1",
 ): DraggedConversation {
-  return { key, accountId, messages: [{ labelIds }] };
+  return { key, threadId: key, accountId, messages: [{ labelIds }] };
 }

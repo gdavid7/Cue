@@ -92,6 +92,35 @@ test("drags a selection onto Trash and brings it back with Undo", async ({
   }
 });
 
+test("opens More while a drag rests on its toggle, and closes it after", async ({
+  page,
+}, testInfo) => {
+  const { conversations } = await openMail(page);
+  const row = conversationWithSubject(
+    page,
+    conversations,
+    "Read Command Message",
+  );
+  const sidebar = page.getByRole("navigation", { name: "Mailboxes" });
+  const more = sidebar.getByRole("button", { name: "More", exact: true });
+  const trash = sidebar.getByRole("link", { name: /^Trash/ });
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+  await expect(trash).toHaveCount(0);
+
+  // On the button inside the heading, not the heading's own padding.
+  await dragOver(page, row, more);
+  await expect(trash).toBeVisible();
+  await moveOver(page, trash);
+  await expect(trash).toHaveAttribute("data-drop", "target");
+  await capturePlaywrightCheckpoint(page, testInfo, "drag-opens-more");
+
+  // Let go over the list, which takes no drop.
+  await moveOver(page, row);
+  await page.mouse.up();
+  await expect(trash).toHaveCount(0);
+  await expect(row).toBeVisible();
+});
+
 test("keeps clicking open and Shift+click selecting on draggable rows", async ({
   page,
 }) => {

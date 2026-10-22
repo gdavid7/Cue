@@ -80,17 +80,21 @@ import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThre
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
 import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSenderCommands";
 import { extractEmailAddress } from "@/utils/email";
+import { LabelPickerDialog } from "@/app/(app)/[emailAccountId]/mail/LabelPickerDialog";
 import {
+  applyEngineLabels,
   getLabelAppliedMessage,
-  LabelPickerDialog,
-} from "@/app/(app)/[emailAccountId]/mail/LabelPickerDialog";
-import { applyEngineLabels } from "@/app/(app)/[emailAccountId]/mail/apply-engine-labels";
+} from "@/app/(app)/[emailAccountId]/mail/apply-engine-labels";
 import {
   MAIL_DRAG_TYPE,
   setConversationDragImage,
   useSetMailDrag,
 } from "@/app/(app)/[emailAccountId]/mail/mail-drag";
-import type { SidebarDropAction } from "@/app/(app)/[emailAccountId]/mail/sidebar-drop";
+import type {
+  DraggedConversation,
+  SidebarDropAction,
+} from "@/app/(app)/[emailAccountId]/mail/sidebar-drop";
+import { randomUuid } from "@/utils/uuid";
 import { ThreadList } from "@/app/(app)/[emailAccountId]/mail/ThreadList";
 import { InboxStyleCard } from "@/app/(app)/[emailAccountId]/mail/InboxStylePicker";
 import { CueLabelsCard } from "@/components/CueLabelsCleanup";
@@ -2343,14 +2347,12 @@ export function MailShell() {
     },
   );
   const labelDropped = useStableCallback(
-    async (keys: string[], accountId: string, labelId: string) => {
+    async (threadIds: string[], accountId: string, labelId: string) => {
+      if (!threadIds.length) return;
       if (!client) {
         toast.error("Mail is still starting. Try again in a moment.");
         return;
       }
-      const threadIds = navThreads
-        .filter((thread) => keys.includes(getListThreadKey(thread)))
-        .map((thread) => thread.id);
       const { succeededThreadIds, failedThreadIds } = await applyEngineLabels({
         client,
         emailAccountId: accountId,
@@ -2370,7 +2372,9 @@ export function MailShell() {
   );
   // The same actions, toasts and Undo as the toolbar and the label picker.
   const dropOnSidebar = useStableCallback(
-    async (keys: string[], action: SidebarDropAction) => {
+    async (conversations: DraggedConversation[], action: SidebarDropAction) => {
+      if (!conversations.length) return;
+      const keys = conversations.map((conversation) => conversation.key);
       switch (action.kind) {
         case "archive":
           return runOn(archive, true, true, "next", keys);
@@ -2403,7 +2407,11 @@ export function MailShell() {
             keys,
           );
         case "label":
-          return labelDropped(keys, action.accountId, action.labelId);
+          return labelDropped(
+            conversations.map((conversation) => conversation.threadId),
+            action.accountId,
+            action.labelId,
+          );
       }
     },
   );
@@ -2421,18 +2429,24 @@ export function MailShell() {
             selection.selectedIds.has(getListThreadKey(row)),
           )
         : [thread];
-      const keys = dragged.map(getListThreadKey);
+      const conversations = dragged.map((row) => ({
+        key: getListThreadKey(row),
+        threadId: row.id,
+        accountId: getListThreadEmailAccountId(row, emailAccountId),
+        messages: row.messages,
+      }));
+      // Only a nonce goes in the drag's data: other pages can read it, and
+      // the drop matches it to this drag.
+      const nonce = randomUuid();
+      event.dataTransfer.clearData();
       event.dataTransfer.effectAllowed = "copyMove";
-      event.dataTransfer.setData(MAIL_DRAG_TYPE, JSON.stringify(keys));
+      event.dataTransfer.setData(MAIL_DRAG_TYPE, nonce);
       setConversationDragImage(event.dataTransfer, dragged.length);
       setMailDrag({
-        conversations: dragged.map((row) => ({
-          key: getListThreadKey(row),
-          accountId: getListThreadEmailAccountId(row, emailAccountId),
-          messages: row.messages,
-        })),
+        nonce,
+        conversations,
         onDrop: (action) => {
-          dropOnSidebar(keys, action);
+          dropOnSidebar(conversations, action);
         },
       });
     },
