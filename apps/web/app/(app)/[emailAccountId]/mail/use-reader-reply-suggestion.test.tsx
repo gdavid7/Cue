@@ -572,7 +572,13 @@ describe("useReaderReplySuggestion", () => {
   // its own, and can finish a few seconds after the reader gave up. The rule's
   // reply is the one the user set up, so it still shows when it lands.
   describe("when the rule's reply lands after the reader opened", () => {
+    // The reader keeps one window per message for the whole session, so each
+    // test gets a message of its own.
+    let ask = "";
+    let messageCount = 0;
     beforeEach(() => {
+      messageCount += 1;
+      ask = `fresh-${messageCount}`;
       vi.useFakeTimers();
       mocks.useReplySuggestion.mockImplementation(({ enabled }) => ({
         phase: enabled ? "done" : "idle",
@@ -585,16 +591,16 @@ describe("useReaderReplySuggestion", () => {
 
     it("shows the rule's reply after Cue's own pass declined, and records it shown", () => {
       const { result, rerender } = renderSuggestion([
-        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"])),
       ]);
       expect(result.current.assist).toBeNull();
       expect(refetchesOver(RULE_REPLY_POLL_INTERVAL_MS)).toBe(1);
 
-      mocks.plans = [ruleSuggestionPlan("ask")];
+      mocks.plans = [ruleSuggestionPlan(ask)];
       rerender();
 
       expect(result.current.assist).toMatchObject({
-        messageId: "ask",
+        messageId: ask,
         reply: "Thursday works for me.",
         executedActionId: "suggestion-1",
       });
@@ -613,14 +619,14 @@ describe("useReaderReplySuggestion", () => {
         suggestion: declined,
       });
       const { result, rerender } = renderSuggestion([
-        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"])),
       ]);
       render(<div data-testid="before">{result.current.replyStatus}</div>);
       expect(screen.getByTestId("before").textContent).toContain(
         "Cue left this reply",
       );
 
-      mocks.plans = [ruleSuggestionPlan("ask")];
+      mocks.plans = [ruleSuggestionPlan(ask)];
       rerender();
 
       expect(result.current.assist?.executedActionId).toBe("suggestion-1");
@@ -629,7 +635,7 @@ describe("useReaderReplySuggestion", () => {
 
     it("stops checking for the rule's reply once the limit passes", () => {
       renderSuggestion([
-        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"])),
       ]);
 
       expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(
@@ -638,9 +644,36 @@ describe("useReaderReplySuggestion", () => {
       expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
     });
 
+    // Reopening the conversation, or the reader remounting, keeps the window
+    // the message already had rather than starting another.
+    it("doesn't start the window again when the reader remounts", () => {
+      const thread = [arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"]))];
+      const first = renderSuggestion(thread);
+      expect(refetchesOver(10_000)).toBe(5);
+      first.unmount();
+
+      renderSuggestion(thread);
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(
+        (RULE_REPLY_POLL_LIMIT_MS - 10_000) / RULE_REPLY_POLL_INTERVAL_MS - 1,
+      );
+    });
+
+    // The Date header is the sender's to write, and clocks drift.
+    it("doesn't check for a rule's reply to mail dated well ahead of now", () => {
+      renderSuggestion([
+        {
+          ...incoming(ask, ["INBOX", "Label_to_reply"]),
+          internalDate: String(Date.now() + 60 * 60 * 1000),
+        } as ThreadMessage,
+      ]);
+
+      expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
+    });
+
     it("stops checking when the reader closes", () => {
       const { unmount } = renderSuggestion([
-        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"])),
       ]);
 
       unmount();
@@ -649,7 +682,7 @@ describe("useReaderReplySuggestion", () => {
     });
 
     it("doesn't check for a rule's reply to mail that arrived a while ago", () => {
-      renderSuggestion([incoming("ask", ["INBOX", "Label_to_reply"])]);
+      renderSuggestion([incoming(ask, ["INBOX", "Label_to_reply"])]);
 
       expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);
     });
@@ -658,7 +691,7 @@ describe("useReaderReplySuggestion", () => {
     // reply landing now must not take its place.
     it("doesn't check for a rule's reply once the user has a draft", () => {
       renderSuggestion([
-        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"])),
         {
           ...incoming("draft", ["DRAFT"]),
           headers: { from: "user@example.com" },
@@ -677,7 +710,7 @@ describe("useReaderReplySuggestion", () => {
       }));
 
       renderSuggestion([
-        arrivedNow(incoming("ask", ["INBOX", "Label_to_reply"])),
+        arrivedNow(incoming(ask, ["INBOX", "Label_to_reply"])),
       ]);
 
       expect(refetchesOver(RULE_REPLY_POLL_LIMIT_MS)).toBe(0);

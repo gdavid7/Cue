@@ -64,6 +64,11 @@ export const REPLY_WAIT_LIMIT_MS = 15_000;
 export const RULE_REPLY_POLL_INTERVAL_MS = 2000;
 export const RULE_REPLY_POLL_LIMIT_MS = 30_000;
 const FRESH_MAIL_MS = 2 * 60 * 1000;
+// Kept outside the hook so reopening the conversation, or the reader
+// remounting, never starts the window again: one window per message. Holds
+// IDs and times only, and only the most recent messages.
+const ruleReplyDueByMessage = new Map<string, number>();
+const RULE_REPLY_WINDOWS_KEPT = 200;
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -115,8 +120,6 @@ export function useReaderReplySuggestion({
     id: string;
     eligible: boolean;
     run: boolean;
-    /** Until when a rule's reply may still be on its way, for fresh mail. */
-    ruleReplyDueBy?: number;
   }>();
   const gate = getReaderReplyGate({
     setting: draftReplies.setting,
@@ -126,14 +129,7 @@ export function useReaderReplySuggestion({
     hasDraft,
   });
   if (latest && decision?.id !== latest.id && !draftReplies.loading) {
-    setDecision({
-      id: latest.id,
-      eligible: gate.autoEligible,
-      run: false,
-      ruleReplyDueBy: isFreshMail(latest)
-        ? Date.now() + RULE_REPLY_POLL_LIMIT_MS
-        : undefined,
-    });
+    setDecision({ id: latest.id, eligible: gate.autoEligible, run: false });
   }
   const current = latest && decision?.id === latest.id ? decision : undefined;
 
@@ -249,7 +245,7 @@ export function useReaderReplySuggestion({
       if (failed) retry();
       return;
     }
-    setDecision({ ...current, id: latest.id, eligible: true, run: true });
+    setDecision({ id: latest.id, eligible: true, run: true });
   };
   // The same context the reader shows, handed to the suggestion so the server
   // doesn't gather it (and read linked pages) again for each pass.
@@ -337,8 +333,9 @@ export function useReaderReplySuggestion({
     plansSettled &&
     !ruleSuggestion &&
     !verified &&
+    latest &&
     isInInbox(messages)
-      ? current?.ruleReplyDueBy
+      ? ruleReplyWindowEnd(emailAccountId, latest)
       : undefined;
   useEffect(() => {
     if (!ruleReplyDueBy) return;
@@ -526,11 +523,40 @@ function namesFrom(
   });
 }
 
+/**
+ * Until when the reader checks for the rule's reply to this message: set the
+ * first time it is asked for, and kept. Undefined for mail that wasn't fresh
+ * then, so it is never checked for at all.
+ */
+function ruleReplyWindowEnd(emailAccountId: string, message: ThreadMessage) {
+  const key = `${emailAccountId}:${message.id}`;
+  let dueBy = ruleReplyDueByMessage.get(key);
+  if (dueBy === undefined) {
+    dueBy = isFreshMail(message) ? Date.now() + RULE_REPLY_POLL_LIMIT_MS : 0;
+    ruleReplyDueByMessage.set(key, dueBy);
+    if (ruleReplyDueByMessage.size > RULE_REPLY_WINDOWS_KEPT) {
+      const oldest = ruleReplyDueByMessage.keys().next().value;
+      if (oldest !== undefined) ruleReplyDueByMessage.delete(oldest);
+    }
+  }
+  return dueBy || undefined;
+}
+
+/**
+ * Whether the message arrived within the last couple of minutes. Both clocks
+ * here can be off: this device's clock is the user's, and without the
+ * provider's receipt time the Date header is whatever the sender wrote. So a
+ * message dated ahead of now counts as fresh only within the same window
+ * ahead, never for as long as its date stays in the future.
+ */
 function isFreshMail(message: ThreadMessage) {
   const receivedAt = message.internalDate
     ? Number(message.internalDate)
     : new Date(message.headers.date).getTime();
-  return Number.isFinite(receivedAt) && Date.now() - receivedAt < FRESH_MAIL_MS;
+  return (
+    Number.isFinite(receivedAt) &&
+    Math.abs(Date.now() - receivedAt) < FRESH_MAIL_MS
+  );
 }
 
 function isInInbox(messages: ThreadMessage[]) {
