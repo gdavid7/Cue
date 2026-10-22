@@ -53,9 +53,10 @@ test("says when a familiar name writes from a new address, until it's marked fin
     `li[data-thread-message-id="${FAMILIAR_MESSAGE}"]`,
   );
   await expect(reloaded).toBeVisible({ timeout: 60_000 });
-  await expect(reloaded.getByText("A note under a familiar name")).toBeVisible({
-    timeout: 60_000,
-  });
+  // HTML bodies render in a frame, so the subject says the reader is open.
+  await expect(
+    page.getByRole("heading", { name: "Familiar Name Message", exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
   await settle(page);
   await expect(reloaded.getByTestId("sender-notice")).toHaveCount(0);
   await capturePlaywrightCheckpoint(page, testInfo, "sender-notice-allowed");
@@ -96,8 +97,9 @@ test("says nothing about a sender at an address they always use", async ({
     "thr_playwright_reader_html",
     "msg_playwright_reader_html",
   );
+  await expect(normal).toBeVisible();
   await expect(
-    normal.getByText("A rich email body for keyboard navigation."),
+    page.getByRole("heading", { name: "Reader Html Message", exact: true }),
   ).toBeVisible({ timeout: 60_000 });
   await settle(page);
   await expect(page.getByTestId("sender-notice")).toHaveCount(0);
