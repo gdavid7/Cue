@@ -1417,6 +1417,102 @@ describe("Gmail quota gate", () => {
   });
 
   describe("store round trips", () => {
+    it("lets the engine's backfill back in once another instance clears the first-sync marker, however long the bucket's wait", async () => {
+      const account = "account-deferral-shared";
+      // A person's reads overdraw the bucket, so the backfill's wait is the
+      // bucket's, longer than the marker's five-second retry.
+      await drainBucket(account);
+      await gmailQuotaStore.block({
+        key: `gmail-quota:${account}:initial-sync`,
+        ms: 90_000,
+      });
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const backfill = () =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "background" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: account, cost: 100 },
+              async () => "page",
+            ),
+        );
+      const first = await backfill().catch((error: unknown) => error);
+      expect(first).toBeInstanceOf(GmailCallDeferredError);
+      expect((first as GmailCallDeferredError).retryAfterMs).toBeGreaterThan(
+        5000,
+      );
+
+      // Another instance's scan ends.
+      await gmailQuotaStore.clear(`gmail-quota:${account}:initial-sync`);
+      await vi.advanceTimersByTimeAsync(1000);
+      const takesBefore = take.mock.calls.length;
+      const second = backfill().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await expect(second).resolves.toBe("page");
+      expect(take.mock.calls.length).toBeGreaterThan(takesBefore);
+    });
+
+    it("shares a wait the pace set for half a second, then asks the store again", async () => {
+      const account = "account-pace-share";
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const sync = () =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: account, cost: 500 },
+              async () => "batch",
+            ),
+        );
+      // A full second's pace: the admission says the next would wait for it.
+      await expect(sync()).resolves.toBe("batch");
+      expect(take).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      const shared = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(shared).resolves.toBe("batch");
+
+      const asks = take.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(600);
+      const lapsed = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take.mock.calls.length).toBe(asks + 1);
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(lapsed).resolves.toBe("batch");
+    });
+
+    it("shares a wait the bucket set past half a second, as it cannot end sooner", async () => {
+      const account = "account-bucket-share";
+      await drainBucket(account);
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const sync = () =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: account, cost: 100 },
+              async () => "batch",
+            ),
+        );
+      const first = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      const second = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        "batch",
+        "batch",
+      ]);
+    });
+
     it("admits a person's reads that arrive together in one store round trip", async () => {
       const take = vi.spyOn(gmailQuotaStore, "take");
       const reads = Array.from({ length: 5 }, () =>
@@ -1788,6 +1884,17 @@ describe("Gmail quota gate", () => {
     ).toBeNull();
   });
 });
+
+// A person's reads overdraw the account's bucket well below sync's floor.
+async function drainBucket(emailAccountId: string) {
+  const reads = Promise.all(
+    [1, 2, 3, 4].map(() =>
+      interactive(emailAccountId, async () => "read", 650),
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(4000);
+  await reads;
+}
 
 function interactive<T>(
   emailAccountId: string,

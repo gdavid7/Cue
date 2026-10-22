@@ -58,8 +58,6 @@ vi.mock("@/utils/redis", () => ({
 }));
 
 const ACCOUNT = "account-1";
-const PRIMARY_TAKES = [7, 8, 8];
-const BACKFILL_TAKES = [8, 7, 8];
 const logger = createScopedLogger("enumeration-redis-commands-test");
 
 describe("Redis commands of one enumeration request", () => {
@@ -91,15 +89,16 @@ describe("Redis commands of one enumeration request", () => {
     expect(pages.map((p) => p.messages)).toEqual([12, 19, 19, 19]);
     // The list call and five batches of whole messages are six admissions;
     // the rest are batches the window or the bucket held, asked once more
-    // after waiting; then the envelope's admission and release. Before each
-    // admission said what the next batch would be told, these were 11 takes.
-    expect(pages.slice(1).map((p) => p.commands)).toEqual(
-      PRIMARY_TAKES.map((takes) => ({
-        "gmail-quota:take": takes,
+    // after waiting. Before each admission said what the next batch would be
+    // told, a page took 11 takes.
+    for (const { commands } of pages.slice(1)) {
+      expect(commands["gmail-quota:take"]).toBeLessThanOrEqual(8);
+      expect(commands).toMatchObject({
         "local-mail-budget:admit": 1,
         "local-mail-budget:release": 1,
-      })),
-    );
+      });
+      expect(Object.keys(commands)).toHaveLength(3);
+    }
   });
 
   it("spends a bounded number of commands on a backfill page", async () => {
@@ -113,15 +112,17 @@ describe("Redis commands of one enumeration request", () => {
     }
 
     expect(pages.map((p) => p.messages)).toEqual([9, 9, 9, 9]);
-    // Six admissions again (background batches are two messages); 10 to 11
-    // takes before.
-    expect(pages.slice(1).map((p) => p.commands)).toEqual(
-      BACKFILL_TAKES.map((takes) => ({
-        "gmail-quota:take": takes,
+    // Six admissions again (background batches are two messages). A marker
+    // can defer the backfill, so it asks after each admission rather than
+    // wait inside the gate on what it was told: 10 to 11 takes, as before.
+    for (const { commands } of pages.slice(1)) {
+      expect(commands["gmail-quota:take"]).toBeLessThanOrEqual(11);
+      expect(commands).toMatchObject({
         "local-mail-budget:admit": 1,
         "local-mail-budget:release": 1,
-      })),
-    );
+      });
+      expect(Object.keys(commands)).toHaveLength(3);
+    }
   });
 });
 

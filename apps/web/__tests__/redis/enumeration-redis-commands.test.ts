@@ -139,10 +139,16 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         );
       expect(pages.map((page) => page.status)).toEqual(pages.map(() => "ok"));
       // Real time and the production Lua, so a page varies by a command or
-      // two. These seven pages took 92 commands before admissions said what
-      // the next batch would be told, and 73 to 75 since.
-      const total = pages.reduce((sum, page) => sum + page.commands.length, 0);
-      expect(total).toBeLessThanOrEqual(80);
+      // two. The primary scan's three pages took 36 commands before each
+      // admission said what the next batch would be told, and 27 to 30
+      // since. The backfill, which a marker can defer, still asks after each
+      // admission: 56 for its four pages, as before.
+      const total = (scope: string) =>
+        pages
+          .filter((page) => page.scope === scope)
+          .reduce((sum, page) => sum + page.commands.length, 0);
+      expect(total("primary")).toBeLessThanOrEqual(31);
+      expect(total("history")).toBeLessThanOrEqual(60);
     });
   },
 );
