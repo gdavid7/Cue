@@ -134,11 +134,15 @@ test("an account whose Today failed is named, and Today never says all clear", a
       `${TRACKER_PREFIX}%`,
     ]),
   );
-  await page.route("**/api/user/home**", async (route) => {
-    if (route.request().headers()["x-email-account-id"] !== account.id)
-      return route.continue();
-    await route.fulfill({ status: 500, json: { error: "Boom" } });
-  });
+  // Today's own answer only, not /api/user/home/deadlines, which loads apart.
+  await page.route(
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      if (route.request().headers()["x-email-account-id"] !== account.id)
+        return route.continue();
+      await route.fulfill({ status: 500, json: { error: "Boom" } });
+    },
+  );
 
   await page.goto(`/${primaryId}/home?accounts=all`);
   await expect(

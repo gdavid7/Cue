@@ -219,12 +219,15 @@ describe("Today's cache", () => {
     // A newer version.
     stored({ version: 99, savedAt: NOW, timeZone: ZONE, data: home() });
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
-    // Older ones: before deadlines loaded on their own, or whose next meeting has no id.
-    stored({ version: 1, savedAt: NOW, timeZone: ZONE, data: home() });
-    expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    // Older ones: Next up with deadlines, a next meeting without an id, or no
+    // Reading lane. Each of 2's shapes shipped from a different branch.
+    for (const version of [1, 2, 3]) {
+      stored({ version, savedAt: NOW, timeZone: ZONE, data: home() });
+      expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    }
     // The right version, missing what Today reads.
     stored({
-      version: 2,
+      version: 4,
       savedAt: NOW,
       timeZone: ZONE,
       data: { needsYou: "nope" },
@@ -232,7 +235,7 @@ describe("Today's cache", () => {
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
     // A time zone this browser can't read.
     stored({
-      version: 2,
+      version: 4,
       savedAt: NOW,
       timeZone: "Nowhere/Else",
       data: home(),

@@ -157,8 +157,9 @@ export function useHomeDeadlines(emailAccountId?: string | null) {
           emailAccountId,
         )
       : null,
-    // Each load asks every connected app, so tab switches share one.
-    { focusThrottleInterval: FOCUS_REFRESH_MIN_MS },
+    // Each load asks every connected app, so tab switches share one, and a
+    // failed load waits for the next visit rather than asking them again.
+    { focusThrottleInterval: FOCUS_REFRESH_MIN_MS, shouldRetryOnError: false },
   );
   return data?.items;
 }
