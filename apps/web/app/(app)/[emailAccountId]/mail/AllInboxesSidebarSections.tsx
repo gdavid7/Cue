@@ -170,6 +170,7 @@ function AccountMailboxes({
             supportsLabelVisibility={isGoogleProvider(provider)}
             collapsed={false}
             reloadDocument
+            dropAccount={{ id: accountId, provider }}
           />
         )}
       </LoadingContent>

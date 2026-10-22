@@ -108,7 +108,7 @@ export function LabelPickerDialog({
         });
       if (succeededThreadIds.length) {
         onApplied(succeededThreadIds, id);
-        toast.success(getSuccessMessage(mode, succeededThreadIds.length));
+        toast.success(getLabelAppliedMessage(mode, succeededThreadIds.length));
       }
       setRemainingThreadIds(failedThreadIds);
       if (failedThreadIds.length) {
@@ -199,7 +199,7 @@ export function LabelPickerDialog({
   );
 }
 
-function getSuccessMessage(mode: "label" | "move", count: number) {
+export function getLabelAppliedMessage(mode: "label" | "move", count: number) {
   if (mode === "move")
     return count === 1 ? "Moved" : `Moved ${count} conversations`;
   return count === 1

@@ -20,6 +20,7 @@ import {
 } from "react";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
+import { MailDragProvider } from "@/app/(app)/[emailAccountId]/mail/mail-drag";
 import { MailMobileNav } from "@/app/(app)/[emailAccountId]/mail/MailMobileNav";
 import { MailShellSidebar } from "@/app/(app)/[emailAccountId]/mail/MailShellSidebar";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
@@ -121,42 +122,44 @@ export function MailFrame({ children }: { children: ReactNode }) {
 
   return (
     <MailFrameContext.Provider value={context}>
-      <MailProductFrame
-        accountSwitcher={
-          mailScreen?.ownsPhoneBar ? null : (
-            <MailMobileNav
-              onOpenMailboxes={() => setIsMobileSidebarOpen(true)}
-              accountSwitcher={
-                <MailAccountSwitcher
-                  isDesktopApp={isDesktopApp}
-                  isAllAccounts={isAllAccounts}
-                  onSelectAccount={selectAccount}
-                  onSelectAll={selectAllAccounts}
-                  variant="bar"
-                />
-              }
-            />
-          )
-        }
-      >
-        <MailShellSidebar
-          activeType={getActiveType({
-            isToday,
-            mailScreen,
-            view: mailLocation?.view,
-          })}
-          activeLabelId={mailScreen?.activeLabelId ?? null}
-          activeFolderId={mailScreen?.activeFolderId ?? null}
-          isAllAccounts={isAllAccounts}
-          isDesktopApp={isDesktopApp}
-          onSelectAccount={selectAccount}
-          onSelectAllAccounts={selectAllAccounts}
-          onMailboxItemDeleted={deleteMailboxItem}
-          mobileOpen={isMobileSidebarOpen && !isLargeScreen}
-          onMobileOpenChange={setIsMobileSidebarOpen}
-        />
-        {children}
-      </MailProductFrame>
+      <MailDragProvider>
+        <MailProductFrame
+          accountSwitcher={
+            mailScreen?.ownsPhoneBar ? null : (
+              <MailMobileNav
+                onOpenMailboxes={() => setIsMobileSidebarOpen(true)}
+                accountSwitcher={
+                  <MailAccountSwitcher
+                    isDesktopApp={isDesktopApp}
+                    isAllAccounts={isAllAccounts}
+                    onSelectAccount={selectAccount}
+                    onSelectAll={selectAllAccounts}
+                    variant="bar"
+                  />
+                }
+              />
+            )
+          }
+        >
+          <MailShellSidebar
+            activeType={getActiveType({
+              isToday,
+              mailScreen,
+              view: mailLocation?.view,
+            })}
+            activeLabelId={mailScreen?.activeLabelId ?? null}
+            activeFolderId={mailScreen?.activeFolderId ?? null}
+            isAllAccounts={isAllAccounts}
+            isDesktopApp={isDesktopApp}
+            onSelectAccount={selectAccount}
+            onSelectAllAccounts={selectAllAccounts}
+            onMailboxItemDeleted={deleteMailboxItem}
+            mobileOpen={isMobileSidebarOpen && !isLargeScreen}
+            onMobileOpenChange={setIsMobileSidebarOpen}
+          />
+          {children}
+        </MailProductFrame>
+      </MailDragProvider>
     </MailFrameContext.Provider>
   );
 }

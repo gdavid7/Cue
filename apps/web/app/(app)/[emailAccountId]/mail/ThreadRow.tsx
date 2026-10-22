@@ -7,6 +7,7 @@ import {
   PaperclipIcon,
 } from "lucide-react";
 import {
+  type DragEvent,
   memo,
   type MouseEvent,
   type PointerEvent,
@@ -87,6 +88,9 @@ export type ThreadRowProps = {
   inInbox?: boolean;
   /** Hover actions on wide rows; touch layouts use selection instead. */
   rowActions?: ThreadRowActionHandlers;
+  /** Makes the row draggable onto the sidebar; touch keeps the pickers. */
+  onDragStart?: (index: number, event: DragEvent<HTMLElement>) => void;
+  onDragEnd?: () => void;
 };
 
 export const ThreadRow = memo(function ThreadRow({
@@ -112,6 +116,8 @@ export const ThreadRow = memo(function ThreadRow({
   accountColorClassName,
   inInbox,
   rowActions,
+  onDragStart,
+  onDragEnd,
 }: ThreadRowProps) {
   // Like Gmail, an unsent draft is marked on the row but doesn't stand in for
   // the message the user received.
@@ -189,6 +195,13 @@ export const ThreadRow = memo(function ThreadRow({
     // Text selection and iOS's callout would start on the same hold.
     <div
       className="group/swipe relative pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none] data-[swiping]:overflow-hidden"
+      // The browser starts a drag only once the pointer has moved a few
+      // pixels, so clicks, Shift+clicks and the checkbox stay as they were.
+      draggable={onDragStart ? true : undefined}
+      onDragStart={
+        onDragStart ? (event) => onDragStart(index, event) : undefined
+      }
+      onDragEnd={onDragEnd}
       onClickCapture={(event) => {
         swipe.handlers.onClickCapture(event);
         if (!event.isPropagationStopped()) longPress.onClickCapture(event);

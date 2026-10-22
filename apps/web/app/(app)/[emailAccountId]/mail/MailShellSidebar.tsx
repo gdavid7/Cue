@@ -157,6 +157,10 @@ export const MailShellSidebar = memo(function MailShellSidebar({
 
   const mailHref = useMailHref();
   const mailSlugs = useMailSlugs(allLabels, folders);
+  const dropAccount = useMemo(
+    () => ({ id: emailAccountId, provider }),
+    [emailAccountId, provider],
+  );
   // In All inboxes, its own views stay in All inboxes.
   const hrefFor = useCallback(
     (target: MailNavTarget) =>
@@ -291,6 +295,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           />
         ) : undefined
       }
+      dropAccount={dropAccount}
       todayHref={todayHref}
       onTodayIntent={todayIntent.begin}
       onTodayIntentEnd={todayIntent.end}
