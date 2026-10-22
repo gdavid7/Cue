@@ -45,7 +45,7 @@ export const searchIntentSchema = z.object({
   keywordGroups: z
     .array(z.array(z.string()))
     .describe(
-      'Words the mail itself would contain, one group per thing it must mention: a mail matches with a word from every group. Put a thing\'s synonyms and translations in its group, e.g. [["lease", "rental agreement"]]; a named place or object is a thing of its own. For a question, use the words the mail holding the answer would contain. Mail often names a thing by its own kind of message rather than the user\'s word (an airline\'s booking confirmation may never say "flight"), so include the words that kind of message would carry. Use as few groups as find the mail, usually one or two, and none beyond the user\'s words when a sender or label already narrows it. Leave out filler, question words and words about the search itself (email, message, find).',
+      'Words the mail itself would contain, one group per thing it must mention: a mail matches with a word from every group. Put a thing\'s synonyms and translations in its group, e.g. [["lease", "rental agreement"]]; a named place or object is a thing of its own. Mail often names a thing by its own kind of message rather than the user\'s word (an airline\'s booking confirmation may never say "flight"), so include the words that kind of message would carry. For a question, use the words the mail holding the answer would contain. Use as few groups as find the mail, usually one or two, and none beyond the user\'s words when a sender or label already narrows it. Leave out filler, question words and words about the search itself (email, message, find).',
     ),
   hasAttachment: z
     .boolean()
