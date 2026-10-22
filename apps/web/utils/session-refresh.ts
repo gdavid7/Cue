@@ -1,4 +1,9 @@
-import { isSessionExpiredErrorBody } from "@/utils/session-expired";
+import { SESSION_EXPIRED_ERROR_CODE } from "@/utils/config";
+import {
+  isSessionExpiredErrorBody,
+  notifySessionExpired,
+} from "@/utils/session-expired";
+import { isSigningOut } from "@/utils/signing-out";
 
 // Skips the signed session-data cookie so the server re-reads the session
 // row and re-issues that cookie, rather than answering from a stale copy.
@@ -8,12 +13,20 @@ const REFRESH_URL = "/api/auth/get-session?disableCookieCache=true";
 const REFRESH_REUSE_MS = 5000;
 
 let refresh: { promise: Promise<boolean>; settledAt?: number } | undefined;
+// The server would not take this page's session even after a refresh. Each
+// SWR revalidation, poll and mail sync would otherwise ask again and earn
+// another 401, so nothing more is sent until the page loads again.
+let sessionGone = false;
 
 /**
  * fetch() that answers a same-origin "session expired" 401 by refreshing the
- * session once and sending the request once more. When the refresh finds no
- * session, or the retry is rejected too, the 401 is returned unchanged so the
- * caller's sign-out handling runs as before.
+ * session once and sending the request once more. Concurrent 401s share one
+ * refresh.
+ *
+ * When the refresh finds no session, or the retry is rejected too, the
+ * session is gone: the page is told once (notifySessionExpired), and from
+ * then on same-origin requests are answered here with the same 401 instead of
+ * being sent, so callers' sign-out handling runs as before.
  *
  * Writes are replayed too: the session-expired code is only sent by the auth
  * gate, which rejects a request before its handler runs, so nothing happened
@@ -23,15 +36,22 @@ export async function fetchWithSessionRetry(
   input: string | URL | Request,
   init?: RequestInit,
 ): Promise<Response> {
-  const replayable = isSameOrigin(input) && canReplay(input, init);
+  const sameOrigin = isSameOrigin(input);
+  if (sameOrigin && sessionGone) return sessionExpiredResponse();
+  const replayable = sameOrigin && canReplay(input, init);
   const response = await fetch(
     replayable && input instanceof Request ? input.clone() : input,
     init,
   );
   if (response.status !== 401 || !replayable) return response;
+  // Sign-out ends the session on purpose; its 401s are not worth a refresh.
+  if (isSigningOut()) return response;
   if (!(await isSessionExpiredResponse(response))) return response;
   if (!(await refreshSession())) return response;
-  return fetch(input, init);
+  const retried = await fetch(input, init);
+  if (retried.status === 401 && (await isSessionExpiredResponse(retried)))
+    markSessionGone();
+  return retried;
 }
 
 function refreshSession() {
@@ -43,27 +63,69 @@ function refreshSession() {
     return refresh.promise;
 
   const current: { promise: Promise<boolean>; settledAt?: number } = {
-    promise: requestSessionRefresh().finally(() => {
-      current.settledAt = Date.now();
-    }),
+    promise: requestSessionRefresh()
+      .then((outcome) => {
+        if (outcome === "signed-out") markSessionGone();
+        return outcome === "refreshed";
+      })
+      .finally(() => {
+        current.settledAt = Date.now();
+      }),
   };
   refresh = current;
   return current.promise;
 }
 
-async function requestSessionRefresh() {
+// Only an answer that names no user means signed out; a failed or erroring
+// refresh says nothing about the session, so the page keeps trying.
+async function requestSessionRefresh(): Promise<
+  "refreshed" | "signed-out" | "unknown"
+> {
   try {
     const response = await fetch(REFRESH_URL, {
       credentials: "same-origin",
       cache: "no-store",
       headers: { accept: "application/json" },
     });
-    if (!response.ok) return false;
+    if (response.status === 401) return "signed-out";
+    if (!response.ok) return "unknown";
     const body: unknown = await response.json();
-    return !!body && typeof body === "object" && "user" in body && !!body.user;
+    const signedIn =
+      !!body && typeof body === "object" && "user" in body && !!body.user;
+    return signedIn ? "refreshed" : "signed-out";
   } catch {
-    return false;
+    return "unknown";
   }
+}
+
+function markSessionGone() {
+  if (sessionGone) return;
+  sessionGone = true;
+  // A page restored from the back/forward cache may be signed in again by
+  // then; its next 401 is worth one more refresh.
+  if (typeof window !== "undefined")
+    window.addEventListener?.(
+      "pageshow",
+      (event: Event) => {
+        if ((event as PageTransitionEvent).persisted) {
+          sessionGone = false;
+          refresh = undefined;
+        }
+      },
+      { once: true },
+    );
+  notifySessionExpired();
+}
+
+function sessionExpiredResponse() {
+  return Response.json(
+    {
+      error: "Unauthorized",
+      errorCode: SESSION_EXPIRED_ERROR_CODE,
+      isKnownError: true,
+    },
+    { status: 401 },
+  );
 }
 
 async function isSessionExpiredResponse(response: Response) {

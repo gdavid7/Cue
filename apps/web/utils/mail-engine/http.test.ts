@@ -1,11 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
-import { createMailHttpRequest } from "./http";
-import { resetSigningOut, startSigningOut } from "@/utils/signing-out";
+
+let createMailHttpRequest: typeof import("./http").createMailHttpRequest;
+let startSigningOut: typeof import("@/utils/signing-out").startSigningOut;
 
 describe("createMailHttpRequest", () => {
+  // A session found gone stays gone for the page, so each test starts with a
+  // fresh copy of the modules that hold that state.
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createMailHttpRequest } = await import("./http"));
+    ({ startSigningOut } = await import("@/utils/signing-out"));
+  });
+
   afterEach(() => {
-    resetSigningOut();
     vi.unstubAllGlobals();
   });
 
