@@ -37,6 +37,8 @@ import type {
   FileSender,
   FilesPage,
   FilesQuery,
+  NeverReadSender,
+  NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
   QuerySnapshot,
@@ -500,6 +502,9 @@ export interface MailStore {
     view: MailboxView;
   }>;
   readMessageSearch(query: MessageSearchQuery): Promise<MessageSearchPage>;
+  readNeverReadSenders(
+    query: NeverReadSendersQuery,
+  ): Promise<NeverReadSender[]>;
   readOperation(key: OperationKey): Promise<{
     revision: LocalRevision;
     operation: OperationState | null;

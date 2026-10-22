@@ -312,6 +312,8 @@ export function createTabFollowerClient(input: {
     // provider search if that tab can't.
     searchMessages: (query) => call("searchMessages", [query]) as never,
     queryPersonCard: (query) => call("queryPersonCard", [query]) as never,
+    queryNeverReadSenders: (query) =>
+      call("queryNeverReadSenders", [query]) as never,
     queryFiles: (query) => call("queryFiles", [query]) as never,
     queryFileSenders: (accountIds) =>
       call("queryFileSenders", [accountIds]) as never,

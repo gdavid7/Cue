@@ -489,3 +489,29 @@ export type FilesPage = { files: FileEntry[]; nextPage: string | null };
 
 /** Who sent the files a Files view can list, most files first. */
 export type FileSender = { email: string; name: string | null; files: number };
+
+/**
+ * Senders who mail often and are never opened, read from the local store
+ * alone, with no model: inbox mail received since `receivedSinceMs`, grouped
+ * by sender address per account.
+ */
+export type NeverReadSendersQuery = {
+  accountIds: string[];
+  /** The user's own addresses, which are never listed. */
+  ownAddresses: string[];
+  receivedSinceMs: number;
+};
+
+/** Most messages first, then the newest. */
+export type NeverReadSender = {
+  accountId: string;
+  email: string;
+  /** The name their newest message is shown with, if any. */
+  name: string | null;
+  count: number;
+  lastReceivedAtMs: number;
+};
+
+/** Fewer messages than this say little about whether they're wanted. */
+export const NEVER_READ_MIN_MESSAGES = 4;
+export const NEVER_READ_SENDER_LIMIT = 5;

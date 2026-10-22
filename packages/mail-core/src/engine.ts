@@ -52,6 +52,8 @@ import type {
   FileSender,
   FilesPage,
   FilesQuery,
+  NeverReadSender,
+  NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
   QueryHandle,
@@ -156,6 +158,13 @@ export type MailClient = {
    * Hosts that can't answer off the UI thread leave it out.
    */
   queryPersonCard?(query: PersonCardQuery): Promise<PersonCard>;
+  /**
+   * The senders Today's "Mail you never read" lists, read once from the
+   * local store. Hosts that can't answer off the UI thread leave it out.
+   */
+  queryNeverReadSenders?(
+    query: NeverReadSendersQuery,
+  ): Promise<NeverReadSender[]>;
   /**
    * A page of the Files view's attachments, read once from the local store.
    * Hosts that can't answer off the UI thread leave it out.
@@ -344,6 +353,9 @@ export function createMailEngine(input: {
     },
     queryPersonCard(query) {
       return store.readPersonCard(query);
+    },
+    queryNeverReadSenders(query) {
+      return store.readNeverReadSenders(query);
     },
     queryFiles(query) {
       return store.readFiles(query);
