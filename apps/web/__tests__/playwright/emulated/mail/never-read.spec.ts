@@ -17,6 +17,13 @@ const DEALS = {
   name: "Never Read Deals",
   address: "never-read-deals@example.com",
 };
+const SKIP = {
+  name: "Never Read Promos",
+  address: "never-read-promos@example.com",
+};
+const SKIP_INBOX_LABEL = isMicrosoftPlaywright()
+  ? "Skip inbox (adds an Outlook rule)"
+  : "Skip inbox (adds a Gmail filter)";
 const UNSUBSCRIBE_LINK = "https://unsubscribe.example/never-read-deals";
 const SIZES = [
   { width: 1280, height: 800 },
@@ -108,17 +115,18 @@ test.afterEach(async () => {
       [user.emailAccountId],
     );
     await client.query(
-      `DELETE FROM "Newsletter" WHERE "emailAccountId" = $1 AND email = $2`,
-      [user.emailAccountId, DEALS.address],
+      `DELETE FROM "Newsletter"
+       WHERE "emailAccountId" = $1 AND email = ANY($2::text[])`,
+      [user.emailAccountId, [DEALS.address, SKIP.address]],
     );
   });
 });
 
-test("Mail you never read: frequent unread senders on Today, Not now kept, Unsubscribe through the existing flow", async ({
+test("Mail you never read: frequent unread senders on Today, Not now kept, Unsubscribe and Skip inbox through the existing flows", async ({
   page,
 }, testInfo) => {
   test.setTimeout(480_000);
-  for (const sender of [WEEKLY, DEALS])
+  for (const sender of [WEEKLY, DEALS, SKIP])
     for (let index = 0; index < 4; index++)
       removals.push(await seedUnreadInboxMail(page, sender, index));
 
@@ -139,10 +147,12 @@ test("Mail you never read: frequent unread senders on Today, Not now kept, Unsub
     await expect(weekly).toContainText(WEEKLY.name);
     await expect(weekly).toContainText("4 emails, none opened");
     await expect(deals).toBeVisible();
-    // Nothing on the card changes the user's mail settings.
-    await expect(card.getByRole("button", { name: /skip inbox/i })).toHaveCount(
-      0,
-    );
+    // The one action that changes the user's mailbox says so.
+    await expect(
+      weekly.getByRole("button", {
+        name: `${SKIP_INBOX_LABEL} for ${WEEKLY.name}`,
+      }),
+    ).toHaveText(SKIP_INBOX_LABEL);
     for (const size of SIZES) {
       await page.setViewportSize(size);
       await expect(weekly).toBeVisible();
@@ -203,6 +213,24 @@ test("Mail you never read: frequent unread senders on Today, Not now kept, Unsub
       )
       .first(),
   ).toBeVisible({ timeout: 60_000 });
+
+  // Skip inbox goes through the existing auto-archive action, which adds
+  // the filter or rule to the user's own mailbox.
+  const skip = card.locator(`[data-never-read-sender="${SKIP.address}"]`);
+  await skip
+    .getByRole("button", { name: `${SKIP_INBOX_LABEL} for ${SKIP.name}` })
+    .click();
+  await expect(
+    page.getByText(`Mail from ${SKIP.name} will skip your inbox`),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(skip).toHaveCount(0);
+  await expect
+    .poll(() => readProviderFilterIds(page, SKIP.address), { timeout: 60_000 })
+    .not.toEqual([]);
+  removals.push(async () => {
+    for (const id of await readProviderFilterIds(page, SKIP.address))
+      await deleteProviderFilter(page, id);
+  });
 });
 
 /**
@@ -272,4 +300,45 @@ async function seedUnreadInboxMail(
 
 function premiumIdForRun() {
   return `playwright_never_read_premium_${process.env.PLAYWRIGHT_RUN_ID ?? "local"}`;
+}
+
+/** The ids of the filters (Gmail) or inbox rules (Outlook) for a sender. */
+async function readProviderFilterIds(page: Page, address: string) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  if (isMicrosoftPlaywright()) {
+    const response = await page.request.get(
+      `${process.env.MICROSOFT_BASE_URL}/v1.0/me/mailFolders/inbox/messageRules`,
+      { headers },
+    );
+    const { value } = (await response.json()) as {
+      value: Array<{ id: string; conditions?: { senderContains?: string[] } }>;
+    };
+    return value
+      .filter((rule) => rule.conditions?.senderContains?.includes(address))
+      .map((rule) => rule.id);
+  }
+  const response = await page.request.get(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/settings/filters`,
+    { headers },
+  );
+  const { filter = [] } = (await response.json()) as {
+    filter?: Array<{ id: string; criteria?: { from?: string } }>;
+  };
+  return filter
+    .filter((item) => item.criteria?.from?.includes(address))
+    .map((item) => item.id);
+}
+
+async function deleteProviderFilter(page: Page, id: string) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  await page.request.delete(
+    isMicrosoftPlaywright()
+      ? `${process.env.MICROSOFT_BASE_URL}/v1.0/me/mailFolders/inbox/messageRules/${id}`
+      : `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/settings/filters/${id}`,
+    { headers },
+  );
 }

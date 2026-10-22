@@ -255,7 +255,11 @@ async function unsubscribeAndArchive({
   return true;
 }
 
-async function blockSender({
+/**
+ * Skip inbox: marks the sender auto-archived, which adds a filter (Gmail) or
+ * an inbox rule (Outlook) in the user's mailbox, and archives their mail.
+ */
+export async function blockSender({
   sender,
   emailAccountId,
   labelId,

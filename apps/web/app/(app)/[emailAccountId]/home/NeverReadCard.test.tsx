@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   queueArchiveSenders: vi.fn(),
   openModal: vi.fn(),
   toastError: vi.fn(),
+  provider: "google",
 }));
 
 vi.mock("@/env", () => ({ env: {} }));
@@ -71,8 +72,18 @@ vi.mock("@inboxzero/mail-react/use-mailbox-window", () => ({
 vi.mock("@/hooks/useUser", () => ({
   useUser: () => ({ data: mocks.user }),
 }));
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => ({
+    data: {
+      emailAccounts: [{ id: "a", account: { provider: mocks.provider } }],
+    },
+  }),
+}));
 vi.mock("@/hooks/usePremium", () => ({
-  usePremium: () => ({ hasUnsubscribeAccess: true, mutate: vi.fn() }),
+  usePremium: () => ({
+    hasUnsubscribeAccess: true,
+    mutate: () => Promise.resolve(),
+  }),
 }));
 vi.mock("@/app/(app)/premium/PremiumModal", () => ({
   usePremiumModal: () => ({
@@ -114,6 +125,7 @@ beforeEach(() => {
   };
   mocks.queryNeverReadSenders.mockResolvedValue([DEALS, NEWS]);
   mocks.queueArchiveSenders.mockResolvedValue(1);
+  mocks.provider = "google";
 });
 
 afterEach(() => {
@@ -336,6 +348,42 @@ describe("Mail you never read", () => {
     expect(mocks.setSenderStatusAction).not.toHaveBeenCalled();
     expect(mocks.unsubscribeSenderAction).not.toHaveBeenCalled();
     expect(screen.getByText("Daily Deals")).toBeTruthy();
+  });
+});
+
+describe("Skip inbox", () => {
+  it("says it adds a Gmail filter, then marks the sender auto-archived and archives their mail", async () => {
+    mocks.setSenderStatusAction.mockResolvedValue({ data: {} });
+    renderCard();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Skip inbox (adds a Gmail filter) for Daily Deals",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.setSenderStatusAction).toHaveBeenCalledWith("a", {
+        senderEmail: "deals@shop.example",
+        status: "AUTO_ARCHIVED",
+        labelId: undefined,
+        labelName: undefined,
+      }),
+    );
+    expect(mocks.queueArchiveSenders).toHaveBeenCalledWith({
+      senders: ["deals@shop.example"],
+    });
+    await waitFor(() => expect(screen.queryByText("Daily Deals")).toBeNull());
+  });
+
+  it("says it adds an Outlook rule on Outlook", async () => {
+    mocks.provider = "microsoft";
+    renderCard();
+    expect(
+      await screen.findByRole("button", {
+        name: "Skip inbox (adds an Outlook rule) for Daily Deals",
+      }),
+    ).toBeTruthy();
   });
 });
 
