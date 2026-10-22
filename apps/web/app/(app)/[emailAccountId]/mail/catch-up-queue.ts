@@ -19,11 +19,15 @@ export type CatchUpItem = {
   atMs: number;
 };
 
-/** What the mailbox says of a batch conversation now. */
-export type CatchUpLive = ReadonlyMap<
-  string,
-  { item: CatchUpItem; unread: boolean }
->;
+/**
+ * The batch's conversations still unread in the tab, as the mailbox has them
+ * now. `complete` says whether one missing here has left the tab or been
+ * read, or may only be past what was read.
+ */
+export type CatchUpLive = {
+  items: ReadonlyMap<string, CatchUpItem>;
+  complete: boolean;
+};
 
 /**
  * One batch, fixed when it starts so the card never reshuffles as the
@@ -145,22 +149,22 @@ export function reconcileCatchUp(
   let next = state;
   for (const item of state.items) {
     if (state.acted[item.key] || state.skipped[item.key]) continue;
-    const now = live.get(item.key);
-    const present = Boolean(now?.unread);
+    const now = live.items.get(item.key);
     if (state.returned[item.key]) {
       // Back in the mailbox after an undo: from here on it is watched again.
-      if (present) next = withoutReturned(next, item.key);
+      if (now) next = withoutReturned(next, item.key);
       continue;
     }
-    if (!now || !present) {
-      next = { ...next, skipped: { ...next.skipped, [item.key]: true } };
+    if (!now) {
+      if (live.complete)
+        next = { ...next, skipped: { ...next.skipped, [item.key]: true } };
       continue;
     }
-    if (!sameCard(item, now.item)) {
+    if (!sameCard(item, now)) {
       next = {
         ...next,
         items: next.items.map((entry) =>
-          entry.key === item.key ? now.item : entry,
+          entry.key === item.key ? now : entry,
         ),
       };
     }

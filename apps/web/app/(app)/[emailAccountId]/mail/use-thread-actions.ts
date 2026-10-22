@@ -73,8 +73,21 @@ export function useThreadActions({
   onRestored?: (threadKeys: string[]) => void;
 }) {
   const lastAction = useRef<UndoableBatch | null>(null);
-  const notifyRestored = useStableCallback((threadKeys: string[]) =>
-    onRestored?.(threadKeys),
+  const restoredListeners = useRef(new Set<(threadKeys: string[]) => void>());
+  const notifyRestored = useStableCallback((threadKeys: string[]) => {
+    onRestored?.(threadKeys);
+    for (const listener of restoredListeners.current) listener(threadKeys);
+  });
+  // For a part of the view that tracks what it acted on, such as Catch up,
+  // to hear an undo from anywhere: its own button, the toast or Z.
+  const subscribeRestored = useCallback(
+    (listener: (threadKeys: string[]) => void) => {
+      restoredListeners.current.add(listener);
+      return () => {
+        restoredListeners.current.delete(listener);
+      };
+    },
+    [],
   );
   const retainedEmailAccountId = useRef(emailAccountId);
   const listTargetsByKey = useRef(new Map<string, ThreadActionTarget>());
@@ -475,6 +488,7 @@ export function useThreadActions({
 
   return {
     addTargets,
+    subscribeRestored,
     archive: useCallback(
       (threadKeys: string[]) => runUndoable("archive", threadKeys),
       [runUndoable],

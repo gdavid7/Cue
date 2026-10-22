@@ -131,15 +131,14 @@ describe("revertCatchUp", () => {
 describe("reconcileCatchUp", () => {
   it("skips a conversation read or gone from the tab elsewhere", () => {
     const state = startCatchUp([item("a", 1), item("b", 2), item("c", 3)]);
-    const next = reconcileCatchUp(
-      state,
-      live([
-        [item("a", 1), false],
-        [item("c", 3), true],
-      ]),
-    );
+    const next = reconcileCatchUp(state, live([item("c", 3)]));
     expect(currentCatchUpItem(next)?.key).toBe("c");
     expect(catchUpLeft(next)).toBe(1);
+  });
+
+  it("keeps a missing conversation when the mailbox only read part of the tab", () => {
+    const state = startCatchUp([item("a", 1), item("b", 2)]);
+    expect(reconcileCatchUp(state, live([item("b", 2)], false))).toBe(state);
   });
 
   it("shows the newer message of a conversation that got one", () => {
@@ -149,13 +148,7 @@ describe("reconcileCatchUp", () => {
       latestMessageId: "a-reply",
       preview: "New",
     };
-    const next = reconcileCatchUp(
-      state,
-      live([
-        [newer, true],
-        [item("b", 2), true],
-      ]),
-    );
+    const next = reconcileCatchUp(state, live([newer, item("b", 2)]));
     expect(currentCatchUpItem(next)).toEqual(newer);
     expect(next.items.map((entry) => entry.key)).toEqual(["a", "b"]);
   });
@@ -163,7 +156,7 @@ describe("reconcileCatchUp", () => {
   it("changes nothing while the mailbox agrees, or hasn't answered", () => {
     const state = startCatchUp([item("a", 1)]);
     expect(reconcileCatchUp(state, null)).toBe(state);
-    expect(reconcileCatchUp(state, live([[item("a", 1), true]]))).toBe(state);
+    expect(reconcileCatchUp(state, live([item("a", 1)]))).toBe(state);
   });
 
   it("leaves acted conversations, and one an undo brought back, to the batch", () => {
@@ -223,10 +216,11 @@ function conversation(
   };
 }
 
-function live(entries: [CatchUpItem, boolean][]): CatchUpLive {
-  return new Map(
-    entries.map(([entry, unread]) => [entry.key, { item: entry, unread }]),
-  );
+function live(entries: CatchUpItem[], complete = true): CatchUpLive {
+  return {
+    items: new Map(entries.map((entry) => [entry.key, entry])),
+    complete,
+  };
 }
 
 function item(key: string, atMs: number): CatchUpItem {

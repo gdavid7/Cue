@@ -22,6 +22,7 @@ import type {
 } from "@inboxzero/mail-core/queries";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
+import { useCatchUpMailbox } from "@/app/(app)/[emailAccountId]/mail/use-catch-up-mailbox";
 import { SnoozeButton } from "@/app/(app)/[emailAccountId]/mail/SnoozeButton";
 import {
   actOnCatchUp,
@@ -78,7 +79,13 @@ const MAX_BATCH_READ = 100;
  */
 type CatchUpActions = Pick<
   ReturnType<typeof useThreadActions>,
-  "addTargets" | "archive" | "markRead" | "setReadState" | "snooze" | "undo"
+  | "addTargets"
+  | "archive"
+  | "markRead"
+  | "setReadState"
+  | "snooze"
+  | "subscribeRestored"
+  | "undo"
 >;
 
 type CatchUpProps = {
@@ -96,8 +103,6 @@ type LastAction = {
   key: string;
   action: Exclude<CatchUpAction, "snooze">;
   subject: string;
-  /** Undoing a keep restores unread only if it was unread when kept. */
-  wasUnread: boolean;
 };
 
 /**
@@ -116,6 +121,16 @@ export function CatchUpEntry({
   // Acted on from earlier batches on this page, which the mailbox may not
   // reflect yet when the next batch starts.
   const actedKeys = useRef(new Set<string>());
+  const { subscribeRestored } = props.actions;
+  // A restored conversation is unread in the tab again, so a later batch
+  // may offer it.
+  useEffect(
+    () =>
+      subscribeRestored((keys) => {
+        for (const key of keys) actedKeys.current.delete(key);
+      }),
+    [subscribeRestored],
+  );
   const client = useOptionalMailClient();
   const tab = useTabPredicate(query, windowOpen);
   const counterQuery = useMemo(
@@ -223,76 +238,54 @@ function CatchUpBody({
   const [lastAction, setLastAction] = useState<LastAction | null>(null);
   const tab = useTabPredicate(query, true);
 
-  const batchQuery = useMemo(
-    () => ({
-      ...unreadQuery(
-        emailAccountId,
-        tab.predicate,
-        Math.min(MAX_BATCH_READ, CATCH_UP_BATCH_SIZE + actedKeys.size),
-      ),
-      order: "oldest_first" as const,
-    }),
-    [emailAccountId, tab.predicate, actedKeys],
-  );
-  const source = useMailboxWindow(batchQuery, {
+  const { batch: read, watch } = useCatchUpMailbox({
     client,
-    enabled: !batch && tab.ready && Boolean(client),
+    emailAccountId,
+    tabPredicate: tab.predicate,
+    tabReady: tab.ready,
+    batchRead: Math.min(MAX_BATCH_READ, CATCH_UP_BATCH_SIZE + actedKeys.size),
+    threadIds: batch ? batch.items.map((item) => item.threadId) : null,
   });
   // The batch is fixed from the first full answer for the tab.
-  if (
-    !batch &&
-    tab.ready &&
-    client &&
-    source.status === "ready" &&
-    source.data &&
-    !getFirstSyncAccountIds([emailAccountId], source.data.coverage).length
-  ) {
+  if (!batch && read.status === "ready") {
     setBatch(
-      startCatchUp(
-        toCatchUpItems(source.data.conversations, userEmail),
-        actedKeys,
-      ),
+      startCatchUp(toCatchUpItems(read.conversations, userEmail), actedKeys),
     );
   }
 
   // Watches the batch's conversations, so a card read or gone elsewhere is
   // skipped and one with a new message shows it before anything acts on it.
-  const batchIds = batch?.items.map((item) => item.threadId).join("\n") ?? "";
-  const watchQuery = useMemo(
-    () => ({
-      ...unreadQuery(emailAccountId, tab.predicate, CATCH_UP_BATCH_SIZE),
-      predicate: {
-        kind: "all" as const,
-        predicates: [
-          unreadQuery(emailAccountId, tab.predicate, 1).predicate,
-          {
-            kind: "conversation" as const,
-            ids: batchIds ? batchIds.split("\n") : [],
-            accountId: emailAccountId,
-          },
-        ],
-      },
-    }),
-    [emailAccountId, tab.predicate, batchIds],
-  );
-  const watch = useMailboxWindow(watchQuery, {
-    client,
-    enabled: Boolean(batch) && tab.ready && Boolean(client),
-  });
   const live = useMemo<CatchUpLive | null>(() => {
-    if (!batch || !tab.ready || watch.status !== "ready" || !watch.data)
-      return null;
-    const entries = new Map<string, { item: CatchUpItem; unread: boolean }>();
-    for (const conversation of watch.data.conversations) {
+    if (!watch) return null;
+    const items = new Map<string, CatchUpItem>();
+    for (const conversation of watch.conversations) {
       const item = toCatchUpItem(conversation, userEmail);
-      if (item) entries.set(item.key, { item, unread: conversation.unread });
+      if (item) items.set(item.key, item);
     }
-    return entries;
-  }, [batch, tab.ready, watch.status, watch.data, userEmail]);
+    return { items, complete: watch.complete };
+  }, [watch, userEmail]);
   if (batch) {
     const reconciled = reconcileCatchUp(batch, live);
     if (reconciled !== batch) setBatch(reconciled);
   }
+
+  // An undo from anywhere in the view (the toast, or Z after closing) brings
+  // the card back too.
+  const { subscribeRestored } = actions;
+  useEffect(
+    () =>
+      subscribeRestored((keys) => {
+        setBatch(
+          (state) =>
+            state &&
+            keys.reduce((next, key) => revertCatchUp(next, key), state),
+        );
+        setLastAction((last) =>
+          last && keys.includes(last.key) ? null : last,
+        );
+      }),
+    [subscribeRestored],
+  );
 
   useEffect(() => {
     if (!lastAction) return;
@@ -321,21 +314,20 @@ function CatchUpBody({
     setBatch(actOnCatchUp(fresh, key, action));
     // Snooze has no undo yet (FT-11a), so the last undoable action stays.
     if (action !== "snooze")
-      setLastAction({
-        key,
-        action,
-        subject: item.subject,
-        wasUnread: live?.get(key)?.unread ?? true,
-      });
+      setLastAction({ key, action, subject: item.subject });
 
     actions.addTargets([
       { id: item.threadId, messageIds: [item.latestMessageId] },
     ]);
     let done: string[] = [];
-    if (action === "archive") done = await actions.archive([key]);
-    if (action === "keep") done = await actions.markRead([key]);
-    if (action === "snooze" && snoozeUntil)
-      done = await actions.snooze([key], snoozeUntil);
+    try {
+      if (action === "archive") done = await actions.archive([key]);
+      if (action === "keep") done = await actions.markRead([key]);
+      if (action === "snooze" && snoozeUntil)
+        done = await actions.snooze([key], snoozeUntil);
+    } catch {
+      // Thrown rather than refused: handled the same way, below.
+    }
     if (done.includes(key)) {
       if (via === "key")
         trackMailAction({
@@ -346,7 +338,8 @@ function CatchUpBody({
       if (action !== "keep") onRemoved?.([key]);
       return;
     }
-    // The engine refused it, and its toast says why: the card comes back.
+    // The engine refused it (its toast says why), or it threw: the card
+    // comes back.
     actedKeys.delete(key);
     setBatch((state) => state && revertCatchUp(state, key));
     setLastAction((last) => (last?.key === key ? null : last));
@@ -357,12 +350,17 @@ function CatchUpBody({
     if (!last || undoing.current) return;
     undoing.current = true;
     try {
-      let restored: string[] = [last.key];
-      if (last.action === "archive") restored = await actions.undo();
-      else if (last.wasUnread)
-        restored = await actions.setReadState([last.key], false, false);
+      const restored =
+        last.action === "archive"
+          ? await actions.undo()
+          : await actions.setReadState([last.key], false, false);
       // A failed undo leaves the batch as it was; the view's toast says so.
-      if (!restored.includes(last.key)) return;
+      // Nothing restored at all means the view had nothing left to undo.
+      if (!restored.includes(last.key)) {
+        if (!restored.length)
+          setLastAction((now) => (now === last ? null : now));
+        return;
+      }
       actedKeys.delete(last.key);
       setBatch((state) => state && revertCatchUp(state, last.key));
       setLastAction((now) => (now === last ? null : now));
@@ -430,8 +428,13 @@ function CatchUpBody({
       </p>
 
       {!batch ? (
-        <p className="py-10 text-center text-muted-foreground text-sm">
-          Finding your oldest unread mail…
+        <p
+          className="py-10 text-center text-muted-foreground text-sm"
+          role="status"
+        >
+          {read.status === "unavailable"
+            ? "Catch up can't read your mail right now. Try again in a moment."
+            : "Finding your oldest unread mail…"}
         </p>
       ) : current ? (
         <>

@@ -216,17 +216,21 @@ test("isn't offered across accounts", async ({ page }) => {
   const second = await createSecondEmailAccount(emailAccountId);
   try {
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    // Loaded: the combined list shows rows, which a single inbox would show
+    // alongside its Catch up line.
     await expect(
-      page.getByRole("listbox", { name: "Conversations" }),
+      page
+        .getByRole("listbox", { name: "Conversations" })
+        .getByRole("option")
+        .first(),
     ).toBeVisible({ timeout: 60_000 });
-    await page.waitForTimeout(2000);
     await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
 
     await page.goto(`/${emailAccountId}/home?accounts=all`);
-    await expect(
-      page.getByRole("region", { name: "Get started with Cue" }),
-    ).toBeVisible({ timeout: 60_000 });
-    await page.waitForTimeout(2000);
+    // Loaded: Today across accounts shows its conversations.
+    await expect(page.locator("[data-today-thread]").first()).toBeVisible({
+      timeout: 60_000,
+    });
     await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
   } finally {
     await deleteSecondEmailAccount(second.accountId);
