@@ -56,6 +56,36 @@ test("asks before sending a message that mentions a missing attachment", async (
   ).toBeVisible();
 });
 
+test("asks before sending a message with an unfilled placeholder and selects it", async ({
+  page,
+}, testInfo) => {
+  await openMail(page);
+  const dialog = await composeWithBody(
+    page,
+    `Playwright Pre-send Placeholder ${testInfo.retry}-${Date.now()}`,
+    "Hi [Name], the review is on {{date}}.",
+  );
+  await dialog.getByRole("button", { exact: true, name: "Send" }).click();
+
+  const check = dialog.getByRole("group", { name: "Before you send" });
+  await expect(check).toContainText(
+    "The message still has placeholders to fill in: [Name], {{date}}.",
+  );
+  await capturePlaywrightCheckpoint(page, testInfo, "pre-send-placeholders");
+
+  await check.getByRole("button", { name: "Edit message" }).click();
+  await expect(check).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString()))
+    .toBe("[Name]");
+
+  await page.keyboard.type("Sam");
+  await dialog.getByRole("button", { exact: true, name: "Send" }).click();
+  await expect(check).toContainText(
+    "The message still has a placeholder to fill in: {{date}}.",
+  );
+});
+
 test("sends straight away when the check is turned off in Settings", async ({
   page,
 }, testInfo) => {
@@ -85,6 +115,10 @@ test("sends straight away when the check is turned off in Settings", async ({
 });
 
 async function composeMentioningAttachment(page: Page, subject: string) {
+  return composeWithBody(page, subject, "The signed contract is attached.");
+}
+
+async function composeWithBody(page: Page, subject: string, body: string) {
   await page.getByRole("button", { name: /^Compose/ }).click();
   const dialog = page.getByRole("dialog", { name: "New Message" });
   await dialog
@@ -92,7 +126,7 @@ async function composeMentioningAttachment(page: Page, subject: string) {
     .fill("recipient@example.com");
   await dialog.getByPlaceholder("Subject").fill(subject);
   const editor = dialog.locator("[contenteditable='true']");
-  await editor.pressSequentially("The signed contract is attached.");
-  await expect(editor).toContainText("The signed contract is attached.");
+  await editor.pressSequentially(body);
+  await expect(editor).toContainText(body);
   return dialog;
 }

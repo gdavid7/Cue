@@ -51,6 +51,7 @@ const TYPE_SEGMENTS: Record<string, string> = {
   trash: "trash",
   focused: "focused",
   other: "other",
+  files: "files",
 };
 
 const CATEGORY_PREFIX = "CATEGORY_";

@@ -47,5 +47,5 @@ export const POST = withEmailProvider(
       })) satisfies GetSearchIntentResponse,
     );
   },
-  { maxDuration },
+  { maxDuration, readOnly: true },
 );

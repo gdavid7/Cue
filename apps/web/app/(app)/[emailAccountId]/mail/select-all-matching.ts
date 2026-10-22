@@ -5,6 +5,7 @@ import type {
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import {
+  MAIL_FILES_TYPE,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
@@ -37,7 +38,11 @@ export function getMatchingScope(
     if (Array.isArray(value) && !value.length) continue;
     if (!SCOPE_KEYS.has(key)) return null;
   }
-  if (query.type === MAIL_SCHEDULED_TYPE || query.type === MAIL_SNOOZED_TYPE)
+  if (
+    query.type === MAIL_SCHEDULED_TYPE ||
+    query.type === MAIL_SNOOZED_TYPE ||
+    query.type === MAIL_FILES_TYPE
+  )
     return null;
   if (
     isMicrosoftProvider(provider) &&

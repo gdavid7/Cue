@@ -94,7 +94,28 @@ describe("PreSendConfirmation", () => {
     fireEvent.keyDown(fix, { key: "Enter" });
     expect(onSend).not.toHaveBeenCalled();
     fireEvent.click(fix);
-    expect(onFix).toHaveBeenCalledWith("attach");
+    expect(onFix).toHaveBeenCalledWith("attach", undefined);
+  });
+
+  it("hands the text to select to the fix", () => {
+    const onFix = vi.fn();
+    render(
+      <PreSendConfirmation
+        onDismiss={vi.fn()}
+        onFix={onFix}
+        onSend={vi.fn()}
+        warnings={[
+          {
+            id: "placeholders",
+            message: "The message still has a placeholder to fill in: [Name].",
+            fix: "body",
+            selectText: "[Name]",
+          },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit message" }));
+    expect(onFix).toHaveBeenCalledWith("body", "[Name]");
   });
 
   it("leaves Enter typed in the message alone", () => {

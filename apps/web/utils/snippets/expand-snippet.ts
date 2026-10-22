@@ -17,6 +17,8 @@ const TOKEN_TO_VARIABLE: Record<string, keyof SnippetVariables> = {
   name: "name",
 };
 
+export const SNIPPET_VARIABLE_TOKENS = Object.keys(TOKEN_TO_VARIABLE);
+
 export function snippetVariablesFromRecipient(
   recipientList?: string,
 ): SnippetVariables {

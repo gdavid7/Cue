@@ -1,4 +1,5 @@
 import { mcpOAuthPlugins } from "@/utils/mcp/oauth-provider";
+import { revokedSessionGuardPlugin } from "@/utils/auth/revoked-session";
 import { INITIAL_MAIL_SPLITS } from "@/utils/split-inbox/initial-splits";
 import { INITIAL_REPLY_TRACKING_RULES } from "@/utils/reply-tracker/initial-rules";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
@@ -288,6 +289,7 @@ export const betterAuthConfig = betterAuth({
   }),
   plugins: [
     emailOtpPlugin,
+    revokedSessionGuardPlugin(),
     adminSso({
       disableImplicitSignUp: false,
       organizationProvisioning: { disabled: true },
@@ -316,13 +318,16 @@ export const betterAuthConfig = betterAuth({
       token: "sessionToken",
       expiresAt: "expires",
     },
+    // Sign-out clears this cookie, but a copy of it still reads as signed in
+    // until it expires, even after the session is revoked. Requests that change
+    // something, admin and account linking check the database instead
+    // (`disableCookieCache`), so this bounds only how long reads trust a copy.
     cookieCache: {
       enabled: true,
-      maxAge: 60 * 5, // 5 minutes — normal sign-out clears the cache cookie immediately;
-      // this TTL only limits exposure for stolen-token scenarios
+      maxAge: 60,
     },
     expiresIn: 60 * 60 * 24 * 30, // 30 days
-    updateAge: 60 * 60 * 24 * 3, // 1 day (every 1 day the session expiration is updated)
+    updateAge: 60 * 60 * 24 * 3, // 3 days (every 3 days the session expiration is updated)
   },
   account: {
     modelName: "account",
@@ -991,10 +996,12 @@ export async function handleLinkAccount(
 
 export const auth = async (
   requestHeaders?: Headers | Awaited<ReturnType<typeof headers>>,
+  { disableCookieCache = false }: { disableCookieCache?: boolean } = {},
 ) => {
   try {
     return await betterAuthConfig.api.getSession({
       headers: requestHeaders ?? (await headers()),
+      query: { disableCookieCache },
     });
   } catch (error) {
     if (error instanceof APIError && error.statusCode === 401) return null;

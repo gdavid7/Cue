@@ -142,6 +142,8 @@ export function applyMetadataPatch(
       patch.snoozedUntilMs === undefined
         ? current.snoozedUntilMs
         : patch.snoozedUntilMs,
+    // A message's Message-ID never changes, so a patch without it keeps it.
+    internetMessageId: patch.internetMessageId ?? current.internetMessageId,
   };
 }
 

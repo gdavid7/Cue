@@ -49,6 +49,9 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  FileSender,
+  FilesPage,
+  FilesQuery,
   PersonCard,
   PersonCardQuery,
   QueryHandle,
@@ -153,6 +156,13 @@ export type MailClient = {
    * Hosts that can't answer off the UI thread leave it out.
    */
   queryPersonCard?(query: PersonCardQuery): Promise<PersonCard>;
+  /**
+   * A page of the Files view's attachments, read once from the local store.
+   * Hosts that can't answer off the UI thread leave it out.
+   */
+  queryFiles?(query: FilesQuery): Promise<FilesPage>;
+  /** The Files view's senders, read once from the local store. */
+  queryFileSenders?(accountIds: string[]): Promise<FileSender[]>;
   /**
    * Finds mail by meaning, from vectors this device made of recent mail.
    * Resolves no matches while the account has none. Only hosts that run
@@ -334,6 +344,12 @@ export function createMailEngine(input: {
     },
     queryPersonCard(query) {
       return store.readPersonCard(query);
+    },
+    queryFiles(query) {
+      return store.readFiles(query);
+    },
+    queryFileSenders(accountIds) {
+      return store.readFileSenders(accountIds);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);

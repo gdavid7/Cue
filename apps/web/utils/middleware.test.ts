@@ -27,7 +27,10 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
+import { timeRequestDependency } from "@/utils/request-metrics";
+import { sleep } from "@/utils/sleep";
 
 const uuidOverride = vi.hoisted(() => ({
   current: undefined as string | undefined,
@@ -251,6 +254,43 @@ describe("Middleware", () => {
           expect(lines[0]).toContain('"durationMs": 1600');
           expect(lines[0]).toContain('"preHandlerMs": 400');
           expect(lines[0]).toContain('"preHandlerDbCalls": 0');
+        } finally {
+          consoleLogSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+
+      it("always carries the dependency timings, and counts waits after an async hop", async () => {
+        vi.useFakeTimers();
+        const consoleLogSpy = vi
+          .spyOn(console, "log")
+          .mockImplementation(() => {});
+        try {
+          const idle = withError("user/home", async () => {
+            vi.advanceTimersByTime(1500);
+            return NextResponse.json({ ok: true });
+          });
+          const waiting = withError("user/thread-brief", async () => {
+            await Promise.all([
+              timeRequestDependency("gmail", () => sleep(300)),
+              timeRequestDependency("wait", () => sleep(200)),
+            ]);
+            vi.advanceTimersByTime(1500);
+            return NextResponse.json({ ok: true });
+          });
+
+          await idle(mockReq, mockContext);
+          const pending = waiting(createMockRequest(), mockContext);
+          await vi.advanceTimersByTimeAsync(300);
+          await pending;
+
+          const [idleLine, waitingLine] = completionLines(consoleLogSpy);
+          // A request that never reached Gmail still says so with zeros.
+          expect(idleLine).toContain('"gmailMs": 0');
+          expect(idleLine).toContain('"waitMs": 0');
+          expect(waitingLine).toContain('"gmailMs": 300');
+          expect(waitingLine).toContain('"waitMs": 200');
+          expect(`${idleLine}${waitingLine}`).not.toMatch(/@|subject|"from"/);
         } finally {
           consoleLogSpy.mockRestore();
           vi.useRealTimers();
@@ -565,6 +605,20 @@ describe("Middleware", () => {
 
       expect(response.status).toBe(429);
       expect(response.headers.get("Retry-After")).toBe("30");
+    });
+
+    it("answers a Gmail call deferred by the quota budget with 503 and Retry-After, not an error", async () => {
+      const response = await withError(
+        "user/inbox-insights",
+        vi
+          .fn()
+          .mockRejectedValue(new GmailCallDeferredError(12_300, "background")),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("13");
+      expect(mockCaptureException).not.toHaveBeenCalled();
+      expect(await response.json()).toMatchObject({ isKnownError: true });
     });
 
     it("tells the client when to retry a rate limit on a route with no email account", async () => {
@@ -1265,6 +1319,91 @@ describe("Middleware", () => {
         error: commonError.message,
         isKnownError: true,
       });
+    });
+  });
+
+  // A revoked session's cache cookie stays readable until it expires; requests
+  // that change something check the database so revocation applies at once.
+  describe("session cookie cache", () => {
+    const mockUserId = "user-123";
+    const mockAccountId = "acc-456";
+    const lastAuthOptions = () => mockAuth.mock.lastCall?.[1];
+
+    beforeEach(() => {
+      mockAuth.mockResolvedValue({ user: { id: mockUserId } } as any);
+      mockOwnedAccount(mockUserId, "test@example.com");
+      mockCreateEmailProvider.mockResolvedValue({ name: "google" } as any);
+    });
+
+    const ok = async () => NextResponse.json({ ok: true });
+
+    it.each([
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+    ])("checks the database for a %s", async (method) => {
+      const request = createMockRequest(method, "http://localhost/api/x", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+
+      await withAuth("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+      await withEmailAccount("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+      await withEmailProvider("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+    });
+
+    it("trusts the cookie cache for reads", async () => {
+      const request = createMockRequest("GET", "http://localhost/api/x", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+
+      await withEmailProvider("x", ok)(request, mockContext);
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: false });
+    });
+
+    it("trusts the cookie cache for a read sent as a POST that opts in", async () => {
+      const request = createMockRequest("POST", "http://localhost/api/x", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+
+      await withEmailProvider("x", ok, { readOnly: true })(
+        request,
+        mockContext,
+      );
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: false });
+    });
+
+    it("checks the database for every admin request", async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        email: "admin@example.com",
+      } as any);
+      mockIsAdmin.mockReturnValue(true);
+
+      await withAdmin("admin/x", ok)(
+        createMockRequest("GET", "http://localhost/api/admin/x"),
+        mockContext,
+      );
+      expect(lastAuthOptions()).toEqual({ disableCookieCache: true });
+    });
+
+    it("rejects a session the database no longer holds", async () => {
+      mockAuth.mockImplementation(async (_headers, options) =>
+        options?.disableCookieCache
+          ? null
+          : ({ user: { id: mockUserId } } as any),
+      );
+      const handler = vi.fn(ok);
+
+      const response = await withAuth("x", handler)(
+        createMockRequest("DELETE", "http://localhost/api/x"),
+        mockContext,
+      );
+
+      expect(response.status).toBe(401);
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 });

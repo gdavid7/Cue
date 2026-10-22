@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type {
   EmbeddingBacklogCursor,
   EmbeddingCap,
@@ -66,13 +67,15 @@ const BODY_CHARS = 1200;
 
 export async function migrateMessageEmbeddings(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 12",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.messageEmbeddings.id],
   );
   if (applied.length) return;
   await tx.exec(MESSAGE_EMBEDDINGS_SQL);
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (12, '0012-message-embeddings')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.messageEmbeddings.id,
+    LOCAL_MIGRATIONS.messageEmbeddings.name,
+  ]);
 }
 
 /**

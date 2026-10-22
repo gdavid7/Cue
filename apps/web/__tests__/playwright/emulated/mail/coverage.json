@@ -22,7 +22,10 @@
     "hooks/useThreadBrief.ts",
     "utils/home/get-thread-brief.ts",
     "app/api/user/thread-brief/route.ts",
-    "hooks/useThread.ts"
+    "hooks/useThread.ts",
+    "utils/reader-prefetch.ts",
+    "app/(app)/[emailAccountId]/mail/reader-prefetch-plan.ts",
+    "app/(app)/[emailAccountId]/mail/use-reader-row-prefetch.ts"
   ],
   "rule-reply-suggestion.spec.ts": [
     "app/(app)/[emailAccountId]/mail/use-reader-reply-suggestion.tsx",
@@ -231,7 +234,10 @@
     "components/email-list/EmailDetails.tsx",
     "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"
   ],
-  "plain-text-links.spec.ts": ["components/email-list/EmailMessage.tsx"],
+  "plain-text-links.spec.ts": [
+    "components/email-list/EmailMessage.tsx",
+    "components/email-list/EmailContents.tsx"
+  ],
   "reader-transition.spec.ts": [
     "app/(app)/[emailAccountId]/mail/BufferedThreadReader.tsx",
     "components/email-list/EmailContents.tsx"
@@ -360,6 +366,13 @@
     "utils/attachments/docx-frame.ts",
     "utils/attachments/office-package.ts"
   ],
+  "files-view.spec.ts": [
+    "app/(app)/[emailAccountId]/mail/FilesView.tsx",
+    "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
+    "components/email-list/EmailAttachments.tsx",
+    "utils/attachments/download.ts",
+    "utils/mail-url.ts"
+  ],
   "pre-send-check.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
     "app/(app)/[emailAccountId]/compose/PreSendConfirmation.tsx",
@@ -374,7 +387,13 @@
     "utils/web-notifications/notifier.ts",
     "utils/web-notifications/unread-title.ts",
     "utils/web-notifications/permission.ts",
-    "hooks/useInboxUnreadCount.ts"
+    "hooks/useInboxUnreadCount.ts",
+    "utils/web-notifications/preference.ts",
+    "utils/web-notifications/quiet-presets.ts",
+    "utils/web-notifications/quiet-command-palette.ts",
+    "hooks/useNotificationsQuiet.ts",
+    "app/(app)/settings/NotificationsSection.tsx",
+    "app/(app)/settings/PauseNotificationsSetting.tsx"
   ],
   "catch-up.spec.ts": [
     "app/(app)/[emailAccountId]/mail/CatchUp.tsx",

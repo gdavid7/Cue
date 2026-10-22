@@ -172,18 +172,28 @@ export function MailMobileNav({
       >
         <PenLineIcon className="size-5" />
       </button>
-      <Link
-        aria-current={isToday ? "page" : undefined}
-        className={cn(
-          barItemClassName,
-          isToday ? "text-foreground" : "text-muted-foreground",
-        )}
-        href={todayHref}
-        prefetch
-      >
-        <SunIcon className="size-5" />
-        Today
-      </Link>
+      {todayHref ? (
+        <Link
+          aria-current={isToday ? "page" : undefined}
+          className={cn(
+            barItemClassName,
+            isToday ? "text-foreground" : "text-muted-foreground",
+          )}
+          href={todayHref}
+          prefetch
+        >
+          <SunIcon className="size-5" />
+          Today
+        </Link>
+      ) : (
+        <span
+          aria-disabled="true"
+          className={cn(barItemClassName, "text-muted-foreground opacity-50")}
+        >
+          <SunIcon className="size-5" />
+          Today
+        </span>
+      )}
       {accountSwitcher}
     </nav>
   );

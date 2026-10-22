@@ -3,6 +3,10 @@ import {
   isGoogleProvider,
   isMicrosoftProvider,
 } from "@/utils/email/provider-types";
+import {
+  type MailMark,
+  recordMailMark,
+} from "@/utils/analytics/mail-performance";
 import { createClientLogger } from "@/utils/logger-client";
 
 /**
@@ -50,6 +54,13 @@ const FIRST_ROW_ACTIONS: readonly RumActionName[] = [
   "app_open_fresh_sign_in",
   "account_switch_first_row",
 ];
+
+const MAIL_MARK_BY_ACTION: Partial<Record<RumActionName, MailMark>> = {
+  app_open_returning: "first_row_cached",
+  app_open_cold: "first_row_fresh",
+  app_open_fresh_sign_in: "first_row_fresh",
+  compose_open: "compose_ready",
+};
 
 const SLOW_START_TIMEOUT_MS = 120_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -337,6 +348,7 @@ export function resetRumActionsForTesting() {
 function emit(name: RumActionName, ms: number, outcome: RumOutcome) {
   if (typeof window === "undefined") return;
   if (!Number.isFinite(ms) || ms < 0 || ms > MAX_REPORTED_MS) return;
+  if (outcome === "ok") feedMailPerformance(name, ms);
   const sampleRate = rumSampleRate(name, outcome);
   if (Math.random() >= sampleRate) return;
   const event = buildRumEvent({
@@ -354,6 +366,13 @@ function emit(name: RumActionName, ms: number, outcome: RumOutcome) {
   } catch {
     // A logging failure must not surface in the interaction it measured.
   }
+}
+
+// The sampled-session summary reuses these timings; "returning" is the
+// app open that found the mailbox in the local store.
+function feedMailPerformance(name: RumActionName, ms: number) {
+  const mark = MAIL_MARK_BY_ACTION[name];
+  if (mark) safely(() => recordMailMark(mark, ms), undefined);
 }
 
 function safely<T>(run: () => T, fallback: T): T {

@@ -161,6 +161,81 @@ describe("sanitizeMailHtml", () => {
   });
 });
 
+describe("sanitizeMailHtml links bare URLs", () => {
+  it("turns a long bare URL in a text node into a link that opens a new tab", () => {
+    const html = sanitizeMailHtml(
+      `<div><p>Confirm here: ${LONG_TRACKING_URL} before Friday.</p></div>`,
+    );
+    const links = parse(html).querySelectorAll("a");
+
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe(LONG_TRACKING_URL);
+    expect(links[0]?.textContent).toBe(LONG_TRACKING_URL);
+    expect(links[0]?.getAttribute("target")).toBe("_blank");
+    expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(parse(html).body.textContent).toBe(
+      `Confirm here: ${LONG_TRACKING_URL} before Friday.`,
+    );
+  });
+
+  it("links a URL wrapped onto several lines inside angle brackets", () => {
+    const wrapped = `${LONG_TRACKING_URL.slice(0, 70)}\n${LONG_TRACKING_URL.slice(70)}`;
+    const html = sanitizeMailHtml(`<pre>Open &lt;${wrapped}&gt; now</pre>`);
+    const links = parse(html).querySelectorAll("a");
+
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe(LONG_TRACKING_URL);
+  });
+
+  it("leaves existing links, styles and unsafe schemes as they were", () => {
+    const html = sanitizeMailHtml(`
+      <style>a { background: url(https://example.com/bg.png); }</style>
+      <a href="https://example.com/real">https://example.com/shown</a>
+      <p>javascript:alert(1) and ftp://example.com/file</p>
+    `);
+    const document = parse(html);
+
+    expect(document.querySelectorAll("a")).toHaveLength(1);
+    expect(document.querySelector("a")?.getAttribute("href")).toBe(
+      "https://example.com/real",
+    );
+    expect(document.querySelector("style")?.textContent).toContain(
+      "url(https://example.com/bg.png)",
+    );
+  });
+
+  it("keeps markup-like text in a URL as text instead of elements", () => {
+    const html = sanitizeMailHtml(
+      `<p>https://example.com/a?b=1&amp;c="&gt;&lt;img src=x onerror=alert(1)&gt;</p>`,
+    );
+    const document = parse(html);
+
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("a")?.getAttribute("href")).toBe(
+      "https://example.com/a?b=1&c=",
+    );
+    expect(document.body.textContent).toBe(
+      `https://example.com/a?b=1&c="><img src=x onerror=alert(1)>`,
+    );
+  });
+  it("stops linking past ~100KB of text across the document", () => {
+    const filler = `<p>${"version 1.2.3 ".repeat(400)}</p>`.repeat(30);
+    const html = sanitizeMailHtml(
+      `<p>https://first.example.com</p>${filler}<p>https://last.example.com</p>`,
+    );
+
+    expect(
+      Array.from(parse(html).querySelectorAll("a"), (a) => a.href),
+    ).toEqual(["https://first.example.com/"]);
+  });
+});
+
+const LONG_TRACKING_URL = `https://click.mail.example.com/ls/click?upn=${"u001.aB3-_x%2F9".repeat(18)}&utm_source=newsletter`;
+
+function parse(html: string) {
+  return new DOMParser().parseFromString(html, "text/html");
+}
+
 // CSP Level 3 fetch, document and navigation directives that Chrome, Firefox
 // and Safari all parse. `prefetch-src` was dropped from the spec and is not.
 const RECOGNISED_CSP_DIRECTIVES = [

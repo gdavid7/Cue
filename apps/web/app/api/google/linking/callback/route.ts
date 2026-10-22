@@ -52,7 +52,9 @@ export const GET = withError("google/linking/callback", (request) =>
 );
 
 async function handleGoogleLinkingCallback(request: RequestWithLogger) {
-  const actorSession = await auth(request.headers);
+  const actorSession = await auth(request.headers, {
+    disableCookieCache: true,
+  });
   const actorUserId = actorSession?.user.id ?? null;
   let logger = request.logger.with({
     actorUserId,

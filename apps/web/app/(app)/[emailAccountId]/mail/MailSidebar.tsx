@@ -32,6 +32,7 @@ import {
   MailsIcon,
   MegaphoneIcon,
   MessagesSquareIcon,
+  PaperclipIcon,
   PenLineIcon,
   PlusIcon,
   SendIcon,
@@ -122,7 +123,8 @@ export type MailSidebarProps = {
   /** Offered above a single account's inbox when there are inboxes to combine. */
   allInboxesHref?: string;
   /** Today's briefing, which lives outside the mail view. */
-  todayHref?: string;
+  /** Undefined hides Today; null keeps its place until there is an account. */
+  todayHref?: string | null;
   /** The pointer or focus reached the Today row, so it may well open next. */
   onTodayIntent?: () => void;
   /** The pointer or focus left the Today row. */
@@ -150,6 +152,8 @@ type SystemItem = {
 
 export const MAIL_SCHEDULED_TYPE = "scheduled";
 export const MAIL_SNOOZED_TYPE = "snoozed";
+/** Every attachment on the mail stored on this device. */
+export const MAIL_FILES_TYPE = "files";
 /** Mailboxes All inboxes merges from every included account's local mail. */
 export const ALL_INBOXES_MAILBOX_TYPES: ReadonlySet<string> = new Set([
   "draft",
@@ -161,12 +165,14 @@ export const ALL_INBOXES_VIEW_TYPES: ReadonlySet<string> = new Set([
   ...ALL_INBOXES_MAILBOX_TYPES,
   MAIL_SNOOZED_TYPE,
   MAIL_SCHEDULED_TYPE,
+  MAIL_FILES_TYPE,
 ]);
 
 /** Visited often enough to sit beside the inbox. */
 const PRIMARY_MAILBOX_ITEMS: SystemItem[] = [
   { name: "Drafts", type: "draft", countId: "DRAFT", Icon: FileIcon },
   { name: "Sent", type: "sent", countId: null, Icon: SendIcon },
+  { name: "Files", type: MAIL_FILES_TYPE, countId: null, Icon: PaperclipIcon },
 ];
 
 /** The rest of the mailbox. Visited rarely enough to stay behind More. */
@@ -414,9 +420,9 @@ function MailSidebarContent({
               prefetch={activeType === "today" ? true : undefined}
             />
           )}
-          {todayHref ? (
+          {todayHref !== undefined ? (
             <NavRow
-              href={todayHref}
+              href={todayHref ?? undefined}
               active={activeType === "today"}
               icon={<SunIcon className="size-4 shrink-0" />}
               name="Today"

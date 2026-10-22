@@ -15,6 +15,11 @@ import {
   rumSampleRate,
   setRumContext,
 } from "@/utils/analytics/rum-actions";
+import { recordMailMark } from "@/utils/analytics/mail-performance";
+
+vi.mock("@/utils/analytics/mail-performance", () => ({
+  recordMailMark: vi.fn(),
+}));
 
 vi.mock("next-axiom", () => ({
   log: {
@@ -252,6 +257,38 @@ describe("sending events", () => {
       name: "reply_suggestion",
       outcome: "timeout",
     });
+  });
+
+  it("feeds the performance summary with the cached or fresh first row", async () => {
+    beginRumAction("app_open_returning", { startedAt: 0 });
+    markRumRowsShown();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(recordMailMark).toHaveBeenLastCalledWith(
+      "first_row_cached",
+      expect.any(Number),
+    );
+
+    beginRumAction("app_open_cold", { startedAt: 0 });
+    markRumRowsShown();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(recordMailMark).toHaveBeenLastCalledWith(
+      "first_row_fresh",
+      expect.any(Number),
+    );
+  });
+
+  it("feeds compose_ready only for a successful open", async () => {
+    beginRumAction("compose_open");
+    completeRumAction("compose_open", { outcome: "error" });
+    expect(recordMailMark).not.toHaveBeenCalled();
+
+    beginRumAction("compose_open");
+    completeRumAction("compose_open");
+    await vi.advanceTimersByTimeAsync(50);
+    expect(recordMailMark).toHaveBeenCalledWith(
+      "compose_ready",
+      expect.any(Number),
+    );
   });
 
   it("ends an app open when the first rows are shown, always sent", async () => {

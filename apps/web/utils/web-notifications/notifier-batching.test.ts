@@ -21,6 +21,7 @@ function setup() {
   const notifier = createNewMailNotifier({
     startedAtMs: NOW,
     getMode: () => "important",
+    isQuiet: () => false,
     isLeader: () => true,
     isForeground: () => false,
     notify: (conversations) => notified.push(conversations),

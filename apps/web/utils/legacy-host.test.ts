@@ -3,6 +3,7 @@ import {
   getLegacyHostRedirects,
   LEGACY_PAGE_SOURCE,
 } from "@/utils/legacy-host";
+import { SEMANTIC_MODEL } from "@/utils/mail-search/semantic-embedding";
 
 describe("getLegacyHostRedirects", () => {
   it("builds one permanent redirect gated to the old hosts", () => {
@@ -60,6 +61,8 @@ describe("legacy page source", () => {
     "/sw.js",
     "/robots.txt",
     "/icons/icon-192x192.png",
+    `/models/${SEMANTIC_MODEL.repository}/${SEMANTIC_MODEL.revision}/onnx/model_quantized.onnx`,
+    `/models/${SEMANTIC_MODEL.repository}/${SEMANTIC_MODEL.revision}/tokenizer.json`,
   ])("leaves %s on the old host", (pathname) => {
     expect(matches(pathname)).toBe(false);
   });

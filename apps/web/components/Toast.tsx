@@ -57,6 +57,10 @@ export function toastLoading(description: string) {
   return toast.loading(description);
 }
 
+export function toastDismiss(id: string | number) {
+  toast.dismiss(id);
+}
+
 export function toastInfo(options: {
   title: string;
   description: string;

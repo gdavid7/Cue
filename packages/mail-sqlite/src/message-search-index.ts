@@ -1,3 +1,4 @@
+import { LOCAL_MIGRATIONS } from "./local-migrations";
 import type { MessageKey } from "@inboxzero/mail-core/identities";
 import type { MessageAttachmentDescriptor } from "@inboxzero/mail-core/messages";
 import type { SqlTransaction, SqlValue } from "./driver";
@@ -36,7 +37,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
 // so opening the mailbox never waits on a full rebuild.
 export async function migrateMessageSearchIndex(tx: SqlTransaction) {
   const applied = await tx.query(
-    "SELECT 1 FROM schema_migrations WHERE id = 13",
+    "SELECT 1 FROM schema_migrations WHERE id = ?",
+    [LOCAL_MIGRATIONS.stemmedMessageSearch.id],
   );
   if (applied.length) return;
   const rebuilt = await withSearchIndex(tx, "rebuild_fts", async () => {
@@ -46,9 +48,10 @@ export async function migrateMessageSearchIndex(tx: SqlTransaction) {
     await markSearchIndexIncomplete(tx);
   });
   if (!rebuilt) return;
-  await tx.execute(
-    "INSERT INTO schema_migrations(id, name) VALUES (13, '0013-stemmed-message-search')",
-  );
+  await tx.execute("INSERT INTO schema_migrations(id, name) VALUES (?, ?)", [
+    LOCAL_MIGRATIONS.stemmedMessageSearch.id,
+    LOCAL_MIGRATIONS.stemmedMessageSearch.name,
+  ]);
 }
 
 export async function indexMessageContent(

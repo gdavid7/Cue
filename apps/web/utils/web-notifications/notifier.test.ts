@@ -66,11 +66,13 @@ function createTab({
   locks,
   mode = "all",
   foreground = false,
+  isQuiet = () => false,
   sink,
 }: {
   locks: Pick<LockManager, "request">;
   mode?: WebNotificationMode;
   foreground?: boolean;
+  isQuiet?: () => boolean;
   sink: TrackedConversation[][];
 }) {
   let leader = false;
@@ -83,6 +85,7 @@ function createTab({
   const notifier = createNewMailNotifier({
     startedAtMs: NOW,
     getMode: () => mode,
+    isQuiet,
     isLeader: () => leader,
     isForeground: () => foreground,
     notify: (conversations) => sink.push(conversations),
@@ -191,6 +194,7 @@ describe("when to notify", () => {
     const notifier = createNewMailNotifier({
       startedAtMs: NOW,
       getMode: () => "important",
+      isQuiet: () => false,
       isLeader: () => leader,
       isForeground: () => false,
       notify: (conversations) => sink.push(conversations),
@@ -204,6 +208,80 @@ describe("when to notify", () => {
 
     expect(sink).toHaveLength(1);
     leader = false;
+  });
+});
+
+describe("while notifications are paused", () => {
+  it("holds back mail that arrives during the pause, and does not replay it after", async () => {
+    let quiet = true;
+    const sink: TrackedConversation[][] = [];
+    const tab = createTab({
+      locks: createFakeLocks(),
+      isQuiet: () => quiet,
+      sink,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    tab.notifier.handle([]);
+    tab.notifier.handle([conversation("during")]);
+    expect(sink).toEqual([]);
+
+    quiet = false;
+    tab.notifier.handle([conversation("during")]);
+    tab.notifier.handle([conversation("during"), conversation("after")]);
+
+    expect(sink.map((batch) => batch.map((item) => item.id))).toEqual([
+      ["after"],
+    ]);
+  });
+
+  it("drops an important-mode batch when a pause starts while triage settles", async () => {
+    let quiet = false;
+    const sink: TrackedConversation[][] = [];
+    const tab = createTab({
+      locks: createFakeLocks(),
+      mode: "important",
+      isQuiet: () => quiet,
+      sink,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    tab.notifier.handle([]);
+    tab.notifier.handle([conversation("person")]);
+    quiet = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(sink).toEqual([]);
+  });
+
+  it("applies a pause set in another tab to the tab holding the lock", async () => {
+    // Stands in for the browser's localStorage, which every tab shares.
+    const sharedStorage = { quietUntilMs: null as number | null };
+    const isQuiet = () =>
+      sharedStorage.quietUntilMs !== null &&
+      sharedStorage.quietUntilMs > Date.now();
+    const locks = createFakeLocks();
+    const sink: TrackedConversation[][] = [];
+    const leader = createTab({ locks, isQuiet, sink });
+    const other = createTab({ locks, isQuiet, sink });
+    await vi.advanceTimersByTimeAsync(0);
+    leader.notifier.handle([]);
+    other.notifier.handle([]);
+
+    // The pause is chosen in the tab that is not notifying.
+    sharedStorage.quietUntilMs = Date.now() + 60 * 60 * 1000;
+    leader.notifier.handle([conversation("paused")]);
+    other.notifier.handle([conversation("paused")]);
+    expect(sink).toEqual([]);
+
+    // Once the hour passes it resumes on its own, with no write by any tab.
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 1);
+    leader.notifier.handle([conversation("resumed")]);
+    other.notifier.handle([conversation("resumed")]);
+
+    expect(sink.map((batch) => batch.map((item) => item.id))).toEqual([
+      ["resumed"],
+    ]);
   });
 });
 

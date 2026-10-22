@@ -5,6 +5,7 @@ import {
   readContactSuggestions,
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
+import { readFileSenders, readFiles } from "./files";
 import { readPersonCard } from "./person-card";
 import {
   countMessageEmbeddings,
@@ -184,6 +185,14 @@ export async function createSqliteMailStore(
     },
     readPersonCard(query) {
       return driver.read((tx) => readPersonCard(tx, query));
+    },
+    readFiles(query) {
+      return driver.read(async (tx) =>
+        readFiles(tx, query, await searchSupport(tx)),
+      );
+    },
+    readFileSenders(accountIds) {
+      return driver.read((tx) => readFileSenders(tx, accountIds));
     },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);
@@ -3029,8 +3038,9 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
     `INSERT INTO messages(
        account_id, message_id, conversation_id, provider, version, subject, preview, external_url,
        from_address, to_json, cc_json, bcc_json, received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json,
-       roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted
-     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted,
+       internet_message_id
+     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(account_id, message_id) DO UPDATE SET
        conversation_id = excluded.conversation_id,
        version = excluded.version,
@@ -3056,7 +3066,8 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
        in_spam = excluded.in_spam,
        has_attachments = excluded.has_attachments,
        snoozed_until_ms = excluded.snoozed_until_ms,
-       deleted = excluded.deleted`,
+       deleted = excluded.deleted,
+       internet_message_id = COALESCE(excluded.internet_message_id, messages.internet_message_id)`,
     [
       message.accountId,
       message.messageId,
@@ -3086,6 +3097,7 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       message.hasAttachments ? 1 : 0,
       message.snoozedUntilMs ?? null,
       message.deleted ? 1 : 0,
+      message.internetMessageId ?? null,
     ],
   );
   await indexContactMessage(tx, message);
@@ -3429,6 +3441,10 @@ function confirmedFromRow(
     hasAttachments: Number(row.has_attachments) === 1,
     snoozedUntilMs:
       row.snoozed_until_ms == null ? null : Number(row.snoozed_until_ms),
+    internetMessageId:
+      row.internet_message_id == null
+        ? undefined
+        : String(row.internet_message_id),
   };
 }
 
