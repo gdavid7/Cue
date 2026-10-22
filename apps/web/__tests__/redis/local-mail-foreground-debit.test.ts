@@ -98,14 +98,14 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         "local-mail-budget:google:account-1:total",
         "tokens",
       );
-      expect(Number(account)).toBeCloseTo(3000, -1);
+      expect(Number(account)).toBeCloseTo(9000, -1);
       expect(
         await redis!.exists("local-mail-budget:google:account-1:active"),
       ).toBe(0);
     });
 
     it("slows a background scan that follows the foreground reads", async () => {
-      for (let i = 0; i < 3; i++)
+      for (let i = 0; i < 9; i++)
         await debitLocalMailSyncBudget({
           emailAccountId: "account-1",
           provider: "google",
@@ -126,7 +126,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
     });
 
     it("does not overdraw a bucket that cannot pay", async () => {
-      for (let i = 0; i < 5; i++)
+      for (let i = 0; i < 11; i++)
         await debitLocalMailSyncBudget({
           emailAccountId: "account-1",
           provider: "google",

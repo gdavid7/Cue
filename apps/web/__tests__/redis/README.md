@@ -31,3 +31,7 @@ RUN_INTEGRATION_TESTS=true pnpm --filter inbox-zero-ai exec vitest --run __tests
 ```sh
 RUN_INTEGRATION_TESTS=true pnpm --filter inbox-zero-ai exec vitest --run __tests__/redis/mail-bulk-job-store.test.ts
 ```
+
+## CI
+
+The `Redis Lua tests` job in `.github/workflows/test.yml` installs `redis-server` and runs everything here except `local-mail-sync-budget.test.ts`, which needs Docker.

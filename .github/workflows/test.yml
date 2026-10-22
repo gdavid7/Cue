@@ -138,6 +138,36 @@ jobs:
           INTERNAL_API_KEY: "secret"
           NEXT_PUBLIC_BASE_URL: "http://localhost:3000"
 
+  redis:
+    name: Redis Lua tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # The suites spawn their own private /usr/bin/redis-server on a free port,
+      # so a service container would go unused; they ignore any configured Redis URL.
+      - name: Install redis-server
+        run: |
+          for attempt in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y -qq redis-server && break
+            sleep 5
+          done
+          test -x /usr/bin/redis-server
+      # local-mail-sync-budget needs Docker (redis:7 container) and stays opt-in locally.
+      - name: Run Redis tests
+        timeout-minutes: 5
+        run: pnpm -F inbox-zero-ai exec vitest --run __tests__/redis --exclude __tests__/redis/local-mail-sync-budget.test.ts
+        env:
+          RUN_INTEGRATION_TESTS: true
+
   electron:
     name: Electron mail runtime
     runs-on: ubuntu-latest
