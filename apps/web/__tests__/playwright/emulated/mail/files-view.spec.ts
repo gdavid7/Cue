@@ -254,7 +254,10 @@ test("in All inboxes, lists every account's files, each naming its account", asy
   test.setTimeout(300_000);
   const { emailAccountId } = await openMail(page);
   const { pdf } = requireSeeded();
-  const second = await createSecondEmailAccount(emailAccountId);
+  // Reads the primary's mailbox, so the file seeded there reached both.
+  const second = await createSecondEmailAccount(emailAccountId, {
+    mailbox: "primary",
+  });
   try {
     await page.goto(`/${emailAccountId}/mail?accountScope=all`, {
       waitUntil: "domcontentloaded",
