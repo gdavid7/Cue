@@ -82,6 +82,44 @@ test("shows persisted execution history and preserves rule filters", async ({
   ).toBeVisible();
 });
 
+test("filters history to one kind of work, as Today's While you were away links to it", async ({
+  page,
+}) => {
+  const emailAccountId = await getEmailAccountId(page);
+  await seedAutomationHistory(emailAccountId);
+  await markAutomationOnboardingViewed(page);
+
+  // The seeded run archived its email.
+  await page.goto(`/${emailAccountId}/automation?tab=history&action=archived`);
+  await expect(
+    page.getByRole("button", { name: "Archived", exact: true }),
+  ).toBeVisible({ timeout: 60_000 });
+  await expectVisibleAfterTransientFetch(
+    page,
+    page.getByText(HISTORY_RULE_NAME, { exact: true }),
+  );
+
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Drafted replies" }).click();
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("action") === "drafted",
+  );
+  await expect(page.getByText("No history", { exact: true })).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(
+    page.getByText("Cue hasn't done this to any emails yet.", { exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Drafted replies" }).click();
+  await page.getByRole("menuitem", { name: "All actions" }).click();
+  await expect(page).toHaveURL((url) => !url.searchParams.has("action"));
+  await expectVisibleAfterTransientFetch(
+    page,
+    page.getByText(HISTORY_RULE_NAME, { exact: true }),
+  );
+});
+
 test("groups conversations and lazily pages older messages without duplicating the latest", async ({
   page,
 }, testInfo) => {

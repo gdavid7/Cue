@@ -8,8 +8,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { parseAsString, useQueryState } from "nuqs";
-import { ChevronDown, Tag } from "lucide-react";
+import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import { ChevronDown, ListFilter, Tag } from "lucide-react";
+import {
+  HISTORY_ACTION_NAMES,
+  type HistoryAction,
+} from "@/utils/rule/history-actions";
 
 export function RulesSelect() {
   const { data, isLoading, error } = useRules();
@@ -61,5 +65,41 @@ export function RulesSelect() {
         </DropdownMenuContent>
       </DropdownMenu>
     </LoadingContent>
+  );
+}
+
+const HISTORY_ACTION_LABELS: Record<HistoryAction, string> = {
+  sorted: "Sorted",
+  archived: "Archived",
+  drafted: "Drafted replies",
+};
+
+/** Narrows History to one kind of work, as Today's "While you were away" counts it. */
+export function HistoryActionSelect() {
+  const [action, setAction] = useQueryState(
+    "action",
+    parseAsStringLiteral(HISTORY_ACTION_NAMES),
+  );
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-10 whitespace-nowrap">
+          <ListFilter className="mr-2 h-4 w-4" />
+          {action ? HISTORY_ACTION_LABELS[action] : "All actions"}
+          <ChevronDown className="ml-2 h-4 w-4 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => setAction(null)}>
+          All actions
+        </DropdownMenuItem>
+        {HISTORY_ACTION_NAMES.map((name) => (
+          <DropdownMenuItem key={name} onClick={() => setAction(name)}>
+            {HISTORY_ACTION_LABELS[name]}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

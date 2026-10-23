@@ -75,6 +75,9 @@ model User {
   completedOnboardingAt   DateTime? // questions about the user. e.g. their role
   onboardingAnswers       Json?
   lastLogin               DateTime?
+  // lastLogin as it was before the user's latest return after a break: when
+  // they were last here, for Today's "While you were away". Cleared on dismiss.
+  previousVisitAt         DateTime?
   utms                    Json?
   errorMessages           Json? // eg. user set incorrect AI API key
   announcementDismissedAt DateTime?

@@ -5,6 +5,11 @@ import { withEmailAccount } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import { Prisma } from "@/generated/prisma/client";
+import {
+  HISTORY_ACTIONS,
+  type HistoryAction,
+  isHistoryAction,
+} from "@/utils/rule/history-actions";
 
 const LIMIT = 50;
 
@@ -28,6 +33,7 @@ export const GET = withEmailAccount(
       ? url.searchParams.get("excludeMessageId") || undefined
       : undefined;
     const ruleId = url.searchParams.get("ruleId") || "all";
+    const action = url.searchParams.get("action");
 
     const result = await getExecutedRules({
       page,
@@ -35,6 +41,7 @@ export const GET = withEmailAccount(
       emailAccountId,
       threadId,
       excludeMessageId,
+      action: isHistoryAction(action) ? action : undefined,
     });
 
     return NextResponse.json(result);
@@ -47,12 +54,14 @@ async function getExecutedRules({
   emailAccountId,
   threadId,
   excludeMessageId,
+  action,
 }: {
   page: number;
   ruleId?: string;
   emailAccountId: string;
   threadId?: string;
   excludeMessageId?: string;
+  action?: HistoryAction;
 }) {
   const conditions = [Prisma.sql`"emailAccountId" = ${emailAccountId}`];
   if (ruleId === "skipped") {
@@ -70,6 +79,18 @@ async function getExecutedRules({
   if (threadId) conditions.push(Prisma.sql`"threadId" = ${threadId}`);
   if (excludeMessageId) {
     conditions.push(Prisma.sql`"messageId" != ${excludeMessageId}`);
+  }
+  if (action) {
+    const types = HISTORY_ACTIONS[action].map(
+      (type) => Prisma.sql`${type}::"ActionType"`,
+    );
+    // As Today counts them: an action that failed or was skipped didn't happen.
+    conditions.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "ExecutedAction" ea
+      WHERE ea."executedRuleId" = "ExecutedRule".id
+        AND ea.type IN (${Prisma.join(types)})
+        AND (ea."executionStatus" IS NULL OR ea."executionStatus" = 'SUCCEEDED')
+    )`);
   }
   const where = Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`;
   const groupColumn = threadId

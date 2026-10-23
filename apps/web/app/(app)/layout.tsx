@@ -86,7 +86,7 @@ export default async function AppLayout({
   after(async () => {
     const email = session.user.email;
     try {
-      await recordLastLogin(email);
+      await recordLastLogin(session.user.id);
     } catch (error) {
       logger.error("Failed to update last login", { email, error });
       captureException(error, { userEmail: email });

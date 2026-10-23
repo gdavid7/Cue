@@ -2,7 +2,12 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
-import { useQueryState, parseAsInteger, parseAsString } from "nuqs";
+import {
+  useQueryState,
+  parseAsInteger,
+  parseAsString,
+  parseAsStringLiteral,
+} from "nuqs";
 import { format, isToday, isYesterday } from "date-fns";
 import { LoadingContent } from "@/components/LoadingContent";
 import type { GetExecutedRulesResponse } from "@/app/api/user/executed-rules/history/route";
@@ -13,7 +18,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { TablePagination } from "@/components/TablePagination";
 import { Badge } from "@/components/Badge";
-import { RulesSelect } from "@/app/(app)/[emailAccountId]/assistant/RulesSelect";
+import {
+  HistoryActionSelect,
+  RulesSelect,
+} from "@/app/(app)/[emailAccountId]/assistant/RulesSelect";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useChat } from "@/providers/ChatProvider";
 import { useExecutedRules } from "@/hooks/useExecutedRules";
@@ -22,14 +30,26 @@ import type { ParsedMessage } from "@/utils/types";
 import { EmailMessageCell } from "@/components/EmailMessageCell";
 import { FixWithChat } from "@/app/(app)/[emailAccountId]/assistant/FixWithChat";
 import { ResultsDisplay } from "@/app/(app)/[emailAccountId]/assistant/ResultDisplay";
+import {
+  HISTORY_ACTION_NAMES,
+  type HistoryAction,
+} from "@/utils/rule/history-actions";
 
 type ExecutedRuleResult = GetExecutedRulesResponse["results"][number];
 
 export function History() {
   const [page] = useQueryState("page", parseAsInteger.withDefault(1));
   const [ruleId] = useQueryState("ruleId", parseAsString.withDefault("all"));
+  const [action] = useQueryState(
+    "action",
+    parseAsStringLiteral(HISTORY_ACTION_NAMES),
+  );
 
-  const { data, isLoading, error } = useExecutedRules({ page, ruleId });
+  const { data, isLoading, error } = useExecutedRules({
+    page,
+    ruleId,
+    action,
+  });
   const results = data?.results ?? [];
   const totalPages = data?.totalPages ?? 1;
   const messageIds = useMemo(
@@ -46,13 +66,17 @@ export function History() {
 
   return (
     <>
-      <RulesSelect />
+      <div className="flex flex-wrap gap-2">
+        <RulesSelect />
+        <HistoryActionSelect />
+      </div>
       <Card className="mt-2">
         <LoadingContent loading={isLoading} error={error}>
           {results.length ? (
             <HistoryTable
-              key={`${page}-${ruleId}`}
+              key={`${page}-${ruleId}-${action}`}
               ruleId={ruleId}
+              action={action}
               data={results}
               totalPages={totalPages}
               messagesById={messagesById}
@@ -61,11 +85,7 @@ export function History() {
           ) : (
             <AlertBasic
               title="No history"
-              description={
-                ruleId === "all"
-                  ? "No emails have been processed yet."
-                  : "No emails have been processed for this rule."
-              }
+              description={emptyHistoryDescription(ruleId, action)}
             />
           )}
         </LoadingContent>
@@ -77,12 +97,14 @@ export function History() {
 function HistoryTable({
   data,
   ruleId,
+  action,
   totalPages,
   messagesById,
   messagesLoading,
 }: {
   data: GetExecutedRulesResponse["results"];
   ruleId: string;
+  action: HistoryAction | null;
   totalPages: number;
   messagesById: Record<string, ParsedMessage>;
   messagesLoading: boolean;
@@ -108,6 +130,7 @@ function HistoryTable({
                   key={er.threadId}
                   result={er}
                   ruleId={ruleId}
+                  action={action}
                   message={messagesById[er.messageId]}
                   messagesLoading={messagesLoading}
                 />
@@ -125,11 +148,13 @@ function HistoryTable({
 function HistoryThread({
   result,
   ruleId,
+  action,
   message,
   messagesLoading,
 }: {
   result: ExecutedRuleResult;
   ruleId: string;
+  action: HistoryAction | null;
   message?: ParsedMessage;
   messagesLoading: boolean;
 }) {
@@ -166,6 +191,7 @@ function HistoryThread({
               threadId={result.threadId}
               latestMessageId={result.messageId}
               ruleId={ruleId}
+              action={action}
             />
           </TableCell>
         </TableRow>
@@ -178,15 +204,18 @@ function ThreadHistory({
   threadId,
   latestMessageId,
   ruleId,
+  action,
 }: {
   threadId: string;
   latestMessageId: string;
   ruleId: string;
+  action: HistoryAction | null;
 }) {
   const [page, setPage] = useState(1);
   const { data, isLoading, error } = useExecutedRules({
     page,
     ruleId,
+    action,
     threadId,
     excludeMessageId: latestMessageId,
   });
@@ -378,6 +407,12 @@ function RuleCell({
       )}
     </div>
   );
+}
+
+function emptyHistoryDescription(ruleId: string, action: HistoryAction | null) {
+  if (action) return "Cue hasn't done this to any emails yet.";
+  if (ruleId === "all") return "No emails have been processed yet.";
+  return "No emails have been processed for this rule.";
 }
 
 function mapMessagesById(messages: ParsedMessage[]) {
