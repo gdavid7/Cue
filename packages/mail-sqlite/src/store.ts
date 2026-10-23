@@ -7,6 +7,11 @@ import {
 import { readMessageSearch } from "./message-search";
 import { readFileSenders, readFiles, readFilesNotOnDevice } from "./files";
 import { readNeverReadSenders } from "./never-read-senders";
+import {
+  deleteAccountImportantPeople,
+  readImportantPeople,
+  writeImportantPerson,
+} from "./important-people";
 import { readPersonCard } from "./person-card";
 import { readWaitingOnYou } from "./waiting-on-you";
 import {
@@ -194,6 +199,14 @@ export async function createSqliteMailStore(
     readNeverReadSenders(query) {
       return driver.read((tx) => readNeverReadSenders(tx, query));
     },
+    readImportantPeople(accountIds) {
+      return driver.read((tx) => readImportantPeople(tx, accountIds));
+    },
+    writeImportantPerson(input) {
+      return driver.write((tx) =>
+        writeImportantPerson(tx, input, runtime.nowMs()),
+      );
+    },
     readFiles(query) {
       return driver.read(async (tx) =>
         readFiles(tx, query, await searchSupport(tx)),
@@ -296,6 +309,7 @@ export async function createSqliteMailStore(
         await deleteAccountSearchIndex(tx, accountId);
         await deleteAccountContactSuggestions(tx, accountId);
         await deleteAccountMessageEmbeddings(tx, accountId);
+        await deleteAccountImportantPeople(tx, accountId);
         const existing = await tx.query(
           "SELECT 1 AS n FROM accounts WHERE account_id = ?",
           [accountId],

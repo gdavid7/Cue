@@ -12,7 +12,10 @@ import {
 } from "react";
 import { markRumRowsShown } from "@/utils/analytics/rum-actions";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
-import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import {
+  isFromImportantPerson,
+  ThreadRow,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import type {
   ListThread,
@@ -28,6 +31,7 @@ import { LoadingMiniSpinner } from "@/components/Loading";
 import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { useImportantPeople } from "@/hooks/useImportantPeople";
 import { useIsCoarsePointer, useIsMobile } from "@/hooks/use-mobile";
 import { useHydrated } from "@/hooks/useHydrated";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
@@ -119,6 +123,18 @@ export const ThreadList = memo(function ThreadList({
     openThreadKey,
     listKey,
   });
+  const rowAccountIds = useMemo(
+    () => [
+      ...new Set([
+        emailAccountId,
+        ...threads.flatMap((thread) =>
+          "account" in thread ? [thread.account.id] : [],
+        ),
+      ]),
+    ],
+    [emailAccountId, threads],
+  );
+  const { isImportant } = useImportantPeople(rowAccountIds);
   const isMobile = useIsMobile();
   // A held finger selects the row, so touch never drags.
   const canDrag = !useIsCoarsePointer() && Boolean(onRowDragStart);
@@ -244,6 +260,11 @@ export const ThreadList = memo(function ThreadList({
                 )
               : undefined
           }
+          fromImportantPerson={isFromImportantPerson(
+            row.item,
+            "account" in row.item ? row.item.account.id : emailAccountId,
+            isImportant,
+          )}
           inInbox={inInbox}
           thread={row.item}
           userEmail={userEmail}

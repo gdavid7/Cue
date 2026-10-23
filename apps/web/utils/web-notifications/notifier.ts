@@ -5,6 +5,10 @@ import {
   type TrackedConversation,
 } from "@/utils/web-notifications/new-mail";
 import type { WebNotificationMode } from "@/utils/web-notifications/preference";
+import {
+  type ImportantPerson,
+  importantPeopleIndex,
+} from "@inboxzero/mail-core/important-people";
 
 const MAX_INDIVIDUAL_NOTIFICATIONS = 3;
 
@@ -26,6 +30,14 @@ export function createNewMailNotifier(deps: {
    * account, or null when they can't be loaded.
    */
   loadBulkMessageIds: (accountId: string) => Promise<Set<string> | null>;
+  /**
+   * Who the reader starred as Important in these accounts, read on this
+   * device, or null when stars can't be read. Their mail always notifies
+   * in "important" mode, whatever triage made of it.
+   */
+  loadImportantPeople: (
+    accountIds: string[],
+  ) => Promise<ImportantPerson[] | null>;
   /** Triage runs after mail arrives, so "important" waits for it. */
   triageSettleMs: number;
 }) {
@@ -46,20 +58,42 @@ export function createNewMailNotifier(deps: {
     );
   }
 
+  async function fromImportantPeople(conversations: TrackedConversation[]) {
+    const accountIds = [...new Set(conversations.map((c) => c.accountId))];
+    const people = await deps.loadImportantPeople(accountIds).catch(() => null);
+    const index = importantPeopleIndex(people ?? []);
+    return new Set(conversations.filter((c) => index.has(c.accountId, c.from)));
+  }
+
   async function dropBulk(conversations: TrackedConversation[]) {
     const accountIds = [...new Set(conversations.map((c) => c.accountId))];
-    const bulkByAccount = new Map(
-      await Promise.all(
+    const [bulkByAccount, important] = await Promise.all([
+      Promise.all(
         accountIds.map(
           async (accountId) =>
             [accountId, await deps.loadBulkMessageIds(accountId)] as const,
         ),
-      ),
-    );
+      ).then((entries) => new Map(entries)),
+      fromImportantPeople(conversations),
+    ]);
     return conversations.filter(
       (conversation) =>
+        important.has(conversation) ||
         !bulkByAccount.get(conversation.accountId)?.has(conversation.id),
     );
+  }
+
+  // Mail from an important person needs no triage, so it doesn't wait for it.
+  function notifyImportantNow(conversations: TrackedConversation[]) {
+    fromImportantPeople(conversations)
+      .then((important) => {
+        const due = pending.filter((c) => important.has(c));
+        if (due.length === 0) return;
+        for (const conversation of due)
+          pending.splice(pending.indexOf(conversation), 1);
+        if (canNotify()) deps.notify(due);
+      })
+      .catch(() => undefined);
   }
 
   return {
@@ -88,6 +122,7 @@ export function createNewMailNotifier(deps: {
       // One timer and one triage lookup per account for everything that
       // arrives while it waits.
       pending.push(...fresh);
+      notifyImportantNow(fresh);
       if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;

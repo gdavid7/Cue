@@ -409,6 +409,38 @@ describe("HomeDashboard states", () => {
     expect(optionFor("b").textContent).not.toContain("Cue drafted a reply");
   });
 
+  it("lists mail from people starred as Important first in Needs reply", async () => {
+    const original = mocks.client;
+    mocks.client = Object.assign(Object.create(original), {
+      capabilities: [
+        "method:queryImportantPeople",
+        "method:setImportantPerson",
+      ],
+      queryImportantPeople: async () => [
+        { accountId: "account", email: "dana@example.com", addedAtMs: 1 },
+      ],
+      setImportantPerson: async () => undefined,
+    });
+    mocks.home.data = homeData([
+      thread("a", "Quarterly numbers"),
+      { ...thread("b", "Contract"), fromEmail: "Dana@example.com" },
+      thread("c", "Lunch on Friday?"),
+    ]);
+
+    try {
+      renderToday();
+      await waitFor(() =>
+        expect(
+          [...document.querySelectorAll("[data-today-thread]")].map((row) =>
+            row.getAttribute("data-today-thread"),
+          ),
+        ).toEqual(["b", "a", "c"]),
+      );
+    } finally {
+      mocks.client = original;
+    }
+  });
+
   it("light: one email that needs a reply, and no empty lanes", () => {
     mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
 

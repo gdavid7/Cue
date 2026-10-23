@@ -12,6 +12,8 @@ export type MailThreadRowProps = {
   index: number;
   layout: "list" | "split";
   participantSummary: string;
+  /** Beside the sender names, such as the mark for an important person. */
+  participantMarker?: ReactNode;
   subject: ReactNode;
   snippet: ReactNode;
   date: ReactNode;
@@ -46,6 +48,7 @@ export function MailThreadRow({
   index,
   layout,
   participantSummary,
+  participantMarker,
   subject,
   snippet,
   date,
@@ -109,6 +112,7 @@ export function MailThreadRow({
       >
         {participantSummary}
       </span>
+      {participantMarker}
       {draftMarker}
       {messageCountMarker}
     </>

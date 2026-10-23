@@ -345,6 +345,11 @@ export function createTabFollowerClient(input: {
     queryFilesNotOnDevice: (accountIds) =>
       call("queryFilesNotOnDevice", [accountIds]) as never,
     queryWaitingOnYou: (query) => call("queryWaitingOnYou", [query]) as never,
+    queryImportantPeople: (accountIds) =>
+      call("queryImportantPeople", [accountIds]) as never,
+    setImportantPerson: async (input) => {
+      await call("setImportantPerson", [input]);
+    },
     searchSemantic: (query) => call("searchSemantic", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),

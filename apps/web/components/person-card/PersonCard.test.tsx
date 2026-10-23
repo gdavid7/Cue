@@ -9,6 +9,8 @@ import {
 } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImportantPerson } from "@inboxzero/mail-core/important-people";
+import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { PersonCard as PersonCardData } from "@inboxzero/mail-core/queries";
 import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 import {
@@ -21,10 +23,12 @@ const HOUR = 3_600_000;
 const mocks = vi.hoisted(() => ({
   queryPersonCard: vi.fn(),
   composeTo: vi.fn(),
+  client: null as Partial<MailClient> | null,
 }));
 
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
-  useOptionalMailClient: () => ({ queryPersonCard: mocks.queryPersonCard }),
+  useOptionalMailClient: () =>
+    mocks.client ?? { queryPersonCard: mocks.queryPersonCard },
 }));
 vi.mock("@/utils/user", () => ({ logOut: vi.fn() }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -61,6 +65,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mocks.client = null;
   cleanup();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -227,6 +232,98 @@ describe("getComposeAccountId", () => {
     ).toBeUndefined();
   });
 });
+
+describe("Important star", () => {
+  it("stars someone in the card's account and unstars them again", async () => {
+    const { stored, setImportantPerson } = engineWithStars();
+    renderTrigger();
+    await openCard();
+
+    const star = await screen.findByRole("button", { name: "Important" });
+    expect(star.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => {
+      fireEvent.click(star);
+    });
+
+    expect(setImportantPerson).toHaveBeenCalledWith({
+      accountIds: ["a"],
+      email: "ana@example.com",
+      important: true,
+    });
+    await waitFor(() => expect(star.getAttribute("aria-pressed")).toBe("true"));
+    expect(stored.map((person) => person.accountId)).toEqual(["a"]);
+
+    await act(async () => {
+      fireEvent.click(star);
+    });
+    await waitFor(() =>
+      expect(star.getAttribute("aria-pressed")).toBe("false"),
+    );
+    expect(stored).toEqual([]);
+  });
+
+  it("in All inboxes shows a star from any account and removes it from all of them", async () => {
+    const { stored, setImportantPerson } = engineWithStars([
+      { accountId: "b", email: "ana@example.com", addedAtMs: 1 },
+    ]);
+    renderTrigger({ accountIds: ["a", "b"] });
+    await openCard();
+
+    const star = await screen.findByRole("button", { name: "Important" });
+    await waitFor(() => expect(star.getAttribute("aria-pressed")).toBe("true"));
+    await act(async () => {
+      fireEvent.click(star);
+    });
+
+    expect(setImportantPerson).toHaveBeenCalledWith({
+      accountIds: ["a", "b"],
+      email: "ana@example.com",
+      important: false,
+    });
+    expect(stored).toEqual([]);
+  });
+
+  it("is hidden when the engine doesn't keep stars", async () => {
+    renderTrigger();
+    await openCard();
+
+    expect(screen.queryByRole("button", { name: "Important" })).toBeNull();
+    expect(screen.getByText("Earlier plan")).toBeTruthy();
+  });
+});
+
+function engineWithStars(people: ImportantPerson[] = []) {
+  const stored = [...people];
+  const setImportantPerson = vi.fn(
+    async (input: {
+      accountIds: string[];
+      email: string;
+      important: boolean;
+    }) => {
+      for (const accountId of input.accountIds) {
+        const at = stored.findIndex(
+          (person) =>
+            person.accountId === accountId && person.email === input.email,
+        );
+        if (at >= 0) stored.splice(at, 1);
+        if (input.important)
+          stored.push({ accountId, email: input.email, addedAtMs: 1 });
+      }
+    },
+  );
+  mocks.client = {
+    capabilities: [
+      "method:queryPersonCard",
+      "method:queryImportantPeople",
+      "method:setImportantPerson",
+    ],
+    queryPersonCard: mocks.queryPersonCard,
+    queryImportantPeople: async (accountIds: string[]) =>
+      stored.filter((person) => accountIds.includes(person.accountId)),
+    setImportantPerson,
+  };
+  return { stored, setImportantPerson };
+}
 
 function renderTrigger(
   scope: {
