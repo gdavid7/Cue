@@ -95,6 +95,7 @@ import { YourDay } from "./YourDay";
 import { useWaitingOnYou } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
 import { useImportantPeople } from "@/hooks/useImportantPeople";
+import { useAwaySummary, WhileYouWereAway } from "./WhileYouWereAway";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
@@ -286,6 +287,7 @@ export function HomeDashboard() {
     [localAccounts],
   );
   const { isImportant } = useImportantPeople(localAccountIds);
+  const away = useAwaySummary(localAccountIds);
   const alsoInInbox = useMemo(() => {
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
@@ -765,6 +767,13 @@ export function HomeDashboard() {
       </header>
 
       <GetStartedChecklist />
+
+      <WhileYouWereAway
+        accountColorIndexById={accountColorIndexById}
+        accounts={allInboxesAccounts ? localAccounts : undefined}
+        onDismiss={away.dismiss}
+        summary={away.summary}
+      />
 
       {allInboxesAccounts ? null : (
         <CatchUpEntry

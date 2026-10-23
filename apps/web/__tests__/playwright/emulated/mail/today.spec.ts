@@ -755,6 +755,95 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
   }
 });
 
+test("While you were away says what Cue did since the last visit, links each count to History, and dismisses", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  await seedAwayWork(emailAccountId);
+  try {
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    const card = page.getByRole("region", { name: "While you were away" });
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await expect(card).toContainText(
+      /Since [^,]+, Cue sorted 1 email, archived 1 and drafted 1 reply\./,
+    );
+    // The link carries the window it counted, and Cue's own runs only.
+    const href = await card
+      .getByRole("link", { name: "archived 1" })
+      .getAttribute("href");
+    const linked = new URL(href ?? "", "http://localhost");
+    expect(linked.pathname).toBe(`/${emailAccountId}/automation`);
+    expect(Object.fromEntries(linked.searchParams)).toMatchObject({
+      tab: "history",
+      action: "archived",
+      automated: "1",
+    });
+    expect(linked.searchParams.get("since")).toBeTruthy();
+    expect(linked.searchParams.get("until")).toBeTruthy();
+
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-away-${theme}-${size.width}`,
+        );
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.emulateMedia({ colorScheme: "light" });
+
+    await card.getByRole("link", { name: "archived 1" }).click();
+    await expect(page).toHaveURL(
+      (url) =>
+        url.pathname.endsWith("/automation") &&
+        url.searchParams.get("action") === "archived",
+    );
+    await expect(
+      page.getByRole("button", { name: "Archived", exact: true }),
+    ).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      page.getByText("Showing what Cue did while you were away."),
+    ).toBeVisible();
+    await expect(
+      page.getByText(AWAY_RULE_NAME, { exact: true }).first(),
+    ).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("button", { name: "Show all history" }).click();
+    await expect(page).toHaveURL((url) => !url.searchParams.has("since"));
+
+    // Dismissed, it stays hidden on the next load, until the next visit.
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await card.getByRole("button", { name: "Dismiss" }).click();
+    await expect(card).toHaveCount(0);
+    await expect
+      .poll(() => readPreviousVisit(emailAccountId), { timeout: 15_000 })
+      .toBeNull();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("listbox", { name: "Needs reply" }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(card).toHaveCount(0);
+  } finally {
+    await clearAwayWork(emailAccountId);
+  }
+});
+
 test("Before your meeting stays inside a phone-width Today in both themes", async ({
   page,
 }, testInfo) => {
@@ -1389,3 +1478,69 @@ async function sortAsNewsletter(
 
 /** Where a seeded newsletter is: "missing" when deleted, trashed or gone. */
 type NewsletterFolder = "inbox" | "archive" | "missing";
+
+const AWAY_RULE_PREFIX = "playwright-away-";
+const AWAY_RULE_NAME = "Playwright away rule";
+
+/**
+ * A return just now after twenty hours away, during which Cue sorted one
+ * email, archived one and drafted a reply to one. The last login is now, so
+ * this load doesn't count as another return.
+ */
+async function seedAwayWork(emailAccountId: string) {
+  await clearAwayWork(emailAccountId);
+  await withClient(async (client) => {
+    await client.query(
+      `UPDATE "User" SET "lastLogin" = now(), "visitReturnedAt" = now(),
+         "previousVisitAt" = now() - interval '20 hours'
+       WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId],
+    );
+    const ruleId = `${AWAY_RULE_PREFIX}rule`;
+    await client.query(
+      `INSERT INTO "Rule" (id, "updatedAt", name, "emailAccountId")
+       VALUES ($1, now(), $2, $3)`,
+      [ruleId, AWAY_RULE_NAME, emailAccountId],
+    );
+    for (const type of ["LABEL", "ARCHIVE", "DRAFT_EMAIL"]) {
+      const id = `${AWAY_RULE_PREFIX}${type}`;
+      await client.query(
+        `INSERT INTO "ExecutedRule" (id, "createdAt", "updatedAt", "threadId", "messageId", status, automated, "emailAccountId", "ruleId")
+         VALUES ($1, now() - interval '2 hours', now(), $1, $1, 'APPLIED', true, $2, $3)`,
+        [id, emailAccountId, ruleId],
+      );
+      await client.query(
+        `INSERT INTO "ExecutedAction" (id, "updatedAt", type, "executionStatus", "executedRuleId")
+         VALUES ($1, now(), $2::"ActionType", 'SUCCEEDED', $1)`,
+        [id, type],
+      );
+    }
+  });
+}
+
+async function clearAwayWork(emailAccountId: string) {
+  await withClient(async (client) => {
+    await client.query(`DELETE FROM "ExecutedRule" WHERE id LIKE $1`, [
+      `${AWAY_RULE_PREFIX}%`,
+    ]);
+    await client.query(`DELETE FROM "Rule" WHERE id LIKE $1`, [
+      `${AWAY_RULE_PREFIX}%`,
+    ]);
+    await client.query(
+      `UPDATE "User" SET "previousVisitAt" = NULL, "visitReturnedAt" = NULL
+       WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId],
+    );
+  });
+}
+
+async function readPreviousVisit(emailAccountId: string) {
+  return withClient(async (client) => {
+    const result = await client.query<{ previousVisitAt: Date | null }>(
+      `SELECT u."previousVisitAt" FROM "User" u
+       JOIN "EmailAccount" e ON e."userId" = u.id WHERE e.id = $1`,
+      [emailAccountId],
+    );
+    return result.rows[0]?.previousVisitAt ?? null;
+  });
+}
