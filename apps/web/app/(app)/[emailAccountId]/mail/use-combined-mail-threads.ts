@@ -57,9 +57,7 @@ export function useCombinedMailThreads({
     () => Object.fromEntries(accounts.map((account) => [account.id, account])),
     [accounts],
   );
-  const { labelsByAccount, labelsLoaded } = useLabelsByAccount(
-    enabled ? accountIds : [],
-  );
+  const labelsByAccount = useLabelsByAccount(enabled ? accountIds : []);
   const isDrafts = !searchQuery && mailboxType === "draft";
   const hiddenDrafts = useAllAccountsHiddenDraftMessageIds(
     enabled && isDrafts ? accounts : undefined,
@@ -115,12 +113,6 @@ export function useCombinedMailThreads({
     if (isUnread) return { type: "unread" };
     return { type: "inbox" };
   }, [isUnread, labelNames, mailboxType, searchQuery]);
-  // Outside a search, the predicate the list reads with, for parts of the
-  // view that read the same mail, such as Catch up.
-  const viewPredicate = useMemo(
-    () => predicate ?? threadsQueryToPredicate(query),
-    [predicate, query],
-  );
   const state = useEngineMailThreads({
     emailAccountId,
     accountIds: accountIds.length ? accountIds : [emailAccountId],
@@ -161,9 +153,6 @@ export function useCombinedMailThreads({
     /** Included accounts whose first sync in this browser is still running. */
     firstSyncAccounts,
     labelsByAccount,
-    viewPredicate,
-    /** A label tab's predicate matches nothing until the labels load. */
-    viewPredicateReady: !labelNames?.length || labelsLoaded,
   };
 }
 
@@ -179,10 +168,7 @@ function startFirstSync(client: MailClient, accounts: AllInboxesAccount[]) {
     .catch(() => undefined);
 }
 
-function useLabelsByAccount(accountIds: string[]): {
-  labelsByAccount: Record<string, EmailLabels>;
-  labelsLoaded: boolean;
-} {
+function useLabelsByAccount(accountIds: string[]): Record<string, EmailLabels> {
   const { fetcher } = useSWRConfig();
   const accountKey = useMemo(
     () => [...accountIds].sort().join(":"),
@@ -213,10 +199,7 @@ function useLabelsByAccount(accountIds: string[]): {
     },
     { revalidateOnFocus: false },
   );
-  return {
-    labelsByAccount: data ?? EMPTY_LABELS_BY_ACCOUNT,
-    labelsLoaded: data !== undefined,
-  };
+  return data ?? EMPTY_LABELS_BY_ACCOUNT;
 }
 
 function labelsResponseToMap(

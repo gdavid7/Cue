@@ -255,7 +255,7 @@ test("finishes a batch from Today on a phone and counts toward Get started", asy
   await expect(dialog).toBeHidden();
 });
 
-test("works through All inboxes, acting and undoing in each card's own account", async ({
+test("works through the All inboxes Inbox tab, acting and undoing in each card's own account", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -344,8 +344,16 @@ test("works through All inboxes, acting and undoing in each card's own account",
     );
     await page.emulateMedia({ colorScheme: "light" });
 
-    // Today across accounts keeps its own lanes, without Catch up.
+    // In All inboxes it's offered on the Inbox tab only, not a split tab.
     await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator("[data-catch-up-entry]")).toBeVisible();
+    const unreadTab = page.getByRole("button", { name: "Unread", exact: true });
+    await unreadTab.click();
+    await expect(unreadTab).toHaveAttribute("aria-current", "true");
+    await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
+
+    // Today across accounts keeps its own lanes, without Catch up.
     await page.goto(`/${primaryId}/home?accounts=all`);
     await expect(page.locator("[data-today-thread]").first()).toBeVisible({
       timeout: 60_000,

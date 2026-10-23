@@ -43,6 +43,7 @@ import {
   keepCatchUpAccounts,
   reconcileCatchUp,
   revertCatchUp,
+  catchUpUnreadConversations,
   setAsideCatchUpAccounts,
   startCatchUp,
   toCatchUpItems,
@@ -94,19 +95,15 @@ const MAX_BATCH_READ = 100;
  */
 type CatchUpActions = Pick<
   ReturnType<typeof useThreadActions>,
-  "addTargets" | "changeCard" | "setReadState" | "subscribeRestored" | "undo"
+  "addTargets" | "changeCard" | "subscribeRestored" | "undo"
 >;
 
 /**
- * All inboxes: the included accounts, walked in one order, and the list's
- * own predicate for the tab shown, as its label tabs match each account's
- * labels by name.
+ * All inboxes, where Catch up walks the Inbox tab of every included account
+ * in one order.
  */
 export type CatchUpAllInboxes = {
   accounts: Array<{ id: string; email: string }>;
-  predicate: MailPredicate;
-  /** False until the predicate can match, such as a label tab's labels loading. */
-  predicateReady: boolean;
   /** Included accounts whose first sync in this browser is still running. */
   waitingAccountIds: string[];
   /** Included accounts the mail engine can't reach. */
@@ -296,16 +293,11 @@ function CatchUpBody({
   const copies = useCatchUpCopies({
     client,
     accountIds: allInboxes ? reading.accountIds : [],
-    tabPredicate: reading.predicate,
-    cardTimes: candidates
-      ? allInboxes
-        ? candidates.items.map((item) => item.atMs)
-        : []
-      : null,
+    cards: candidates ? (allInboxes ? candidates.items : []) : null,
   });
   // The batch is fixed once its cards' copies are known.
   if (candidates && copies.status === "ready") {
-    setBatch(withCatchUpCopies(candidates, copies.conversations, scope));
+    setBatch(withCatchUpCopies(candidates, copies.found, scope, actedKeys));
   }
   if (batch && allInboxes) {
     // An account removed from the view leaves the batch, and one the engine
@@ -377,7 +369,8 @@ function CatchUpBody({
     const { key } = item;
     // A second key press before the card has moved on acts once.
     if (actedKeys.has(key)) return;
-    if (action === "snooze" && !snoozeUntil) return;
+    const change = cardChange(action, snoozeUntil);
+    if (!change) return;
     actedKeys.add(key);
     setBatch(actOnCatchUp(fresh, key, action));
     setLastAction({ item, action });
@@ -390,10 +383,7 @@ function CatchUpBody({
       refusedAccountIds: [item.accountId],
     };
     try {
-      outcome = await actions.changeCard(
-        [key],
-        cardChange(action, snoozeUntil),
-      );
+      outcome = await actions.changeCard([key], change);
     } catch {
       // Handled with a refusal, below.
     }
@@ -430,10 +420,14 @@ function CatchUpBody({
     try {
       let restored: string[];
       if (last.action === "keep") {
-        // The list may have replaced the card's target since; unread goes to
-        // every copy the card was read in, each in its own account.
-        actions.addTargets([cardTarget(last.item, Boolean(allInboxes))]);
-        restored = await actions.setReadState([key], false, false);
+        // Unread again where it was unread before, each in its own account,
+        // and nowhere else.
+        restored = (
+          await actions.changeCard([key], {
+            kind: "mark_unread",
+            conversations: catchUpUnreadConversations(last.item),
+          })
+        ).actedRows;
       } else {
         restored = await actions.undo();
       }
@@ -514,6 +508,7 @@ function CatchUpBody({
         <AccountNotes
           accounts={allInboxes.accounts}
           failedAccountIds={allInboxes.failedAccountIds}
+          incomplete={batch?.incomplete ?? 0}
           setAside={batch?.setAside ?? NOTHING_SET_ASIDE}
           waitingAccountIds={allInboxes.waitingAccountIds}
         />
@@ -679,11 +674,13 @@ function AccountNotes({
   waitingAccountIds,
   failedAccountIds,
   setAside,
+  incomplete,
 }: {
   accounts: CatchUpAllInboxes["accounts"];
   waitingAccountIds: string[];
   failedAccountIds: string[];
   setAside: Record<string, CatchUpSetAside>;
+  incomplete: number;
 }) {
   const emailsOf = (ids: string[]) =>
     accounts.filter((account) => ids.includes(account.id)).map((a) => a.email);
@@ -703,7 +700,8 @@ function AccountNotes({
       (id) => !unreachable.includes(id) && !setAside[id],
     ),
   );
-  if (!failed.length && !waiting.length && !refused.length) return null;
+  if (!failed.length && !waiting.length && !refused.length && !incomplete)
+    return null;
 
   return (
     <div className="flex flex-col gap-1.5 text-xs" role="status">
@@ -718,6 +716,13 @@ function AccountNotes({
           Couldn&apos;t update {refused.join(", ")}, so{" "}
           {refused.length === 1 ? "its" : "their"} conversations are set aside
           for now.
+        </p>
+      ) : null}
+      {incomplete ? (
+        <p className="px-1 text-muted-foreground">
+          {incomplete === 1
+            ? "1 conversation is left out, as its copies in your other inboxes couldn't all be found."
+            : `${incomplete} conversations are left out, as their copies in your other inboxes couldn't all be found.`}
         </p>
       ) : null}
       {waiting.length ? (
@@ -784,16 +789,16 @@ const TRACKED_ACTIONS: Record<CatchUpAction, string> = {
 
 /**
  * What Catch up reads: the routed account's tab, or in All inboxes each
- * included account the engine has synced and can reach, by the list's own
- * predicate. Until a tab's Cue sorting, or an All inboxes label tab's labels,
- * are known its predicate can't match and `ready` is false.
+ * included account's inbox the engine has synced and can reach. Until a
+ * tab's Cue sorting is known its predicate matches nothing and `ready` is
+ * false.
  */
 function useCatchUpScope(
   { emailAccountId, query, allInboxes }: CatchUpProps,
   enabled: boolean,
 ) {
   const { userEmail } = useAccount();
-  const usesCue = !allInboxes && threadsQueryUsesCue(query);
+  const usesCue = threadsQueryUsesCue(query);
   const { membership } = useCueMembership(enabled && usesCue);
   const tabPredicate = useMemo(
     () => threadsQueryToPredicate(query, membership),
@@ -825,10 +830,8 @@ function useCatchUpScope(
   );
   return {
     accountIds,
-    predicate: allInboxes?.predicate ?? tabPredicate,
-    ready: allInboxes
-      ? allInboxes.predicateReady
-      : !usesCue || Boolean(membership),
+    predicate: tabPredicate,
+    ready: !usesCue || Boolean(membership),
     /** How cards are keyed and named. */
     scope,
     /** Every included account failed, rather than any still loading. */
@@ -857,10 +860,14 @@ function cardTarget(item: CatchUpItem, allInboxes: boolean) {
   };
 }
 
-function cardChange(action: CatchUpAction, snoozeUntil?: Date): CardChange {
+/** The change a card action makes; a snooze needs its time picked. */
+function cardChange(
+  action: CatchUpAction,
+  snoozeUntil: Date | undefined,
+): CardChange | null {
   if (action === "archive") return { kind: "archive" };
   if (action === "keep") return { kind: "mark_read" };
-  return { kind: "snooze", until: snoozeUntil ?? new Date() };
+  return snoozeUntil ? { kind: "snooze", until: snoozeUntil } : null;
 }
 
 function doneLine(batch: CatchUpState) {

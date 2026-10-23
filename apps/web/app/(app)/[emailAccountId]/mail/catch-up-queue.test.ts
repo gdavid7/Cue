@@ -8,6 +8,8 @@ import {
   type CatchUpScope,
   reconcileCatchUp,
   revertCatchUp,
+  type CatchUpCopiesFound,
+  catchUpUnreadConversations,
   keepCatchUpAccounts,
   setAsideCatchUpAccounts,
   startCatchUp,
@@ -159,7 +161,9 @@ describe("reconcileCatchUp", () => {
   });
 
   it("keeps the copies a card was found with when it shows a newer message", () => {
-    const copies = [{ accountId: "home", threadId: "h1", inInbox: true }];
+    const copies = [
+      { accountId: "home", threadId: "h1", inInbox: true, unread: true },
+    ];
     const state = startCatchUp([{ ...item("work:a", 1, "work"), copies }]);
     const newer = { ...item("work:a", 5, "work"), latestMessageId: "reply" };
     const next = reconcileCatchUp(state, live([newer]));
@@ -263,47 +267,85 @@ describe("toCatchUpItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0].key).toBe("work:w1");
     expect(items[0].copies).toEqual([
-      { accountId: "home", threadId: "h1", inInbox: true },
+      { accountId: "home", threadId: "h1", inInbox: true, unread: true },
     ]);
   });
 });
 
 describe("withCatchUpCopies", () => {
-  it("adds a copy already read in another account, which the unread read can't return", () => {
-    const state = startCatchUp(
+  const SHARED = "<shared@example.com>";
+
+  function workCard() {
+    return startCatchUp(
       toCatchUpItems(
         [
           conversation({
             key: { accountId: "work", conversationId: "w1" },
-            latestInternetMessageId: "<same@example.com>",
+            latestInternetMessageId: SHARED,
           }),
         ],
         ALL_INBOXES,
       ),
     );
+  }
+
+  it("adds a copy already read in another account, which the unread read can't return", () => {
+    const state = workCard();
     const next = withCatchUpCopies(
       state,
-      [
+      found("work:w1", [
         conversation({
           key: { accountId: "work", conversationId: "w1" },
-          latestInternetMessageId: "<same@example.com>",
+          latestInternetMessageId: SHARED,
         }),
         conversation({
           key: { accountId: "home", conversationId: "h1" },
-          latestInternetMessageId: "<same@example.com>",
+          latestInternetMessageId: SHARED,
           unread: false,
-          roles: ["inbox"],
         }),
         conversation({
           key: { accountId: "home", conversationId: "other" },
           latestInternetMessageId: "<other@example.com>",
         }),
-      ],
+      ]),
       ALL_INBOXES,
     );
     expect(next.items.map((entry) => [entry.key, entry.copies])).toEqual([
-      ["work:w1", [{ accountId: "home", threadId: "h1", inInbox: true }]],
+      [
+        "work:w1",
+        [{ accountId: "home", threadId: "h1", inInbox: true, unread: false }],
+      ],
     ]);
+    expect(next.incomplete).toBe(0);
+  });
+
+  it("leaves out a card whose read didn't reach every possible copy", () => {
+    const next = withCatchUpCopies(
+      workCard(),
+      found("work:w1", [], false),
+      ALL_INBOXES,
+    );
+    expect(next.items).toEqual([]);
+    expect(next.incomplete).toBe(1);
+  });
+
+  it("leaves out a card when one account has two conversations for its message", () => {
+    const next = withCatchUpCopies(
+      workCard(),
+      found("work:w1", [
+        conversation({
+          key: { accountId: "home", conversationId: "h1" },
+          latestInternetMessageId: SHARED,
+        }),
+        conversation({
+          key: { accountId: "home", conversationId: "h2" },
+          latestInternetMessageId: SHARED,
+        }),
+      ]),
+      ALL_INBOXES,
+    );
+    expect(next.items).toEqual([]);
+    expect(next.incomplete).toBe(1);
   });
 
   it("shows the card from the routed account once its copy is found there", () => {
@@ -312,7 +354,7 @@ describe("withCatchUpCopies", () => {
         [
           conversation({
             key: { accountId: "home", conversationId: "h1" },
-            latestInternetMessageId: "<same@example.com>",
+            latestInternetMessageId: SHARED,
           }),
         ],
         ALL_INBOXES,
@@ -320,29 +362,88 @@ describe("withCatchUpCopies", () => {
     );
     const next = withCatchUpCopies(
       state,
-      [
+      found("home:h1", [
         conversation({
           key: { accountId: "work", conversationId: "w1" },
-          latestInternetMessageId: "<same@example.com>",
+          latestInternetMessageId: SHARED,
           unread: false,
           roles: [],
         }),
-      ],
+      ]),
       ALL_INBOXES,
     );
     expect(next.items[0]).toMatchObject({
       key: "work:w1",
       inInbox: false,
-      copies: [{ accountId: "home", threadId: "h1", inInbox: true }],
+      unread: false,
+      copies: [
+        { accountId: "home", threadId: "h1", inInbox: true, unread: true },
+      ],
     });
   });
 
-  it("changes nothing for a single account, or with nothing found", () => {
-    const state = startCatchUp([item("a", 1)]);
+  it("drops a card that became one already acted on, or already in the batch", () => {
+    const routedCopy = conversation({
+      key: { accountId: "work", conversationId: "w1" },
+      latestInternetMessageId: SHARED,
+    });
+    const homeCard = startCatchUp(
+      toCatchUpItems(
+        [
+          conversation({
+            key: { accountId: "home", conversationId: "h1" },
+            latestInternetMessageId: SHARED,
+          }),
+        ],
+        ALL_INBOXES,
+      ),
+    );
     expect(
-      withCatchUpCopies(state, [conversation({})], singleAccount("me@x")),
+      withCatchUpCopies(
+        homeCard,
+        found("home:h1", [routedCopy]),
+        ALL_INBOXES,
+        new Set(["work:w1"]),
+      ).items,
+    ).toEqual([]);
+    const twice = {
+      ...homeCard,
+      items: [...workCard().items, ...homeCard.items],
+    };
+    expect(
+      withCatchUpCopies(
+        twice,
+        found("home:h1", [routedCopy]),
+        ALL_INBOXES,
+      ).items.map((entry) => entry.key),
+    ).toEqual(["work:w1"]);
+  });
+
+  it("keeps a card with no Message-ID, and changes nothing for one account", () => {
+    const state = startCatchUp([item("a", 1)]);
+    expect(withCatchUpCopies(state, new Map(), ALL_INBOXES).items).toEqual(
+      state.items,
+    );
+    expect(
+      withCatchUpCopies(state, found("a", [], false), singleAccount("me@x")),
     ).toBe(state);
-    expect(withCatchUpCopies(state, [], ALL_INBOXES)).toBe(state);
+  });
+});
+
+describe("catchUpUnreadConversations", () => {
+  it("names only the conversations that were unread when the card was made", () => {
+    const card = {
+      ...item("work:w1", 1, "work"),
+      threadId: "w1",
+      unread: false,
+      copies: [
+        { accountId: "home", threadId: "h1", inInbox: true, unread: true },
+        { accountId: "side", threadId: "s1", inInbox: true, unread: false },
+      ],
+    };
+    expect(catchUpUnreadConversations(card)).toEqual([
+      { accountId: "home", threadId: "h1" },
+    ]);
   });
 });
 
@@ -351,7 +452,9 @@ describe("toCatchUpLive", () => {
     const card = {
       ...item("work:w1", 1, "work"),
       threadId: "w1",
-      copies: [{ accountId: "home", threadId: "h1", inInbox: true }],
+      copies: [
+        { accountId: "home", threadId: "h1", inInbox: true, unread: true },
+      ],
     };
     const state = startCatchUp([card]);
     const live = toCatchUpLive(
@@ -374,7 +477,9 @@ describe("keepCatchUpAccounts", () => {
     const state = startCatchUp([
       {
         ...item("work:a", 1, "work"),
-        copies: [{ accountId: "home", threadId: "h", inInbox: true }],
+        copies: [
+          { accountId: "home", threadId: "h", inInbox: true, unread: true },
+        ],
       },
       item("home:b", 2, "home"),
     ]);
@@ -466,10 +571,20 @@ function item(key: string, atMs: number, accountId = "account"): CatchUpItem {
     latestMessageId: key,
     messageKey: null,
     inInbox: true,
+    unread: true,
+    fromAddress: "sender@example.com",
     copies: [],
     sender: "Sender",
     subject: `Subject ${key}`,
     preview: "",
     atMs,
   };
+}
+
+function found(
+  key: string,
+  conversations: ConversationSummary[],
+  complete = true,
+): ReadonlyMap<string, CatchUpCopiesFound> {
+  return new Map([[key, { conversations, complete }]]);
 }

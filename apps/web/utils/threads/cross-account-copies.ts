@@ -9,6 +9,8 @@ import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
  *
  * Copies that arrived at the same moment are listed in no meaningful order,
  * so `preferAccountId`'s copy (the account the user is in) stands for them.
+ * With `alwaysPrefer` its copy stands for the group whenever it has one, for
+ * a view that shows one copy at a time rather than in time order.
  *
  * The local store keys each conversation once (mail-sqlite's
  * conversation_message_keys, read here as latestInternetMessageId) and its
@@ -23,6 +25,7 @@ export function showCopiesOnce<T>(
     at: number;
   },
   preferAccountId?: string,
+  { alwaysPrefer = false }: { alwaysPrefer?: boolean } = {},
 ): { row: T; copies: T[] }[] {
   const shown: { row: T; copies: T[] }[] = [];
   const groupsByMessageId = new Map<
@@ -51,7 +54,7 @@ export function showCopiesOnce<T>(
       continue;
     }
     group.accountIds.add(accountId);
-    if (accountId === preferAccountId && at === group.at) {
+    if (accountId === preferAccountId && (alwaysPrefer || at === group.at)) {
       group.entry.copies.push(group.entry.row);
       group.entry.row = row;
       group.accountId = accountId;

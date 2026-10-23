@@ -1418,21 +1418,15 @@ export function MailShell() {
     requestReaderReply();
   }, [replyRequested, openReaderThreadKey, requestReaderReply]);
 
-  // In All inboxes, Catch up walks every included account the list reads,
-  // and names the ones it leaves out the way the list does.
-  const {
-    failedAccountIds: combinedFailedAccountIds,
-    viewPredicate,
-    viewPredicateReady,
-  } = combinedThreadState;
+  // In All inboxes, Catch up walks every included account's inbox, and names
+  // the ones it leaves out the way the list does.
+  const { failedAccountIds: combinedFailedAccountIds } = combinedThreadState;
   const combinedFirstSyncAccounts = combinedThreadState.firstSyncAccounts;
   const catchUpAllInboxes = useMemo<CatchUpAllInboxes | undefined>(
     () =>
       isAllAccounts
         ? {
             accounts: combinedAccounts,
-            predicate: viewPredicate,
-            predicateReady: viewPredicateReady,
             waitingAccountIds: combinedFirstSyncAccounts.map(
               (account) => account.id,
             ),
@@ -1444,8 +1438,6 @@ export function MailShell() {
       combinedFailedAccountIds,
       combinedFirstSyncAccounts,
       isAllAccounts,
-      viewPredicate,
-      viewPredicateReady,
     ],
   );
 
@@ -2933,16 +2925,20 @@ export function MailShell() {
               {!isAllAccounts && (
                 <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
               )}
-              {showSplitTabs && !isTourOpen && (
-                <CatchUpEntry
-                  actions={threadActions}
-                  allInboxes={catchUpAllInboxes}
-                  className="mx-3 my-2"
-                  emailAccountId={emailAccountId}
-                  onReply={replyFromCatchUp}
-                  query={query}
-                />
-              )}
+              {/* All inboxes offers it on the Inbox tab alone, where every
+                  card and every copy is inbox mail. */}
+              {showSplitTabs &&
+                !isTourOpen &&
+                (!isAllAccounts || !activeSplit?.filters.length) && (
+                  <CatchUpEntry
+                    actions={threadActions}
+                    allInboxes={catchUpAllInboxes}
+                    className="mx-3 my-2"
+                    emailAccountId={emailAccountId}
+                    onReply={replyFromCatchUp}
+                    query={isAllAccounts ? INBOX_THREADS_QUERY : query}
+                  />
+                )}
               {!isAllAccounts && (
                 <NotificationsOffHint ready={!isTourOpen && !isFirstSync} />
               )}

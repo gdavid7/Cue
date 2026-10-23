@@ -86,7 +86,16 @@ export type ThreadActionOutcome = {
 export type CardChange =
   | { kind: "archive" }
   | { kind: "mark_read" }
-  | { kind: "snooze"; until: Date };
+  | { kind: "snooze"; until: Date }
+  /**
+   * Undoing Keep: unread again for exactly these conversations, the ones that
+   * were unread before, each in its own account; the row's other copies stay
+   * as they are.
+   */
+  | {
+      kind: "mark_unread";
+      conversations: Array<{ accountId: string; threadId: string }>;
+    };
 
 type UndoableBatch = {
   action: UndoableAction;
@@ -172,7 +181,10 @@ export function useThreadActions({
       payload: ThreadMutationPayload,
     ) => {
       const targets = REACHES_COPIES.has(payload.kind)
-        ? rowTargets.flatMap((target) => [target, ...copyTargets(target)])
+        ? rowTargets.flatMap((target) => [
+            target,
+            ...copyTargets(target, payload.kind),
+          ])
         : rowTargets;
       const nothingQueued = (rejectionCodes: string[]) => ({
         snapshots: [],
@@ -353,10 +365,10 @@ export function useThreadActions({
         actedRows: rowKeys(snapshots),
         refusedAccountIds,
       };
-      if (!rows.length) {
-        // Copies that did change stay undoable with the shortcut.
-        if (!snapshots.length && lastAction.current === batch)
-          lastAction.current = previous;
+      // A row changed in some account is undoable, even where a copy in
+      // another account refused.
+      if (!outcome.actedRows.length) {
+        if (lastAction.current === batch) lastAction.current = previous;
         if (threadKeys.length) {
           toast.error(
             enqueueFailureCopy(
@@ -370,7 +382,7 @@ export function useThreadActions({
 
       const failedCount = threadKeys.length - rows.length;
       toastUndo({
-        message: UNDOABLE_COPY[action].done(rows.length, payload),
+        message: UNDOABLE_COPY[action].done(outcome.actedRows.length, payload),
         shortcut: getShortcutHint("undo"),
         onUndo: () => {
           undoBatch(batch);
@@ -379,7 +391,9 @@ export function useThreadActions({
       if (failedCount) {
         toast.error(
           enqueueFailureCopy(
-            `Couldn't queue ${failedCount} of ${threadKeys.length} for ${UNDOABLE_COPY[action].noun}`,
+            failedCount === threadKeys.length
+              ? `Couldn't queue ${UNDOABLE_COPY[action].noun} in every inbox`
+              : `Couldn't queue ${failedCount} of ${threadKeys.length} for ${UNDOABLE_COPY[action].noun}`,
             rejectionCodes,
           ),
         );
@@ -463,10 +477,41 @@ export function useThreadActions({
     [runUndoable],
   );
 
+  const markUnread = useCallback(
+    async (
+      threadKeys: string[],
+      change: Extract<CardChange, { kind: "mark_unread" }>,
+    ): Promise<ThreadActionOutcome> => {
+      const [rowKey] = threadKeys;
+      if (!rowKey) return { rows: [], actedRows: [], refusedAccountIds: [] };
+      const { rows, snapshots, refusedAccountIds, rejectionCodes } =
+        await enqueueTargets(
+          change.conversations.map(({ accountId, threadId }) => ({
+            emailAccountId: accountId,
+            key: `${accountId}:${threadId}`,
+            messageIds: [],
+            threadId,
+            rowKey,
+          })),
+          { kind: "set_read_state", read: false },
+        );
+      if (!rows.length)
+        toast.error(
+          enqueueFailureCopy(
+            "Couldn't queue marking as unread",
+            rejectionCodes,
+          ),
+        );
+      return { rows, actedRows: rowKeys(snapshots), refusedAccountIds };
+    },
+    [enqueueTargets],
+  );
+
   const changeCard = useCallback(
     (threadKeys: string[], change: CardChange) => {
       if (change.kind === "mark_read")
         return changeReadState(threadKeys, true, false);
+      if (change.kind === "mark_unread") return markUnread(threadKeys, change);
       if (change.kind === "archive")
         return runUndoable({ kind: "archive" }, threadKeys);
       return runUndoable(
@@ -474,7 +519,7 @@ export function useThreadActions({
         threadKeys,
       );
     },
-    [changeReadState, runUndoable],
+    [changeReadState, markUnread, runUndoable],
   );
 
   const markSpam = useCallback(
@@ -613,7 +658,9 @@ const UNDOABLE_COPY: Record<
   }
 > = {
   archive: {
-    compensation: () => "unarchive",
+    // A copy that was outside its inbox, behind a label, stays there.
+    compensation: (snapshot) =>
+      snapshot.inInbox === false ? "archive" : "unarchive",
     done: (count) => summarise("Archived", count),
     noun: "archiving",
   },
@@ -640,15 +687,24 @@ const UNDOABLE_COPY: Record<
   },
 };
 
-function copyTargets(target: ThreadActionTarget): ThreadActionTarget[] {
-  return (target.copies ?? []).map((copy) => ({
-    emailAccountId: copy.accountId,
-    key: `${copy.accountId}:${copy.threadId}`,
-    inInbox: copy.inInbox,
-    messageIds: [],
-    threadId: copy.threadId,
-    rowKey: target.key,
-  }));
+function copyTargets(
+  target: ThreadActionTarget,
+  kind: ThreadMutationPayload["kind"],
+): ThreadActionTarget[] {
+  return (
+    (target.copies ?? [])
+      // Snoozing brings mail back to the inbox, so a copy outside it, behind a
+      // label, isn't snoozed into it.
+      .filter((copy) => !(kind === "snooze" && copy.inInbox === false))
+      .map((copy) => ({
+        emailAccountId: copy.accountId,
+        key: `${copy.accountId}:${copy.threadId}`,
+        inInbox: copy.inInbox,
+        messageIds: [],
+        threadId: copy.threadId,
+        rowKey: target.key,
+      }))
+  );
 }
 
 /** Accounts holding a target whose change wasn't queued. */
@@ -712,9 +768,10 @@ function rememberTargets(
         ? labelled.some((message) => message.labelIds?.includes("INBOX"))
         : undefined);
     const known = merge ? targets.get(key) : undefined;
+    // At most one copy per account, the newest source's.
     const copies = new Map(
       [...(known?.copies ?? []), ...(thread.copies ?? [])].map((copy) => [
-        `${copy.accountId}:${copy.threadId}`,
+        copy.accountId,
         copy,
       ]),
     );
