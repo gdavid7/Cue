@@ -116,4 +116,23 @@ describe("server actions and revoked sessions", () => {
       expect(result?.serverError).toBe(SESSION_EXPIRED_MESSAGE);
     expect(run).not.toHaveBeenCalled();
   });
+
+  // Next.js re-renders the open page, and can reload it, for any action that
+  // sets a cookie, and reading the session from the database rewrites its cache.
+  it("reads the session in every signed-in action client without writing a cookie", async () => {
+    vi.mocked(auth).mockResolvedValue(null);
+
+    await Promise.all([
+      actionClient.metadata({ name: "sendEmail" }).action(vi.fn())("account-1"),
+      actionClientUser.metadata({ name: "deleteAccount" }).action(vi.fn())(),
+      adminActionClient.metadata({ name: "adminAction" }).action(vi.fn())(),
+    ]);
+
+    expect(vi.mocked(auth)).toHaveBeenCalledTimes(3);
+    for (const [, options] of vi.mocked(auth).mock.calls)
+      expect(options).toEqual({
+        disableCookieCache: true,
+        disableRefresh: true,
+      });
+  });
 });

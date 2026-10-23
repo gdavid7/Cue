@@ -21,9 +21,9 @@ const OWNERSHIP_CHECKS: Record<string, OwnershipCheck> = {
     how: "rejects ids outside the user's accounts",
     check: /where: \{ userId \}[\s\S]*ownedAccountIds\.has\(id\)/,
   },
-  "utils/actions/email-account-cookie.ts#setLastEmailAccountAction": {
+  "app/api/user/last-email-account/route.ts#POST": {
     how: "looks the account up by id and userId",
-    check: /where: \{ id: emailAccountId, userId \}/,
+    check: /where: \{ id: parsed\.data\.emailAccountId, userId \}/,
   },
   "utils/actions/feedback.ts#submitFeedbackAction": {
     how: "keeps the account only when it is the user's own",

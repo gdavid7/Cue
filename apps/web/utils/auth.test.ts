@@ -237,6 +237,15 @@ describe("session revocation", () => {
       headers: requestHeaders,
       query: { disableCookieCache: false },
     });
+
+    await auth(requestHeaders, {
+      disableCookieCache: true,
+      disableRefresh: true,
+    });
+    expect(getSession).toHaveBeenLastCalledWith({
+      headers: requestHeaders,
+      query: { disableCookieCache: true, disableRefresh: true },
+    });
   });
 
   it("rejects a revoked session at once without the cookie cache and within a minute with it", async () => {
@@ -267,6 +276,27 @@ describe("session revocation", () => {
     expect(await cached()).not.toBeNull();
     vi.setSystemTime(new Date("2026-01-01T00:01:01Z"));
     expect(await cached()).toBeNull();
+  });
+
+  it("reads the session from the database without writing a cookie when refresh is off", async () => {
+    const { auth: realAuth, cookie } = await signedInWithConfiguredSession();
+    const read = (query: Record<string, boolean>) =>
+      realAuth.api.getSession({
+        headers: new Headers({ cookie }),
+        query,
+        returnHeaders: true,
+      });
+
+    // Next.js re-renders the page for any action that sets a cookie.
+    const refreshing = await read({ disableCookieCache: true });
+    expect(refreshing.headers.getSetCookie()).not.toHaveLength(0);
+
+    const readOnly = await read({
+      disableCookieCache: true,
+      disableRefresh: true,
+    });
+    expect(readOnly.response?.user).toBeDefined();
+    expect(readOnly.headers.getSetCookie()).toHaveLength(0);
   });
 
   it("clears the cache cookie on sign-out", async () => {
