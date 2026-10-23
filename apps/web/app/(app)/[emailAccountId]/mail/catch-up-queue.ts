@@ -31,8 +31,6 @@ export type CatchUpItem = {
   inInbox: boolean;
   /** Whether it was unread when the card was made; a copy may be the unread one. */
   unread: boolean;
-  /** Who sent the latest message, which its copies in other accounts share. */
-  fromAddress: string;
   copies: CatchUpCopy[];
   sender: string;
   subject: string;
@@ -84,10 +82,10 @@ export type CatchUpState = {
    */
   setAside: Record<string, CatchUpSetAside>;
   /**
-   * Cards left out because their copies in other accounts couldn't all be
-   * found, so acting on them could leave one copy behind.
+   * Cards left out because their copies couldn't all be found for sure, so
+   * acting on them could leave one copy behind.
    */
-  incomplete: number;
+  incomplete: string[];
 };
 
 /**
@@ -125,7 +123,6 @@ export function toCatchUpItem(
       normalizeInternetMessageId(conversation.latestInternetMessageId) ?? null,
     inInbox: conversation.roles.includes("inbox"),
     unread: conversation.unread,
-    fromAddress: extractEmailAddress(conversation.from).toLowerCase(),
     copies,
     sender: extractNameFromEmail(from) || extractEmailAddress(from),
     subject: conversation.subject,
@@ -164,13 +161,15 @@ export function toCatchUpItems(
 }
 
 /**
- * Completes each card's copies from its own read for them, which isn't
- * limited to unread mail or to the page the batch came from: archive, read
- * and snooze must reach every copy. A card whose read didn't reach every
- * possible copy, or found two conversations for its message in one account,
- * is left out of the batch and counted in `incomplete`, as acting on it
- * could leave a copy behind. A card that becomes the routed account's copy
- * is dropped if that card was acted on already or is in the batch twice.
+ * Completes each card's copies from the read for them, which isn't limited to
+ * unread mail or to the page the batch came from: archive, read and snooze
+ * must reach every copy. A card is left out of the batch, its key added to
+ * `incomplete`, when that read didn't reach every possible copy, when some
+ * account (its own included) has a second conversation for its message, or
+ * when it would become a card acted on already or in the batch twice, as
+ * acting on it could leave a copy behind. The card becomes the routed
+ * account's conversation only where that one is in its inbox; otherwise the
+ * routed one is just a copy.
  */
 export function withCatchUpCopies(
   state: CatchUpState,
@@ -180,7 +179,7 @@ export function withCatchUpCopies(
 ): CatchUpState {
   if (!scope.combined) return state;
   const routedAccountId = scope.combined.routedAccountId;
-  let incomplete = 0;
+  const incomplete: string[] = [];
   const items: CatchUpItem[] = [];
   for (const item of state.items) {
     const read = found.get(item.key);
@@ -189,35 +188,47 @@ export function withCatchUpCopies(
       items.push(item);
       continue;
     }
-    const matches = read.conversations.filter(
-      (conversation) =>
-        conversation.key.accountId !== item.accountId &&
-        normalizeInternetMessageId(conversation.latestInternetMessageId) ===
-          item.messageKey,
-    );
     const perAccount = new Map<string, ConversationSummary[]>();
-    for (const match of matches)
+    for (const match of read.conversations) {
+      // A copy is a conversation whose latest message is this one; one that
+      // only holds it further back is a conversation of its own.
+      if (
+        normalizeInternetMessageId(match.latestInternetMessageId) !==
+        item.messageKey
+      )
+        continue;
+      const own =
+        match.key.accountId === item.accountId &&
+        match.key.conversationId === item.threadId;
+      if (own) continue;
       perAccount.set(match.key.accountId, [
         ...(perAccount.get(match.key.accountId) ?? []),
         match,
       ]);
-    const ambiguous = [...perAccount.values()].some(
-      (conversations) =>
-        new Set(conversations.map((c) => c.key.conversationId)).size > 1,
-    );
+    }
+    const ambiguous =
+      perAccount.has(item.accountId) ||
+      [...perAccount.values()].some(
+        (matches) =>
+          new Set(matches.map((match) => match.key.conversationId)).size > 1,
+      );
     if (!read.complete || ambiguous) {
-      incomplete++;
+      incomplete.push(item.key);
       continue;
     }
     const copies = new Map(item.copies.map((copy) => [copy.accountId, copy]));
     for (const [accountId, [match]] of perAccount)
       if (!copies.has(accountId)) copies.set(accountId, toCopy(match));
     const routed = perAccount.get(routedAccountId)?.[0];
-    if (!routed || item.accountId === routedAccountId) {
+    const swaps =
+      routed &&
+      item.accountId !== routedAccountId &&
+      routed.roles.includes("inbox");
+    if (!swaps) {
       items.push({ ...item, copies: [...copies.values()] });
       continue;
     }
-    // The routed account has it after all: the card is its conversation.
+    // The routed account has it in its inbox too: the card is its copy.
     copies.delete(routedAccountId);
     const swapped = toCatchUpItem(routed, scope, [
       ...copies.values(),
@@ -228,15 +239,17 @@ export function withCatchUpCopies(
         unread: item.unread,
       },
     ]);
-    if (!swapped) {
-      items.push({ ...item, copies: [...copies.values()] });
+    if (
+      !swapped ||
+      skip?.has(swapped.key) ||
+      items.some((entry) => entry.key === swapped.key)
+    ) {
+      incomplete.push(item.key);
       continue;
     }
-    if (skip?.has(swapped.key) || items.some((i) => i.key === swapped.key))
-      continue;
     items.push(swapped);
   }
-  return { ...state, items, incomplete: state.incomplete + incomplete };
+  return { ...state, items, incomplete: [...state.incomplete, ...incomplete] };
 }
 
 /** Conversations the card stands for that were unread when it was made. */
@@ -310,7 +323,7 @@ export function startCatchUp(
     skipped: {},
     returned: {},
     setAside: {},
-    incomplete: 0,
+    incomplete: [],
   };
 }
 

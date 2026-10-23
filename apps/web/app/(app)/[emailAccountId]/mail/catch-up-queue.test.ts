@@ -275,12 +275,12 @@ describe("toCatchUpItems", () => {
 describe("withCatchUpCopies", () => {
   const SHARED = "<shared@example.com>";
 
-  function workCard() {
+  function cardFrom(accountId: string, conversationId: string) {
     return startCatchUp(
       toCatchUpItems(
         [
           conversation({
-            key: { accountId: "work", conversationId: "w1" },
+            key: { accountId, conversationId },
             latestInternetMessageId: SHARED,
           }),
         ],
@@ -289,20 +289,25 @@ describe("withCatchUpCopies", () => {
     );
   }
 
+  function shared(
+    accountId: string,
+    conversationId: string,
+    overrides: Partial<ConversationSummary> = {},
+  ) {
+    return conversation({
+      key: { accountId, conversationId },
+      latestInternetMessageId: SHARED,
+      ...overrides,
+    });
+  }
+
   it("adds a copy already read in another account, which the unread read can't return", () => {
-    const state = workCard();
     const next = withCatchUpCopies(
-      state,
+      cardFrom("work", "w1"),
       found("work:w1", [
-        conversation({
-          key: { accountId: "work", conversationId: "w1" },
-          latestInternetMessageId: SHARED,
-        }),
-        conversation({
-          key: { accountId: "home", conversationId: "h1" },
-          latestInternetMessageId: SHARED,
-          unread: false,
-        }),
+        shared("work", "w1"),
+        shared("home", "h1", { unread: false }),
+        // Holds the message further back only: a conversation of its own.
         conversation({
           key: { accountId: "home", conversationId: "other" },
           latestInternetMessageId: "<other@example.com>",
@@ -316,65 +321,62 @@ describe("withCatchUpCopies", () => {
         [{ accountId: "home", threadId: "h1", inInbox: true, unread: false }],
       ],
     ]);
-    expect(next.incomplete).toBe(0);
+    expect(next.incomplete).toEqual([]);
+  });
+
+  it("finds a copy whose user wrote last, where a sender match would miss it", () => {
+    // In home the user replied: its newest sender is the user, yet its
+    // latest message's Message-ID is still the card's.
+    const next = withCatchUpCopies(
+      cardFrom("work", "w1"),
+      found("work:w1", [
+        shared("home", "h1", {
+          from: "me@home.example",
+          senders: ["Dana <dana@example.com>", "Me <me@home.example>"],
+        }),
+      ]),
+      ALL_INBOXES,
+    );
+    expect(next.items[0].copies.map((copy) => copy.threadId)).toEqual(["h1"]);
   });
 
   it("leaves out a card whose read didn't reach every possible copy", () => {
     const next = withCatchUpCopies(
-      workCard(),
+      cardFrom("work", "w1"),
       found("work:w1", [], false),
       ALL_INBOXES,
     );
     expect(next.items).toEqual([]);
-    expect(next.incomplete).toBe(1);
+    expect(next.incomplete).toEqual(["work:w1"]);
   });
 
-  it("leaves out a card when one account has two conversations for its message", () => {
+  it("leaves out a card when another account has two conversations for its message", () => {
     const next = withCatchUpCopies(
-      workCard(),
-      found("work:w1", [
-        conversation({
-          key: { accountId: "home", conversationId: "h1" },
-          latestInternetMessageId: SHARED,
-        }),
-        conversation({
-          key: { accountId: "home", conversationId: "h2" },
-          latestInternetMessageId: SHARED,
-        }),
-      ]),
+      cardFrom("work", "w1"),
+      found("work:w1", [shared("home", "h1"), shared("home", "h2")]),
+      ALL_INBOXES,
+    );
+    expect(next.incomplete).toEqual(["work:w1"]);
+  });
+
+  it("leaves out a card when its own account has a second conversation for its message", () => {
+    const next = withCatchUpCopies(
+      cardFrom("work", "w1"),
+      found("work:w1", [shared("work", "w1"), shared("work", "w2")]),
       ALL_INBOXES,
     );
     expect(next.items).toEqual([]);
-    expect(next.incomplete).toBe(1);
+    expect(next.incomplete).toEqual(["work:w1"]);
   });
 
-  it("shows the card from the routed account once its copy is found there", () => {
-    const state = startCatchUp(
-      toCatchUpItems(
-        [
-          conversation({
-            key: { accountId: "home", conversationId: "h1" },
-            latestInternetMessageId: SHARED,
-          }),
-        ],
-        ALL_INBOXES,
-      ),
-    );
+  it("shows the card from the routed account where its copy is in the inbox", () => {
     const next = withCatchUpCopies(
-      state,
-      found("home:h1", [
-        conversation({
-          key: { accountId: "work", conversationId: "w1" },
-          latestInternetMessageId: SHARED,
-          unread: false,
-          roles: [],
-        }),
-      ]),
+      cardFrom("home", "h1"),
+      found("home:h1", [shared("work", "w1", { unread: false })]),
       ALL_INBOXES,
     );
     expect(next.items[0]).toMatchObject({
       key: "work:w1",
-      inInbox: false,
       unread: false,
       copies: [
         { accountId: "home", threadId: "h1", inInbox: true, unread: true },
@@ -382,41 +384,37 @@ describe("withCatchUpCopies", () => {
     });
   });
 
-  it("drops a card that became one already acted on, or already in the batch", () => {
-    const routedCopy = conversation({
-      key: { accountId: "work", conversationId: "w1" },
-      latestInternetMessageId: SHARED,
-    });
-    const homeCard = startCatchUp(
-      toCatchUpItems(
-        [
-          conversation({
-            key: { accountId: "home", conversationId: "h1" },
-            latestInternetMessageId: SHARED,
-          }),
-        ],
-        ALL_INBOXES,
-      ),
+  it("keeps the card where the routed account's copy is outside its inbox, adding that copy", () => {
+    const next = withCatchUpCopies(
+      cardFrom("home", "h1"),
+      found("home:h1", [shared("work", "w1", { roles: [] })]),
+      ALL_INBOXES,
     );
+    expect(next.items[0]).toMatchObject({
+      key: "home:h1",
+      copies: [
+        { accountId: "work", threadId: "w1", inInbox: false, unread: true },
+      ],
+    });
+  });
+
+  it("leaves out a card that would become one already acted on, or already in the batch", () => {
+    const routed = found("home:h1", [shared("work", "w1")]);
     expect(
       withCatchUpCopies(
-        homeCard,
-        found("home:h1", [routedCopy]),
+        cardFrom("home", "h1"),
+        routed,
         ALL_INBOXES,
         new Set(["work:w1"]),
-      ).items,
-    ).toEqual([]);
+      ).incomplete,
+    ).toEqual(["home:h1"]);
     const twice = {
-      ...homeCard,
-      items: [...workCard().items, ...homeCard.items],
+      ...cardFrom("home", "h1"),
+      items: [...cardFrom("work", "w1").items, ...cardFrom("home", "h1").items],
     };
-    expect(
-      withCatchUpCopies(
-        twice,
-        found("home:h1", [routedCopy]),
-        ALL_INBOXES,
-      ).items.map((entry) => entry.key),
-    ).toEqual(["work:w1"]);
+    const next = withCatchUpCopies(twice, routed, ALL_INBOXES);
+    expect(next.items.map((entry) => entry.key)).toEqual(["work:w1"]);
+    expect(next.incomplete).toEqual(["home:h1"]);
   });
 
   it("keeps a card with no Message-ID, and changes nothing for one account", () => {
@@ -572,7 +570,6 @@ function item(key: string, atMs: number, accountId = "account"): CatchUpItem {
     messageKey: null,
     inInbox: true,
     unread: true,
-    fromAddress: "sender@example.com",
     copies: [],
     sender: "Sender",
     subject: `Subject ${key}`,

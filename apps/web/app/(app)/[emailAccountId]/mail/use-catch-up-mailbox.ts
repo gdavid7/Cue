@@ -19,12 +19,9 @@ import { getFirstSyncAccountIds } from "@/utils/mail-engine/coverage";
 // to the newest thousand unread; the oldest of those starts the batch.
 const LEGACY_PAGE_SIZE = 100;
 const LEGACY_MAX_PAGES = 10;
-// A message delivered to several of the user's addresses reaches each within
-// moments; an hour either side of a card's message finds its copies.
-const COPY_WINDOW_MS = 60 * 60 * 1000;
-// One sender's mail in two hours is a page; past five, the read gives up and
-// says so rather than guess.
-const COPY_PAGE_SIZE = 50;
+// A batch's copies are a few per card; past this many pages the read gives
+// up and says so rather than guess.
+const COPY_PAGE_SIZE = 100;
 const COPY_MAX_PAGES = 5;
 // A page the engine never answers counts as a failed read.
 const COPY_PAGE_TIMEOUT_MS = 15_000;
@@ -155,12 +152,17 @@ export type CatchUpCopiesRead =
   | { status: "ready"; found: ReadonlyMap<string, CatchUpCopiesFound> };
 
 /**
- * Reads, for each card with a Message-ID, every conversation in the included
- * accounts from its sender within an hour of its message, read or not, page
- * by page to the end, so its copies can be found even where the batch's
- * unread read didn't reach them. A read that fails, or doesn't reach the end
- * within a few pages, says so as incomplete rather than guessing. The order
- * and predicates are ones an engine from before Catch up knows.
+ * Reads every conversation in the included accounts holding one of the cards'
+ * Message-IDs, read or not, in one query, page by page to the end, so a
+ * card's copies are found even where the batch's unread read didn't reach
+ * them. Each card hears all of them, and whether the read reached every
+ * one: a read that fails, is cancelled or doesn't end within its pages says
+ * so, rather than guess.
+ *
+ * It sees only what each account's local store holds: a copy older than an
+ * account's synced window isn't there to find, or to change, until that
+ * account syncs further back. The caller checks the engine can match a
+ * Message-ID (`predicate:internet_message_id`) before asking.
  */
 export function useCatchUpCopies({
   client,
@@ -172,41 +174,43 @@ export function useCatchUpCopies({
   /** The cards to read for; null until they are known. */
   cards: CatchUpItem[] | null;
 }): CatchUpCopiesRead {
-  const reads = useMemo(
+  const keyed = useMemo(
     () =>
       (cards ?? []).flatMap((card) =>
-        card.messageKey
-          ? [{ key: card.key, from: card.fromAddress, atMs: card.atMs }]
-          : [],
+        card.messageKey ? [{ key: card.key, messageKey: card.messageKey }] : [],
       ),
     [cards],
   );
-  const readKey = JSON.stringify([accountIds, reads]);
+  const readKey = JSON.stringify([accountIds, keyed]);
   const [answer, setAnswer] = useState<{
     readKey: string;
     found: ReadonlyMap<string, CatchUpCopiesFound>;
   } | null>(null);
 
-  // readKey stands for accountIds and reads, which are rebuilt each render.
+  // readKey stands for accountIds and keyed, which are rebuilt each render.
   // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   useEffect(() => {
-    if (!client || !reads.length) return;
-    let cancelled = false;
-    Promise.all(
-      reads.map(
-        async (read) =>
-          [read.key, await readCopies(client, accountIds, read)] as const,
-      ),
-    ).then((entries) => {
-      if (!cancelled) setAnswer({ readKey, found: new Map(entries) });
+    if (!client || !keyed.length) return;
+    const signal = { cancelled: false };
+    readCopies(
+      client,
+      accountIds,
+      keyed.map((card) => card.messageKey),
+      signal,
+    ).then(({ conversations, complete }) => {
+      if (signal.cancelled) return;
+      const found = new Map<string, CatchUpCopiesFound>(
+        keyed.map((card) => [card.key, { conversations, complete }]),
+      );
+      setAnswer({ readKey, found });
     });
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
     };
   }, [client, readKey]);
 
   if (cards === null) return { status: "loading" };
-  if (!reads.length) return { status: "ready", found: NO_COPIES_FOUND };
+  if (!keyed.length) return { status: "ready", found: NO_COPIES_FOUND };
   // Without an engine nothing can be read, and nothing acted on either.
   if (!client) return { status: "loading" };
   return answer?.readKey === readKey
@@ -236,31 +240,17 @@ const NO_COPIES_FOUND: ReadonlyMap<string, CatchUpCopiesFound> = new Map();
 async function readCopies(
   client: MailClient,
   accountIds: string[],
-  card: { from: string; atMs: number },
-): Promise<CatchUpCopiesFound> {
-  if (!card.from || !accountIds.length)
-    return { conversations: [], complete: false };
+  messageKeys: string[],
+  signal: { cancelled: boolean },
+): Promise<{ conversations: ConversationSummary[]; complete: boolean }> {
   const conversations: ConversationSummary[] = [];
+  if (!accountIds.length) return { conversations, complete: false };
   let after: string | null = null;
   for (let page = 0; page < COPY_MAX_PAGES; page++) {
+    if (signal.cancelled) return { conversations, complete: false };
     const view = await readMailboxPage(client, {
       accountIds,
-      predicate: {
-        kind: "all",
-        predicates: [
-          {
-            kind: "received",
-            afterMs: card.atMs - COPY_WINDOW_MS,
-            beforeMs: card.atMs + COPY_WINDOW_MS,
-          },
-          {
-            kind: "address",
-            field: "from",
-            value: card.from,
-            match: "address",
-          },
-        ],
-      },
+      predicate: { kind: "internet_message_id", ids: messageKeys },
       order: "newest_first",
       pageSize: COPY_PAGE_SIZE,
       after,
@@ -273,33 +263,43 @@ async function readCopies(
   return { conversations, complete: false };
 }
 
-/** One page of a mailbox query, or null when the engine can't answer it. */
+/**
+ * One page of a mailbox query, or null when the engine can't answer it: an
+ * error, a rejection, or no answer in time. It settles once, whichever
+ * comes first.
+ */
 function readMailboxPage(
   client: MailClient,
   query: ConversationQuery,
 ): Promise<MailboxView | null> {
   return new Promise((resolve) => {
-    let handle: ReturnType<MailClient["observeMailbox"]>;
-    try {
-      handle = client.observeMailbox(query);
-    } catch {
-      resolve(null);
-      return;
-    }
+    let settled = false;
+    let handle: ReturnType<MailClient["observeMailbox"]> | undefined;
     let unsubscribe = () => {};
     const finish = (view: MailboxView | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      unsubscribe();
-      handle.close();
+      try {
+        unsubscribe();
+        handle?.close();
+      } catch {
+        // Closing a handle the engine already dropped changes nothing.
+      }
       resolve(view);
     };
     const timer = setTimeout(() => finish(null), COPY_PAGE_TIMEOUT_MS);
     const check = () => {
-      const snapshot = handle.getSnapshot();
-      if (snapshot.status === "loading") return;
+      const snapshot = handle?.getSnapshot();
+      if (!snapshot || snapshot.status === "loading") return;
       finish(snapshot.status === "ready" ? snapshot.data : null);
     };
-    unsubscribe = handle.subscribe(check);
-    check();
+    try {
+      handle = client.observeMailbox(query);
+      unsubscribe = handle.subscribe(check);
+      check();
+    } catch {
+      finish(null);
+    }
   });
 }

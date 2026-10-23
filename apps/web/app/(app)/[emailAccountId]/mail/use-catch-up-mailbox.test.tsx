@@ -139,19 +139,19 @@ describe("useCatchUpMailbox", () => {
 });
 
 describe("useCatchUpCopies", () => {
-  it("reads a card's sender's mail around it, read or not, in every account, in a shape old engines know", async () => {
+  it("reads the cards' Message-IDs in every account, read or not, in one query", async () => {
     const engine = fakeEngine(
       [
         ...unreadMail(1, "work", [1000]),
         { ...unreadMail(1, "home", [1000])[0], unread: false },
       ],
-      { legacy: true },
+      { legacy: false },
     );
     const { result } = renderHook(() =>
       useCatchUpCopies({
         client: engine.client,
         accountIds: ["work", "home"],
-        cards: [card("work:c0")],
+        cards: [card("work:c0", "one@example.com"), card("work:c1", "two@x")],
       }),
     );
     await waitFor(() => expect(result.current.status).toBe("ready"));
@@ -161,18 +161,19 @@ describe("useCatchUpCopies", () => {
       "home",
       "work",
     ]);
+    expect(engine.queries()).toHaveLength(1);
     const [query] = engine.queries();
-    expect(query.order).toBe("newest_first");
-    const predicate = JSON.stringify(query.predicate);
-    expect(predicate).not.toContain('"read"');
-    expect(predicate).toContain('"received"');
-    expect(predicate).toContain('"value":"dana@example.com"');
+    expect(query.accountIds).toEqual(["work", "home"]);
+    expect(query.predicate).toEqual({
+      kind: "internet_message_id",
+      ids: ["one@example.com", "two@x"],
+    });
   });
 
-  it("follows every page, finding a copy past the first two hundred", async () => {
-    // 230 of the sender's conversations in the window; the copy is the oldest.
-    const mail = unreadMail(230, "home", range(230, 1000));
-    const engine = fakeEngine(mail, { legacy: false });
+  it("follows every page past the first", async () => {
+    const engine = fakeEngine(unreadMail(230, "home", range(230, 1000)), {
+      legacy: false,
+    });
     const { result } = renderHook(() =>
       useCatchUpCopies({
         client: engine.client,
@@ -184,11 +185,10 @@ describe("useCatchUpCopies", () => {
     const read = found(result.current, "work:c0");
     expect(read?.complete).toBe(true);
     expect(read?.conversations).toHaveLength(230);
-    expect(read?.conversations.at(-1)?.latestMessageAtMs).toBe(1000);
   });
 
-  it("says a read that doesn't reach the end within its pages is incomplete", async () => {
-    const engine = fakeEngine(unreadMail(300, "home", range(300, 1000)), {
+  it("says a read that doesn't end within its pages is incomplete", async () => {
+    const engine = fakeEngine(unreadMail(600, "home", range(600, 1000)), {
       legacy: false,
     });
     const { result } = renderHook(() =>
@@ -202,20 +202,36 @@ describe("useCatchUpCopies", () => {
     expect(found(result.current, "work:c0")?.complete).toBe(false);
   });
 
-  it("says a read that fails is incomplete, rather than holding the batch", async () => {
-    const engine = fakeEngine(unreadMail(1), { legacy: true, broken: true });
-    const { result } = renderHook(() =>
+  it("says a read the engine refuses or throws on is incomplete", async () => {
+    const refusing = fakeEngine(unreadMail(1), { legacy: true, broken: true });
+    const refused = renderHook(() =>
       useCatchUpCopies({
-        client: engine.client,
+        client: refusing.client,
         accountIds: ["a"],
         cards: [card("a:c0")],
       }),
     );
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    expect(found(result.current, "a:c0")).toEqual({
-      conversations: [],
-      complete: false,
-    });
+    await waitFor(() =>
+      expect(found(refused.result.current, "a:c0")).toEqual({
+        conversations: [],
+        complete: false,
+      }),
+    );
+    const throwing = {
+      observeMailbox: () => {
+        throw new Error("engine gone");
+      },
+    } as unknown as MailClient;
+    const thrown = renderHook(() =>
+      useCatchUpCopies({
+        client: throwing,
+        accountIds: ["a"],
+        cards: [card("a:c0")],
+      }),
+    );
+    await waitFor(() =>
+      expect(found(thrown.result.current, "a:c0")?.complete).toBe(false),
+    );
   });
 
   it("reads nothing until the cards are known, nor for a card without a Message-ID", () => {
@@ -240,16 +256,15 @@ describe("useCatchUpCopies", () => {
   });
 });
 
-function card(key: string): CatchUpItem {
+function card(key: string, messageKey = "shared@example.com"): CatchUpItem {
   return {
     key,
     threadId: key.split(":")[1] ?? key,
     accountId: key.split(":")[0] ?? "a",
     latestMessageId: "m",
-    messageKey: "shared@example.com",
+    messageKey,
     inInbox: true,
     unread: true,
-    fromAddress: "dana@example.com",
     copies: [],
     sender: "Dana",
     subject: "Subject",

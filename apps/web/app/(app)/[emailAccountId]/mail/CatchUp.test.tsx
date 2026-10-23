@@ -8,6 +8,12 @@ import type { useCatchUpMailbox } from "./use-catch-up-mailbox";
 
 const UNTIL = new Date("2026-10-23T09:00:00");
 
+// The engine behind the view; this build's matches a Message-ID.
+const engine = vi.hoisted(() => ({
+  client: {} as { capabilities?: readonly string[] },
+}));
+const MATCHES_MESSAGE_IDS = ["predicate:internet_message_id"];
+
 // What the batch read answers; each test sets its own mail.
 const mailbox = vi.hoisted(() => ({
   conversations: [] as ConversationSummary[],
@@ -33,7 +39,7 @@ vi.mock("@/hooks/useCueMembership", () => ({
 }));
 vi.mock("@/utils/analytics/mail-usage", () => ({ trackMailAction: vi.fn() }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
-  useOptionalMailClient: () => ({}),
+  useOptionalMailClient: () => engine.client,
 }));
 vi.mock("@inboxzero/mail-react/use-mailbox-window", () => ({
   useMailboxWindow: (query: { accountIds: string[] }) => ({
@@ -162,6 +168,10 @@ describe("Catch up", () => {
     expect(await screen.findByRole("heading", { name: "First" })).toBeTruthy();
     expect(actions.undo).toHaveBeenCalledTimes(1);
   });
+});
+
+beforeEach(() => {
+  engine.client = { capabilities: MATCHES_MESSAGE_IDS };
 });
 
 describe("Catch up in All inboxes", () => {
@@ -412,6 +422,48 @@ describe("Catch up in All inboxes", () => {
         "1 conversation is left out, as its copies in your other inboxes couldn't all be found.",
       ),
     ).toBeTruthy();
+  });
+
+  it("leaves out every card whose copies are uncertain, and says nothing is left for now", async () => {
+    mailbox.conversations = [
+      conversation("w1", "Unsure", 1, "work", "<unsure@example.com>"),
+    ];
+    mailbox.copies = new Map([
+      ["work:w1", { conversations: [], complete: false }],
+    ]);
+    renderAllInboxes(actions);
+    fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
+
+    expect(
+      await screen.findByText("Nothing left to clear for now."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "1 conversation is left out, as its copies in your other inboxes couldn't all be found.",
+      ),
+    ).toBeTruthy();
+    // Read again past it, so the batch could fill.
+    expect(
+      mailbox.calls.some((call) => call.batchRead > mailbox.calls[0].batchRead),
+    ).toBe(true);
+  });
+
+  it("isn't offered where the engine can't match a Message-ID, though one account's still is", () => {
+    // An older desktop build, or an older tab owning the engine.
+    engine.client = {};
+    const view = renderAllInboxes(actions);
+    expect(screen.queryByRole("button", { name: "Catch up" })).toBeNull();
+    view.unmount();
+
+    render(
+      <CatchUpEntry
+        actions={actions}
+        emailAccountId="account"
+        onReply={vi.fn()}
+        query={{ type: "inbox" }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Catch up" })).toBeTruthy();
   });
 
   it("sets aside an account that stops being reachable mid-batch", async () => {

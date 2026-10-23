@@ -21,6 +21,7 @@ import type {
   MailPredicate,
 } from "@inboxzero/mail-core/queries";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
 import {
   useCatchUpCopies,
@@ -159,7 +160,14 @@ export function CatchUpEntry({
     () => unreadQuery(reading.accountIds, reading.predicate, 1),
     [reading.accountIds, reading.predicate],
   );
+  // In All inboxes a card must reach every copy of its message, which takes
+  // an engine that can match a Message-ID; an older desktop build, or an
+  // older tab owning the engine, can't, so Catch up isn't offered there.
+  const offered =
+    !props.allInboxes ||
+    mailClientSupports(client, "predicate:internet_message_id");
   const counted =
+    offered &&
     windowOpen &&
     reading.ready &&
     Boolean(client) &&
@@ -175,7 +183,7 @@ export function CatchUpEntry({
       : 0;
 
   // An open overlay stays while its last conversation leaves the count.
-  if (!open && unread === 0) return null;
+  if (!offered || (!open && unread === 0)) return null;
 
   return (
     <div
@@ -256,6 +264,8 @@ function CatchUpBody({
   const client = useOptionalMailClient();
   const [batch, setBatch] = useState<CatchUpState | null>(null);
   const [lastAction, setLastAction] = useState<LastAction | null>(null);
+  // Cards left out of this opening's batch, so the read fills past them.
+  const [leftOut, setLeftOut] = useState<string[]>([]);
   const reading = useCatchUpScope(props, true);
   const { scope } = reading;
   // Every conversation the batch's cards stand for, copies included, so a
@@ -277,7 +287,7 @@ function CatchUpBody({
     // for a full batch once copies are grouped.
     batchRead: Math.min(
       MAX_BATCH_READ,
-      (CATCH_UP_BATCH_SIZE + actedKeys.size) *
+      (CATCH_UP_BATCH_SIZE + actedKeys.size + leftOut.length) *
         Math.max(1, reading.accountIds.length),
     ),
     watched,
@@ -286,9 +296,12 @@ function CatchUpBody({
   const candidates = useMemo(
     () =>
       !batch && read.status === "ready"
-        ? startCatchUp(toCatchUpItems(read.conversations, scope), actedKeys)
+        ? startCatchUp(
+            toCatchUpItems(read.conversations, scope),
+            new Set([...actedKeys, ...leftOut]),
+          )
         : null,
-    [batch, read, scope, actedKeys],
+    [batch, read, scope, actedKeys, leftOut],
   );
   const copies = useCatchUpCopies({
     client,
@@ -296,8 +309,18 @@ function CatchUpBody({
     cards: candidates ? (allInboxes ? candidates.items : []) : null,
   });
   // The batch is fixed once its cards' copies are known.
+  // Cards whose copies couldn't all be found are left out, and the batch is
+  // read again past them, until it holds only cards that are safe to act on.
   if (candidates && copies.status === "ready") {
-    setBatch(withCatchUpCopies(candidates, copies.found, scope, actedKeys));
+    const filled = withCatchUpCopies(
+      candidates,
+      copies.found,
+      scope,
+      actedKeys,
+    );
+    if (filled.incomplete.length)
+      setLeftOut((keys) => [...keys, ...filled.incomplete]);
+    else setBatch({ ...filled, incomplete: leftOut });
   }
   if (batch && allInboxes) {
     // An account removed from the view leaves the batch, and one the engine
@@ -508,7 +531,7 @@ function CatchUpBody({
         <AccountNotes
           accounts={allInboxes.accounts}
           failedAccountIds={allInboxes.failedAccountIds}
-          incomplete={batch?.incomplete ?? 0}
+          incomplete={batch?.incomplete.length ?? 0}
           setAside={batch?.setAside ?? NOTHING_SET_ASIDE}
           waitingAccountIds={allInboxes.waitingAccountIds}
         />
@@ -874,8 +897,8 @@ function doneLine(batch: CatchUpState) {
   const cleared = batch.history.length;
   if (cleared === 1) return "You cleared 1 conversation.";
   if (cleared > 1) return `You cleared ${cleared} conversations.`;
-  // Cards set aside are unread mail still waiting, just not now.
-  return Object.keys(batch.setAside).length
+  // Cards set aside or left out are unread mail still waiting, just not now.
+  return Object.keys(batch.setAside).length || batch.incomplete.length
     ? "Nothing left to clear for now."
     : "Nothing unread here.";
 }
