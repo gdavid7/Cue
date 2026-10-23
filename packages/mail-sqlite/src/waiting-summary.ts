@@ -68,7 +68,11 @@ export async function readWaitingSummary(
          json_extract(payload_json, '$.change.present')
        ) AS change_on,
        json_extract(payload_json, '$.change.membership') AS membership,
-       (next_attempt_at_ms IS NOT NULL AND next_attempt_at_ms - ? >= ?) AS held_offline,
+       -- Only a deferred dispatch waits for a connection. A provider can ask
+       -- for a long retry too, and that change is still stuck, not offline.
+       (status = 'queued'
+         AND next_attempt_at_ms IS NOT NULL
+         AND next_attempt_at_ms - ? >= ?) AS held_offline,
        COUNT(*) AS n,
        MIN(MAX(created_at_ms, ${sendAt})) AS oldest
      FROM operations

@@ -119,6 +119,28 @@ describe("getWaitingSummary", () => {
     await store.close();
   });
 
+  it("counts a change the provider asked to retry much later as waiting, not held offline", async () => {
+    const { driver, store } = await harness();
+    await insertOperation(driver, {
+      id: "rate-limited",
+      status: "retry_wait",
+      payload: { kind: "conversations", change: { kind: "archive" } },
+      createdAtMs: NOW - 5000,
+      nextAttemptAtMs: NOW + DEFERRED_DISPATCH_MIN_HOLD_MS * 2,
+    });
+
+    const [summary] = await store.getWaitingSummary(["acc-1"], NOW);
+
+    expect(summary?.groups).toEqual([
+      expect.objectContaining({
+        status: "retry_wait",
+        heldOffline: false,
+        count: 1,
+      }),
+    ]);
+    await store.close();
+  });
+
   it("answers for every account asked about, signed out or unknown", async () => {
     const { driver, store } = await harness();
     await driver.write((tx) =>

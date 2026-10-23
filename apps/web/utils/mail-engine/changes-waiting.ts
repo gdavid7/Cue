@@ -51,14 +51,12 @@ export function summarizeWaitingChanges(
 }
 
 /**
- * Whether any account has a change on its way or is signed out, so the
- * indicator may need to show soon.
+ * Whether any account has a change on its way, so the indicator may need to
+ * show soon. A signed-out account with nothing waiting already shows its
+ * reconnect state, and only reconnecting changes that.
  */
 export function hasPendingChanges(summaries: MailWaitingSummary[]) {
-  return summaries.some(
-    (summary) =>
-      summary.connection === "blocked_auth" || summary.groups.length > 0,
-  );
+  return summaries.some((summary) => summary.groups.length > 0);
 }
 
 /** Whether anything waiting could go now if the engine were asked. */

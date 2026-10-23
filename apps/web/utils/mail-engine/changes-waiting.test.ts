@@ -73,6 +73,19 @@ describe("summarizeWaitingChanges", () => {
     expect(hasDeliverableChanges(summaries)).toBe(false);
   });
 
+  it("polls a signed-out account with nothing waiting at the idle pace", () => {
+    const signedOut: MailWaitingSummary = {
+      ...account([]),
+      connection: "blocked_auth",
+    };
+    expect(hasPendingChanges([signedOut])).toBe(false);
+    expect(
+      hasPendingChanges([
+        { ...signedOut, groups: [group({ status: "blocked_auth" })] },
+      ]),
+    ).toBe(true);
+  });
+
   it("counts changes held for a connection only while offline", () => {
     const summary = account([
       group({
