@@ -3,7 +3,6 @@ import type { Metadata } from "next";
 import type React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { after } from "next/server";
 import { Inter } from "next/font/google";
 import { SideNavWithTopNav } from "@/components/SideNavWithTopNav";
 import { auth } from "@/utils/auth";
@@ -27,10 +26,8 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { EmailViewer } from "@/components/EmailViewer";
 import { SettingsDialog } from "@/app/(app)/settings/SettingsDialog";
 import { AnnouncementDialog } from "@/components/feature-announcements/AnnouncementDialog";
-import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
-import { recordLastLogin } from "@/utils/user/last-login";
-import { createScopedLogger } from "@/utils/logger";
+import { VisitRecorder } from "@/app/(app)/VisitRecorder";
 import { getEnabledMailboxProviders } from "@/utils/oauth/provider-config";
 import { getOrderedEmailAccounts } from "@/utils/mail-url.server";
 import { THEME_COLOR } from "@/components/theme-options";
@@ -39,8 +36,6 @@ import {
   getAiAccess,
   NO_AI_BANNER_DISMISSED_COOKIE,
 } from "@/utils/premium/ai-access";
-
-const logger = createScopedLogger("AppLayout");
 
 const inter = Inter({
   subsets: ["latin"],
@@ -83,16 +78,6 @@ export default async function AppLayout({
   ]);
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
 
-  after(async () => {
-    const email = session.user.email;
-    try {
-      await recordLastLogin(email);
-    } catch (error) {
-      logger.error("Failed to update last login", { email, error });
-      captureException(error, { userEmail: email });
-    }
-  });
-
   return (
     <div className={inter.variable}>
       <div className="font-inter">
@@ -107,6 +92,7 @@ export default async function AppLayout({
               <TabUnreadTitle />
               <KeepTodayPrefetched />
               <GetStartedRecorder />
+              <VisitRecorder />
               <WebNewMailNotifications />
               <AiAutomationStatusBanner
                 aiAccess={aiAccess}

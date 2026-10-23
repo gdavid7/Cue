@@ -37,6 +37,10 @@ import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
 import { webCryptoSha256 } from "./canonical";
 import type { MailEngineCapabilities } from "./capabilities";
+import type {
+  ImportantPerson,
+  SetImportantPersonInput,
+} from "./important-people";
 import {
   extractProviderSearches,
   resolveSearchPredicates,
@@ -95,6 +99,10 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // A sync request (a provider push, the tab coming back) refreshes them only
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
+// A paused background backfill waits at least this long, doubling while the
+// budget stays shut, up to the maximum. See `backfillPauseMs`.
+const BACKFILL_PAUSE_MIN_MS = 30_000;
+const BACKFILL_PAUSE_MAX_MS = 5 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
 // A throttled scan page waits the source's hint. Throttling in a row means
 // the hint keeps missing (another lane, tab or device spends the same
@@ -102,9 +110,9 @@ const MAX_MAILBOX_WINDOW_PAGES = 40;
 // scans refused together spread out, and never less than the hint. A landed
 // page, a new scan, a sync someone asks for or a removed account starts over.
 const ENUMERATION_BACKOFF_MIN_MS = 1000;
-const ENUMERATION_BACKOFF_MAX_MS = 60_000;
-// Scans outside the backfill lane, such as the primary scan filling the
-// inbox someone is waiting for, never wait as long.
+// For scans outside the backfill lane, such as the primary scan filling the
+// inbox someone is waiting for. The backfill lane backs off account-wide
+// instead (see `backfillPauseMs`).
 const FOREGROUND_ENUMERATION_BACKOFF_MAX_MS = 15_000;
 const COMMAND_REQUEST_RETRY_MIN_MS = 1000;
 const COMMAND_REQUEST_RETRY_MAX_MS = 30_000;
@@ -237,6 +245,13 @@ export type MailClient = {
   queryWaitingOnYou?(
     query: WaitingOnYouQuery,
   ): Promise<WaitingOnYouConversation[]>;
+  /** The people the user starred as Important in these accounts. */
+  queryImportantPeople?(accountIds: string[]): Promise<ImportantPerson[]>;
+  /**
+   * Stars or unstars someone as Important in each of the given accounts, on
+   * this device only. Hosts that don't keep stars leave it out.
+   */
+  setImportantPerson?(input: SetImportantPersonInput): Promise<void>;
   /**
    * Finds mail by meaning, from vectors this device made of recent mail.
    * Resolves no matches while the account has none. Only hosts that run
@@ -447,6 +462,12 @@ export function createMailEngine(input: {
     },
     queryWaitingOnYou(query) {
       return store.readWaitingOnYou(query);
+    },
+    queryImportantPeople(accountIds) {
+      return store.readImportantPeople(accountIds);
+    },
+    setImportantPerson(input) {
+      return store.writeImportantPerson(input);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
@@ -1571,10 +1592,25 @@ export function createMailEngine(input: {
     requestId: string;
     scopeId?: string;
     scope?: ScopeDescriptor;
-    /** The backfill lane's scan, which may back off further. */
-    background?: boolean;
+    /** Set for a background backfill, whose pauses back off account-wide. */
+    backfillPause?: BackfillPause;
   }) {
     const scopeId = input.scopeId ?? "primary";
+    // Only a throttled backfill backs off: an unavailable one (the network,
+    // the adapter) retries when it says, like the rest of sync.
+    const pausedFor = (paused: { retryAfterMs: number; reason: string }) => {
+      const pause = input.backfillPause;
+      if (!pause || paused.reason !== "throttled") return paused.retryAfterMs;
+      const delayMs = backfillPauseMs(
+        paused.retryAfterMs,
+        pause.repeats,
+        runtime,
+      );
+      pause.repeats += 1;
+      pause.delayMs = delayMs;
+      pause.untilMs = runtime.nowMs() + delayMs;
+      return delayMs;
+    };
     let scan = await store.readBootstrapScan({
       session: input.session,
       scopeId,
@@ -1593,6 +1629,7 @@ export function createMailEngine(input: {
         windowedBackfill: true,
       });
       if (bootstrap.status !== "ok") {
+        if (bootstrap.status === "paused") pausedFor(bootstrap);
         await noteConnection(input.session.accountId, bootstrap);
         return;
       }
@@ -1624,6 +1661,7 @@ export function createMailEngine(input: {
       return;
     }
     let processedPages = 0;
+    let landedLastPage = false;
     while (scan.page) {
       if (processedPages > 0) await yieldToHost();
       if (input.signal?.aborted) return;
@@ -1657,12 +1695,13 @@ export function createMailEngine(input: {
           nextAttemptAtMs:
             runtime.nowMs() +
             (paused
-              ? enumerationRetryDelayMs({
-                  hintMs: enumerated.retryAfterMs,
-                  refusals: throttled ? refusals : 1,
-                  background: input.background === true,
-                  random: runtime.random ?? Math.random,
-                })
+              ? input.backfillPause
+                ? pausedFor(enumerated)
+                : enumerationRetryDelayMs({
+                    hintMs: enumerated.retryAfterMs,
+                    refusals: throttled ? refusals : 1,
+                    random: runtime.random,
+                  })
               : idleCatchUpIntervalMs),
           errorCode: paused ? enumerated.reason : "blocked_auth",
         });
@@ -1695,6 +1734,8 @@ export function createMailEngine(input: {
           }),
       });
       if (applied.status === "stale") break;
+      landedLastPage = enumerated.value.nextPage === null;
+      if (input.backfillPause) input.backfillPause.repeats = 0;
       processedPages += 1;
       // A first sync shows each page as it lands rather than after the whole
       // slice, so a new mailbox fills in from its first page of mail.
@@ -1739,6 +1780,7 @@ export function createMailEngine(input: {
       };
     }
     await refreshViews();
+    return landedLastPage;
   }
 
   // Each account syncs in its own lane, so a slow account or a slow request
@@ -1761,6 +1803,13 @@ export function createMailEngine(input: {
     stream: AccountSyncState["streams"][number];
   }) {
     const { session, idleGate, stream } = input;
+    // One pause holds all of the account's background scopes (Gmail's older
+    // mail, Outlook's custom folders): they draw on the same budget, so a
+    // sibling asking meanwhile is only paused too. A pause further off than
+    // it was set for means the clock moved back, and is ignored.
+    const pause = idleGate.backfillPause;
+    const pausedForMs = pause.untilMs - runtime.nowMs();
+    if (pausedForMs > 0 && pausedForMs <= pause.delayMs) return;
     startLane(backfillLaneKey(session.accountId), async (signal) => {
       await ingestBootstrap({
         session,
@@ -1770,7 +1819,7 @@ export function createMailEngine(input: {
         requestId: runtime.randomId(),
         scopeId: stream.streamId,
         scope: idleGate.activeBootstrapScopes.get(stream.streamId),
-        background: true,
+        backfillPause: idleGate.backfillPause,
       });
       if (signal.aborted) return;
       await rememberBootstrapContinuation(idleGate, session, stream.streamId);
@@ -1980,7 +2029,7 @@ export function createMailEngine(input: {
           startBackfill({ session, idleGate, stream });
           continue;
         }
-        await ingestBootstrap({
+        const finished = await ingestBootstrap({
           session,
           from: stream,
           deadlineMs: runtime.nowMs() + SYNC_LANE_BOOTSTRAP_SLICE_MS,
@@ -1990,6 +2039,13 @@ export function createMailEngine(input: {
           scope: idleGate.activeBootstrapScopes.get(stream.streamId),
         });
         await rememberBootstrapContinuation(idleGate, session, stream.streamId);
+        if (finished) {
+          await resumeHeldBackfill(
+            idleGate,
+            session,
+            streams.map((candidate) => candidate.streamId),
+          );
+        }
         continue;
       }
       if (!catchUpDue) continue;
@@ -2144,6 +2200,7 @@ export function createMailEngine(input: {
     if (existing?.generation === generation) return existing;
     const created: IdleCatchUpGate = {
       activeBootstrapScopes: new Map(),
+      backfillPause: { untilMs: 0, delayMs: 0, repeats: 0 },
       generation,
       lowPriorityStreams: new Set(),
       nextAssistantCatchUpAtMs: 0,
@@ -2185,6 +2242,46 @@ export function createMailEngine(input: {
       idleGate.requestCount > checked.requestCount &&
       runtime.nowMs() - checked.atMs >= minIntervalMs
     );
+  }
+
+  // The server holds background scans while a scan the user waits on runs,
+  // so a backfill paused meanwhile was waiting for that scan, not for budget:
+  // once the last such scan of the account ends, it asks again at once and
+  // backs off afresh. A server that refuses for its budget (PF-12a-3 would
+  // tell the two apart) costs one more ask per finished scan.
+  async function resumeHeldBackfill(
+    idleGate: IdleCatchUpGate,
+    session: { accountId: string; generation: string },
+    scopeIds: string[],
+  ) {
+    const nowMs = runtime.nowMs();
+    if (idleGate.backfillPause.untilMs <= nowMs) return;
+    for (const scopeId of scopeIds) {
+      if (idleGate.lowPriorityStreams.has(scopeId)) continue;
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (scan?.page) return;
+    }
+    idleGate.backfillPause.untilMs = 0;
+    idleGate.backfillPause.repeats = 0;
+    for (const scopeId of idleGate.lowPriorityStreams) {
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (
+        !scan?.page ||
+        scan.errorCode !== "throttled" ||
+        scan.nextAttemptAtMs === null ||
+        scan.nextAttemptAtMs <= nowMs
+      ) {
+        continue;
+      }
+      await store.deferBootstrapScan({
+        session,
+        scopeId,
+        bootstrapId: scan.bootstrapId,
+        page: scan.page,
+        nextAttemptAtMs: nowMs,
+        errorCode: null,
+      });
+    }
   }
 
   async function rememberBootstrapContinuation(
@@ -2484,6 +2581,7 @@ function conversationFetchKey(key: ConversationKey) {
 
 type IdleCatchUpGate = {
   activeBootstrapScopes: Map<string, ScopeDescriptor>;
+  backfillPause: BackfillPause;
   generation: string;
   lowPriorityStreams: Set<string>;
   nextAssistantCatchUpAtMs: number;
@@ -2496,8 +2594,34 @@ type IdleCatchUpGate = {
 
 type CheckStamp = { atMs: number; requestCount: number };
 
+type BackfillPause = { untilMs: number; delayMs: number; repeats: number };
+
 function backfillLaneKey(accountId: string) {
   return `${accountId}\u0000backfill`;
+}
+
+// A paused backfill's retry time is when the server can afford one more page,
+// so asking then buys that page and the next pause: during a long backfill,
+// every other request was a pause. Waiting until the budget refills a run of
+// pages spends the same budget in a fraction of the requests. Pauses with no
+// page in between back off further, and jitter keeps engines that share an
+// account's budget (another device) from asking in step. A server retry time
+// past the low-priority interval is held to it, so a bad answer can't park
+// the backfill for longer than its scope would otherwise wait.
+function backfillPauseMs(
+  retryAfterMs: number,
+  repeats: number,
+  runtime: Pick<HostRuntime, "random">,
+) {
+  const backoffMs = BACKFILL_PAUSE_MIN_MS * 2 ** Math.min(repeats, 8);
+  const jitteredMs = Math.min(
+    BACKFILL_PAUSE_MAX_MS,
+    backoffMs * (1 + runtime.random() / 2),
+  );
+  return Math.max(
+    Math.min(retryAfterMs, LOW_PRIORITY_CATCH_UP_INTERVAL_MS),
+    jitteredMs,
+  );
 }
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {
@@ -2515,9 +2639,9 @@ export function createHostRuntime(
   return {
     nowMs: overrides?.nowMs ?? (() => Date.now()),
     randomId: overrides?.randomId ?? defaultRandomId,
+    random: overrides?.random ?? Math.random,
     sha256: overrides?.sha256 ?? webCryptoSha256,
     storagePressure: overrides?.storagePressure ?? (() => false),
-    random: overrides?.random ?? Math.random,
   };
 }
 
@@ -2553,15 +2677,11 @@ function enumerationRefusalKey(
 function enumerationRetryDelayMs(input: {
   hintMs: number;
   refusals: number;
-  background: boolean;
   random: () => number;
 }) {
   if (input.refusals <= 1) return input.hintMs;
-  const maxMs = input.background
-    ? ENUMERATION_BACKOFF_MAX_MS
-    : FOREGROUND_ENUMERATION_BACKOFF_MAX_MS;
   const doubled = Math.min(
-    maxMs,
+    FOREGROUND_ENUMERATION_BACKOFF_MAX_MS,
     ENUMERATION_BACKOFF_MIN_MS * 2 ** Math.min(30, input.refusals - 1),
   );
   const jittered = doubled / 2 + input.random() * (doubled / 2);

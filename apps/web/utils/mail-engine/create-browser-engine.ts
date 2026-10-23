@@ -33,6 +33,7 @@ import {
   workerFoundSessionGone,
 } from "@/utils/session-refresh";
 import { env } from "@/env";
+import { noteServerBuild } from "@/utils/build-update";
 
 export { browserMailEngineCapabilities };
 
@@ -270,6 +271,10 @@ async function createWorkerOwnedEngine(
       logDroppedWork(message.drop);
       return;
     }
+    if (message.type === "server_build") {
+      noteServerBuild(message.buildId);
+      return;
+    }
     if (message.type === "session_expired") {
       workerFoundSessionGone(message.reason, engineClosed.signal).then(
         (answer) => {
@@ -383,6 +388,10 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "queryFilesNotOnDevice", [accountIds]),
     queryWaitingOnYou: (query) =>
       callWorker(worker, pending, "queryWaitingOnYou", [query]),
+    queryImportantPeople: (accountIds) =>
+      callWorker(worker, pending, "queryImportantPeople", [accountIds]),
+    setImportantPerson: (input) =>
+      callWorker<void>(worker, pending, "setImportantPerson", [input]),
     searchSemantic: (query) =>
       callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),

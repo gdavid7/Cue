@@ -90,6 +90,7 @@ function createTab({
     isForeground: () => foreground,
     notify: (conversations) => sink.push(conversations),
     loadBulkMessageIds: async () => new Set(["bulk"]),
+    loadImportantPeople: async () => [],
     triageSettleMs: 10_000,
   });
   return {
@@ -199,6 +200,7 @@ describe("when to notify", () => {
       isForeground: () => false,
       notify: (conversations) => sink.push(conversations),
       loadBulkMessageIds: async () => null,
+      loadImportantPeople: async () => [],
       triageSettleMs: 1000,
     });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
+import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { createNodeSqliteDriver } from "./node-sqlite";
 import { createSqliteMailStore } from "./store";
 
@@ -110,6 +111,67 @@ describe("query corpora", () => {
         drafts.view.conversations.map((item) => item.key.conversationId),
       ).toEqual(["c-two-drafts"]);
       expect(drafts.view.counts.matchingConversations).toBe(1);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("lists a conversation named by id in one view and out of its inverse, whichever message was named", async () => {
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    try {
+      await store.ensureAccount({
+        accountId: "acc-1",
+        provider: "google",
+        generation: "g1",
+      });
+      await applyInboxPage(store, "acc-1", [
+        messagePatch({
+          accountId: "acc-1",
+          messageId: "m-first",
+          conversationId: "c-newsletter",
+          receivedAtMs: 1,
+          subject: "first",
+        }),
+        messagePatch({
+          accountId: "acc-1",
+          messageId: "m-sorted",
+          conversationId: "c-newsletter",
+          receivedAtMs: 2,
+          subject: "sorted",
+        }),
+        messagePatch({
+          accountId: "acc-1",
+          messageId: "m-other",
+          conversationId: "c-other",
+          receivedAtMs: 3,
+          subject: "other",
+        }),
+      ]);
+      const named: Extract<MailPredicate, { kind: "conversation" }> = {
+        kind: "conversation",
+        ids: ["c-newsletter"],
+        accountId: "acc-1",
+      };
+      const read = (predicate: MailPredicate) =>
+        store.readMailboxView({
+          accountIds: ["acc-1"],
+          predicate: {
+            kind: "all",
+            predicates: [{ kind: "mailbox", mailbox: "inbox" }, predicate],
+          },
+          order: "newest_first",
+          pageSize: PAGE_SIZE,
+          after: null,
+        });
+
+      expect(conversationIds(await read(named))).toEqual(["c-newsletter"]);
+      expect(
+        conversationIds(await read({ kind: "not", predicate: named })),
+      ).toEqual(["c-other"]);
+      // Another account's conversation of the same id isn't this one.
+      expect(
+        conversationIds(await read({ ...named, accountId: "acc-2" })),
+      ).toEqual([]);
     } finally {
       await store.close();
     }

@@ -45,6 +45,7 @@ test("keeps keyboard focus in the composer and follows the message field order",
     dialog.getByRole("button", { exact: true, name: "Send" }),
     dialog.getByRole("button", { name: "Send later" }),
     dialog.getByRole("button", { name: "Remind me" }),
+    dialog.getByRole("button", { name: "Share my free times" }),
     dialog.getByRole("button", { name: "Attach files" }),
     dialog.getByRole("button", { name: "Attach from mail" }),
     dialog.getByRole("button", { name: "Insert inline images" }),
@@ -784,6 +785,37 @@ test("pastes markdown as formatting that survives sending", async ({
     "https://example.com/doc",
   );
   await capturePlaywrightCheckpoint(page, testInfo, "markdown-sent");
+});
+
+// The seeded account signs in with its calendar connected.
+test("shares free times from the slash menu, from the keyboard", async ({
+  page,
+}, testInfo) => {
+  await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const editor = dialog.getByRole("textbox", { name: "Email message" });
+  await editor.click();
+  await page.keyboard.type("/free");
+
+  const share = page.getByRole("option", { name: /Share my free times/ });
+  await expect(share).toBeVisible();
+  await page.keyboard.press("ArrowUp");
+  await expect(share).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("Enter");
+
+  await expect(editor).toContainText("Here are a few times that work for me:", {
+    timeout: 60_000,
+  });
+  // The "/free" typed to find it is replaced, not left in the message.
+  await expect(editor).not.toContainText("/free");
+  const times = editor.locator("li");
+  await expect(times.first()).toBeVisible();
+  expect(await times.count()).toBeLessThanOrEqual(3);
+  await capturePlaywrightCheckpoint(page, testInfo, "free-times-from-slash");
+
+  await dialog.getByRole("button", { name: "Discard draft" }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test.describe("Cue writing partner", () => {

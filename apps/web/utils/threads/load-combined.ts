@@ -1,3 +1,4 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { Logger } from "@/utils/logger";
 import type { EmailLabel, EmailLabels } from "@/providers/email-label-types";
 import type { ThreadListItem } from "@/utils/threads/load";
@@ -30,10 +31,10 @@ export type CombinedListThread = ThreadListItem & {
   alsoIn?: CombinedAccount[];
   /**
    * The conversations this row stands for in those accounts, on rows of the
-   * local list. Reading, archiving and starring the row change them too;
-   * other actions don't.
+   * local list. Reading, archiving, snoozing and starring the row change them
+   * too; other actions don't.
    */
-  copies?: Array<{ accountId: string; threadId: string }>;
+  copies?: Array<{ accountId: string; threadId: string; inInbox?: boolean }>;
 };
 
 export async function loadCombinedThreads({
@@ -109,7 +110,10 @@ export async function loadCombinedThreads({
     items,
     (thread) => ({
       accountId: thread.account.id,
-      messageId: newestReceivedMessage(thread)?.headers["message-id"],
+      messageId:
+        normalizeInternetMessageId(
+          newestReceivedMessage(thread)?.headers["message-id"],
+        ) ?? undefined,
       at: getThreadTimestamp(thread),
     }),
     accounts[0]?.id,

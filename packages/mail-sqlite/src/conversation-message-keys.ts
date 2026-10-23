@@ -6,8 +6,11 @@ import { LOCAL_MIGRATIONS } from "./local-migrations";
  * Each conversation's message key: the normalised Message-ID of its latest
  * message, the newest that isn't a draft or in the trash, else the newest.
  * One message delivered to several of the user's accounts has one key in
- * each, so All inboxes shows and counts it once. This table is the one place
- * the rule lives: conversation summaries and counts both read it.
+ * each, so All inboxes shows and counts it once. Conversation summaries and
+ * counts both read this table. mail-core's conversationMessageKey states the
+ * same rule for the engine's reference semantics; the two must change
+ * together, and a parity test (conversation-message-keys.test.ts) holds them
+ * equal.
  */
 export async function migrateConversationMessageKeys(tx: SqlTransaction) {
   const applied = await tx.query(

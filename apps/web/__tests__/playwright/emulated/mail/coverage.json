@@ -47,7 +47,8 @@
     "app/(app)/[emailAccountId]/mail/ReadingBundle.tsx",
     "app/(app)/[emailAccountId]/mail/reading-lane.ts",
     "app/(app)/[emailAccountId]/mail/use-reading-bulk.ts",
-    "utils/label/reading-label.ts"
+    "utils/label/reading-label.ts",
+    "utils/split-inbox/cue-membership.server.ts"
   ],
   "never-read.spec.ts": [
     "app/(app)/[emailAccountId]/home/NeverReadCard.tsx",
@@ -191,7 +192,13 @@
   ],
   "composer-editing.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
-    "components/ShortcutTooltipContent.tsx"
+    "components/ShortcutTooltipContent.tsx",
+    "components/snippets/SnippetPicker.tsx",
+    "app/(app)/[emailAccountId]/compose/useComposeSnippets.tsx",
+    "app/(app)/[emailAccountId]/compose/useShareFreeTimes.ts",
+    "app/(app)/[emailAccountId]/compose/free-times-text.ts",
+    "app/api/user/calendar/free-times/route.ts",
+    "utils/calendar/free-times.ts"
   ],
   "compose-drafts.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
@@ -262,6 +269,7 @@
   ],
   "person-card.spec.ts": [
     "components/person-card/PersonCard.tsx",
+    "hooks/useImportantPeople.ts",
     "components/email-list/EmailMessage.tsx",
     "components/email-list/EmailDetails.tsx",
     "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"

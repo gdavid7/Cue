@@ -1,5 +1,8 @@
 import { internalDateToDate } from "@/utils/date";
-import type { CueMembership } from "@/utils/split-inbox/cue-filter";
+import type {
+  CueFilterValue,
+  CueMembership,
+} from "@/utils/split-inbox/cue-filter";
 import { matchesSenderFilter } from "@/utils/split-inbox/sender-filter";
 import type { ParsedMessage } from "@/utils/types";
 import { mailSplitToThreadsQuery } from "@/utils/split-inbox/split-query";
@@ -68,7 +71,7 @@ export function createThreadsQueryFilter(
 function matchesMessage(
   message: SplitMessage,
   query: ThreadsQuery | ThreadsQueryLeaf,
-  cueSets: Record<keyof CueMembership, Set<string>> | undefined,
+  cueSets: Record<CueFilterValue, Set<string>> | undefined,
 ): boolean {
   const labels = message.labelIds ?? [];
   if (

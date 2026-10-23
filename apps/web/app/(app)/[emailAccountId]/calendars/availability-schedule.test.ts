@@ -1,9 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  buildDayState,
-  collectWindows,
-  DEFAULT_WEEKDAY_WINDOWS,
-} from "./availability-schedule";
+import { DEFAULT_WEEKDAY_WINDOWS } from "@/utils/booking/default-availability";
+import { buildDayState, collectWindows } from "./availability-schedule";
 
 describe("buildDayState", () => {
   it("groups windows by weekday and marks days without windows unavailable", () => {

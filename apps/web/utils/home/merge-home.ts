@@ -1,4 +1,3 @@
-import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import type { AgentTask, HomeLane, HomeThread } from "@/utils/home/get-home";
 import type { TodayHomeData } from "@/utils/home/keep-shown-lanes";
@@ -38,8 +37,9 @@ export type TodayData = Omit<
   | "agentTasks"
   | "cue"
   | "today"
-  // Label ids are each mailbox's own, so they aren't merged.
+  // Label and thread ids are each mailbox's own, so they aren't merged.
   | "handledLabelIds"
+  | "newsletterThreadIds"
 > & {
   needsYou: TodayThread[];
   waiting: TodayThread[];
@@ -280,7 +280,7 @@ export function mergeMeetingNews(lists: MeetingNews[][]): MeetingNews[] {
  * its newest message carries one Message-ID header everywhere.
  */
 export function todayConversationKey(thread: TodayThread) {
-  const messageId = normalizeInternetMessageId(thread.rfcMessageId);
+  const messageId = thread.rfcMessageId;
   return messageId
     ? `message:${messageId}`
     : `thread:${thread.account?.id ?? ""}:${thread.threadId}`;

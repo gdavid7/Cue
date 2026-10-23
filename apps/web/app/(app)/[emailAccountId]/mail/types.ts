@@ -40,8 +40,13 @@ export type ActionableThread = {
   messageIds?: string[];
   /** Engine rows' labels carry INBOX while a message is in the inbox. */
   messages?: Array<{ id: string; labelIds?: string[] }>;
-  /** Copies of the row's message in other accounts, hidden behind it. */
-  copies?: Array<{ accountId: string; threadId: string }>;
+  /** Whether the row is in the inbox, when known without its labels. */
+  inInbox?: boolean;
+  /**
+   * Copies of the row's message in other accounts, hidden behind it, each
+   * with whether it is in its own inbox when that is known.
+   */
+  copies?: Array<{ accountId: string; threadId: string; inInbox?: boolean }>;
 };
 
 export function getListThreadKey(thread: ActionableThread) {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { env } from "./env";
 import { isIndexingAllowed } from "./utils/indexing";
 import { getLegacyHostRedirects } from "./utils/legacy-host";
+import { serverBuildHeaderRoutes } from "./utils/server-build";
 import type { NextConfig } from "next";
 
 const isDevelopment = process.env.NODE_ENV === "development";
@@ -212,6 +213,7 @@ const nextConfig: NextConfig = {
         ],
         source: "/sw.js",
       },
+      ...serverBuildHeaderRoutes(process.env.NEXT_DEPLOYMENT_ID),
       {
         // Each path names the model's pinned revision, so its bytes never change.
         headers: [

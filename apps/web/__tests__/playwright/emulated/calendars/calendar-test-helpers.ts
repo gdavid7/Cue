@@ -119,6 +119,19 @@ export async function getCalendarTestState() {
   }
 }
 
+export async function setBookingLink(bookingLink: string) {
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query(
+      `UPDATE "EmailAccount" SET "calendarBookingLink" = $2 WHERE email = $1`,
+      [PLAYWRIGHT_TEST_EMAIL, bookingLink],
+    );
+  } finally {
+    await client.end();
+  }
+}
+
 export async function getCalendarConnectionCount() {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
