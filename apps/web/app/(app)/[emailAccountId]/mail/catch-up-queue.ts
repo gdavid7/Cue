@@ -1,12 +1,20 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { ConversationSummary } from "@inboxzero/mail-core/queries";
 import { getListThreadKey } from "@/app/(app)/[emailAccountId]/mail/types";
 import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
 import { decodeSnippet } from "@/utils/gmail/decode";
-import { showCopiesOnce } from "@/utils/threads/cross-account-copies";
 
 export const CATCH_UP_BATCH_SIZE = 10;
 
 export type CatchUpAction = "archive" | "keep" | "snooze";
+
+/** The same message in another account, which every card action reaches. */
+export type CatchUpCopy = {
+  accountId: string;
+  threadId: string;
+  /** Whether it is in its own inbox, so an undo puts it back where it was. */
+  inInbox: boolean;
+};
 
 export type CatchUpItem = {
   /** The list's key for the conversation, which thread actions take. */
@@ -14,8 +22,11 @@ export type CatchUpItem = {
   threadId: string;
   accountId: string;
   latestMessageId: string;
-  /** The same message in other accounts, which archive and read reach too. */
-  copies: Array<{ accountId: string; threadId: string }>;
+  /** The latest message's Message-ID, normalized, which its copies share. */
+  messageKey: string | null;
+  /** Whether the conversation is in its inbox, as a label tab may show mail outside it. */
+  inInbox: boolean;
+  copies: CatchUpCopy[];
   sender: string;
   subject: string;
   preview: string;
@@ -28,8 +39,9 @@ export type CatchUpScope = {
   ownEmail: (accountId: string) => string;
   /**
    * All inboxes, where a row's key carries its account and a message in
-   * several accounts is one row, shown from the routed account where it can
-   * be, as the list shows it.
+   * several accounts is one card, shown from the routed account whenever it
+   * has a copy, so the card is the routed account's conversation, as Reply
+   * opens it.
    */
   combined: { routedAccountId: string } | null;
 };
@@ -43,6 +55,9 @@ export type CatchUpLive = {
   items: ReadonlyMap<string, CatchUpItem>;
   complete: boolean;
 };
+
+/** Why an account's open cards were set aside. */
+export type CatchUpSetAside = "unreachable" | "refused";
 
 /**
  * One batch, fixed when it starts so the card never reshuffles as the
@@ -60,13 +75,13 @@ export type CatchUpState = {
    * Accounts whose open cards wait for another batch, as their mail couldn't
    * be reached or changed, so the other accounts' cards carry on.
    */
-  setAside: Record<string, true>;
+  setAside: Record<string, CatchUpSetAside>;
 };
 
 export function toCatchUpItem(
   conversation: ConversationSummary,
   scope: CatchUpScope,
-  copies: ConversationSummary[] = [],
+  copies: CatchUpCopy[] = [],
 ): CatchUpItem | null {
   // A conversation that is only a draft has nothing to read yet.
   if (!conversation.latestMessageId) return null;
@@ -85,10 +100,10 @@ export function toCatchUpItem(
     threadId: conversationId,
     accountId,
     latestMessageId: conversation.latestMessageId,
-    copies: copies.map((copy) => ({
-      accountId: copy.key.accountId,
-      threadId: copy.key.conversationId,
-    })),
+    messageKey:
+      normalizeInternetMessageId(conversation.latestInternetMessageId) ?? null,
+    inInbox: conversation.roles.includes("inbox"),
+    copies,
     sender: extractNameFromEmail(from) || extractEmailAddress(from),
     subject: conversation.subject,
     preview: decodeSnippet(conversation.preview),
@@ -99,28 +114,119 @@ export function toCatchUpItem(
 /**
  * The unread conversations in a mailbox view, as the card shows them. In All
  * inboxes a message in several accounts is one card, unread while any copy
- * is, as it is one row in the list.
+ * is. The grouping runs over everything read, before a batch is cut from it.
  */
 export function toCatchUpItems(
   conversations: ConversationSummary[],
   scope: CatchUpScope,
 ): CatchUpItem[] {
-  const shown = scope.combined
-    ? showCopiesOnce(
-        conversations,
-        (conversation) => ({
-          accountId: conversation.key.accountId,
-          messageId: conversation.latestInternetMessageId,
-          at: conversation.latestMessageAtMs,
-        }),
-        scope.combined.routedAccountId,
-      )
-    : conversations.map((row) => ({ row, copies: [] }));
-  return shown.flatMap(({ row, copies }) => {
-    if (!row.unread && !copies.some((copy) => copy.unread)) return [];
-    const item = toCatchUpItem(row, scope, copies);
+  return groupCopies(conversations, scope).flatMap((group) => {
+    if (!group.some((member) => member.unread)) return [];
+    const item = groupItem(group, scope);
     return item ? [item] : [];
   });
+}
+
+/**
+ * Completes each card's copies from conversations read without the unread
+ * filter, such as a copy already read in another account, or one past the
+ * page the batch came from: archive, read and snooze must reach it too.
+ */
+export function withCatchUpCopies(
+  state: CatchUpState,
+  conversations: ConversationSummary[],
+  scope: CatchUpScope,
+): CatchUpState {
+  if (!scope.combined || !conversations.length) return state;
+  const byMessage = new Map<string, ConversationSummary[]>();
+  for (const conversation of conversations) {
+    const messageKey = normalizeInternetMessageId(
+      conversation.latestInternetMessageId,
+    );
+    if (!messageKey) continue;
+    byMessage.set(messageKey, [
+      ...(byMessage.get(messageKey) ?? []),
+      conversation,
+    ]);
+  }
+  let changed = false;
+  const items = state.items.map((item) => {
+    const found = item.messageKey ? byMessage.get(item.messageKey) : undefined;
+    if (!found) return item;
+    const accounts = new Set([
+      item.accountId,
+      ...item.copies.map((copy) => copy.accountId),
+    ]);
+    const added = found.filter((conversation) => {
+      if (accounts.has(conversation.key.accountId)) return false;
+      accounts.add(conversation.key.accountId);
+      return true;
+    });
+    if (!added.length) return item;
+    changed = true;
+    const copies = [...item.copies, ...added.map(toCopy)];
+    const routed = added.find(
+      (conversation) =>
+        conversation.key.accountId === scope.combined?.routedAccountId,
+    );
+    if (!routed) return { ...item, copies };
+    // The routed account has it after all: the card is its conversation.
+    return (
+      toCatchUpItem(routed, scope, [
+        ...copies.filter((copy) => copy.accountId !== routed.key.accountId),
+        {
+          accountId: item.accountId,
+          threadId: item.threadId,
+          inInbox: item.inInbox,
+        },
+      ]) ?? { ...item, copies }
+    );
+  });
+  return changed ? { ...state, items } : state;
+}
+
+/**
+ * The batch's cards as the watch has them now. A card stays while its own
+ * conversation or any copy is still unread in the tab, as the list's row
+ * does, and shows its own conversation's newest message when that is here.
+ */
+export function toCatchUpLive(
+  state: CatchUpState,
+  conversations: ConversationSummary[],
+  scope: CatchUpScope,
+  complete: boolean,
+): CatchUpLive {
+  const cardOf = new Map<string, CatchUpItem>();
+  for (const item of state.items) {
+    cardOf.set(`${item.accountId}\t${item.threadId}`, item);
+    for (const copy of item.copies)
+      cardOf.set(`${copy.accountId}\t${copy.threadId}`, item);
+  }
+  const items = new Map<string, CatchUpItem>();
+  for (const conversation of conversations) {
+    const card = cardOf.get(
+      `${conversation.key.accountId}\t${conversation.key.conversationId}`,
+    );
+    if (!card) continue;
+    const own =
+      conversation.key.accountId === card.accountId &&
+      conversation.key.conversationId === card.threadId;
+    if (!own) {
+      if (!items.has(card.key)) items.set(card.key, card);
+      continue;
+    }
+    const item = toCatchUpItem(conversation, scope, card.copies);
+    if (item) items.set(card.key, item);
+  }
+  return { items, complete };
+}
+
+/** Every conversation a batch's cards stand for, each in its own account. */
+export function catchUpConversations(state: CatchUpState) {
+  return state.items.flatMap((item) => [
+    { accountId: item.accountId, threadId: item.threadId },
+    ...item.copies.map(({ accountId, threadId }) => ({ accountId, threadId })),
+  ]);
 }
 
 /** The oldest conversations first, up to a batch, past any already acted on. */
@@ -152,12 +258,13 @@ export function catchUpLeft(state: CatchUpState) {
 /**
  * Sets aside the open cards of accounts whose mail can't be reached or
  * changed, so one account's trouble never holds up another's cards. Cards
- * already acted on keep their undo. Returns the same state when nothing
- * changed.
+ * already acted on keep their undo. The first reason given for an account
+ * stays. Returns the same state when nothing changed.
  */
 export function setAsideCatchUpAccounts(
   state: CatchUpState,
   accountIds: readonly string[],
+  reason: CatchUpSetAside,
 ): CatchUpState {
   const added = accountIds.filter(
     (accountId) =>
@@ -169,8 +276,42 @@ export function setAsideCatchUpAccounts(
     ...state,
     setAside: {
       ...state.setAside,
-      ...Object.fromEntries(added.map((accountId) => [accountId, true])),
+      ...Object.fromEntries(added.map((accountId) => [accountId, reason])),
     },
+  };
+}
+
+/**
+ * Drops what an account no longer in the view holds: its cards, and its
+ * copies behind other cards. Returns the same state when nothing changed.
+ */
+export function keepCatchUpAccounts(
+  state: CatchUpState,
+  accountIds: readonly string[],
+): CatchUpState {
+  const kept = new Set(accountIds);
+  const holds = (accountId: string) => kept.has(accountId);
+  const unchanged = state.items.every(
+    (item) =>
+      holds(item.accountId) &&
+      item.copies.every((copy) => holds(copy.accountId)),
+  );
+  if (unchanged) return state;
+  return {
+    ...state,
+    items: state.items
+      .filter((item) => holds(item.accountId))
+      .map((item) =>
+        item.copies.every((copy) => holds(copy.accountId))
+          ? item
+          : {
+              ...item,
+              copies: item.copies.filter((copy) => holds(copy.accountId)),
+            },
+      ),
+    setAside: Object.fromEntries(
+      Object.entries(state.setAside).filter(([accountId]) => holds(accountId)),
+    ),
   };
 }
 
@@ -265,4 +406,61 @@ function sameCard(a: CatchUpItem, b: CatchUpItem) {
     a.preview === b.preview &&
     a.sender === b.sender
   );
+}
+
+/**
+ * Conversations sharing their latest message's Message-ID, at most one per
+ * account; one with no Message-ID is its own group.
+ */
+function groupCopies(
+  conversations: ConversationSummary[],
+  scope: CatchUpScope,
+): ConversationSummary[][] {
+  if (!scope.combined) return conversations.map((row) => [row]);
+  const groups: ConversationSummary[][] = [];
+  const open = new Map<string, ConversationSummary[][]>();
+  for (const conversation of conversations) {
+    const messageKey = normalizeInternetMessageId(
+      conversation.latestInternetMessageId,
+    );
+    if (!messageKey) {
+      groups.push([conversation]);
+      continue;
+    }
+    const candidates = open.get(messageKey) ?? [];
+    const group = candidates.find((members) =>
+      members.every(
+        (member) => member.key.accountId !== conversation.key.accountId,
+      ),
+    );
+    if (group) {
+      group.push(conversation);
+      continue;
+    }
+    const created = [conversation];
+    groups.push(created);
+    open.set(messageKey, [...candidates, created]);
+  }
+  return groups;
+}
+
+/** A group's card: the routed account's copy when it has one. */
+function groupItem(group: ConversationSummary[], scope: CatchUpScope) {
+  const shown =
+    group.find(
+      (member) => member.key.accountId === scope.combined?.routedAccountId,
+    ) ?? group[0];
+  return toCatchUpItem(
+    shown,
+    scope,
+    group.filter((member) => member !== shown).map(toCopy),
+  );
+}
+
+function toCopy(conversation: ConversationSummary): CatchUpCopy {
+  return {
+    accountId: conversation.key.accountId,
+    threadId: conversation.key.conversationId,
+    inInbox: conversation.roles.includes("inbox"),
+  };
 }

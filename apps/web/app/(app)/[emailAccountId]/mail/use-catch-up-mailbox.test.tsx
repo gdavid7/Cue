@@ -10,7 +10,7 @@ import type {
   MailPredicate,
   QuerySnapshot,
 } from "@inboxzero/mail-core/queries";
-import { useCatchUpMailbox } from "./use-catch-up-mailbox";
+import { useCatchUpCopies, useCatchUpMailbox } from "./use-catch-up-mailbox";
 
 const INBOX: MailPredicate = { kind: "role", role: "inbox" };
 
@@ -130,6 +130,71 @@ describe("useCatchUpMailbox", () => {
     await waitFor(() =>
       expect(result.current.batch.status).toBe("unavailable"),
     );
+  });
+});
+
+describe("useCatchUpCopies", () => {
+  it("reads every account's mail around each card, read or not, in a shape old engines know", async () => {
+    const mail = [
+      ...unreadMail(1, "work", [1000]),
+      { ...unreadMail(1, "home", [1000])[0], unread: false },
+    ];
+    const engine = fakeEngine(mail, { legacy: true });
+    const { result } = renderHook(() =>
+      useCatchUpCopies({
+        client: engine.client,
+        accountIds: ["work", "home"],
+        tabPredicate: INBOX,
+        cardTimes: [1000],
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(
+      result.current.status === "ready" &&
+        result.current.conversations.map((row) => row.key.accountId).sort(),
+    ).toEqual(["home", "work"]);
+    const [query] = engine.queries();
+    expect(query.order).toBe("newest_first");
+    expect(JSON.stringify(query.predicate)).not.toContain('"read"');
+    expect(JSON.stringify(query.predicate)).toContain('"received"');
+  });
+
+  it("answers with nothing found, rather than holding the batch, when the read fails", async () => {
+    const engine = fakeEngine(unreadMail(1), { legacy: true, broken: true });
+    const { result } = renderHook(() =>
+      useCatchUpCopies({
+        client: engine.client,
+        accountIds: ["a"],
+        tabPredicate: INBOX,
+        cardTimes: [1],
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current).toEqual({ status: "ready", conversations: [] }),
+    );
+  });
+
+  it("reads nothing until the cards are known, and nothing for no cards", () => {
+    const engine = fakeEngine(unreadMail(1), { legacy: false });
+    const waiting = renderHook(() =>
+      useCatchUpCopies({
+        client: engine.client,
+        accountIds: ["a"],
+        tabPredicate: INBOX,
+        cardTimes: null,
+      }),
+    );
+    expect(waiting.result.current.status).toBe("loading");
+    const none = renderHook(() =>
+      useCatchUpCopies({
+        client: engine.client,
+        accountIds: ["a"],
+        tabPredicate: INBOX,
+        cardTimes: [],
+      }),
+    );
+    expect(none.result.current).toEqual({ status: "ready", conversations: [] });
+    expect(engine.reads()).toBe(0);
   });
 });
 
@@ -283,6 +348,7 @@ function fakeEngine(
     } as unknown as MailClient,
     orders: () => [...new Set(seen.map((query) => query.order))],
     reads: () => seen.length,
+    queries: () => [...seen],
   };
 }
 

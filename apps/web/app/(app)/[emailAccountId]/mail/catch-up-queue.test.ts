@@ -8,9 +8,12 @@ import {
   type CatchUpScope,
   reconcileCatchUp,
   revertCatchUp,
+  keepCatchUpAccounts,
   setAsideCatchUpAccounts,
   startCatchUp,
   toCatchUpItems,
+  toCatchUpLive,
+  withCatchUpCopies,
 } from "./catch-up-queue";
 import type { ConversationSummary } from "@inboxzero/mail-core/queries";
 
@@ -156,7 +159,7 @@ describe("reconcileCatchUp", () => {
   });
 
   it("keeps the copies a card was found with when it shows a newer message", () => {
-    const copies = [{ accountId: "home", threadId: "h1" }];
+    const copies = [{ accountId: "home", threadId: "h1", inInbox: true }];
     const state = startCatchUp([{ ...item("work:a", 1, "work"), copies }]);
     const newer = { ...item("work:a", 5, "work"), latestMessageId: "reply" };
     const next = reconcileCatchUp(state, live([newer]));
@@ -239,25 +242,147 @@ describe("toCatchUpItems", () => {
     expect(items.map((entry) => entry.sender)).toEqual(["Dana", "Home Me"]);
   });
 
-  it("shows a message delivered to several accounts once, carrying its copies", () => {
+  it("groups an unread message in several accounts into one card, from the routed account", () => {
+    // What the batch read returns: unread only, oldest first, so home's
+    // copy, received a moment earlier, comes first.
     const items = toCatchUpItems(
       [
         conversation({
           key: { accountId: "home", conversationId: "h1" },
           latestInternetMessageId: "<same@example.com>",
-          unread: false,
+          latestMessageAtMs: 1,
         }),
         conversation({
           key: { accountId: "work", conversationId: "w1" },
-          latestInternetMessageId: "<same@example.com>",
+          latestInternetMessageId: "<SAME@example.com>",
+          latestMessageAtMs: 2,
         }),
       ],
       ALL_INBOXES,
     );
-    // Unread while any copy is, and shown from the routed account.
     expect(items).toHaveLength(1);
     expect(items[0].key).toBe("work:w1");
-    expect(items[0].copies).toEqual([{ accountId: "home", threadId: "h1" }]);
+    expect(items[0].copies).toEqual([
+      { accountId: "home", threadId: "h1", inInbox: true },
+    ]);
+  });
+});
+
+describe("withCatchUpCopies", () => {
+  it("adds a copy already read in another account, which the unread read can't return", () => {
+    const state = startCatchUp(
+      toCatchUpItems(
+        [
+          conversation({
+            key: { accountId: "work", conversationId: "w1" },
+            latestInternetMessageId: "<same@example.com>",
+          }),
+        ],
+        ALL_INBOXES,
+      ),
+    );
+    const next = withCatchUpCopies(
+      state,
+      [
+        conversation({
+          key: { accountId: "work", conversationId: "w1" },
+          latestInternetMessageId: "<same@example.com>",
+        }),
+        conversation({
+          key: { accountId: "home", conversationId: "h1" },
+          latestInternetMessageId: "<same@example.com>",
+          unread: false,
+          roles: ["inbox"],
+        }),
+        conversation({
+          key: { accountId: "home", conversationId: "other" },
+          latestInternetMessageId: "<other@example.com>",
+        }),
+      ],
+      ALL_INBOXES,
+    );
+    expect(next.items.map((entry) => [entry.key, entry.copies])).toEqual([
+      ["work:w1", [{ accountId: "home", threadId: "h1", inInbox: true }]],
+    ]);
+  });
+
+  it("shows the card from the routed account once its copy is found there", () => {
+    const state = startCatchUp(
+      toCatchUpItems(
+        [
+          conversation({
+            key: { accountId: "home", conversationId: "h1" },
+            latestInternetMessageId: "<same@example.com>",
+          }),
+        ],
+        ALL_INBOXES,
+      ),
+    );
+    const next = withCatchUpCopies(
+      state,
+      [
+        conversation({
+          key: { accountId: "work", conversationId: "w1" },
+          latestInternetMessageId: "<same@example.com>",
+          unread: false,
+          roles: [],
+        }),
+      ],
+      ALL_INBOXES,
+    );
+    expect(next.items[0]).toMatchObject({
+      key: "work:w1",
+      inInbox: false,
+      copies: [{ accountId: "home", threadId: "h1", inInbox: true }],
+    });
+  });
+
+  it("changes nothing for a single account, or with nothing found", () => {
+    const state = startCatchUp([item("a", 1)]);
+    expect(
+      withCatchUpCopies(state, [conversation({})], singleAccount("me@x")),
+    ).toBe(state);
+    expect(withCatchUpCopies(state, [], ALL_INBOXES)).toBe(state);
+  });
+});
+
+describe("toCatchUpLive", () => {
+  it("keeps a card while a copy is still unread, though its own conversation was read", () => {
+    const card = {
+      ...item("work:w1", 1, "work"),
+      threadId: "w1",
+      copies: [{ accountId: "home", threadId: "h1", inInbox: true }],
+    };
+    const state = startCatchUp([card]);
+    const live = toCatchUpLive(
+      state,
+      [conversation({ key: { accountId: "home", conversationId: "h1" } })],
+      ALL_INBOXES,
+      true,
+    );
+    expect(reconcileCatchUp(state, live)).toBe(state);
+    expect(
+      currentCatchUpItem(
+        reconcileCatchUp(state, toCatchUpLive(state, [], ALL_INBOXES, true)),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("keepCatchUpAccounts", () => {
+  it("drops a removed account's cards and its copies behind others", () => {
+    const state = startCatchUp([
+      {
+        ...item("work:a", 1, "work"),
+        copies: [{ accountId: "home", threadId: "h", inInbox: true }],
+      },
+      item("home:b", 2, "home"),
+    ]);
+    const next = keepCatchUpAccounts(state, ["work"]);
+    expect(next.items.map((entry) => [entry.key, entry.copies])).toEqual([
+      ["work:a", []],
+    ]);
+    expect(keepCatchUpAccounts(next, ["work"])).toBe(next);
   });
 });
 
@@ -270,7 +395,7 @@ describe("setAsideCatchUpAccounts", () => {
       item("home:d", 4, "home"),
     ]);
     state = actOnCatchUp(state, "work:a", "archive");
-    state = setAsideCatchUpAccounts(state, ["work"]);
+    state = setAsideCatchUpAccounts(state, ["work"], "refused");
     expect(currentCatchUpItem(state)?.key).toBe("home:b");
     expect(catchUpLeft(state)).toBe(2);
     // Already done stays done, and undoable.
@@ -285,8 +410,13 @@ describe("setAsideCatchUpAccounts", () => {
     const state = setAsideCatchUpAccounts(
       startCatchUp([item("work:a", 1, "work")]),
       ["work"],
+      "refused",
     );
-    expect(setAsideCatchUpAccounts(state, ["work", "elsewhere"])).toBe(state);
+    // The first reason stays.
+    expect(
+      setAsideCatchUpAccounts(state, ["work", "elsewhere"], "unreachable"),
+    ).toBe(state);
+    expect(state.setAside).toEqual({ work: "refused" });
   });
 });
 
@@ -334,6 +464,8 @@ function item(key: string, atMs: number, accountId = "account"): CatchUpItem {
     threadId: key,
     accountId,
     latestMessageId: key,
+    messageKey: null,
+    inInbox: true,
     copies: [],
     sender: "Sender",
     subject: `Subject ${key}`,

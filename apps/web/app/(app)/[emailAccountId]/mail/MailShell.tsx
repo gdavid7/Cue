@@ -1420,8 +1420,11 @@ export function MailShell() {
 
   // In All inboxes, Catch up walks every included account the list reads,
   // and names the ones it leaves out the way the list does.
-  const { failedAccountIds: combinedFailedAccountIds, viewPredicate } =
-    combinedThreadState;
+  const {
+    failedAccountIds: combinedFailedAccountIds,
+    viewPredicate,
+    viewPredicateReady,
+  } = combinedThreadState;
   const combinedFirstSyncAccounts = combinedThreadState.firstSyncAccounts;
   const catchUpAllInboxes = useMemo<CatchUpAllInboxes | undefined>(
     () =>
@@ -1429,6 +1432,7 @@ export function MailShell() {
         ? {
             accounts: combinedAccounts,
             predicate: viewPredicate,
+            predicateReady: viewPredicateReady,
             waitingAccountIds: combinedFirstSyncAccounts.map(
               (account) => account.id,
             ),
@@ -1441,6 +1445,7 @@ export function MailShell() {
       combinedFirstSyncAccounts,
       isAllAccounts,
       viewPredicate,
+      viewPredicateReady,
     ],
   );
 

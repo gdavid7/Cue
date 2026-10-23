@@ -14,6 +14,11 @@ import { getFirstSyncAccountIds } from "@/utils/mail-engine/coverage";
 // to the newest thousand unread; the oldest of those starts the batch.
 const LEGACY_PAGE_SIZE = 100;
 const LEGACY_MAX_PAGES = 10;
+// A message delivered to several of the user's addresses reaches each within
+// moments; an hour either side of a card's message finds its copies.
+const COPY_WINDOW_MS = 60 * 60 * 1000;
+// Ten cards' hours of mail, read or not, in every included account.
+const COPY_READ_SIZE = 200;
 
 export type CatchUpRead =
   | { status: "loading" }
@@ -134,6 +139,69 @@ export function useCatchUpMailbox({
       : null;
 
   return { batch, watch };
+}
+
+export type CatchUpCopiesRead =
+  | { status: "loading" }
+  | { status: "ready"; conversations: ConversationSummary[] };
+
+/**
+ * Reads the conversations around each card's message in every account,
+ * whether read or not, so a card's copies can be found by Message-ID even
+ * where the batch's unread read didn't reach them. Its order and predicates
+ * are ones an engine from before Catch up knows. A read that fails leaves
+ * the copies the batch read found, rather than holding the batch back.
+ */
+export function useCatchUpCopies({
+  client,
+  accountIds,
+  tabPredicate,
+  cardTimes,
+}: {
+  client: MailClient | null;
+  accountIds: string[];
+  tabPredicate: MailPredicate;
+  /** The cards' message times; null until the cards are known. */
+  cardTimes: number[] | null;
+}): CatchUpCopiesRead {
+  const accountKey = accountIds.join("\n");
+  const timesKey = cardTimes?.join(",") ?? "";
+  const query = useMemo<ConversationQuery>(
+    () => ({
+      accountIds: accountKey ? accountKey.split("\n") : [],
+      predicate: {
+        kind: "all",
+        predicates: [
+          tabPredicate,
+          {
+            kind: "any",
+            predicates: (timesKey ? timesKey.split(",") : []).map((time) => ({
+              kind: "received",
+              afterMs: Number(time) - COPY_WINDOW_MS,
+              beforeMs: Number(time) + COPY_WINDOW_MS,
+            })),
+          },
+        ],
+      },
+      order: "newest_first",
+      pageSize: COPY_READ_SIZE,
+      after: null,
+    }),
+    [accountKey, tabPredicate, timesKey],
+  );
+  const enabled =
+    Boolean(client) && accountIds.length > 0 && Boolean(cardTimes?.length);
+  const mailbox = useMailboxWindow(query, { client, enabled });
+  if (cardTimes === null) return { status: "loading" };
+  if (
+    !enabled ||
+    mailbox.status === "error" ||
+    mailbox.status === "unavailable"
+  )
+    return { status: "ready", conversations: [] };
+  return mailbox.status === "ready" && mailbox.data
+    ? { status: "ready", conversations: mailbox.data.conversations }
+    : { status: "loading" };
 }
 
 /** The watched conversations, each matched within its own account. */

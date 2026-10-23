@@ -11,6 +11,8 @@ const UNTIL = new Date("2026-10-23T09:00:00");
 // What the batch read answers; each test sets its own mail.
 const mailbox = vi.hoisted(() => ({
   conversations: [] as ConversationSummary[],
+  /** What the read for cards' copies answers, read or not. */
+  copies: [] as ConversationSummary[],
   calls: [] as Array<Parameters<typeof useCatchUpMailbox>[0]>,
 }));
 
@@ -55,6 +57,10 @@ vi.mock("./use-catch-up-mailbox", () => ({
       watch: null,
     };
   },
+  useCatchUpCopies: () => ({
+    status: "ready",
+    conversations: mailbox.copies,
+  }),
 }));
 // The picker's popover isn't under test; this picks a time straight away.
 vi.mock("./SnoozeButton", () => ({
@@ -83,14 +89,13 @@ describe("Catch up", () => {
       conversation("first", "First", 1),
       conversation("second", "Second", 2),
     ];
+    mailbox.copies = [];
     mailbox.calls = [];
     restoredListeners = new Set();
     actions = {
       addTargets: vi.fn(),
-      archive: vi.fn(async (keys: string[]) => keys),
-      markRead: vi.fn(async (keys: string[]) => keys),
+      changeCard: vi.fn(async (keys: string[]) => changed(keys)),
       setReadState: vi.fn(async (keys: string[]) => keys),
-      snooze: vi.fn(async (keys: string[]) => keys),
       subscribeRestored: (listener) => {
         restoredListeners.add(listener);
         return () => restoredListeners.delete(listener);
@@ -121,7 +126,10 @@ describe("Catch up", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pick tomorrow" }));
 
     expect(await screen.findByText("Snoozed “First”")).toBeTruthy();
-    expect(actions.snooze).toHaveBeenCalledWith(["first"], UNTIL);
+    expect(actions.changeCard).toHaveBeenCalledWith(["first"], {
+      kind: "snooze",
+      until: UNTIL,
+    });
     expect(screen.getByRole("heading", { name: "Second" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Undo/ }));
@@ -157,7 +165,7 @@ describe("Catch up", () => {
 describe("Catch up in All inboxes", () => {
   let restoredListeners: Set<(keys: string[]) => void>;
   let actions: Parameters<typeof CatchUpEntry>[0]["actions"];
-  let lastArchived: string[];
+  let lastActed: string[];
 
   beforeEach(() => {
     // Both accounts have a conversation t1; work's is the oldest.
@@ -166,25 +174,24 @@ describe("Catch up in All inboxes", () => {
       conversation("t1", "Home middle", 2, "home"),
       conversation("t3", "Work newest", 3, "work"),
     ];
+    mailbox.copies = [];
     mailbox.calls = [];
     restoredListeners = new Set();
-    lastArchived = [];
+    lastActed = [];
     actions = {
       addTargets: vi.fn(),
-      archive: vi.fn(async (keys: string[]) => {
-        lastArchived = keys;
-        return keys;
+      changeCard: vi.fn(async (keys: string[]) => {
+        lastActed = keys;
+        return changed(keys);
       }),
-      markRead: vi.fn(async (keys: string[]) => keys),
       setReadState: vi.fn(async (keys: string[]) => keys),
-      snooze: vi.fn(async (keys: string[]) => keys),
       subscribeRestored: (listener) => {
         restoredListeners.add(listener);
         return () => restoredListeners.delete(listener);
       },
       undo: vi.fn(async () => {
-        for (const listener of restoredListeners) listener(lastArchived);
-        return lastArchived;
+        for (const listener of restoredListeners) listener(lastActed);
+        return lastActed;
       }),
     };
   });
@@ -204,7 +211,9 @@ describe("Catch up in All inboxes", () => {
       await screen.findByRole("heading", { name: "Home middle" }),
     ).toBeTruthy();
     expect(screen.getByText("me@home.example")).toBeTruthy();
-    expect(actions.archive).toHaveBeenCalledWith(["work:t1"]);
+    expect(actions.changeCard).toHaveBeenCalledWith(["work:t1"], {
+      kind: "archive",
+    });
     expect(actions.addTargets).toHaveBeenCalledWith([
       expect.objectContaining({ id: "t1", account: { id: "work" } }),
     ]);
@@ -214,7 +223,9 @@ describe("Catch up in All inboxes", () => {
     expect(
       await screen.findByRole("heading", { name: "Work newest" }),
     ).toBeTruthy();
-    expect(actions.markRead).toHaveBeenCalledWith(["home:t1"]);
+    expect(actions.changeCard).toHaveBeenLastCalledWith(["home:t1"], {
+      kind: "mark_read",
+    });
     expect(actions.addTargets).toHaveBeenLastCalledWith([
       expect.objectContaining({ id: "t1", account: { id: "home" } }),
     ]);
@@ -245,8 +256,10 @@ describe("Catch up in All inboxes", () => {
   });
 
   it("sets aside an account whose change is refused, and carries on with the others", async () => {
-    actions.archive = vi.fn(async (keys: string[]) =>
-      keys.filter((key) => !key.startsWith("work:")),
+    actions.changeCard = vi.fn(async (keys: string[]) =>
+      keys.some((key) => key.startsWith("work:"))
+        ? { rows: [], actedRows: [], refusedAccountIds: ["work"] }
+        : changed(keys),
     );
     renderAllInboxes(actions);
     fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
@@ -289,6 +302,85 @@ describe("Catch up in All inboxes", () => {
       ),
     ).toBeTruthy();
     expect(mailbox.calls.at(-1)?.accountIds).toEqual(["work"]);
+  });
+
+  it("archives a copy already read in another account along with the card", async () => {
+    mailbox.conversations = [
+      conversation("w1", "Shared", 1, "work", "<shared@example.com>"),
+    ];
+    // The copy is read, so only the read without the unread filter finds it.
+    mailbox.copies = [
+      {
+        ...conversation("h1", "Shared", 1, "home", "<shared@example.com>"),
+        unread: false,
+      },
+    ];
+    renderAllInboxes(actions);
+    fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
+    await screen.findByText("1 left");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "e" });
+
+    await screen.findByText("You cleared 1 conversation.");
+    expect(actions.addTargets).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: "w1",
+        account: { id: "work" },
+        copies: [{ accountId: "home", threadId: "h1", inInbox: true }],
+      }),
+    ]);
+    expect(actions.changeCard).toHaveBeenCalledWith(["work:w1"], {
+      kind: "archive",
+    });
+  });
+
+  it("keeps a card done and undoable when only a copy elsewhere refused, setting that account aside", async () => {
+    actions.changeCard = vi.fn(async (keys: string[]) => {
+      lastActed = keys;
+      return keys.includes("work:t1")
+        ? { rows: [], actedRows: keys, refusedAccountIds: ["home"] }
+        : changed(keys);
+    });
+    renderAllInboxes(actions);
+    fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
+    await screen.findByText("3 left");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "e" });
+
+    // Home's card waits; work's next one is up, and the archive undoable.
+    expect(
+      await screen.findByRole("heading", { name: "Work newest" }),
+    ).toBeTruthy();
+    expect(screen.getByText("1 left")).toBeTruthy();
+    expect(screen.getByText("Archived “Work oldest”")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Couldn't update me@home.example, so its conversations are set aside for now.",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "z" });
+
+    expect(
+      await screen.findByRole("heading", { name: "Work oldest" }),
+    ).toBeTruthy();
+    expect(actions.undo).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops an account removed from All inboxes while open", async () => {
+    const view = renderAllInboxes(actions);
+    fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
+    await screen.findByText("3 left");
+
+    view.rerender(allInboxesEntry(actions, { accounts: [ACCOUNTS[0]] }));
+
+    expect(await screen.findByText("2 left")).toBeTruthy();
+    expect(screen.queryByText("me@home.example")).toBeNull();
+  });
+
+  it("waits for a label tab's labels before offering Catch up", () => {
+    renderAllInboxes(actions, { predicateReady: false });
+    expect(screen.queryByRole("button", { name: "Catch up" })).toBeNull();
   });
 
   it("sets aside an account that stops being reachable mid-batch", async () => {
@@ -336,6 +428,7 @@ function allInboxesEntry(
       allInboxes={{
         accounts: ACCOUNTS,
         predicate: INBOX,
+        predicateReady: true,
         waitingAccountIds: [],
         failedAccountIds: [],
         ...overrides,
@@ -347,14 +440,21 @@ function allInboxesEntry(
   );
 }
 
+/** Every part of the change made, as the view's thread actions report it. */
+function changed(keys: string[]) {
+  return { rows: keys, actedRows: keys, refusedAccountIds: [] };
+}
+
 function conversation(
   id: string,
   subject: string,
   atMs: number,
   accountId = "account",
+  latestInternetMessageId?: string,
 ): ConversationSummary {
   return {
     key: { accountId, conversationId: id },
+    latestInternetMessageId,
     subject,
     preview: "",
     from: "Ada <ada@example.com>",

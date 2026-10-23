@@ -57,7 +57,9 @@ export function useCombinedMailThreads({
     () => Object.fromEntries(accounts.map((account) => [account.id, account])),
     [accounts],
   );
-  const labelsByAccount = useLabelsByAccount(enabled ? accountIds : []);
+  const { labelsByAccount, labelsLoaded } = useLabelsByAccount(
+    enabled ? accountIds : [],
+  );
   const isDrafts = !searchQuery && mailboxType === "draft";
   const hiddenDrafts = useAllAccountsHiddenDraftMessageIds(
     enabled && isDrafts ? accounts : undefined,
@@ -160,6 +162,8 @@ export function useCombinedMailThreads({
     firstSyncAccounts,
     labelsByAccount,
     viewPredicate,
+    /** A label tab's predicate matches nothing until the labels load. */
+    viewPredicateReady: !labelNames?.length || labelsLoaded,
   };
 }
 
@@ -175,7 +179,10 @@ function startFirstSync(client: MailClient, accounts: AllInboxesAccount[]) {
     .catch(() => undefined);
 }
 
-function useLabelsByAccount(accountIds: string[]): Record<string, EmailLabels> {
+function useLabelsByAccount(accountIds: string[]): {
+  labelsByAccount: Record<string, EmailLabels>;
+  labelsLoaded: boolean;
+} {
   const { fetcher } = useSWRConfig();
   const accountKey = useMemo(
     () => [...accountIds].sort().join(":"),
@@ -206,7 +213,10 @@ function useLabelsByAccount(accountIds: string[]): Record<string, EmailLabels> {
     },
     { revalidateOnFocus: false },
   );
-  return data ?? EMPTY_LABELS_BY_ACCOUNT;
+  return {
+    labelsByAccount: data ?? EMPTY_LABELS_BY_ACCOUNT,
+    labelsLoaded: data !== undefined,
+  };
 }
 
 function labelsResponseToMap(

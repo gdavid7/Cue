@@ -523,7 +523,7 @@ describe("useEngineMailThreads in All inboxes", () => {
     expect(
       isCombinedListThread(result.current.threads[0]) &&
         result.current.threads[0].copies,
-    ).toEqual([{ accountId: "acc-1", threadId: "c-old" }]);
+    ).toEqual([{ accountId: "acc-1", threadId: "c-old", inInbox: true }]);
 
     act(() => {
       for (const [accountId, conversationId] of [

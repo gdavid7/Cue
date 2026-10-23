@@ -136,9 +136,9 @@ describe("useThreadActions", () => {
   });
 
   describe("a row standing for one message in two accounts", () => {
-    // All inboxes shows the message once; reading, archiving and starring it
-    // reach every copy, each in its own account, while the rest of the
-    // actions stay with the copy shown.
+    // All inboxes shows the message once; reading, archiving, snoozing and
+    // starring it reach every copy, each in its own account, while the rest
+    // of the actions stay with the copy shown.
     const row = {
       ...createThread(["INBOX", "UNREAD"], "shown"),
       account: { id: "one", email: "one@example.com", name: null, image: null },
@@ -162,6 +162,11 @@ describe("useThreadActions", () => {
       [
         "star",
         (actions: Actions) => actions.setStarredState(["one:shown"], true),
+      ],
+      [
+        "snooze",
+        (actions: Actions) =>
+          actions.snooze(["one:shown"], new Date(Date.now() + 60_000)),
       ],
     ])("%s changes every copy, counted as one conversation", async (_, act_) => {
       const { result } = renderActions({ threads: [row] });
@@ -285,6 +290,83 @@ describe("useThreadActions", () => {
 
       expect(restored).toEqual([]);
       expect(notifications.error).toHaveBeenLastCalledWith("Couldn't restore");
+    });
+
+    it("undoes a snooze copy by copy, each back where it was", async () => {
+      mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+      // The copy in two was already out of its inbox, behind a label.
+      const mixed = {
+        ...row,
+        copies: [{ accountId: "two", threadId: "hidden", inInbox: false }],
+      } as ListThread;
+      const { result } = renderActions({ threads: [mixed] });
+      await act(() =>
+        result.current.snooze(["one:shown"], new Date(Date.now() + 60_000)),
+      );
+      mail.client.submitConversations.mockClear();
+
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+
+      expect(restored).toEqual(["one:shown"]);
+      expect(submitted().sort()).toEqual([
+        ["one", ["shown"], "unarchive"],
+        ["two", ["hidden"], "archive"],
+      ]);
+    });
+
+    it("names the account that refused when only a copy was refused", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) =>
+          command.accountId === "two"
+            ? { status: "rejected", code: "stale_selection" }
+            : { status: "queued" },
+      );
+      const { result } = renderActions({ threads: [row] });
+
+      let outcome: Awaited<ReturnType<Actions["changeCard"]>> | undefined;
+      await act(async () => {
+        outcome = await result.current.changeCard(["one:shown"], {
+          kind: "archive",
+        });
+      });
+
+      // Not the whole row, but changed where it is shown, and undoable.
+      expect(outcome).toEqual({
+        rows: [],
+        actedRows: ["one:shown"],
+        refusedAccountIds: ["two"],
+      });
+      mail.client.submitConversations.mockResolvedValue({ status: "queued" });
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual(["one:shown"]);
+    });
+
+    it("keeps the copies the list found when a card adds its own", async () => {
+      const { result } = renderActions({ threads: [row] });
+      // A card that found a third copy, and none of the list's.
+      act(() =>
+        result.current.addTargets([
+          {
+            id: "shown",
+            account: { id: "one" },
+            messageIds: ["shown-message"],
+            copies: [{ accountId: "three", threadId: "third" }],
+          },
+        ]),
+      );
+      await act(() => result.current.archive(["one:shown"]));
+
+      expect(submitted()).toEqual([
+        ["one", ["shown"], "archive"],
+        ["two", ["hidden"], "archive"],
+        ["three", ["third"], "archive"],
+      ]);
     });
 
     it("deletes only the copy shown", async () => {
