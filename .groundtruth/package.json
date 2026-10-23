@@ -1,0 +1,8 @@
+{
+  "name": "groundtruth-record",
+  "private": true,
+  "description": "Groundtruth's record for this app: claims, scenarios and their Playwright tests. Run with: npm install && npx playwright test",
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "note": "Written by Groundtruth from .groundtruth/app.yml; edits are overwritten. workdir is relative to the app's repo.",
+  "workdir": ".",
+  "env": {
+    "AXIOM_TOKEN": "",
+    "AXIOM_QUERY_TOKEN": "",
+    "AXIOM_DATASET": "",
+    "VERCEL_TOKEN": "",
+    "GH_TOKEN": "",
+    "GITHUB_TOKEN": "",
+    "AWS_ACCESS_KEY_ID": "",
+    "AWS_SECRET_ACCESS_KEY": "",
+    "COMPOSIO_API_KEY": "",
+    "EXA_API_KEY": "",
+    "CUE_FEEDBACK_AGENT_KEY": ""
+  },
+  "port": 3100,
+  "ready": "/api/health",
+  "reset": "node .groundtruth/cue/reset.mjs",
+  "secrets": {
+    "file": ".groundtruth/secrets.env",
+    "names": []
+  },
+  "scenarios": {}
+}

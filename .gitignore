@@ -121,3 +121,5 @@ eval-results/
 .tmp/
 
 /.private-build-install.json
+# local settings written by Groundtruth
+.claude/settings.local.json
