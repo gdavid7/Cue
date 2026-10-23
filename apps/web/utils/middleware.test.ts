@@ -22,7 +22,12 @@ import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import prisma from "@/utils/__mocks__/prisma";
 import { auth } from "@/utils/auth";
 import { isAdmin } from "@/utils/admin";
-import { captureException, checkCommonErrors, SafeError } from "@/utils/error";
+import {
+  captureException,
+  checkCommonErrors,
+  ReconnectRequiredError,
+  SafeError,
+} from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
@@ -1220,6 +1225,54 @@ describe("Middleware", () => {
         display: "compact",
         hasEmailProvider: true,
       });
+    });
+
+    it("logs no error for a reconnect-required account, but keeps warning for a calendar one", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount(mockUserId, mockEmail);
+      mockCreateEmailProvider.mockRejectedValue(new ReconnectRequiredError());
+
+      const response = await withEmailProvider(vi.fn())(mockReq, mockContext);
+
+      expect(response.status).toBe(401);
+      expect(error).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+
+      // Calendar clients throw a plain SafeError for the same state.
+      mockCreateEmailProvider.mockRejectedValue(
+        new SafeError("No refresh token"),
+      );
+      await withEmailProvider(vi.fn())(mockReq, mockContext);
+      expect(
+        warn.mock.calls.some(([line]) =>
+          String(line).includes("Returning 401"),
+        ),
+      ).toBe(true);
+      error.mockRestore();
+      warn.mockRestore();
+    });
+
+    it("answers a missing grant at provider creation with the typed reconnect 401", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount(mockUserId, mockEmail);
+      mockCreateEmailProvider.mockRejectedValue(new ReconnectRequiredError());
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+
+      const response = await withEmailProvider(handler)(mockReq, mockContext);
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toMatchObject({
+        errorCode: "NO_REFRESH_TOKEN",
+        isKnownError: true,
+      });
+      expect(handler).not.toHaveBeenCalled();
+      expect(mockCaptureException).not.toHaveBeenCalled();
     });
 
     it("checks the account and finds its provider in one read", async () => {

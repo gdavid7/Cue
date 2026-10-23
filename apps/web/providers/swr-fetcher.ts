@@ -5,6 +5,11 @@ import {
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
 } from "@/utils/config";
+import {
+  isReconnectRequired,
+  noteReconnectRequired,
+  reconnectRequiredBody,
+} from "@/utils/reconnect-required";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 import {
   getSWRFetchErrorMessage,
@@ -36,6 +41,14 @@ export const swrFetcher = async (
   },
 ) => {
   if (isSigningOut()) return leaving();
+
+  // The account was already offered a reconnect; asking again only repeats
+  // the refusal.
+  if (emailAccountId && isReconnectRequired(emailAccountId, url)) {
+    // The first refusal may have come while another account was on screen.
+    promptReconnect(emailAccountId, options?.viewedEmailAccountId);
+    throw reconnectRequiredError();
+  }
 
   const headers = new Headers(init?.headers);
 
@@ -82,6 +95,7 @@ export const swrFetcher = async (
       errorData.errorCode === MICROSOFT_AUTH_EXPIRED_ERROR_CODE
     ) {
       if (emailAccountId) {
+        noteReconnectRequired(emailAccountId, url);
         const errorMessage =
           errorData.errorCode === MICROSOFT_AUTH_EXPIRED_ERROR_CODE
             ? "Microsoft authorization expired"
@@ -97,15 +111,10 @@ export const swrFetcher = async (
           },
         });
 
-        const redirectUrl = getPermissionsConsentPath(emailAccountId, {
-          expired: true,
-        });
-        if (emailAccountId === options?.viewedEmailAccountId) {
+        if (promptReconnect(emailAccountId, options?.viewedEmailAccountId)) {
           console.log(`${errorMessage}, redirecting to consent page...`);
-          redirectToSafeUrl(redirectUrl);
           return;
         }
-        offerReconnect(emailAccountId, redirectUrl);
       }
     }
 
@@ -146,9 +155,30 @@ export const swrFetcher = async (
   return res.json();
 };
 
+function reconnectRequiredError() {
+  const info = reconnectRequiredBody();
+  return Object.assign(new Error(info.error), { info, status: 401 });
+}
+
 /** Never settles: the page is leaving, so there is nothing to report. */
 function leaving(): Promise<never> {
   return new Promise(() => {});
+}
+
+/** Sends the account on screen to its reconnect page; offers it for any other. */
+function promptReconnect(
+  emailAccountId: string,
+  viewedEmailAccountId: string | null | undefined,
+) {
+  const reconnectUrl = getPermissionsConsentPath(emailAccountId, {
+    expired: true,
+  });
+  if (emailAccountId === viewedEmailAccountId) {
+    redirectToSafeUrl(reconnectUrl);
+    return true;
+  }
+  offerReconnect(emailAccountId, reconnectUrl);
+  return false;
 }
 
 function offerReconnect(emailAccountId: string, reconnectUrl: string) {
