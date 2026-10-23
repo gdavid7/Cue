@@ -94,6 +94,7 @@ import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
 import { useWaitingOnYou } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
+import { useImportantPeople } from "@/hooks/useImportantPeople";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
@@ -280,6 +281,11 @@ export function HomeDashboard() {
     },
   );
   const neverRead = useNeverReadSenders({ accounts: localAccounts });
+  const localAccountIds = useMemo(
+    () => localAccounts.map((account) => account.id),
+    [localAccounts],
+  );
+  const { isImportant } = useImportantPeople(localAccountIds);
   const alsoInInbox = useMemo(() => {
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
@@ -308,13 +314,22 @@ export function HomeDashboard() {
     const visible = (threads: TodayThread[]) =>
       threads.filter((thread) => !hidden.has(rowKey(thread)));
     return {
-      needsYou: visible(data.needsYou),
+      needsYou: importantFirst(visible(data.needsYou), (thread) =>
+        isImportant(thread.account?.id ?? emailAccountId, thread.fromEmail),
+      ),
       waitingOnYou: visibleWaitingOnYou,
       waiting: visible(data.waiting),
       alsoInInbox: visibleAlsoInInbox,
       reading: visible(data.reading),
     };
-  }, [data, hidden, visibleWaitingOnYou, visibleAlsoInInbox]);
+  }, [
+    data,
+    hidden,
+    visibleWaitingOnYou,
+    visibleAlsoInInbox,
+    isImportant,
+    emailAccountId,
+  ]);
   const notice =
     data && lanes && !earlierDay
       ? cueNotice(data.cue, emailAccountId, {
@@ -1622,6 +1637,16 @@ function formatCount(count: number, capped: boolean) {
 /** A row's key for its actions: across accounts it names the account. */
 function rowKey(thread: TodayThread) {
   return getListThreadKey({ id: thread.threadId, account: thread.account });
+}
+
+/** Rows from Important people first, each group in its own order. */
+function importantFirst(
+  threads: TodayThread[],
+  important: (thread: TodayThread) => boolean,
+) {
+  const starred = threads.filter(important);
+  if (starred.length === 0) return threads;
+  return [...starred, ...threads.filter((thread) => !important(thread))];
 }
 
 /** Moves a conversation between Needs reply and the rest of the inbox. */

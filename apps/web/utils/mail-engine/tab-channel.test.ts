@@ -4,6 +4,7 @@ import {
   mailClientSupports,
 } from "@inboxzero/mail-core/capabilities";
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import { supportsImportantPeople } from "@inboxzero/mail-core/important-people";
 import type { QueryHandle, QuerySnapshot } from "@inboxzero/mail-core/queries";
 import {
   bindTabMailOwner,
@@ -235,6 +236,46 @@ describe("mail engine tab channel capability handshake", () => {
 
     expect(owner.capabilities).toContain("method:queryPersonCard");
     expect(owner.capabilities).not.toContain("method:searchSemantic");
+  });
+
+  it("stars through the owner's engine, and hides stars behind an owner without them", async () => {
+    const stars: unknown[] = [];
+    const current = createMemoryTabBus();
+    bindTabMailOwner({
+      client: {
+        ...stubClient({}),
+        async queryImportantPeople() {
+          return stars;
+        },
+        async setImportantPerson(input: unknown) {
+          stars.push(input);
+        },
+      } as never,
+      bus: current,
+    });
+    const follower = createTabFollowerClient({
+      accountId: "acc-1",
+      bus: current,
+      capabilities: (await helloOwner(current, "acc-1")).capabilities,
+    });
+    expect(supportsImportantPeople(follower)).toBe(true);
+    await follower.setImportantPerson?.({
+      accountIds: ["acc-1"],
+      email: "dana@example.com",
+      important: true,
+    });
+    expect(await follower.queryImportantPeople?.(["acc-1"])).toHaveLength(1);
+    disposeTabFollowerClient(follower);
+
+    const older = createMemoryTabBus();
+    bindOlderOwner(older);
+    const behindOlder = createTabFollowerClient({
+      accountId: "acc-1",
+      bus: older,
+      capabilities: (await helloOwner(older, "acc-1")).capabilities,
+    });
+    expect(supportsImportantPeople(behindOlder)).toBe(false);
+    disposeTabFollowerClient(behindOlder);
   });
 
   it("assumes the baseline behind an owner tab that predates reporting", async () => {

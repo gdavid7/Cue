@@ -54,6 +54,10 @@ import type {
   ProviderChange,
   SyncPage,
 } from "../sync";
+import type {
+  ImportantPerson,
+  SetImportantPersonInput,
+} from "../important-people";
 import type { MessageAttachmentDescriptor, MessageMetadata } from "../messages";
 
 export type ConversationView = {
@@ -492,6 +496,7 @@ export interface MailStore {
    * only the server can still stop.
    */
   readHeldSend(key: OperationKey): Promise<PreparedOperation | null>;
+  readImportantPeople(accountIds: string[]): Promise<ImportantPerson[]>;
   readMailboxCounts(query: MailboxCountsQuery): Promise<{
     revision: LocalRevision;
     view: MailboxCountsView;
@@ -585,6 +590,8 @@ export interface MailStore {
     scopeId: string;
     seenMessageIds: string[];
   }): Promise<LocalRevision>;
+  /** Rejects an input without a valid address. */
+  writeImportantPerson(input: SetImportantPersonInput): Promise<void>;
   writeMessageEmbeddings(input: {
     model: string;
     embeddings: MessageEmbedding[];

@@ -263,6 +263,7 @@
   ],
   "person-card.spec.ts": [
     "components/person-card/PersonCard.tsx",
+    "hooks/useImportantPeople.ts",
     "components/email-list/EmailMessage.tsx",
     "components/email-list/EmailDetails.tsx",
     "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"

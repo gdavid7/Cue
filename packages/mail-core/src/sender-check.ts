@@ -124,7 +124,11 @@ function domainOf(address: string) {
   return address.slice(address.lastIndexOf("@") + 1);
 }
 
-/** An address as every part of the sender check compares it. */
+/**
+ * An address as every part of the sender check compares it. Takes a bare
+ * address; `normalizeImportantPersonAddress` builds on this to also accept a
+ * `Name <address>` header and reject what isn't an address.
+ */
 export function normalizeAddress(address: string) {
   return address.trim().toLowerCase();
 }

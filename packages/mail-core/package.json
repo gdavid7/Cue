@@ -29,6 +29,7 @@
     "./engine": "./src/engine.ts",
     "./canonical": "./src/canonical.ts",
     "./capabilities": "./src/capabilities.ts",
+    "./important-people": "./src/important-people.ts",
     "./subscriptions": "./src/subscriptions.ts",
     "./ports/mailbox-source": "./src/ports/mailbox-source.ts",
     "./ports/operation-executor": "./src/ports/operation-executor.ts",

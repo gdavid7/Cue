@@ -37,6 +37,10 @@ import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
 import { webCryptoSha256 } from "./canonical";
 import type { MailEngineCapabilities } from "./capabilities";
+import type {
+  ImportantPerson,
+  SetImportantPersonInput,
+} from "./important-people";
 import {
   extractProviderSearches,
   resolveSearchPredicates,
@@ -212,6 +216,13 @@ export type MailClient = {
   queryWaitingOnYou?(
     query: WaitingOnYouQuery,
   ): Promise<WaitingOnYouConversation[]>;
+  /** The people the user starred as Important in these accounts. */
+  queryImportantPeople?(accountIds: string[]): Promise<ImportantPerson[]>;
+  /**
+   * Stars or unstars someone as Important in each of the given accounts, on
+   * this device only. Hosts that don't keep stars leave it out.
+   */
+  setImportantPerson?(input: SetImportantPersonInput): Promise<void>;
   /**
    * Finds mail by meaning, from vectors this device made of recent mail.
    * Resolves no matches while the account has none. Only hosts that run
@@ -415,6 +426,12 @@ export function createMailEngine(input: {
     },
     queryWaitingOnYou(query) {
       return store.readWaitingOnYou(query);
+    },
+    queryImportantPeople(accountIds) {
+      return store.readImportantPeople(accountIds);
+    },
+    setImportantPerson(input) {
+      return store.writeImportantPerson(input);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);

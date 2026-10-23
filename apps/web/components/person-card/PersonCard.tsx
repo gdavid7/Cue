@@ -8,7 +8,12 @@ import {
   useState,
 } from "react";
 import useSWR from "swr";
-import { FileTextIcon, SearchIcon, SquarePenIcon } from "lucide-react";
+import {
+  FileTextIcon,
+  SearchIcon,
+  SquarePenIcon,
+  UserStarIcon,
+} from "lucide-react";
 import {
   PERSON_CARD_CONVERSATION_LIMIT,
   type PersonCard as PersonCardData,
@@ -35,8 +40,13 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toastError } from "@/components/Toast";
 import { SystemType } from "@/generated/prisma/enums";
 import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  useImportantPeople,
+  useSetImportantPerson,
+} from "@/hooks/useImportantPeople";
 import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
 import { useComposeModal } from "@/providers/ComposeModalProvider";
 import type { EmailLabels } from "@/providers/email-label-types";
@@ -344,6 +354,7 @@ function PersonCardBody({
             </p>
           ))}
         </div>
+        <ImportantToggle accountIds={scope.accountIds} email={email} />
       </header>
       <div className="flex gap-2 px-4 pb-3">
         <Button
@@ -395,6 +406,55 @@ function PersonCardBody({
         <Note>Your mail history with them isn&apos;t available here.</Note>
       )}
     </div>
+  );
+}
+
+/**
+ * Marks someone as Important in the card's accounts (every account All
+ * inboxes includes): while a Cue tab is open their mail notifies whatever
+ * triage made of it, and it leads Today. On when they're Important in any
+ * of those accounts; hidden where the engine can't keep stars.
+ */
+function ImportantToggle({
+  email,
+  accountIds,
+}: {
+  email: string;
+  accountIds: string[];
+}) {
+  const { supported, isImportant } = useImportantPeople(accountIds);
+  const setImportantPerson = useSetImportantPerson();
+  if (!supported) return null;
+  const important = accountIds.some((accountId) =>
+    isImportant(accountId, email),
+  );
+  // A native hint, not a tooltip layer: that would take the first Escape and
+  // leave the card open.
+  return (
+    <Button
+      aria-label="Important"
+      aria-pressed={important}
+      title={important ? "Remove from important" : "Mark as important"}
+      className="-mt-1 -mr-2 relative size-8 shrink-0 text-muted-foreground transition-transform duration-100 ease-out before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100 aria-pressed:bg-amber-500/10 aria-pressed:text-amber-600 dark:aria-pressed:text-amber-400"
+      onClick={() => {
+        setImportantPerson({
+          accountIds,
+          email,
+          important: !important,
+        }).catch(() =>
+          toastError({
+            description: "Couldn't update Important on this device.",
+          }),
+        );
+      }}
+      size="icon"
+      variant="ghost"
+    >
+      <UserStarIcon
+        aria-hidden
+        className="size-4 transition-colors duration-150 motion-reduce:transition-none"
+      />
+    </Button>
   );
 }
 

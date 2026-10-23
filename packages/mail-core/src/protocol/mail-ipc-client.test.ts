@@ -35,6 +35,7 @@ describe("mail IPC capability handshake", () => {
         "predicate:conversation",
         "method:forgetDeletedDrafts",
         "method:queryWaitingOnYou",
+        "method:setImportantPerson",
       ],
     });
 
@@ -43,6 +44,8 @@ describe("mail IPC capability handshake", () => {
     expect(mailClientSupports(client, "method:forgetDeletedDrafts")).toBe(true);
     // Reported, but this page's client has no way to ask for it.
     expect(mailClientSupports(client, "method:queryWaitingOnYou")).toBe(false);
+    // IPC v1 relays no Important stars, so the person card hides its star.
+    expect(mailClientSupports(client, "method:setImportantPerson")).toBe(false);
   });
 
   it("keeps sending requests an engine that predates reporting accepts", async () => {

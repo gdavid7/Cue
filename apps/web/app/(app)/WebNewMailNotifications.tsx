@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { supportsImportantPeople } from "@inboxzero/mail-core/important-people";
 import type { Coverage, MailboxView } from "@inboxzero/mail-core/queries";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -104,6 +105,10 @@ export function WebNewMailNotifications() {
     );
   };
 
+  // Read for each batch of new mail, so a star set a moment ago counts.
+  const clientRef = useRef(client);
+  clientRef.current = client;
+
   const active = !isDesktopApp && permission === "granted" && mode !== "off";
   const notifierRef =
     useRef<ReturnType<typeof createNewMailNotifier>>(undefined);
@@ -148,6 +153,11 @@ export function WebNewMailNotifications() {
             ),
         }),
       loadBulkMessageIds,
+      loadImportantPeople: async (accountIds) => {
+        const current = clientRef.current;
+        if (!supportsImportantPeople(current)) return null;
+        return current.queryImportantPeople(accountIds);
+      },
       triageSettleMs: TRIAGE_SETTLE_MS,
     });
     notifierRef.current = notifier;

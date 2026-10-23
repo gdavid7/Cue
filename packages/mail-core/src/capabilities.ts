@@ -82,6 +82,8 @@ const OPTIONAL_METHODS = {
   queryFiles: true,
   queryFileSenders: true,
   queryFilesNotOnDevice: true,
+  queryImportantPeople: true,
+  setImportantPerson: true,
   searchSemantic: true,
   observeMailboxWindow: true,
   ensureAccount: true,

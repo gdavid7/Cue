@@ -52,7 +52,9 @@ export type TabMailMessage =
   | { type: "unobserve"; id: string; handleId: string }
   | { type: "ok"; id: string; value?: unknown }
   | { type: "error"; id: string; message: string }
-  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> };
+  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> }
+  /** A tab changed an Important star; others read stars again. */
+  | { type: "importantPeopleChanged" };
 
 export type TabMailBus = {
   post(message: TabMailMessage): void;
@@ -346,6 +348,11 @@ export function createTabFollowerClient(input: {
     queryFilesNotOnDevice: (accountIds) =>
       call("queryFilesNotOnDevice", [accountIds]) as never,
     queryWaitingOnYou: (query) => call("queryWaitingOnYou", [query]) as never,
+    queryImportantPeople: (accountIds) =>
+      call("queryImportantPeople", [accountIds]) as never,
+    setImportantPerson: async (input) => {
+      await call("setImportantPerson", [input]);
+    },
     searchSemantic: (query) => call("searchSemantic", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),

@@ -31,6 +31,7 @@ vi.mock("@/hooks/useSentMessageOpens", () => ({
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ThreadRow", () => ({
   ThreadRow: ({ thread }: { thread: { id: string } }) => <div>{thread.id}</div>,
+  isFromImportantPerson: () => false,
 }));
 
 type Item = { id: string; day: string };

@@ -9,7 +9,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import {
+  isFromImportantPerson,
+  ThreadRow,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import type { ListThread } from "@/app/(app)/[emailAccountId]/mail/types";
 import { formatShortDate } from "@/utils/date";
@@ -192,6 +195,36 @@ describe("ThreadRow", () => {
     expect(screen.getByRole("option").textContent).toContain("Unread");
   });
 
+  it("marks mail from an important person, for screen readers too", () => {
+    renderRow({ fromImportantPerson: true });
+
+    expect(screen.getByTestId("important-person-marker")).toBeTruthy();
+    expect(screen.getByRole("option").textContent).toContain(
+      "From an important person",
+    );
+  });
+
+  it("counts the people a conversation is from, not the user's own draft", () => {
+    const starred = (accountId: string, from: string) =>
+      accountId === "acc-1" && from === "david@example.com";
+
+    expect(isFromImportantPerson(thread(), "acc-1", starred)).toBe(false);
+    expect(
+      isFromImportantPerson(
+        thread(),
+        "acc-1",
+        (accountId, from) => accountId === "acc-1" && from.includes("kevin"),
+      ),
+    ).toBe(true);
+    expect(
+      isFromImportantPerson(
+        thread(),
+        "acc-2",
+        (accountId, from) => accountId === "acc-1" && from.includes("kevin"),
+      ),
+    ).toBe(false);
+  });
+
   it("selects on a touch hold without also opening the conversation", () => {
     vi.useFakeTimers();
     const onOpen = vi.fn();
@@ -371,16 +404,19 @@ function renderRow({
   unread = false,
   insightData,
   rowActions,
+  fromImportantPerson,
 }: {
   onOpen?: (index: number) => void;
   onToggleSelect?: (index: number) => void;
   unread?: boolean;
   insightData?: ThreadInsightData;
   rowActions?: ThreadRowActionHandlers;
+  fromImportantPerson?: boolean;
 } = {}) {
   const base = thread();
   return render(
     <ThreadRow
+      fromImportantPerson={fromImportantPerson}
       hasAnySelection={false}
       index={0}
       insightData={insightData}

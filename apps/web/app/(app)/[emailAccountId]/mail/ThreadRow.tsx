@@ -5,6 +5,7 @@ import {
   MailIcon,
   MailOpenIcon,
   PaperclipIcon,
+  UserStarIcon,
 } from "lucide-react";
 import {
   type DragEvent,
@@ -88,6 +89,8 @@ export type ThreadRowProps = {
   inInbox?: boolean;
   /** Hover actions on wide rows; touch layouts use selection instead. */
   rowActions?: ThreadRowActionHandlers;
+  /** Someone in the conversation is starred as Important for its account. */
+  fromImportantPerson?: boolean;
   /** Makes the row draggable onto the sidebar; touch keeps the pickers. */
   onDragStart?: (index: number, event: DragEvent<HTMLElement>) => void;
   onDragEnd?: () => void;
@@ -116,6 +119,7 @@ export const ThreadRow = memo(function ThreadRow({
   accountColorClassName,
   inInbox,
   rowActions,
+  fromImportantPerson = false,
   onDragStart,
   onDragEnd,
 }: ThreadRowProps) {
@@ -329,6 +333,18 @@ export const ThreadRow = memo(function ThreadRow({
           onOpen={onOpen}
           onSelectRangeTo={onSelectRangeTo}
           onToggleSelect={onToggleSelect}
+          participantMarker={
+            fromImportantPerson ? (
+              <>
+                <span className="sr-only">From an important person,</span>
+                <UserStarIcon
+                  aria-hidden
+                  className="size-3.5 shrink-0 self-center text-amber-600 dark:text-amber-400"
+                  data-testid="important-person-marker"
+                />
+              </>
+            ) : null
+          }
           participantSummary={participantSummary}
           renderSelectionControl={({
             ariaLabel,
@@ -379,6 +395,22 @@ export const ThreadRow = memo(function ThreadRow({
     </div>
   );
 });
+
+/**
+ * Whether a conversation has mail from someone starred as Important in its
+ * account. A row's own drafts don't count.
+ */
+export function isFromImportantPerson(
+  thread: ListThread,
+  accountId: string,
+  isImportant: (accountId: string, addressOrHeader: string) => boolean,
+) {
+  return thread.messages.some(
+    (message) =>
+      !message.labelIds?.includes(GmailLabel.DRAFT) &&
+      isImportant(accountId, message.headers.from),
+  );
+}
 
 /**
  * What a swipe will do, revealed behind the row as it moves: muted until the

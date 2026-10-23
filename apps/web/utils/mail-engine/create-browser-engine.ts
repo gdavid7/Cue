@@ -383,6 +383,10 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "queryFilesNotOnDevice", [accountIds]),
     queryWaitingOnYou: (query) =>
       callWorker(worker, pending, "queryWaitingOnYou", [query]),
+    queryImportantPeople: (accountIds) =>
+      callWorker(worker, pending, "queryImportantPeople", [accountIds]),
+    setImportantPerson: (input) =>
+      callWorker<void>(worker, pending, "setImportantPerson", [input]),
     searchSemantic: (query) =>
       callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),

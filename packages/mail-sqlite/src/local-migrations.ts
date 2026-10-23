@@ -29,4 +29,5 @@ export const LOCAL_MIGRATIONS = {
     id: 17,
     name: "0017-conversation-message-keys",
   },
+  importantPeople: { id: 18, name: "0018-important-people" },
 } as const;
