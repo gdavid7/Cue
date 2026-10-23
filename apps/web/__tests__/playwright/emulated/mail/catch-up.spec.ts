@@ -375,11 +375,40 @@ test("works through the All inboxes Inbox tab and Today across accounts, acting 
       "catch-up-today-all-accounts-dark",
     );
     await page.emulateMedia({ colorScheme: "light" });
-    const todayBefore = countFor(operations, todayAccount);
-    await press(page, "e", todayCard, "archive", tokens[todayAccount]);
+    // Keep cards until one is a conversation Today lists, then archive it:
+    // its row leaves Today, and Z in Catch up brings it back.
+    const todayLeft = await leftCount(todayDialog);
+    let listed:
+      | { card: { messageId: string; threadId: string }; account: string }
+      | undefined;
+    for (let step = 0; step < todayLeft; step++) {
+      const card = step === 0 ? todayCard : await currentCard(todayDialog);
+      const account =
+        step === 0 ? todayAccount : await cardAccount(todayDialog);
+      if (await todayRow(page, account, card.threadId).count()) {
+        listed = { card, account };
+        break;
+      }
+      if (step === todayLeft - 1) break;
+      await press(page, "s", card, "keep", tokens[account]);
+      await expect
+        .poll(
+          async () =>
+            `${await cardAccount(todayDialog)}:${(await currentCard(todayDialog)).threadId}`,
+        )
+        .not.toBe(`${account}:${card.threadId}`);
+    }
+    if (!listed)
+      throw new Error("No Catch up card is a conversation Today lists");
+    const row = todayRow(page, listed.account, listed.card.threadId);
+    const todayBefore = countFor(operations, listed.account);
+    await press(page, "e", listed.card, "archive", tokens[listed.account]);
     await expect
-      .poll(() => countFor(operations, todayAccount), { timeout: 60_000 })
+      .poll(() => countFor(operations, listed.account), { timeout: 60_000 })
       .toBeGreaterThan(todayBefore);
+    await expect(row).toHaveCount(0);
+    await page.keyboard.press("z");
+    await expect(row).toHaveCount(1, { timeout: 60_000 });
     await page.keyboard.press("Escape");
     await expect(todayDialog).toBeHidden();
   } finally {
@@ -388,6 +417,11 @@ test("works through the All inboxes Inbox tab and Today across accounts, acting 
     await deleteSecondEmailAccount(second.accountId);
   }
 });
+
+/** Today's row for a conversation, keyed across accounts by its account. */
+function todayRow(page: Page, accountId: string, threadId: string) {
+  return page.locator(`[data-today-thread="${accountId}:${threadId}"]`);
+}
 
 async function openCatchUp(page: Page) {
   const entry = page.locator("[data-catch-up-entry]");

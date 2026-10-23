@@ -56,6 +56,7 @@ import type {
   ThreadActionOutcome,
   useThreadActions,
 } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
+import { useFailedAccountIds } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import { Kbd } from "@/components/Kbd";
 import { Button } from "@/components/ui/button";
 import {
@@ -85,6 +86,7 @@ import type { ThreadsQuery } from "@/utils/threads/validation";
 
 const UNDO_WINDOW_MS = 10_000;
 const NOTHING_SET_ASIDE: Record<string, CatchUpSetAside> = {};
+const NO_ACCOUNT_IDS: string[] = [];
 // Past the batch, room for conversations acted on in earlier batches that
 // the mailbox may still show.
 const MAX_BATCH_READ = 100;
@@ -103,10 +105,27 @@ type CatchUpActions = Pick<
  * All inboxes, where Catch up walks the Inbox tab of every included account
  * in one order.
  */
-export type CatchUpAllInboxes = {
+type CatchUpAllInboxes = {
   accounts: Array<{ id: string; email: string }>;
   /** Included accounts whose first sync in this browser is still running. */
   waitingAccountIds: string[];
+  /** Included accounts the mail engine can't reach. */
+  failedAccountIds: string[];
+};
+
+/**
+ * The accounts a view shows together, for Catch up across them. A view that
+ * already reads their inboxes from the mail engine passes what it knows of
+ * them; otherwise Catch up reads that itself, and only while it's offered.
+ */
+export type CatchUpAccounts = {
+  accounts: CatchUpAllInboxes["accounts"];
+  engine?: CatchUpEngineStatus;
+};
+
+type CatchUpEngineStatus = {
+  /** Included accounts with no finished sync in this browser yet. */
+  firstSyncAccountIds: string[];
   /** Included accounts the mail engine can't reach. */
   failedAccountIds: string[];
 };
@@ -121,36 +140,11 @@ type CatchUpProps = {
   /** Starts the existing reply flow for the conversation, after the overlay closes. */
   onReply: (item: CatchUpItem) => void;
   /**
-   * A conversation whose archive or snooze was queued, with the copies it
-   * reached, for a view that hides rows itself.
+   * A conversation whose archive or snooze was queued, for a view that hides
+   * rows itself. Its copies in the refused accounts were left as they were.
    */
-  onRemoved?: (item: CatchUpItem) => void;
+  onRemoved?: (item: CatchUpItem, refusedAccountIds: string[]) => void;
 };
-
-/**
- * All inboxes' Catch up for the accounts a view shows together, from the
- * mail engine's view of their inboxes; undefined for one account's view.
- */
-export function useCatchUpAllInboxes(
-  accounts: CatchUpAllInboxes["accounts"] | null,
-  engine: { firstSyncAccountIds: string[]; failedAccountIds: string[] },
-): CatchUpAllInboxes | undefined {
-  const { firstSyncAccountIds, failedAccountIds } = engine;
-  return useMemo(
-    () =>
-      accounts
-        ? {
-            accounts,
-            // An account the engine can't reach is named as failed alone.
-            waitingAccountIds: firstSyncAccountIds.filter(
-              (accountId) => !failedAccountIds.includes(accountId),
-            ),
-            failedAccountIds,
-          }
-        : undefined,
-    [accounts, failedAccountIds, firstSyncAccountIds],
-  );
-}
 
 type LastAction = {
   item: CatchUpItem;
@@ -164,15 +158,19 @@ type LastAction = {
  */
 export function CatchUpEntry({
   className,
-  ...props
-}: CatchUpProps & { className?: string }) {
+  allInboxes: shownAccounts,
+  ...entryProps
+}: Omit<CatchUpProps, "allInboxes"> & {
+  className?: string;
+  allInboxes?: CatchUpAccounts;
+}) {
   const { data: user } = useUser();
   const windowOpen = Boolean(user && isGetStartedWindowOpen(user, new Date()));
   const [open, setOpen] = useState(false);
   // Acted on from earlier batches on this page, which the mailbox may not
   // reflect yet when the next batch starts.
   const actedKeys = useRef(new Set<string>());
-  const { subscribeRestored } = props.actions;
+  const { subscribeRestored } = entryProps.actions;
   // A restored conversation is unread in the tab again, so a later batch
   // may offer it.
   useEffect(
@@ -183,17 +181,19 @@ export function CatchUpEntry({
     [subscribeRestored],
   );
   const client = useOptionalMailClient();
+  // In All inboxes a card must reach every copy of its message, which takes
+  // an engine that can match a Message-ID; an older desktop build, or an
+  // older tab owning the engine, can't, so Catch up isn't offered there.
+  const offered =
+    !shownAccounts ||
+    mailClientSupports(client, "predicate:internet_message_id");
+  const allInboxes = useCatchUpAllInboxes(shownAccounts, offered && windowOpen);
+  const props: CatchUpProps = { ...entryProps, allInboxes };
   const reading = useCatchUpScope(props, windowOpen);
   const counterQuery = useMemo(
     () => unreadQuery(reading.accountIds, reading.predicate, 1),
     [reading.accountIds, reading.predicate],
   );
-  // In All inboxes a card must reach every copy of its message, which takes
-  // an engine that can match a Message-ID; an older desktop build, or an
-  // older tab owning the engine, can't, so Catch up isn't offered there.
-  const offered =
-    !props.allInboxes ||
-    mailClientSupports(client, "predicate:internet_message_id");
   const counted =
     offered &&
     windowOpen &&
@@ -454,7 +454,7 @@ function CatchUpBody({
           source: "shortcut",
           shortcut: ACTION_KEYS[action].toLowerCase(),
         });
-      if (action !== "keep") onRemoved?.(item);
+      if (action !== "keep") onRemoved?.(item, outcome.refusedAccountIds);
       return;
     }
     // Nothing changed (the view's toast says why): the card comes back.
@@ -894,6 +894,67 @@ function useCatchUpScope(
         ),
     ),
   };
+}
+
+/**
+ * All inboxes' Catch up for the accounts a view shows together: those whose
+ * first sync is still running wait, and those the engine can't reach are
+ * left out and named. Read from the engine, a row at a time, when the view
+ * doesn't already know.
+ */
+function useCatchUpAllInboxes(
+  shown: CatchUpAccounts | undefined,
+  enabled: boolean,
+): CatchUpAllInboxes | undefined {
+  const client = useOptionalMailClient();
+  const accounts = shown?.accounts;
+  const accountIds = useMemo(
+    () => accounts?.map((account) => account.id) ?? [],
+    [accounts],
+  );
+  const reads =
+    enabled && Boolean(client) && !shown?.engine && accountIds.length > 0;
+  const inboxQuery = useMemo<ConversationQuery>(
+    () => ({
+      accountIds,
+      predicate: { kind: "mailbox", mailbox: "inbox" },
+      order: "newest_first",
+      pageSize: 1,
+      after: null,
+    }),
+    [accountIds],
+  );
+  const inbox = useMailboxWindow(inboxQuery, { client, enabled: reads });
+  const view = reads && inbox.status === "ready" ? inbox.data : null;
+  const firstSyncKey = view
+    ? getFirstSyncAccountIds(accountIds, view.coverage).join("\n")
+    : "";
+  const readFirstSync = useMemo(
+    () => (firstSyncKey ? firstSyncKey.split("\n") : NO_ACCOUNT_IDS),
+    [firstSyncKey],
+  );
+  const readFailed = useFailedAccountIds(
+    reads ? client : null,
+    accountIds,
+    view?.connection,
+  );
+  const firstSyncAccountIds =
+    shown?.engine?.firstSyncAccountIds ?? readFirstSync;
+  const failedAccountIds = shown?.engine?.failedAccountIds ?? readFailed;
+  return useMemo(
+    () =>
+      accounts
+        ? {
+            accounts,
+            // An account the engine can't reach is named as failed alone.
+            waitingAccountIds: firstSyncAccountIds.filter(
+              (accountId) => !failedAccountIds.includes(accountId),
+            ),
+            failedAccountIds,
+          }
+        : undefined,
+    [accounts, failedAccountIds, firstSyncAccountIds],
+  );
 }
 
 /**

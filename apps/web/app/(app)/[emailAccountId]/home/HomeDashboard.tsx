@@ -30,8 +30,8 @@ import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInb
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import {
+  type CatchUpAccounts,
   CatchUpEntry,
-  useCatchUpAllInboxes,
 } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
 import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import {
@@ -40,7 +40,6 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
 import { useThreadActions } from "@/app/(app)/[emailAccountId]/mail/use-thread-actions";
-import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import { PlaceholderRow } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -65,7 +64,6 @@ import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import {
   engineProvider,
   registerEngineAccounts,
@@ -193,9 +191,7 @@ export function HomeDashboard() {
         .filter((account) => account.id !== emailAccountId)
         .map((account) => ({
           accountId: account.id,
-          provider: isMicrosoftProvider(account.provider)
-            ? "microsoft"
-            : "google",
+          provider: engineProvider(account.provider),
         })),
     ).catch(() => undefined);
   }, [allInboxesAccounts, emailAccountId, mailClient]);
@@ -430,14 +426,15 @@ export function HomeDashboard() {
   // of the card, which reports only its own key, brings them back.
   const caughtUpCopyKeys = useRef(new Map<string, string[]>());
   const showThreads = useCallback((threadIds: string[]) => {
+    const keys = new Set(threadIds);
+    for (const threadId of threadIds) {
+      for (const key of caughtUpCopyKeys.current.get(threadId) ?? [])
+        keys.add(key);
+      caughtUpCopyKeys.current.delete(threadId);
+    }
     setHidden((current) => {
       const next = new Set(current);
-      for (const threadId of threadIds) {
-        next.delete(threadId);
-        for (const key of caughtUpCopyKeys.current.get(threadId) ?? [])
-          next.delete(key);
-        caughtUpCopyKeys.current.delete(threadId);
-      }
+      for (const key of keys) next.delete(key);
       return next;
     });
   }, []);
@@ -459,38 +456,34 @@ export function HomeDashboard() {
 
   // Catch up reports a conversation once its archive or snooze has been
   // queued. Across accounts it walks the Inbox tab of All inboxes, keyed as
-  // Today's rows are, and a card acts on every copy of its message.
-  const allInboxesProviders = useMemo(
-    () =>
-      new Map(
-        (allInboxesAccounts ?? []).map((account) => [
-          account.id,
-          engineProvider(account.provider),
-        ]),
-      ),
+  // Today's rows are, and a card acts on every copy of its message; a copy
+  // in an account that refused stays.
+  const catchUpAccounts = useMemo<CatchUpAccounts | undefined>(
+    () => (allInboxesAccounts ? { accounts: allInboxesAccounts } : undefined),
     [allInboxesAccounts],
   );
-  const allInboxesEngine = useEngineMailThreads({
-    emailAccountId,
-    accountIds: localAccountIds,
-    providers: allInboxesProviders,
-    query: INBOX_QUERY,
-    enabled: Boolean(allInboxesAccounts?.length),
-  });
-  const catchUpAllInboxes = useCatchUpAllInboxes(
-    allInboxesAccounts,
-    allInboxesEngine,
+  const hideCaughtUp = useCallback(
+    (item: CatchUpItem, refusedAccountIds: string[]) => {
+      const removed = [
+        { key: item.key, accountId: item.accountId, threadId: item.threadId },
+        ...item.copies.map((copy) => ({
+          key: getListThreadKey({
+            id: copy.threadId,
+            account: { id: copy.accountId },
+          }),
+          accountId: copy.accountId,
+          threadId: copy.threadId,
+        })),
+      ].filter(({ accountId }) => !refusedAccountIds.includes(accountId));
+      const keys = removed.map(({ key }) => key);
+      const copyKeys = keys.filter((key) => key !== item.key);
+      if (copyKeys.length) caughtUpCopyKeys.current.set(item.key, copyKeys);
+      setHidden((current) => new Set([...current, ...keys]));
+      for (const { accountId, threadId } of removed)
+        removeFromCachedToday(accountId, [threadId]);
+    },
+    [],
   );
-  const hideCaughtUp = useCallback((item: CatchUpItem) => {
-    const copyKeys = item.copies.map((copy) =>
-      getListThreadKey({ id: copy.threadId, account: { id: copy.accountId } }),
-    );
-    if (copyKeys.length) caughtUpCopyKeys.current.set(item.key, copyKeys);
-    setHidden((current) => new Set([...current, item.key, ...copyKeys]));
-    removeFromCachedToday(item.accountId, [item.threadId]);
-    for (const copy of item.copies)
-      removeFromCachedToday(copy.accountId, [copy.threadId]);
-  }, []);
 
   const threadHref = useCallback(
     (thread: { threadId: string; account?: { id: string } }, reply = false) => {
@@ -818,7 +811,7 @@ export function HomeDashboard() {
 
       <CatchUpEntry
         actions={threadActions}
-        allInboxes={catchUpAllInboxes}
+        allInboxes={catchUpAccounts}
         emailAccountId={emailAccountId}
         onRemoved={hideCaughtUp}
         onReply={(item) =>
@@ -826,9 +819,7 @@ export function HomeDashboard() {
             threadHref(
               {
                 threadId: item.threadId,
-                ...(catchUpAllInboxes
-                  ? { account: { id: item.accountId } }
-                  : {}),
+                account: catchUpAccounts ? { id: item.accountId } : undefined,
               },
               true,
             ),
