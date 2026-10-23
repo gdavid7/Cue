@@ -261,7 +261,7 @@ test("a new mailbox shows Waiting on you across accounts before Today answers, a
   }
 });
 
-test("mail another account lists in Needs reply shows once there, below Waiting on you", async ({
+test("mail another account may list in Needs reply waits for it, then shows once there, below Waiting on you", async ({
   page,
 }, testInfo) => {
   test.setTimeout(360_000);
@@ -326,27 +326,29 @@ test("mail another account lists in Needs reply shows once there, below Waiting 
     await page.goto(`/${primaryId}/home?accounts=all`, {
       waitUntil: "domcontentloaded",
     });
-    // The primary's other unchecked rows show; the copy waits for the
-    // account that may list it in Needs reply.
-    const firstOption = waitingOnYou.getByRole("option").first();
-    await expect(firstOption).toBeVisible({ timeout: 90_000 });
+    // Every message in the primary's inbox is in the shared account's too,
+    // whose Needs reply may list it: until that answers, none shows here.
+    await expect(
+      page.getByRole("main").getByRole("status").first(),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(waitingOnYou).toHaveCount(0);
     await expect(copies).toHaveCount(0);
-    const before = await firstOption.boundingBox();
-    expect(before).not.toBeNull();
+    await capturePlaywrightCheckpoint(page, testInfo, "today-all-copies-held");
 
     release();
     const listed = needsReply.locator(
       `[data-today-thread="${shared.id}:${seeded.threadId}"]`,
     );
     await expect(listed).toBeVisible({ timeout: 60_000 });
-    // Once on Today, in Needs reply, with Waiting on you where it was above.
+    // The rest join Waiting on you, above Needs reply; this one shows once,
+    // in Needs reply.
+    await expect(waitingOnYou.getByRole("option").first()).toBeVisible({
+      timeout: 60_000,
+    });
     await expect(copies).toHaveCount(1);
-    expect((await firstOption.boundingBox())?.y).toBeCloseTo(
-      before?.y ?? -1,
-      0,
-    );
+    const waitingOnYouBox = await waitingOnYou.boundingBox();
     const needsReplyBox = await needsReply.boundingBox();
-    expect(needsReplyBox?.y ?? 0).toBeGreaterThan(before?.y ?? 0);
+    expect(needsReplyBox?.y ?? 0).toBeGreaterThan(waitingOnYouBox?.y ?? 0);
     await capturePlaywrightCheckpoint(
       page,
       testInfo,
