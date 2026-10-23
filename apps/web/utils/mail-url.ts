@@ -45,6 +45,7 @@ const TYPE_SEGMENTS: Record<string, string> = {
   starred: "starred",
   important: "important",
   snoozed: "snoozed",
+  muted: "muted",
   scheduled: "scheduled",
   all: "all",
   spam: "spam",

@@ -26,6 +26,12 @@ export function createNewMailNotifier(deps: {
    * account, or null when they can't be loaded.
    */
   loadBulkMessageIds: (accountId: string) => Promise<Set<string> | null>;
+  /**
+   * Thread ids the reader muted for an account, or null when they can't be
+   * loaded. The server archives a muted conversation's new mail, but the tab
+   * can see it in the inbox first.
+   */
+  loadMutedThreadIds: (accountId: string) => Promise<Set<string> | null>;
   /** Triage runs after mail arrives, so "important" waits for it. */
   triageSettleMs: number;
 }) {
@@ -43,6 +49,22 @@ export function createNewMailNotifier(deps: {
       !deps.isQuiet() &&
       deps.isLeader() &&
       !deps.isForeground()
+    );
+  }
+
+  async function dropMuted(conversations: TrackedConversation[]) {
+    const accountIds = [...new Set(conversations.map((c) => c.accountId))];
+    const mutedByAccount = new Map(
+      await Promise.all(
+        accountIds.map(
+          async (accountId) =>
+            [accountId, await deps.loadMutedThreadIds(accountId)] as const,
+        ),
+      ),
+    );
+    return conversations.filter(
+      (conversation) =>
+        !mutedByAccount.get(conversation.accountId)?.has(conversation.threadId),
     );
   }
 
@@ -82,7 +104,11 @@ export function createNewMailNotifier(deps: {
       if (fresh.length === 0 || !canNotify()) return;
 
       if (deps.getMode() === "all") {
-        deps.notify(fresh);
+        dropMuted(fresh)
+          .then((unmuted) => {
+            if (unmuted.length > 0 && canNotify()) deps.notify(unmuted);
+          })
+          .catch(() => undefined);
         return;
       }
       // One timer and one triage lookup per account for everything that
@@ -93,7 +119,8 @@ export function createNewMailNotifier(deps: {
         timer = undefined;
         const batch = pending.splice(0);
         if (!canNotify()) return;
-        dropBulk(batch)
+        dropMuted(batch)
+          .then(dropBulk)
           .then((important) => {
             if (important.length > 0 && canNotify()) deps.notify(important);
           })

@@ -3,6 +3,7 @@
 import {
   ArchiveIcon,
   ArrowBigUpIcon,
+  BellOffIcon,
   CornerUpLeftIcon,
   ArchiveRestoreIcon,
   ExternalLinkIcon,
@@ -57,6 +58,8 @@ export type ThreadActionsMenuProps = {
   /** Gmail only: Outlook has no per-thread importance in the mail engine. */
   onToggleImportant?: () => void;
   onMarkSpam: () => void;
+  /** Archives now and keeps the conversation's new mail out of the inbox. */
+  onMute?: () => void;
   onDelete: () => void;
   onLabel?: () => void;
   onMove?: () => void;
@@ -84,6 +87,7 @@ export function ThreadActionsMenu({
   isImportant = false,
   onToggleImportant,
   onMarkSpam,
+  onMute,
   onDelete,
   onLabel,
   onMove,
@@ -220,6 +224,14 @@ export function ThreadActionsMenu({
               Track until I reply
             </DropdownMenuItem>
           ) : null}
+
+          {onMute && (
+            <DropdownMenuItem onSelect={onMute}>
+              <BellOffIcon className="mr-2 size-4" />
+              Mute
+              <MenuShortcut id="mute" />
+            </DropdownMenuItem>
+          )}
 
           <DropdownMenuSeparator />
 

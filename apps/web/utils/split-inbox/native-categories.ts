@@ -33,6 +33,7 @@ const MAILBOX_TYPES = new Set([
   "archive",
   "all",
   "snoozed",
+  "muted",
   "label",
   "folder",
   "scheduled",

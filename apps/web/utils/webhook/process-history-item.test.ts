@@ -37,6 +37,9 @@ vi.mock("@/utils/prisma", () => ({
       findMany: vi.fn().mockResolvedValue([]),
       findUnique: vi.fn().mockResolvedValue(null),
     },
+    mutedThread: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
   },
 }));
 vi.mock("@/utils/cold-email/is-cold-email", () => ({
@@ -445,6 +448,102 @@ describe("Provider Edge Cases", () => {
           { ...baseOptions, provider },
         ),
       ).rejects.toThrow("fetch failed");
+    });
+  });
+
+  describe.each([
+    "google",
+    "microsoft",
+  ])("Muted conversations (%s)", (providerName) => {
+    function getMutedArrival() {
+      const message = getMockParsedMessage({
+        id: "muted-message",
+        threadId: "muted-thread",
+        internalDate: String(Date.now() - 60_000),
+      });
+      const provider = createMockEmailProvider({
+        name: providerName,
+        getMessage: vi.fn().mockResolvedValue(message),
+        isSentMessage: vi.fn().mockReturnValue(false),
+      });
+      return { message, provider };
+    }
+
+    it("archives new mail on arrival and skips rules and notifications", async () => {
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValueOnce({
+        id: "mute-1",
+      } as any);
+      const { message, provider } = getMutedArrival();
+
+      await processHistoryItem(
+        { messageId: message.id, threadId: message.threadId },
+        {
+          ...baseOptions,
+          provider,
+          hasAutomationRules: true,
+          hasAiAccess: true,
+          isNewMessage: true,
+        },
+      );
+
+      expect(prisma.mutedThread.findUnique).toHaveBeenCalledWith({
+        where: {
+          emailAccountId_threadId: {
+            emailAccountId: baseOptions.emailAccount.id,
+            threadId: "muted-thread",
+          },
+        },
+        select: { id: true },
+      });
+      expect(provider.archiveThread).toHaveBeenCalledExactlyOnceWith(
+        "muted-thread",
+        baseOptions.emailAccount.email,
+      );
+      expect(runRules).not.toHaveBeenCalled();
+      expect(categorizeSender).not.toHaveBeenCalled();
+      expect(sendOtpPushNotification).not.toHaveBeenCalled();
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
+      expect(sendMobilePushNotification).not.toHaveBeenCalled();
+    });
+
+    it("processes mail normally when the conversation isn't muted", async () => {
+      const { message, provider } = getMutedArrival();
+      vi.mocked(runRules).mockResolvedValueOnce([]);
+
+      await processHistoryItem(
+        { messageId: message.id, threadId: message.threadId },
+        {
+          ...baseOptions,
+          provider,
+          hasAutomationRules: true,
+          hasAiAccess: true,
+          isNewMessage: true,
+        },
+      );
+
+      expect(provider.archiveThread).not.toHaveBeenCalled();
+      expect(runRules).toHaveBeenCalledOnce();
+    });
+
+    it("still handles the user's own reply in a muted conversation", async () => {
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValue({
+        id: "mute-1",
+      } as any);
+      const { message } = getMutedArrival();
+      const provider = createMockEmailProvider({
+        name: providerName,
+        getMessage: vi.fn().mockResolvedValue(message),
+        isSentMessage: vi.fn().mockReturnValue(true),
+      });
+
+      await processHistoryItem(
+        { messageId: message.id, threadId: message.threadId },
+        { ...baseOptions, provider },
+      );
+
+      expect(handleOutboundMessage).toHaveBeenCalledOnce();
+      expect(provider.archiveThread).not.toHaveBeenCalled();
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValue(null);
     });
   });
 

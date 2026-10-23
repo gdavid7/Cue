@@ -1,4 +1,5 @@
 import {
+  BellOffIcon,
   ArchiveIcon,
   ForwardIcon,
   KeyboardIcon,
@@ -446,8 +447,23 @@ const SHORTCUT_DEFINITIONS = [
     label: "More actions",
   },
   {
-    id: "openTeamComments",
+    // Gmail's `m`. Muting lives in Cue's database, not a mailbox label.
+    id: "mute",
     keys: ["m"],
+    scope: "mail",
+    group: "Triage",
+    label: "Mute conversation",
+    palette: {
+      section: "actions",
+      description: "Archive it now and keep new replies out of the inbox",
+      keywords: ["mute", "silence", "ignore"],
+      icon: BellOffIcon,
+    },
+  },
+  {
+    // `m` is Gmail's mute; comments take the shifted key beside it.
+    id: "openTeamComments",
+    keys: ["shift+m"],
     scope: "mail",
     group: "View",
     label: "Comment for your team",

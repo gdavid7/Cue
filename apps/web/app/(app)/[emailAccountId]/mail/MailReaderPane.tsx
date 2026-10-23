@@ -41,6 +41,7 @@ export const MailReaderPane = memo(function MailReaderPane({
   isImportant,
   onToggleImportant,
   onMarkSpam,
+  onMute,
   onDelete,
   onLabel,
   onMove,
@@ -68,6 +69,7 @@ export const MailReaderPane = memo(function MailReaderPane({
   isImportant: boolean;
   onToggleImportant?: () => void;
   onMarkSpam: () => void;
+  onMute?: () => void;
   onDelete: () => void;
   onLabel?: () => void;
   onMove?: () => void;
@@ -131,6 +133,7 @@ export const MailReaderPane = memo(function MailReaderPane({
                 isImportant={isImportant}
                 onToggleImportant={onToggleImportant}
                 onMarkSpam={onMarkSpam}
+                onMute={onMute}
                 onDelete={onDelete}
                 onLabel={onLabel}
                 onMove={onMove}

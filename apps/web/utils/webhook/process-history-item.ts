@@ -150,6 +150,26 @@ export async function processHistoryItem(
       return;
     }
 
+    // A muted conversation's new mail skips the inbox, the rules (and their
+    // model call) and every notification. The mute lives in Cue's database,
+    // never as a mailbox label or filter.
+    const muted = actualThreadId
+      ? await prisma.mutedThread.findUnique({
+          where: {
+            emailAccountId_threadId: {
+              emailAccountId,
+              threadId: actualThreadId,
+            },
+          },
+          select: { id: true },
+        })
+      : null;
+    if (muted && actualThreadId) {
+      await provider.archiveThread(actualThreadId, userEmail);
+      logger.info("Skipping. Muted conversation archived.");
+      return;
+    }
+
     // check if unsubscribed
     const email = canonicalizeEmailAddress(parsedMessage.headers.from);
     const sender = await prisma.newsletter.findFirst({

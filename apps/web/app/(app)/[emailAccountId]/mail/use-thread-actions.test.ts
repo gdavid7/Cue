@@ -24,6 +24,15 @@ const mail = vi.hoisted(() => ({
 }));
 
 const activation = vi.hoisted(() => ({ report: vi.fn() }));
+const muting = vi.hoisted(() => ({
+  mute: vi.fn(),
+  unmute: vi.fn(),
+}));
+
+vi.mock("@/utils/actions/mute", () => ({
+  muteThreadsAction: muting.mute,
+  unmuteThreadsAction: muting.unmute,
+}));
 
 vi.mock("@/hooks/useActivationSignal", () => ({
   reportActivationSignal: activation.report,
@@ -41,6 +50,8 @@ describe("useThreadActions", () => {
     mail.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mail.client.submitConversations.mockResolvedValue({ status: "queued" });
     mail.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
+    muting.mute.mockResolvedValue({ data: { mutedThreadIds: [] } });
+    muting.unmute.mockResolvedValue({ data: { unmutedThreadIds: [] } });
   });
 
   it("archives through the engine with the observed revision", async () => {
@@ -176,6 +187,47 @@ describe("useThreadActions", () => {
       ]);
       expect(changed).toEqual(["one:shown"]);
       expect(notifications.error).not.toHaveBeenCalled();
+    });
+
+    it("mutes every copy in its own account, archives them, and undo reverses both", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.mute(["one:shown"]));
+
+      expect(submitted()).toEqual([
+        ["one", ["shown"], "archive"],
+        ["two", ["hidden"], "archive"],
+      ]);
+      expect(muting.mute.mock.calls).toEqual([
+        ["one", { threadIds: ["shown"] }],
+        ["two", { threadIds: ["hidden"] }],
+      ]);
+      expect(toastUndo).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Muted" }),
+      );
+
+      await act(async () => {
+        await result.current.undo();
+      });
+
+      expect(
+        mail.client.cancelOperation.mock.calls.map(([call]) => call.accountId),
+      ).toEqual(["one", "two"]);
+      expect(muting.unmute.mock.calls).toEqual([
+        ["one", { threadIds: ["shown"] }],
+        ["two", { threadIds: ["hidden"] }],
+      ]);
+    });
+
+    it("says new replies still reach the inbox when an account can't save the mute", async () => {
+      muting.mute.mockImplementation(async (accountId: string) =>
+        accountId === "two" ? undefined : { data: { mutedThreadIds: [] } },
+      );
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.mute(["one:shown"]));
+
+      expect(notifications.error).toHaveBeenCalledWith(
+        "Couldn't mute this conversation. New replies will still reach your inbox.",
+      );
     });
 
     it("says one conversation was archived, and its undo restores every copy", async () => {

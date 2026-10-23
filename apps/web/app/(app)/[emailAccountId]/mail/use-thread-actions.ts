@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { toastUndo } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { randomUuid } from "@/utils/uuid";
+import { muteThreadsAction, unmuteThreadsAction } from "@/utils/actions/mute";
 import {
   type ActionableThread,
   getListThreadEmailAccountId,
@@ -38,7 +39,7 @@ const RUM_TRIAGE_ACTIONS: Partial<
   set_read_state: "mark_read",
 };
 
-type UndoableAction = "archive" | "unarchive" | "trash";
+type UndoableAction = "archive" | "unarchive" | "trash" | "mute";
 
 type ThreadSnapshot = {
   emailAccountId: string;
@@ -71,6 +72,8 @@ type UndoableBatch = {
   // while it is still being admitted waits for it instead of getting lost.
   snapshots: Promise<ThreadSnapshot[]>;
   undone: boolean;
+  /** Reverses what the action changed beyond the mailbox, such as a mute. */
+  undoExtra?: () => Promise<void>;
 };
 
 export function useThreadActions({
@@ -235,7 +238,9 @@ export function useThreadActions({
     if (batch.undone || !client) return [];
     batch.undone = true;
     if (lastAction.current === batch) lastAction.current = null;
+    const extraUndone = batch.undoExtra?.();
     const snapshots = await batch.snapshots;
+    await extraUndone;
     if (!snapshots.length) return [];
 
     const compensation = mutationPayloadToChange({
@@ -308,7 +313,21 @@ export function useThreadActions({
   const runUndoable = useCallback(
     async (action: UndoableAction, threadKeys: string[]) => {
       const targets = resolveTargets(threadKeys);
-      const enqueued = enqueueTargets(targets, { kind: action });
+      // Muting archives through the same path, so the row leaves the same way
+      // and the undo moves it back to the inbox.
+      const enqueued = enqueueTargets(targets, {
+        kind: action === "mute" ? "archive" : action,
+      });
+      const muted = action === "mute" ? setMuted(targets, true) : undefined;
+      const unmute = muted
+        ? async () => {
+            const mutedTargets = await muted;
+            if (!mutedTargets.length) return;
+            const unmuted = await setMuted(mutedTargets, false);
+            if (unmuted.length < mutedTargets.length)
+              toast.error("Couldn't unmute this conversation");
+          }
+        : undefined;
       // The row leaves on the keypress, before the engine admits the command,
       // so the batch is the one to undo from that moment on.
       const previous = lastAction.current;
@@ -319,6 +338,7 @@ export function useThreadActions({
           () => [],
         ),
         undone: false,
+        undoExtra: unmute,
       };
       lastAction.current = batch;
       const { rows, snapshots, rejectionCodes } = await enqueued.catch(
@@ -331,6 +351,7 @@ export function useThreadActions({
         // Copies that did change stay undoable with the shortcut.
         if (!snapshots.length && lastAction.current === batch)
           lastAction.current = previous;
+        if (!snapshots.length) unmute?.();
         if (threadKeys.length) {
           toast.error(
             enqueueFailureCopy(
@@ -553,6 +574,10 @@ export function useThreadActions({
       (threadKeys: string[]) => runUndoable("trash", threadKeys),
       [runUndoable],
     ),
+    mute: useCallback(
+      (threadKeys: string[]) => runUndoable("mute", threadKeys),
+      [runUndoable],
+    ),
     markRead: useCallback(
       (threadKeys: string[]) => setReadState(threadKeys, true, false),
       [setReadState],
@@ -592,7 +617,47 @@ const UNDOABLE_COPY: Record<
     done: (count) => summarise("Deleted", count),
     noun: "deletion",
   },
+  mute: {
+    compensation: "unarchive",
+    done: (count) => summarise("Muted", count),
+    noun: "muting",
+  },
 };
+
+/**
+ * Mutes (or unmutes) each conversation in the account that owns it, and every
+ * copy of it in the user's other accounts, so the copy's new mail stays out of
+ * All inboxes too. Resolves with the targets whose account took the change.
+ */
+async function setMuted(
+  targets: ThreadActionTarget[],
+  muted: boolean,
+): Promise<ThreadActionTarget[]> {
+  const all = targets.flatMap((target) => [target, ...copyTargets(target)]);
+  const action = muted ? muteThreadsAction : unmuteThreadsAction;
+  const results = await Promise.allSettled(
+    Object.entries(groupBy(all, (target) => target.emailAccountId)).map(
+      async ([accountId, accountTargets]) => {
+        const result = await action(accountId, {
+          threadIds: [
+            ...new Set(accountTargets.map((target) => target.threadId)),
+          ],
+        });
+        if (!result?.data) throw new Error("mute_failed");
+        return accountTargets;
+      },
+    ),
+  );
+  const done = results.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
+  if (muted && done.length < all.length) {
+    toast.error(
+      "Couldn't mute this conversation. New replies will still reach your inbox.",
+    );
+  }
+  return done;
+}
 
 function copyTargets(target: ThreadActionTarget): ThreadActionTarget[] {
   return (target.copies ?? []).map((copy) => ({

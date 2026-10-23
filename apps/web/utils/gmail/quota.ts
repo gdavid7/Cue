@@ -263,6 +263,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/snoozed-threads/create",
     "user/snoozed-threads/delete",
     "user/snoozed-threads",
+    "user/muted-threads",
+    "user/muted-threads/ids",
     // The open thread's summary, context and reply suggestion: the reader
     // only asks for them while the conversation is on screen.
     "user/thread-context",
