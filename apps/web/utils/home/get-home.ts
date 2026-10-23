@@ -204,6 +204,7 @@ export async function getHomeData({
           after: new Date(since),
           limit: LIST_LIMIT,
           deadline,
+          logger,
         }),
       );
     },
@@ -296,7 +297,12 @@ export async function getHomeData({
   // Each thread shows once on Today. Recently filed mail is Cue's to handle,
   // so it isn't repeated under the rest of the inbox either.
   const shownIds = new Set(needsYou.map((t) => t.id));
-  const isRecent = (thread: EmailThread) =>
+  // Cue's newsletters are checked by listing unread mail since `since`; one
+  // missing from that listing is left out only if the inbox's own copy also
+  // shows it read through and recent, so a test on either side that the
+  // other doesn't make never hides unread mail.
+  const isReadAndRecent = (thread: EmailThread) =>
+    thread.messages.every((m) => !m.labelIds?.includes("UNREAD")) &&
     thread.messages.some((m) => getMessageTimestamp(m) >= since);
   const isRecentlyFiled = (thread: EmailThread, ids: ReadonlySet<string>) =>
     thread.messages.some(
@@ -343,7 +349,7 @@ export async function getHomeData({
       (t) =>
         !shownIds.has(t.id) &&
         !readingThreadIds.has(t.id) &&
-        !(cueNewsletters.has(t.id) && isRecent(t)) &&
+        !(cueNewsletters.has(t.id) && isReadAndRecent(t)) &&
         !isRecentlyFiled(t, handledIds),
     )
     .map(toRow)
@@ -728,8 +734,10 @@ async function getReadingThreads({
   after,
   limit,
   deadline,
+  logger,
 }: {
   emailProvider: EmailProvider;
+  logger: Logger;
   readingLabelId: string | undefined;
   cueThreadIds: string[];
   after: Date;
@@ -751,12 +759,17 @@ async function getReadingThreads({
 
   const unread = await emailProvider
     .listUnreadInboxThreadIds({ after, maxResults: UNREAD_SCAN_LIMIT })
-    .catch(() => null);
+    .catch((error) => {
+      // Gmail's budget is busy: the lane comes back pending, to ask again.
+      if (isGmailCallDeferredError(error)) throw error;
+      logger.warn("Failed to list unread inbox mail for Reading", { error });
+      return null;
+    });
   // Without the listing nothing is known of Cue's, so the labelled stand.
   if (!unread)
     return { threads: labelled, checkedCueThreadIds: [], capped: false };
-  const unreadIds = new Set(unread);
-  const listingFull = unread.length >= UNREAD_SCAN_LIMIT;
+  const unreadIds = new Set(unread.threadIds);
+  const listingFull = unread.full;
   const labelledIds = new Set(labelled.map((thread) => thread.id));
   const hits = cueThreadIds.filter(
     (threadId) => unreadIds.has(threadId) && !labelledIds.has(threadId),

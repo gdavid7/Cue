@@ -177,6 +177,8 @@ describe("localInboxRows", () => {
       view(
         [
           conversation("weekly"),
+          // Still unread, so it isn't Cue's to file away yet.
+          conversation("digest", { unread: true }),
           conversation("t1"),
           // The same id in another mailbox is another conversation.
           conversation("weekly", { accountId: BOB.id }),
@@ -186,11 +188,12 @@ describe("localInboxRows", () => {
       {
         accounts: [ADA, BOB],
         named: true,
-        newsletterThreadIds: { [ADA.id]: ["weekly"] },
+        newsletterThreadIds: { [ADA.id]: ["weekly", "digest"] },
       },
     );
 
     expect(rows?.map((row) => `${row.account?.id}:${row.threadId}`)).toEqual([
+      `${ADA.id}:digest`,
       `${ADA.id}:t1`,
       `${BOB.id}:weekly`,
     ]);

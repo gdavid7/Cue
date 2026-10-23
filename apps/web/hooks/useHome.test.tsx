@@ -15,6 +15,7 @@ import { useHome, useWarmHome } from "./useHome";
 
 // The zone useHome asks the server to count "today" in.
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const PATH = `/api/user/home?tz=${encodeURIComponent(ZONE)}`;
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -38,7 +39,7 @@ describe("useHome", () => {
       wrapper: wrapper(fetcher),
     });
 
-    await act(() => vi.advanceTimersByTimeAsync(5000 * 20));
+    await advanceInSteps(5000 * 20);
 
     expect(fetcher).toHaveBeenCalledTimes(12);
     expect(result.current.gaveUp).toBe(true);
@@ -86,29 +87,44 @@ describe("useHome", () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(answer(["waiting"]))
+      .mockResolvedValueOnce(answer(["waiting"]))
+      .mockResolvedValueOnce(answer(["waiting"]))
       .mockResolvedValue(answer([]));
     renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
-    // Opening Today, then asking again for the lane still pending.
-    await act(() => vi.advanceTimersByTimeAsync(5100));
+    // Opening Today, its first two retries of the lane still pending, then
+    // a third, which Today asks for by itself.
+    await advanceInSteps(5000 * 3 + 100);
     // Cue sorted something new.
     await act(async () => {
       announceTodayChanged();
       await vi.advanceTimersByTimeAsync(100);
     });
-    // The user comes back to the tab.
+
+    expect(requestPaths(fetcher)).toEqual([
+      PATH,
+      PATH,
+      PATH,
+      `${PATH}&refresh=auto`,
+      `${PATH}&refresh=auto`,
+    ]);
+  });
+
+  it("treats the user coming back to the tab as asked for, even while a lane is pending", async () => {
+    const fetcher = vi.fn(async () => answer(["waiting"]));
+    renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
+    // Past the requested retries, Today is asking by itself.
+    await advanceInSteps(5000 * 3 + 100);
+    expect(requestPaths(fetcher).at(-1)).toBe(`${PATH}&refresh=auto`);
+
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       window.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(10);
     });
 
-    const paths = fetcher.mock.calls.map(([key]) => (key as string[])[0]);
-    expect(paths).toEqual([
-      `/api/user/home?tz=${encodeURIComponent(ZONE)}`,
-      `/api/user/home?tz=${encodeURIComponent(ZONE)}&refresh=auto`,
-      `/api/user/home?tz=${encodeURIComponent(ZONE)}&refresh=auto`,
-      `/api/user/home?tz=${encodeURIComponent(ZONE)}`,
-    ]);
+    expect(requestPaths(fetcher)).toContain(PATH);
+    const afterFocus = requestPaths(fetcher).slice(4);
+    expect(afterFocus).toContain(PATH);
   });
 
   it("reloads when the user comes back to the tab", async () => {
@@ -134,7 +150,7 @@ describe("useHome", () => {
       wrapper: wrapper(fetcher),
     });
 
-    await act(() => vi.advanceTimersByTimeAsync(5000 * 5));
+    await advanceInSteps(5000 * 5);
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(result.current.gaveUp).toBe(false);
@@ -447,4 +463,15 @@ function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
       {children}
     </SWRConfig>
   );
+}
+
+function requestPaths(fetcher: ReturnType<typeof vi.fn>) {
+  return fetcher.mock.calls.map(([key]) => (key as string[])[0]);
+}
+
+// React runs effects, which schedule a pending lane's next ask, once each
+// act ends, as a browser does after each render.
+async function advanceInSteps(ms: number) {
+  for (let elapsed = 0; elapsed < ms; elapsed += 1000)
+    await act(() => vi.advanceTimersByTimeAsync(Math.min(1000, ms - elapsed)));
 }

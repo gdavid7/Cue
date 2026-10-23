@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import useSWR, {
   type Cache,
   type BareFetcher,
@@ -18,6 +24,9 @@ import { getAccountScopedKey } from "@/utils/swr";
 // each ask spends its quota again.
 const PENDING_REFRESH_MS = 5000;
 const PENDING_LOAD_LIMIT = 12;
+// The first retries of a lane still pending are part of opening Today; after
+// those, Today is waiting on Gmail by itself and asks behind people's work.
+const REQUESTED_PENDING_RETRIES = 2;
 const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
 
@@ -32,27 +41,23 @@ const seededCopies = new WeakSet<TodayHomeData>();
  */
 export function useHome(emailAccountId?: string | null) {
   // Loads in a row that came back with a lane still pending. SWR may call
-  // refreshInterval from an earlier render, so it reads the ref.
+  // onSuccess from an earlier render, so it reads the ref.
   const pendingLoadsRef = useRef(0);
   const [pendingLoads, setPendingLoads] = useState(0);
   const countPendingLoads = (loads: number) => {
     pendingLoadsRef.current = loads;
     setPendingLoads(loads);
   };
-  // A load Today starts by itself, to show a change or a lane still pending,
-  // rather than one the user asked for by opening or returning to it.
-  const changeLoadRef = useRef(false);
-  const isUnrequestedLoad = () => {
-    const unrequested = changeLoadRef.current || pendingLoadsRef.current > 0;
-    changeLoadRef.current = false;
-    return unrequested;
-  };
+  // Set only while Today starts a load by itself (to show a change, or a lane
+  // still pending), around the call that starts it: SWR calls the fetcher
+  // within that call, so the mark reaches that load alone.
+  const unrequestedRef = useRef(false);
   const key = homeKey(emailAccountId);
   const { cache, mutate: mutateKey, fetcher } = useSWRConfig();
   useSavedHomeSeed(emailAccountId);
   const home = useSWR<TodayHomeData>(
     key,
-    loadHome(cache, fetcher, isUnrequestedLoad),
+    loadHome(cache, fetcher, () => unrequestedRef.current),
     {
       // A row action while a load is on its way makes SWR drop that load's
       // answer; ask again so the fresh lanes still arrive. A newer load still
@@ -65,15 +70,29 @@ export function useHome(emailAccountId?: string | null) {
       focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
       onSuccess: (data) =>
         countPendingLoads(isRefreshing(data) ? pendingLoadsRef.current + 1 : 0),
-      refreshInterval: (data) =>
-        data &&
-        isRefreshing(data) &&
-        pendingLoadsRef.current < PENDING_LOAD_LIMIT
-          ? PENDING_REFRESH_MS
-          : 0,
     },
   );
   const { mutate } = home;
+  const loadUnrequested = useCallback(() => {
+    unrequestedRef.current = true;
+    try {
+      mutate();
+    } finally {
+      unrequestedRef.current = false;
+    }
+  }, [mutate]);
+
+  // A lane Gmail couldn't serve in time is asked for again shortly.
+  const refreshing = Boolean(home.data && isRefreshing(home.data));
+  useEffect(() => {
+    if (!refreshing || pendingLoads === 0 || pendingLoads >= PENDING_LOAD_LIMIT)
+      return;
+    const timer = setTimeout(() => {
+      if (pendingLoads > REQUESTED_PENDING_RETRIES) loadUnrequested();
+      else mutate();
+    }, PENDING_REFRESH_MS);
+    return () => clearTimeout(timer);
+  }, [refreshing, pendingLoads, mutate, loadUnrequested]);
 
   useEffect(() => {
     if (!home.data || seededCopies.has(home.data) || !emailAccountId) return;
@@ -93,8 +112,7 @@ export function useHome(emailAccountId?: string | null) {
     let changedSinceLoad = false;
     const load = () => {
       changedSinceLoad = false;
-      changeLoadRef.current = true;
-      mutate();
+      loadUnrequested();
       timer = setTimeout(() => {
         timer = undefined;
         if (changedSinceLoad) load();
@@ -110,7 +128,7 @@ export function useHome(emailAccountId?: string | null) {
       stop();
       clearTimeout(timer);
     };
-  }, [emailAccountId, mutate]);
+  }, [emailAccountId, loadUnrequested]);
 
   return {
     data: home.data,

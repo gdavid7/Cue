@@ -118,9 +118,12 @@ test("an account without the Newsletter label bundles what Cue sorted as newslet
       .poll(() => newsletter.folderOf(), { timeout: 60_000 })
       .toBe("archive");
   } finally {
-    await unsort?.();
-    await newsletter.remove();
-    await restoreLabel();
+    // Each step runs whatever another throws, so the label is put back.
+    await runEach([
+      () => unsort?.(),
+      () => newsletter.remove(),
+      () => restoreLabel(),
+    ]);
   }
 });
 
@@ -998,6 +1001,19 @@ async function openNeedsReplyTrackers(
     );
     return result.rowCount ?? 0;
   });
+}
+
+/** Runs every cleanup step in turn, then throws the first failure, if any. */
+async function runEach(steps: (() => unknown)[]) {
+  let failure: { error: unknown } | undefined;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failure ??= { error };
+    }
+  }
+  if (failure) throw failure.error;
 }
 
 /**

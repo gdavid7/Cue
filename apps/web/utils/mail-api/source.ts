@@ -1195,8 +1195,13 @@ function compileMailboxSearch(
         compiled.hasAttachment = child.value;
         break;
       case "not":
-        // Providers can't search by message id, so it only filters results.
-        if (child.predicate.kind === "message") break;
+        // Providers can't search by message or conversation id, so these
+        // only filter results.
+        if (
+          child.predicate.kind === "message" ||
+          child.predicate.kind === "conversation"
+        )
+          break;
         if (child.predicate.kind !== "role") return null;
         compiled.excludedRoles ??= [];
         compiled.excludedRoles.push(child.predicate.role);

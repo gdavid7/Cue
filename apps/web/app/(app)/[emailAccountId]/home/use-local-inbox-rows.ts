@@ -123,7 +123,9 @@ export function localInboxRows(
     )
       return [];
     // And so is what Cue sorted as a newsletter without labelling it.
+    // As there, only once it's read through: unread, it still shows.
     if (
+      !conversation.unread &&
       conversation.latestMessageAtMs >= handledSince &&
       newsletters.get(account.id)?.has(conversation.key.conversationId)
     )

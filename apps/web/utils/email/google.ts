@@ -2312,7 +2312,7 @@ export class GmailProvider implements EmailProvider {
   }: {
     after: Date;
     maxResults: number;
-  }): Promise<string[]> {
+  }): Promise<{ threadIds: string[]; full: boolean }> {
     return this.withRateLimitTracking(
       "list-unread-inbox-thread-ids",
       async () => {
@@ -2322,12 +2322,15 @@ export class GmailProvider implements EmailProvider {
             labelIds: [GmailLabel.INBOX],
             q: `is:unread after:${Math.floor(after.getTime() / 1000)}`,
             maxResults,
-            fields: "threads/id",
+            fields: "threads/id,nextPageToken",
           }),
         );
-        return (response.data.threads ?? []).flatMap((thread) =>
-          thread.id ? [thread.id] : [],
-        );
+        return {
+          threadIds: (response.data.threads ?? []).flatMap((thread) =>
+            thread.id ? [thread.id] : [],
+          ),
+          full: Boolean(response.data.nextPageToken),
+        };
       },
     );
   }

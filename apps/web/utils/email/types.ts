@@ -473,12 +473,13 @@ export interface EmailProvider {
   }>;
   /**
    * Conversations in the inbox with unread mail received since `after`,
-   * newest first, by id only: one cheap listing to check ids against.
+   * newest first, by id only: one cheap listing to check ids against. `full`
+   * says the provider had more than one page holds, so some may be missing.
    */
   listUnreadInboxThreadIds(options: {
     after: Date;
     maxResults: number;
-  }): Promise<string[]>;
+  }): Promise<{ threadIds: string[]; full: boolean }>;
   readonly localMailSyncStrategy: "account-history" | "folder-delta";
   markMessagesReadState(messageIds: string[], read: boolean): Promise<void>;
   markMessagesStarredState(

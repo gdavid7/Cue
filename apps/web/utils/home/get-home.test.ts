@@ -700,7 +700,10 @@ describe("getHomeData", () => {
     // Cue decided on them newest first.
     sortedAsNewsletters(ids);
     // Every one is unread in the inbox, though the inbox lists only three.
-    provider.listUnreadInboxThreadIds.mockResolvedValue(ids);
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: ids,
+      full: false,
+    });
     vi.mocked(provider.getThread).mockImplementation(
       async (threadId: string) => {
         const found = unread.find((t) => t.id === threadId);
@@ -756,6 +759,87 @@ describe("getHomeData", () => {
     expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["deferred"]);
   });
 
+  it("hides nothing it didn't see when the unread listing was full, though it named fewer conversations", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const older = thread("older", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Unread, past the listing",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly, older] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly", "older"]);
+    // A full page of messages, many of one conversation (as Outlook lists
+    // them), naming only one.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: ["weekly"],
+      full: true,
+    });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.stats.readingCapped).toBe(true);
+    expect(home.newsletterThreadIds).toEqual(["weekly"]);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["older"]);
+  });
+
+  it("comes back pending when Gmail defers the unread listing", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    provider.listUnreadInboxThreadIds.mockRejectedValue(
+      new GmailCallDeferredError(5000, "interactive"),
+    );
+
+    const home = await run(provider);
+
+    expect(home.pending).toContain("reading");
+    // Nothing was checked, so nothing leaves the rest of the inbox.
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["weekly"]);
+  });
+
+  it("leaves an unread newsletter with an older unread message in the rest of the inbox", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "Read lately, unread before",
+      labels: ["INBOX"],
+    });
+    weekly.messages.unshift({
+      ...weekly.messages[0],
+      id: "weekly-old",
+      labelIds: ["INBOX", "UNREAD"],
+      internalDate: String(NOW.getTime() - 30 * 86_400_000),
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    // Nothing unread since the window opened, so the listing leaves it out.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: [],
+      full: false,
+    });
+
+    const home = await run(provider);
+
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["weekly"]);
+  });
+
   it("starts no reads once Today's time is up", async () => {
     const weekly = thread("weekly", {
       from: "Field Notes <hello@fieldnotes.example>",
@@ -770,7 +854,7 @@ describe("getHomeData", () => {
     const realNow = Date.now;
     provider.listUnreadInboxThreadIds.mockImplementation(async () => {
       vi.spyOn(Date, "now").mockImplementation(() => realNow() + 60_000);
-      return ["weekly"];
+      return { threadIds: ["weekly"], full: false };
     });
 
     try {
@@ -1498,8 +1582,8 @@ function mockProvider(
     }),
     getLabels: vi.fn(async () => labels),
     // Unread inbox conversations, by id, as the provider lists them.
-    listUnreadInboxThreadIds: vi.fn(async () =>
-      [...threadsById.values()]
+    listUnreadInboxThreadIds: vi.fn(async () => ({
+      threadIds: [...threadsById.values()]
         .filter((t) =>
           t.messages.some(
             (m) =>
@@ -1507,7 +1591,8 @@ function mockProvider(
           ),
         )
         .map((t) => t.id),
-    ),
+      full: false,
+    })),
     getThreadsWithQuery: vi.fn(
       async ({ query }: { query: { labelIds?: string[] } }) => {
         const labelId = query.labelIds?.find((id) => id !== "INBOX") ?? "INBOX";
