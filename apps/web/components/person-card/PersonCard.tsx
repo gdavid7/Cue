@@ -12,7 +12,7 @@ import {
   FileTextIcon,
   SearchIcon,
   SquarePenIcon,
-  StarIcon,
+  UserStarIcon,
 } from "lucide-react";
 import {
   PERSON_CARD_CONVERSATION_LIMIT,
@@ -349,7 +349,7 @@ function PersonCardBody({
             </p>
           ))}
         </div>
-        <ImportantStar accountIds={scope.accountIds} email={email} />
+        <ImportantToggle accountIds={scope.accountIds} email={email} />
       </header>
       <div className="flex gap-2 px-4 pb-3">
         <Button
@@ -405,12 +405,12 @@ function PersonCardBody({
 }
 
 /**
- * Stars someone as Important in the card's accounts (every account All
- * inboxes includes), so their mail always notifies and leads Today. Shown
- * filled when they're starred in any of them; hidden where the engine
- * can't keep stars.
+ * Marks someone as Important in the card's accounts (every account All
+ * inboxes includes): while a Cue tab is open their mail notifies whatever
+ * triage made of it, and it leads Today. On when they're Important in any
+ * of those accounts; hidden where the engine can't keep stars.
  */
-function ImportantStar({
+function ImportantToggle({
   email,
   accountIds,
 }: {
@@ -430,7 +430,7 @@ function ImportantStar({
       aria-label="Important"
       aria-pressed={important}
       title={important ? "Remove from important" : "Mark as important"}
-      className="-mt-1 -mr-2 relative size-8 shrink-0 text-muted-foreground transition-transform duration-100 ease-out before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100 aria-pressed:text-amber-500"
+      className="-mt-1 -mr-2 relative size-8 shrink-0 text-muted-foreground transition-transform duration-100 ease-out before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100 aria-pressed:bg-amber-500/10 aria-pressed:text-amber-600 dark:aria-pressed:text-amber-400"
       onClick={() => {
         setImportantPerson({
           accountIds,
@@ -445,12 +445,9 @@ function ImportantStar({
       size="icon"
       variant="ghost"
     >
-      <StarIcon
+      <UserStarIcon
         aria-hidden
-        className={cn(
-          "size-4 transition-colors duration-150 motion-reduce:transition-none",
-          important && "fill-current",
-        )}
+        className="size-4 transition-colors duration-150 motion-reduce:transition-none"
       />
     </Button>
   );

@@ -266,7 +266,6 @@ export function HomeDashboard() {
     const visible = (threads: TodayThread[]) =>
       threads.filter((thread) => !hidden.has(rowKey(thread)));
     return {
-      // Starred people lead, each group still in Cue's order.
       needsYou: importantFirst(visible(data.needsYou), (thread) =>
         isImportant(thread.account?.id ?? emailAccountId, thread.fromEmail),
       ),
@@ -1540,6 +1539,11 @@ function formatCount(count: number, capped: boolean) {
 }
 
 /** A row's key for its actions: across accounts it names the account. */
+function rowKey(thread: TodayThread) {
+  return getListThreadKey({ id: thread.threadId, account: thread.account });
+}
+
+/** Rows from Important people first, each group in its own order. */
 function importantFirst(
   threads: TodayThread[],
   important: (thread: TodayThread) => boolean,
@@ -1547,10 +1551,6 @@ function importantFirst(
   const starred = threads.filter(important);
   if (starred.length === 0) return threads;
   return [...starred, ...threads.filter((thread) => !important(thread))];
-}
-
-function rowKey(thread: TodayThread) {
-  return getListThreadKey({ id: thread.threadId, account: thread.account });
 }
 
 /** Moves a conversation between Needs reply and the rest of the inbox. */

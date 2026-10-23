@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportantPerson } from "@inboxzero/mail-core/important-people";
-import { createNewMailNotifier } from "@/utils/web-notifications/notifier";
+import {
+  createNewMailNotifier,
+  showNewMailNotifications,
+} from "@/utils/web-notifications/notifier";
 import type { TrackedConversation } from "@/utils/web-notifications/new-mail";
 import type { WebNotificationMode } from "@/utils/web-notifications/preference";
 
 const NOW = 1_700_000_000_000;
 const TRIAGE_SETTLE_MS = 15_000;
+const IMPORTANT_BATCH_MS = 750;
 const DANA: ImportantPerson = {
   accountId: "acc-1",
   email: "dana@example.com",
@@ -84,11 +88,58 @@ describe("mail from an important person", () => {
       conversation("from-dana", { from: "dana@example.com" }),
       conversation("other"),
     ]);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(IMPORTANT_BATCH_MS);
     expect(notified).toEqual([["from-dana"]]);
 
     await vi.advanceTimersByTimeAsync(TRIAGE_SETTLE_MS);
     expect(notified).toEqual([["from-dana"], ["other"]]);
+  });
+
+  it("lands a burst as one batch, still capped at three notifications and a summary", async () => {
+    const { notifier, notified } = setup();
+    const burst = Array.from({ length: 10 }, (_, index) =>
+      conversation(`dana-${index}`, { from: "Dana <dana@example.com>" }),
+    );
+
+    // Arriving over a few snapshots, as sync delivers them.
+    for (let index = 0; index < burst.length; index++) {
+      notifier.handle(burst.slice(0, index + 1));
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    await vi.advanceTimersByTimeAsync(IMPORTANT_BATCH_MS);
+
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toHaveLength(10);
+
+    const shown: string[] = [];
+    showNewMailNotifications({
+      conversations: burst,
+      Notification: class {
+        onclick: (() => void) | null = null;
+        constructor(title: string) {
+          shown.push(title);
+        }
+        close() {}
+      } as never,
+      summaryTitle: (count) => `${count} more new messages`,
+      openThread: () => undefined,
+      focusWindow: () => undefined,
+    });
+    expect(shown).toEqual(["Dana", "Dana", "Dana", "7 more new messages"]);
+
+    await vi.advanceTimersByTimeAsync(TRIAGE_SETTLE_MS);
+    expect(notified).toHaveLength(1);
+  });
+
+  it("doesn't match a display name dressed up as their address", async () => {
+    const { notifier, notified } = setup({ bulk: ["spoof"] });
+
+    notifier.handle([
+      conversation("spoof", { from: '"dana@example.com" <x@evil.com>' }),
+    ]);
+    await vi.advanceTimersByTimeAsync(TRIAGE_SETTLE_MS);
+
+    expect(notified).toEqual([]);
   });
 
   it("counts only in the account they were starred in", async () => {

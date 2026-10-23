@@ -2,33 +2,22 @@
 
 import { useCallback, useMemo } from "react";
 import useSWR, { useSWRConfig } from "swr";
-import type { MailClient } from "@inboxzero/mail-core/engine";
-import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import {
   type ImportantPerson,
   importantPeopleIndex,
   normalizeImportantPersonAddress,
   type SetImportantPersonInput,
+  supportsImportantPeople,
 } from "@inboxzero/mail-core/important-people";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
+import {
+  announceImportantPeopleChange,
+  IMPORTANT_PEOPLE_KEY,
+  isImportantPeopleKey,
+} from "@/utils/mail-engine/important-people-changes";
 
-const KEY = "important-people";
 const NO_PEOPLE: ImportantPerson[] = [];
-
-/**
- * Whether the engine behind this client keeps Important stars. An older
- * desktop build or an older owner tab doesn't, and then the feature hides.
- */
-export function supportsImportantPeople(
-  client: Partial<MailClient> | null | undefined,
-): client is MailClient &
-  Required<Pick<MailClient, "queryImportantPeople" | "setImportantPerson">> {
-  return (
-    mailClientSupports(client, "method:queryImportantPeople") &&
-    mailClientSupports(client, "method:setImportantPerson")
-  );
-}
 
 /**
  * The people starred as Important in these accounts, read from this device's
@@ -40,7 +29,7 @@ export function useImportantPeople(accountIds: readonly string[]) {
   const supported = supportsImportantPeople(client);
   const ids = useMemo(() => [...new Set(accountIds)].sort(), [accountIds]);
   const { data } = useSWR(
-    supported && ids.length ? [KEY, ids.join("\u0000")] : null,
+    supported && ids.length ? [IMPORTANT_PEOPLE_KEY, ids.join("\u0000")] : null,
     () => (supported ? client.queryImportantPeople(ids) : NO_PEOPLE),
     { shouldRetryOnError: false, keepPreviousData: true },
   );
@@ -67,8 +56,6 @@ export function useSetImportantPerson() {
       const email = normalizeImportantPersonAddress(input.email);
       if (!supportsImportantPeople(client) || !email)
         throw new Error("important_people_unavailable");
-      const isImportantPeopleKey = (key: unknown) =>
-        Array.isArray(key) && key[0] === KEY;
       const addedAtMs = Date.now();
       await mutate<ImportantPerson[]>(
         isImportantPeopleKey,
@@ -78,6 +65,7 @@ export function useSetImportantPerson() {
       );
       try {
         await client.setImportantPerson({ ...input, email });
+        announceImportantPeopleChange();
       } finally {
         await mutate(isImportantPeopleKey);
       }

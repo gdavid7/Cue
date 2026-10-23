@@ -11,6 +11,9 @@ import {
 } from "@inboxzero/mail-core/important-people";
 
 const MAX_INDIVIDUAL_NOTIFICATIONS = 3;
+// Mail from an important person skips the triage wait, but a burst of it
+// still lands as one batch rather than a notification per message.
+const IMPORTANT_BATCH_MS = 750;
 
 export function createNewMailNotifier(deps: {
   startedAtMs: number;
@@ -32,8 +35,9 @@ export function createNewMailNotifier(deps: {
   loadBulkMessageIds: (accountId: string) => Promise<Set<string> | null>;
   /**
    * Who the reader starred as Important in these accounts, read on this
-   * device, or null when stars can't be read. Their mail always notifies
-   * in "important" mode, whatever triage made of it.
+   * device, or null when stars can't be read. While a Cue tab is open their
+   * mail notifies in "important" mode whatever triage made of it; server
+   * push can't see these stars.
    */
   loadImportantPeople: (
     accountIds: string[],
@@ -46,6 +50,7 @@ export function createNewMailNotifier(deps: {
   let awaitingSync = new Set<string>();
   const pending: TrackedConversation[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let importantTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
   function canNotify() {
@@ -83,17 +88,22 @@ export function createNewMailNotifier(deps: {
     );
   }
 
-  // Mail from an important person needs no triage, so it doesn't wait for it.
-  function notifyImportantNow(conversations: TrackedConversation[]) {
-    fromImportantPeople(conversations)
-      .then((important) => {
-        const due = pending.filter((c) => important.has(c));
-        if (due.length === 0) return;
-        for (const conversation of due)
-          pending.splice(pending.indexOf(conversation), 1);
-        if (canNotify()) deps.notify(due);
-      })
-      .catch(() => undefined);
+  // Mail from an important person needs no triage, so it doesn't wait for
+  // it; whatever is left waits for triage as before.
+  function notifyImportantSoon() {
+    if (importantTimer) return;
+    importantTimer = setTimeout(() => {
+      importantTimer = undefined;
+      fromImportantPeople([...pending])
+        .then((important) => {
+          const due = pending.filter((c) => important.has(c));
+          if (due.length === 0) return;
+          for (const conversation of due)
+            pending.splice(pending.indexOf(conversation), 1);
+          if (canNotify()) deps.notify(due);
+        })
+        .catch(() => undefined);
+    }, IMPORTANT_BATCH_MS);
   }
 
   return {
@@ -122,15 +132,15 @@ export function createNewMailNotifier(deps: {
       // One timer and one triage lookup per account for everything that
       // arrives while it waits.
       pending.push(...fresh);
-      notifyImportantNow(fresh);
+      notifyImportantSoon();
       if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;
         const batch = pending.splice(0);
         if (!canNotify()) return;
         dropBulk(batch)
-          .then((important) => {
-            if (important.length > 0 && canNotify()) deps.notify(important);
+          .then((kept) => {
+            if (kept.length > 0 && canNotify()) deps.notify(kept);
           })
           .catch(() => undefined);
       }, deps.triageSettleMs);
@@ -138,7 +148,9 @@ export function createNewMailNotifier(deps: {
     dispose() {
       disposed = true;
       if (timer) clearTimeout(timer);
+      if (importantTimer) clearTimeout(importantTimer);
       timer = undefined;
+      importantTimer = undefined;
       pending.length = 0;
     },
   };

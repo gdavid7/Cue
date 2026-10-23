@@ -5,7 +5,7 @@ import {
   MailIcon,
   MailOpenIcon,
   PaperclipIcon,
-  StarIcon,
+  UserStarIcon,
 } from "lucide-react";
 import {
   type DragEvent,
@@ -337,9 +337,9 @@ export const ThreadRow = memo(function ThreadRow({
             fromImportantPerson ? (
               <>
                 <span className="sr-only">From an important person,</span>
-                <StarIcon
+                <UserStarIcon
                   aria-hidden
-                  className="size-3 shrink-0 self-center fill-current text-amber-500"
+                  className="size-3.5 shrink-0 self-center text-amber-600 dark:text-amber-400"
                   data-testid="important-person-marker"
                 />
               </>

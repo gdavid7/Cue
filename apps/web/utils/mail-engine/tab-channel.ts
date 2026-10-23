@@ -52,7 +52,9 @@ export type TabMailMessage =
   | { type: "unobserve"; id: string; handleId: string }
   | { type: "ok"; id: string; value?: unknown }
   | { type: "error"; id: string; message: string }
-  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> };
+  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> }
+  /** A tab changed an Important star; others read stars again. */
+  | { type: "importantPeopleChanged" };
 
 export type TabMailBus = {
   post(message: TabMailMessage): void;

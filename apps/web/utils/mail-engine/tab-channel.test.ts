@@ -1,10 +1,10 @@
-import { supportsImportantPeople } from "@/hooks/useImportantPeople";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASELINE_MAIL_ENGINE_CAPABILITIES,
   mailClientSupports,
 } from "@inboxzero/mail-core/capabilities";
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import { supportsImportantPeople } from "@inboxzero/mail-core/important-people";
 import type { QueryHandle, QuerySnapshot } from "@inboxzero/mail-core/queries";
 import {
   bindTabMailOwner,

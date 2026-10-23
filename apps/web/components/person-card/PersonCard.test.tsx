@@ -13,6 +13,8 @@ import type { ImportantPerson } from "@inboxzero/mail-core/important-people";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { PersonCard as PersonCardData } from "@inboxzero/mail-core/queries";
 import { MAIL_SHORTCUTS_OFF_ATTRIBUTE } from "@/lib/shortcuts/registry";
+import { relayImportantPeopleChanges } from "@/utils/mail-engine/important-people-changes";
+import { createMemoryTabBus } from "@/utils/mail-engine/tab-channel";
 import {
   getComposeAccountId,
   PersonCardScope,
@@ -236,6 +238,10 @@ describe("getComposeAccountId", () => {
 describe("Important star", () => {
   it("stars someone in the card's account and unstars them again", async () => {
     const { stored, setImportantPerson } = engineWithStars();
+    const bus = createMemoryTabBus();
+    const toOtherTabs: unknown[] = [];
+    bus.subscribe((message) => toOtherTabs.push(message));
+    const stopRelay = relayImportantPeopleChanges(bus, vi.fn());
     renderTrigger();
     await openCard();
 
@@ -260,6 +266,11 @@ describe("Important star", () => {
       expect(star.getAttribute("aria-pressed")).toBe("false"),
     );
     expect(stored).toEqual([]);
+    expect(toOtherTabs).toEqual([
+      { type: "importantPeopleChanged" },
+      { type: "importantPeopleChanged" },
+    ]);
+    stopRelay();
   });
 
   it("in All inboxes shows a star from any account and removes it from all of them", async () => {

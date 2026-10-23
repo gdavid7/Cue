@@ -1,3 +1,6 @@
+import { mailClientSupports } from "./capabilities";
+import type { MailClient } from "./engine";
+
 /**
  * Someone the user marked Important in one of their accounts. Kept only in
  * this device's mail store; it never reaches a server.
@@ -30,6 +33,20 @@ export function normalizeImportantPersonAddress(
   if (email.length > 320) return null;
   if (!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/u.test(email)) return null;
   return email;
+}
+
+/**
+ * Whether the engine behind this client keeps stars. An older desktop build
+ * or an older owner tab doesn't, and then the feature hides.
+ */
+export function supportsImportantPeople(
+  client: Partial<MailClient> | null | undefined,
+): client is MailClient &
+  Required<Pick<MailClient, "queryImportantPeople" | "setImportantPerson">> {
+  return (
+    mailClientSupports(client, "method:queryImportantPeople") &&
+    mailClientSupports(client, "method:setImportantPerson")
+  );
 }
 
 /** Looks up a star by account and address, whatever form the address is in. */
