@@ -41,7 +41,6 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toastError } from "@/components/Toast";
-import { Tooltip } from "@/components/Tooltip";
 import { SystemType } from "@/generated/prisma/enums";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -424,38 +423,36 @@ function ImportantStar({
   const important = accountIds.some((accountId) =>
     isImportant(accountId, email),
   );
+  // A native hint, not a tooltip layer: that would take the first Escape and
+  // leave the card open.
   return (
-    <Tooltip
-      content={important ? "Remove from important" : "Mark as important"}
-      openOnClick={false}
+    <Button
+      aria-label="Important"
+      aria-pressed={important}
+      title={important ? "Remove from important" : "Mark as important"}
+      className="-mt-1 -mr-2 relative size-8 shrink-0 text-muted-foreground transition-transform duration-100 ease-out before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100 aria-pressed:text-amber-500"
+      onClick={() => {
+        setImportantPerson({
+          accountIds,
+          email,
+          important: !important,
+        }).catch(() =>
+          toastError({
+            description: "Couldn't update Important on this device.",
+          }),
+        );
+      }}
+      size="icon"
+      variant="ghost"
     >
-      <Button
-        aria-label="Important"
-        aria-pressed={important}
-        className="-mt-1 -mr-2 relative size-8 shrink-0 text-muted-foreground transition-transform duration-100 ease-out before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100 aria-pressed:text-amber-500"
-        onClick={() => {
-          setImportantPerson({
-            accountIds,
-            email,
-            important: !important,
-          }).catch(() =>
-            toastError({
-              description: "Couldn't update Important on this device.",
-            }),
-          );
-        }}
-        size="icon"
-        variant="ghost"
-      >
-        <StarIcon
-          aria-hidden
-          className={cn(
-            "size-4 transition-colors duration-150 motion-reduce:transition-none",
-            important && "fill-current",
-          )}
-        />
-      </Button>
-    </Tooltip>
+      <StarIcon
+        aria-hidden
+        className={cn(
+          "size-4 transition-colors duration-150 motion-reduce:transition-none",
+          important && "fill-current",
+        )}
+      />
+    </Button>
   );
 }
 

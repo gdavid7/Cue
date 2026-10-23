@@ -283,6 +283,18 @@ describe("Important star", () => {
     expect(stored).toEqual([]);
   });
 
+  it("closes the card on the first Escape while the star has focus", async () => {
+    engineWithStars();
+    renderTrigger();
+    await openCard();
+
+    const star = await screen.findByRole("button", { name: "Important" });
+    star.focus();
+    fireEvent.keyDown(star, { key: "Escape" });
+
+    expect(screen.queryByTestId("person-card")).toBeNull();
+  });
+
   it("is hidden when the engine doesn't keep stars", async () => {
     renderTrigger();
     await openCard();
