@@ -36,6 +36,7 @@ import type { AssistantStateSource } from "./ports/assistant-source";
 import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
 import { webCryptoSha256 } from "./canonical";
+import type { MailEngineCapabilities } from "./capabilities";
 import {
   extractProviderSearches,
   resolveSearchPredicates,
@@ -152,6 +153,12 @@ export type MailboxWindowOptions = {
 };
 
 export type MailClient = {
+  /**
+   * The query shapes and optional methods the engine behind this client
+   * reported when it connected. Read it with `mailClientSupports`, which
+   * treats a client without it as an engine that predates reporting.
+   */
+  readonly capabilities?: MailEngineCapabilities;
   queryContactSuggestions?(
     query: ContactSuggestionQuery,
   ): Promise<ContactSuggestion[]>;
