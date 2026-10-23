@@ -585,6 +585,7 @@ function renderAllInboxes(
         emailAccountId,
         accountIds: ACCOUNT_IDS,
         accounts: ALL_INBOXES_ACCOUNTS,
+        providers: ALL_INBOXES_PROVIDERS,
         query,
       }),
     {
@@ -597,6 +598,9 @@ function renderAllInboxes(
 }
 
 const ACCOUNT_IDS = ["acc-1", "acc-2"];
+const ALL_INBOXES_PROVIDERS = new Map(
+  ACCOUNT_IDS.map((id) => [id, "google" as const]),
+);
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 
 function copy(
