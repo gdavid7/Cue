@@ -1,3 +1,4 @@
+import { describeMailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import type { MailEngine } from "@inboxzero/mail-core/engine";
 import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
 import {
@@ -7,6 +8,7 @@ import {
   type BrowserEngineStart,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerStarted,
 } from "./worker-protocol";
 
 export function createMailWorkerHost(hooks: {
@@ -135,7 +137,7 @@ export function createMailWorkerHost(hooks: {
       return;
     }
     if (engine) {
-      respond({ id: message.id, type: "ok" });
+      respond({ id: message.id, type: "ok", value: started(engine) });
       return;
     }
     startedAccount = message.input.accountId;
@@ -145,8 +147,12 @@ export function createMailWorkerHost(hooks: {
       startedAccount = undefined;
       throw error;
     }
-    respond({ id: message.id, type: "ok" });
+    respond({ id: message.id, type: "ok", value: started(engine) });
   }
 
   return { handle };
+}
+
+function started(engine: MailEngine): WorkerStarted {
+  return { capabilities: describeMailEngineCapabilities(engine) };
 }

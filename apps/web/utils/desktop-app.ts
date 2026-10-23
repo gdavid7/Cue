@@ -16,6 +16,8 @@ export type InboxZeroDesktopApi = {
     options?: { callbackPath?: string },
   ) => Promise<void>;
   mailEngine?: (payload: unknown) => Promise<unknown>;
+  /** What the bundled engine supports; builds that predate it leave it out. */
+  mailEngineCapabilities?: readonly string[];
   mailEngineSubscribe?: (input: unknown) => Promise<unknown>;
   mailEngineUnsubscribe?: (subscriptionId: string) => Promise<unknown>;
   onMailEngineSnapshot?: (

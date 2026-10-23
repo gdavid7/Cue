@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  BASELINE_MAIL_ENGINE_CAPABILITIES,
+  mailClientSupports,
+} from "@inboxzero/mail-core/capabilities";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { QueryHandle, QuerySnapshot } from "@inboxzero/mail-core/queries";
 import {
@@ -7,6 +11,8 @@ import {
   createMemoryTabBus,
   createTabFollowerClient,
   disposeTabFollowerClient,
+  type TabMailBus,
+  type TabMailMessage,
 } from "./tab-channel";
 
 describe("mail engine tab channel", () => {
@@ -190,6 +196,147 @@ describe("mail engine tab channel", () => {
     disposeTabFollowerClient(follower);
   });
 });
+
+describe("mail engine tab channel capability handshake", () => {
+  it("gives a follower what a current owner's engine reported", async () => {
+    const bus = createMemoryTabBus();
+    bindTabMailOwner({
+      client: {
+        ...stubClient({}),
+        capabilities: [
+          ...BASELINE_MAIL_ENGINE_CAPABILITIES,
+          "order:oldest_first",
+          "method:queryPersonCard",
+        ],
+      },
+      bus,
+    });
+
+    const follower = createTabFollowerClient({
+      accountId: "acc-1",
+      bus,
+      capabilities: (await helloOwner(bus, "acc-1")).capabilities,
+    });
+
+    expect(mailClientSupports(follower, "order:oldest_first")).toBe(true);
+    expect(mailClientSupports(follower, "method:queryPersonCard")).toBe(true);
+    expect(mailClientSupports(follower, "method:searchSemantic")).toBe(false);
+    disposeTabFollowerClient(follower);
+  });
+
+  it("reports what an owner's client answers when its engine reported nothing", async () => {
+    const bus = createMemoryTabBus();
+    bindTabMailOwner({
+      client: { ...stubClient({}), async queryPersonCard() {} } as never,
+      bus,
+    });
+
+    const owner = await helloOwner(bus, "acc-1");
+
+    expect(owner.capabilities).toContain("method:queryPersonCard");
+    expect(owner.capabilities).not.toContain("method:searchSemantic");
+  });
+
+  it("assumes the baseline behind an owner tab that predates reporting", async () => {
+    const bus = createMemoryTabBus();
+    bindOlderOwner(bus);
+
+    const owner = await helloOwner(bus, "acc-1");
+    const follower = createTabFollowerClient({
+      accountId: "acc-1",
+      bus,
+      capabilities: owner.capabilities,
+    });
+
+    expect(follower.capabilities).toBe(BASELINE_MAIL_ENGINE_CAPABILITIES);
+    expect(mailClientSupports(follower, "order:oldest_first")).toBe(false);
+    expect(mailClientSupports(follower, "method:queryPersonCard")).toBe(false);
+    // The older owner still answers what it always did.
+    await expect(follower.queryPersonCard?.({} as never)).rejects.toThrow(
+      "unsupported method queryPersonCard",
+    );
+    disposeTabFollowerClient(follower);
+  });
+
+  it("serves a follower that predates reporting", async () => {
+    const bus = createMemoryTabBus();
+    bindTabMailOwner({
+      client: { ...stubClient({}), capabilities: ["order:oldest_first"] },
+      bus,
+    });
+    const answers: TabMailMessage[] = [];
+    bus.subscribe((message) => {
+      if (message.type === "ok") answers.push(message);
+    });
+
+    // Exactly what an older follower sends; it never reads capabilities.
+    bus.post({ type: "hello", accountId: "acc-1" });
+    bus.post({
+      type: "call",
+      id: "call-1",
+      accountId: "acc-1",
+      method: "getDiagnostics",
+      args: ["acc-1"],
+    });
+
+    await waitFor(() => answers.length > 0);
+    expect(answers[0]).toMatchObject({ type: "ok", id: "call-1" });
+  });
+
+  it("follows the report of the tab that takes over as owner", async () => {
+    const bus = createMemoryTabBus();
+    const unbindFirst = bindTabMailOwner({
+      client: { ...stubClient({}), capabilities: ["order:oldest_first"] },
+      bus,
+    });
+    const follower = createTabFollowerClient({
+      accountId: "acc-1",
+      bus,
+      capabilities: (await helloOwner(bus, "acc-1")).capabilities,
+    });
+    expect(mailClientSupports(follower, "order:oldest_first")).toBe(true);
+
+    // The owner tab closes and one running an older build takes over.
+    unbindFirst();
+    bindOlderOwner(bus);
+    bus.post({ type: "ready" });
+
+    await waitFor(
+      () => follower.capabilities === BASELINE_MAIL_ENGINE_CAPABILITIES,
+    );
+    expect(mailClientSupports(follower, "order:oldest_first")).toBe(false);
+    disposeTabFollowerClient(follower);
+  });
+});
+
+/** Says hello as a tab looking for the owner, and resolves the owner's answer. */
+function helloOwner(bus: TabMailBus, accountId: string) {
+  return new Promise<Extract<TabMailMessage, { type: "owner" }>>((resolve) => {
+    const unsubscribe = bus.subscribe((message) => {
+      if (message.type !== "owner" || message.accountId !== accountId) return;
+      unsubscribe();
+      resolve(message);
+    });
+    bus.post({ type: "hello", accountId });
+  });
+}
+
+/** An owner tab on a build from before capability reporting. */
+function bindOlderOwner(bus: TabMailBus) {
+  return bus.subscribe((message) => {
+    if (message.type === "hello") {
+      bus.post({ type: "owner", accountId: message.accountId });
+      return;
+    }
+    if (message.type === "call") {
+      bus.post({
+        type: "error",
+        id: message.id,
+        message: `unsupported method ${message.method}`,
+      });
+    }
+  });
+}
 
 function stubClient(input: {
   onSubmit?: (commandId: string) => void;

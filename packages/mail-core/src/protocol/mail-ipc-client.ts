@@ -1,3 +1,4 @@
+import { parseMailEngineCapabilities } from "../capabilities";
 import type { MailboxWindowHandle, MailClient } from "../engine";
 import { revisionEquals } from "../identities";
 import type { MailboxView, QueryHandle, QuerySnapshot } from "../queries";
@@ -10,6 +11,12 @@ export function createMailIpcClient(
     push: MailIpcPushTransport;
     requestId?: () => string;
     provider?: "google" | "microsoft";
+    /**
+     * What the host's engine reported when the page connected (the desktop
+     * bridge's `mailEngineCapabilities`). Hosts that predate reporting leave
+     * it out, which means the baseline.
+     */
+    capabilities?: unknown;
   },
 ): MailClient & { inspect(): Promise<unknown> } {
   const requestId = options.requestId ?? defaultRequestId;
@@ -43,6 +50,7 @@ export function createMailIpcClient(
   };
 
   return {
+    capabilities: parseMailEngineCapabilities(options.capabilities),
     observeMailbox: (query) =>
       observeSnapshot(observation, "observeMailbox", () => query),
     observeMailboxCounts: (query) =>
