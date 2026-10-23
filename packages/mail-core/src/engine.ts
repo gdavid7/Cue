@@ -1677,6 +1677,7 @@ export function createMailEngine(input: {
       };
     }
     await refreshViews();
+    return scan.page === null;
   }
 
   // Each account syncs in its own lane, so a slow account or a slow request
@@ -1917,7 +1918,7 @@ export function createMailEngine(input: {
           startBackfill({ session, idleGate, stream });
           continue;
         }
-        await ingestBootstrap({
+        const finished = await ingestBootstrap({
           session,
           from: stream,
           deadlineMs: runtime.nowMs() + SYNC_LANE_BOOTSTRAP_SLICE_MS,
@@ -1927,6 +1928,7 @@ export function createMailEngine(input: {
           scope: idleGate.activeBootstrapScopes.get(stream.streamId),
         });
         await rememberBootstrapContinuation(idleGate, session, stream.streamId);
+        if (finished) await resumeHeldBackfill(idleGate, session);
         continue;
       }
       if (!catchUpDue) continue;
@@ -2123,6 +2125,38 @@ export function createMailEngine(input: {
       idleGate.requestCount > checked.requestCount &&
       runtime.nowMs() - checked.atMs >= minIntervalMs
     );
+  }
+
+  // The server holds background scans while a scan the user waits on runs,
+  // so a backfill paused meanwhile was waiting for that scan, not for budget:
+  // it asks again as soon as the scan ends. Its back-off count stays, so a
+  // budget that really is shut still backs off.
+  async function resumeHeldBackfill(
+    idleGate: IdleCatchUpGate,
+    session: { accountId: string; generation: string },
+  ) {
+    const nowMs = runtime.nowMs();
+    if (idleGate.backfillPause.untilMs <= nowMs) return;
+    idleGate.backfillPause.untilMs = 0;
+    for (const scopeId of idleGate.lowPriorityStreams) {
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (
+        !scan?.page ||
+        scan.errorCode !== "throttled" ||
+        scan.nextAttemptAtMs === null ||
+        scan.nextAttemptAtMs <= nowMs
+      ) {
+        continue;
+      }
+      await store.deferBootstrapScan({
+        session,
+        scopeId,
+        bootstrapId: scan.bootstrapId,
+        page: scan.page,
+        nextAttemptAtMs: nowMs,
+        errorCode: null,
+      });
+    }
   }
 
   async function rememberBootstrapContinuation(

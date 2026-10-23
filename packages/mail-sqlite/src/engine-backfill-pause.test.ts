@@ -69,9 +69,14 @@ describe("engine backfill pauses", () => {
 
     await drive(engine, 30 * 60_000);
 
-    const gaps = server.paused
+    // Pauses met while the primary scan ran end with it (see below), so the
+    // back-off is measured from the first ask after it.
+    const paused = server.paused.filter(
+      (pause) => pause.atMs >= (server.primaryDoneAtMs ?? 0),
+    );
+    const gaps = paused
       .slice(1)
-      .map((pause, index) => pause.atMs - (server.paused[index]?.atMs ?? 0));
+      .map((pause, index) => pause.atMs - (paused[index]?.atMs ?? 0));
     expect(gaps.length).toBeGreaterThan(3);
     for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(30_000);
     expect(gaps[1]).toBeGreaterThan(gaps[0]!);
@@ -89,7 +94,11 @@ describe("engine backfill pauses", () => {
 
     await drive(engine, 20_000);
 
-    expect(server.paused.map((pause) => pause.scopeId)).toEqual(["older-a"]);
+    // Asked again once, when the primary scan it may have waited for ends.
+    expect(server.paused.map((pause) => pause.scopeId)).toEqual([
+      "older-a",
+      "older-a",
+    ]);
     await engine.close();
   });
 
@@ -103,7 +112,8 @@ describe("engine backfill pauses", () => {
 
     await drive(engine, 20_000);
 
-    expect(server.backfillBootstraps).toBe(1);
+    // Once more when the primary scan ends, then held.
+    expect(server.backfillBootstraps).toBe(2);
     await engine.close();
   });
 
@@ -138,6 +148,24 @@ describe("engine backfill pauses", () => {
     await drive(engine, 30_000);
 
     expect(server.paused.length).toBeGreaterThan(5);
+    await engine.close();
+  });
+
+  // The server holds background scans while a first sync's primary scan runs,
+  // so a pause met then says nothing about the budget: it ends with the scan.
+  it("starts a backfill held behind the primary scan as soon as that scan ends", async () => {
+    const server = budgetedServer({
+      backfillScopes: ["history"],
+      holdBackfillDuringPrimary: true,
+    });
+    const { engine } = await openEngine(server.source);
+
+    await drive(engine, 30_000);
+
+    expect(server.paused.length).toBeGreaterThan(0);
+    expect(server.primaryDoneAtMs).not.toBeNull();
+    const firstServedAtMs = server.served[0] ?? Number.POSITIVE_INFINITY;
+    expect(firstServedAtMs - server.primaryDoneAtMs!).toBeLessThan(5000);
     await engine.close();
   });
 
@@ -214,9 +242,11 @@ function budgetedServer({
   shutBackfill = false,
   pauseBootstrap = false,
   pauseReason = "throttled",
+  holdBackfillDuringPrimary = false,
 }: {
   backfillScopes: string[];
   shutBackfill?: boolean;
+  holdBackfillDuringPrimary?: boolean;
   pauseBootstrap?: boolean;
   pauseReason?: "throttled" | "unavailable";
 }) {
@@ -290,15 +320,19 @@ function budgetedServer({
           tokens + ((nowMs - refilledAtMs) * BACKFILL_CAPACITY) / 60_000,
         );
         refilledAtMs = nowMs;
-        if (state.shut || tokens < BACKFILL_PAGE_COST) {
-          const retryAfterMs = state.shut
-            ? 1000
-            : Math.max(
-                1000,
-                Math.ceil(
-                  ((BACKFILL_PAGE_COST - tokens) * 60_000) / BACKFILL_CAPACITY,
-                ),
-              );
+        const held =
+          holdBackfillDuringPrimary && state.primaryDoneAtMs === null;
+        if (state.shut || held || tokens < BACKFILL_PAGE_COST) {
+          const retryAfterMs =
+            state.shut || held
+              ? 1000
+              : Math.max(
+                  1000,
+                  Math.ceil(
+                    ((BACKFILL_PAGE_COST - tokens) * 60_000) /
+                      BACKFILL_CAPACITY,
+                  ),
+                );
           if (nowMs < knownPauseUntilMs) state.pausedInsideKnownWindow += 1;
           knownPauseUntilMs = nowMs + retryAfterMs;
           state.paused.push({ atMs: nowMs, retryAfterMs, scopeId });
