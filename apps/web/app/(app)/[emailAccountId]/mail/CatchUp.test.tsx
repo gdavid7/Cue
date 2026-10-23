@@ -3,14 +3,28 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationSummary } from "@inboxzero/mail-core/queries";
-import { type CatchUpAllInboxes, CatchUpEntry } from "./CatchUp";
+import { CatchUpEntry } from "./CatchUp";
 import type { useCatchUpMailbox } from "./use-catch-up-mailbox";
 
 const UNTIL = new Date("2026-10-23T09:00:00");
 
 // The engine behind the view; this build's matches a Message-ID.
 const engine = vi.hoisted(() => ({
-  client: {} as { capabilities?: readonly string[] },
+  client: {} as {
+    capabilities?: readonly string[];
+    getDiagnostics?: (accountId: string) => Promise<{ connection: string }>;
+  },
+  /** Every mailbox window opened, with whether it was on. */
+  windows: [] as Array<{
+    query: { accountIds: string[]; pageSize: number; predicate: unknown };
+    enabled?: boolean;
+  }>,
+  /** The engine's connection, as a window's view reports it. */
+  connection: "ready",
+  /** Accounts whose first sync hasn't finished. */
+  unsynced: [] as string[],
+  /** When the user joined; unset for someone in their first week. */
+  joinedAt: undefined as string | undefined,
 }));
 const MATCHES_MESSAGE_IDS = ["predicate:internet_message_id"];
 
@@ -28,7 +42,10 @@ const mailbox = vi.hoisted(() => ({
 vi.mock("@/env", () => ({ env: {} }));
 vi.mock("@/hooks/useUser", () => ({
   useUser: () => ({
-    data: { createdAt: new Date().toISOString(), dismissedHints: [] },
+    data: {
+      createdAt: engine.joinedAt ?? new Date().toISOString(),
+      dismissedHints: [],
+    },
   }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -42,16 +59,23 @@ vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => engine.client,
 }));
 vi.mock("@inboxzero/mail-react/use-mailbox-window", () => ({
-  useMailboxWindow: (query: { accountIds: string[] }) => ({
-    status: "ready",
-    data: {
-      counts: { matchingConversations: 2 },
-      coverage: query.accountIds.map((accountId) => ({
-        accountId,
-        lastCompletedSyncAtMs: 1,
-      })),
-    },
-  }),
+  useMailboxWindow: (
+    query: (typeof engine.windows)[number]["query"],
+    options: { enabled?: boolean } = {},
+  ) => {
+    engine.windows.push({ query, enabled: options.enabled });
+    return {
+      status: "ready",
+      data: {
+        connection: engine.connection,
+        counts: { matchingConversations: 2 },
+        coverage: query.accountIds.map((accountId) => ({
+          accountId,
+          lastCompletedSyncAtMs: engine.unsynced.includes(accountId) ? null : 1,
+        })),
+      },
+    };
+  },
 }));
 vi.mock("./use-catch-up-mailbox", () => ({
   useCatchUpMailbox: (props: Parameters<typeof useCatchUpMailbox>[0]) => {
@@ -172,6 +196,10 @@ describe("Catch up", () => {
 
 beforeEach(() => {
   engine.client = { capabilities: MATCHES_MESSAGE_IDS };
+  engine.windows = [];
+  engine.connection = "ready";
+  engine.unsynced = [];
+  engine.joinedAt = undefined;
 });
 
 describe("Catch up in All inboxes", () => {
@@ -466,6 +494,103 @@ describe("Catch up in All inboxes", () => {
     expect(screen.getByRole("button", { name: "Catch up" })).toBeTruthy();
   });
 
+  it("tells the view which accounts refused, along with the card it removed", async () => {
+    actions.changeCard = vi.fn(async (keys: string[]) => ({
+      rows: [],
+      actedRows: keys,
+      refusedAccountIds: ["home"],
+    }));
+    const onRemoved = vi.fn();
+    render(
+      <CatchUpEntry
+        actions={actions}
+        allInboxes={{ accounts: ACCOUNTS }}
+        emailAccountId="work"
+        onRemoved={onRemoved}
+        onReply={vi.fn()}
+        query={{ type: "inbox" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
+    await screen.findByText("3 left");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "e" });
+
+    await screen.findByText("Archived “Work oldest”");
+    expect(onRemoved).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "work:t1" }),
+      ["home"],
+    );
+  });
+
+  it("reads each account's state a row at a time where the view doesn't, naming the ones left out", async () => {
+    engine.unsynced = ["home"];
+    engine.connection = "blocked_auth";
+    engine.client = {
+      capabilities: MATCHES_MESSAGE_IDS,
+      getDiagnostics: async (accountId) => ({
+        connection: accountId === "side" ? "blocked_auth" : "ready",
+      }),
+    };
+    render(
+      <CatchUpEntry
+        actions={actions}
+        allInboxes={{
+          accounts: [...ACCOUNTS, { id: "side", email: "me@side.example" }],
+        }}
+        emailAccountId="work"
+        onReply={vi.fn()}
+        query={{ type: "inbox" }}
+      />,
+    );
+
+    expect(engine.windows).toContainEqual({
+      query: expect.objectContaining({
+        accountIds: ["work", "home", "side"],
+        predicate: { kind: "mailbox", mailbox: "inbox" },
+        pageSize: 1,
+      }),
+      enabled: true,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Catch up" }));
+    expect(
+      await screen.findByText(
+        "me@side.example couldn't be loaded, so its mail isn't in Catch up.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Mail from me@home.example is still loading, so it isn't in Catch up yet.",
+      ),
+    ).toBeTruthy();
+    expect(mailbox.calls.at(-1)?.accountIds).toEqual(["work"]);
+  });
+
+  it.each([
+    ["the engine can't match a Message-ID", () => (engine.client = {})],
+    [
+      "the first week is over",
+      () =>
+        (engine.joinedAt = new Date(
+          Date.now() - 60 * 86_400_000,
+        ).toISOString()),
+    ],
+  ])("doesn't read the accounts' state where %s", (_case, arrange) => {
+    arrange();
+    render(
+      <CatchUpEntry
+        actions={actions}
+        allInboxes={{ accounts: ACCOUNTS }}
+        emailAccountId="work"
+        onReply={vi.fn()}
+        query={{ type: "inbox" }}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Catch up" })).toBeNull();
+    expect(engine.windows.some((window) => window.enabled)).toBe(false);
+  });
+
   it("sets aside an account that stops being reachable mid-batch", async () => {
     const view = renderAllInboxes(actions);
     fireEvent.click(screen.getByRole("button", { name: "Catch up" }));
@@ -492,25 +617,33 @@ const ACCOUNTS = [
   { id: "home", email: "me@home.example" },
 ];
 
+type AllInboxesOverrides = {
+  accounts?: typeof ACCOUNTS;
+  waitingAccountIds?: string[];
+  failedAccountIds?: string[];
+};
+
 function renderAllInboxes(
   actions: Parameters<typeof CatchUpEntry>[0]["actions"],
-  overrides: Partial<CatchUpAllInboxes> = {},
+  overrides: AllInboxesOverrides = {},
 ) {
   return render(allInboxesEntry(actions, overrides));
 }
 
+/** All inboxes, which already reads each account's state from the engine. */
 function allInboxesEntry(
   actions: Parameters<typeof CatchUpEntry>[0]["actions"],
-  overrides: Partial<CatchUpAllInboxes> = {},
+  overrides: AllInboxesOverrides = {},
 ) {
   return (
     <CatchUpEntry
       actions={actions}
       allInboxes={{
-        accounts: ACCOUNTS,
-        waitingAccountIds: [],
-        failedAccountIds: [],
-        ...overrides,
+        accounts: overrides.accounts ?? ACCOUNTS,
+        engine: {
+          firstSyncAccountIds: overrides.waitingAccountIds ?? [],
+          failedAccountIds: overrides.failedAccountIds ?? [],
+        },
       }}
       emailAccountId="work"
       onReply={vi.fn()}

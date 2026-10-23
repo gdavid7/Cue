@@ -120,8 +120,8 @@ import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import {
+  type CatchUpAccounts,
   CatchUpEntry,
-  useCatchUpAllInboxes,
 } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
 import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
@@ -1443,9 +1443,27 @@ export function MailShell() {
 
   // In All inboxes, Catch up walks every included account's inbox, and names
   // the ones it leaves out the way the list does.
-  const catchUpAllInboxes = useCatchUpAllInboxes(
-    isAllAccounts ? combinedAccounts : null,
-    combinedThreadState,
+  const {
+    firstSyncAccountIds: combinedFirstSyncAccountIds,
+    failedAccountIds: combinedFailedAccountIds,
+  } = combinedThreadState;
+  const catchUpAccounts = useMemo<CatchUpAccounts | undefined>(
+    () =>
+      isAllAccounts
+        ? {
+            accounts: combinedAccounts,
+            engine: {
+              firstSyncAccountIds: combinedFirstSyncAccountIds,
+              failedAccountIds: combinedFailedAccountIds,
+            },
+          }
+        : undefined,
+    [
+      combinedAccounts,
+      combinedFailedAccountIds,
+      combinedFirstSyncAccountIds,
+      isAllAccounts,
+    ],
   );
 
   // Catch up's Reply opens the conversation the way Today's does, asking for
@@ -2951,7 +2969,7 @@ export function MailShell() {
                 (!isAllAccounts || !activeSplit?.filters.length) && (
                   <CatchUpEntry
                     actions={threadActions}
-                    allInboxes={catchUpAllInboxes}
+                    allInboxes={catchUpAccounts}
                     className="mx-3 my-2"
                     emailAccountId={emailAccountId}
                     onReply={replyFromCatchUp}
