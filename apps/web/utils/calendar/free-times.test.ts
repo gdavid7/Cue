@@ -125,16 +125,45 @@ describe("getFreeTimes", () => {
     });
   });
 
-  it("respects saved weekly hours and the booking link's meeting length", async () => {
+  it("uses saved weekly hours when there is no booking link", async () => {
+    // Mondays 13:00-14:00 only.
+    prisma.availabilitySchedule.findFirst.mockResolvedValue({
+      windows: [{ weekday: 1, startMinutes: 13 * 60, endMinutes: 14 * 60 }],
+    } as never);
+
+    const result = await getFreeTimes({
+      emailAccountId: "account",
+      now: NOW,
+      logger,
+    });
+
+    expect(result.status === "ok" && result.slots).toEqual([
+      {
+        startTime: "2026-10-26T17:00:00.000Z",
+        endTime: "2026-10-26T17:30:00.000Z",
+      },
+      // Nov 2 is after the clock change, so 13:00 is an hour later in UTC.
+      {
+        startTime: "2026-11-02T18:00:00.000Z",
+        endTime: "2026-11-02T18:30:00.000Z",
+      },
+    ]);
+  });
+
+  it("offers what the booking link offers: its schedule, meeting length and window", async () => {
+    // The account's default schedule says Mondays; the link says Tuesdays.
+    prisma.availabilitySchedule.findFirst.mockResolvedValue({
+      windows: [{ weekday: 1, startMinutes: 9 * 60, endMinutes: 17 * 60 }],
+    } as never);
     mockAccount({
       bookingLinks: [
-        { slug: "dana", durationMinutes: 45, minimumNoticeMinutes: 0 },
+        bookingLink({
+          maxDaysAhead: 7,
+          // Tuesdays 13:00-14:00: a 45-minute meeting fits once.
+          windows: [{ weekday: 2, startMinutes: 13 * 60, endMinutes: 14 * 60 }],
+        }),
       ],
     });
-    // Tuesdays 13:00-14:00 only: a 45-minute meeting fits once.
-    prisma.availabilitySchedule.findFirst.mockResolvedValue({
-      windows: [{ weekday: 2, startMinutes: 13 * 60, endMinutes: 14 * 60 }],
-    } as never);
 
     const result = await getFreeTimes({
       emailAccountId: "account",
@@ -146,19 +175,43 @@ describe("getFreeTimes", () => {
       status: "ok",
       timezone: "America/New_York",
       durationMinutes: 45,
-      searchDays: 14,
+      // The link takes bookings 7 days out, so Tuesday Nov 3 is past it.
+      searchDays: 7,
       slots: [
         {
           startTime: "2026-10-27T17:00:00.000Z",
           endTime: "2026-10-27T17:45:00.000Z",
         },
-        // Nov 3 is after the clock change, so 13:00 is an hour later in UTC.
-        {
-          startTime: "2026-11-03T18:00:00.000Z",
-          endTime: "2026-11-03T18:45:00.000Z",
-        },
       ],
       bookingLink: "https://cue.example/book/dana",
+    });
+    expect(unifiedAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({ endDate: "2026-10-30" }),
+    );
+  });
+
+  it("caps a booking link's longer window at the free-times search", async () => {
+    mockAccount({
+      bookingLinks: [
+        bookingLink({
+          maxDaysAhead: 90,
+          windows: [{ weekday: 2, startMinutes: 13 * 60, endMinutes: 14 * 60 }],
+        }),
+      ],
+    });
+
+    const result = await getFreeTimes({
+      emailAccountId: "account",
+      now: NOW,
+      logger,
+    });
+
+    expect(result).toMatchObject({
+      searchDays: 14,
+      slots: [
+        { startTime: "2026-10-27T17:00:00.000Z" },
+        { startTime: "2026-11-03T18:00:00.000Z" },
+      ],
     });
   });
 
@@ -232,15 +285,27 @@ function mockAccount({
   bookingLinks = [],
 }: {
   calendarBookingLink?: string | null;
-  bookingLinks?: {
-    slug: string;
-    durationMinutes: number;
-    minimumNoticeMinutes: number;
-  }[];
+  bookingLinks?: ReturnType<typeof bookingLink>[];
 }) {
   prisma.emailAccount.findUnique.mockResolvedValue({
     timezone: "America/New_York",
     calendarBookingLink,
     bookingLinks,
   } as never);
+}
+
+function bookingLink({
+  maxDaysAhead,
+  windows,
+}: {
+  maxDaysAhead: number;
+  windows: { weekday: number; startMinutes: number; endMinutes: number }[];
+}) {
+  return {
+    slug: "dana",
+    durationMinutes: 45,
+    minimumNoticeMinutes: 0,
+    maxDaysAhead,
+    availabilitySchedule: { windows },
+  };
 }

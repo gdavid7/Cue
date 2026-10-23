@@ -12,6 +12,8 @@ import { formatFreeTimesHtml } from "./free-times-text";
  * openings (and the booking link) at the caret. It inserts only what the
  * calendar answered; when it can't tell, it says so and inserts nothing.
  */
+const FETCH_TIMEOUT_MS = 15_000;
+
 export function useShareFreeTimes({
   editorRef,
   emailAccountId,
@@ -93,6 +95,8 @@ export function useShareFreeTimes({
   return { shareFreeTimes, isLoading };
 }
 
+// A timeout lands in the catch below like any failed read, so the person sees
+// "Couldn't read your calendar" and the action is free to run again.
 async function loadFreeTimes(
   emailAccountId: string,
 ): Promise<GetFreeTimesResponse | null> {
@@ -100,7 +104,11 @@ async function loadFreeTimes(
     const response = await fetchWithAccount({
       url: "/api/user/calendar/free-times",
       emailAccountId,
-      init: { cache: "no-store" },
+      // Someone is waiting at the caret: past this, say so rather than spin.
+      init: {
+        cache: "no-store",
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      },
     });
     if (!response.ok) return null;
     return (await response.json()) as GetFreeTimesResponse;

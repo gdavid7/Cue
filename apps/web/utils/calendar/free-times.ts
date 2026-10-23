@@ -51,6 +51,18 @@ export async function getFreeTimes({
             slug: true,
             durationMinutes: true,
             minimumNoticeMinutes: true,
+            maxDaysAhead: true,
+            availabilitySchedule: {
+              select: {
+                windows: {
+                  select: {
+                    weekday: true,
+                    startMinutes: true,
+                    endMinutes: true,
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -100,9 +112,16 @@ export async function getFreeTimes({
   const timezone = getAccountTimezone(emailAccount.timezone);
   const durationMinutes =
     cueBookingLink?.durationMinutes ?? DEFAULT_MEETING_MINUTES;
-  const end = new Date(
-    now.getTime() + FREE_TIMES_SEARCH_DAYS * 24 * 60 * 60 * 1000,
-  );
+  // With a booking link, offer exactly what a guest on it could book: its own
+  // schedule and how far ahead it takes bookings, as loadPublicBookingLink
+  // reads them.
+  const rules = cueBookingLink
+    ? cueBookingLink.availabilitySchedule.windows
+    : (schedule?.windows ?? DEFAULT_WEEKDAY_WINDOWS);
+  const searchDays = cueBookingLink
+    ? Math.min(FREE_TIMES_SEARCH_DAYS, cueBookingLink.maxDaysAhead)
+    : FREE_TIMES_SEARCH_DAYS;
+  const end = new Date(now.getTime() + searchDays * 24 * 60 * 60 * 1000);
 
   const [calendarBusy, bookingHolds] = await Promise.all([
     getUnifiedCalendarAvailability({
@@ -113,7 +132,9 @@ export async function getFreeTimes({
       timezone,
       logger,
       // A calendar that can't be read could hide a meeting, and a wrong time
-      // is worse than none.
+      // is worse than none. A calendar the provider reports as not found
+      // (deleted or unshared) is still skipped, as in the public booking
+      // flow: it can't hold a meeting.
       failClosed: true,
       excludeGoogleVirtualCalendars: true,
     }).catch((error) => {
@@ -143,7 +164,7 @@ export async function getFreeTimes({
     timezone,
     start: now,
     end,
-    rules: schedule?.windows ?? DEFAULT_WEEKDAY_WINDOWS,
+    rules,
     busyPeriods: [
       ...calendarBusy,
       ...bookingHolds.map((hold) => ({
@@ -158,7 +179,7 @@ export async function getFreeTimes({
         cueBookingLink?.minimumNoticeMinutes ?? DEFAULT_MINIMUM_NOTICE_MINUTES,
       bufferBeforeMinutes: 0,
       bufferAfterMinutes: 0,
-      bookingWindowDays: FREE_TIMES_SEARCH_DAYS,
+      bookingWindowDays: searchDays,
     },
   });
 
@@ -166,7 +187,7 @@ export async function getFreeTimes({
     status: "ok" as const,
     timezone,
     durationMinutes,
-    searchDays: FREE_TIMES_SEARCH_DAYS,
+    searchDays,
     slots: pickOpenings(slots, slotIntervalMinutes, FREE_TIMES_COUNT),
     bookingLink,
   };
