@@ -1,4 +1,8 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 
 export const EMAIL_ACCOUNT_HEADER = "X-Email-Account-ID";
 // The web app's code for a signed-out app session, as opposed to a revoked
@@ -28,6 +32,9 @@ export function mailApiHeaders(
     accept:
       accept === "bytes" ? "application/octet-stream" : "application/json",
     ...(accountId ? { [EMAIL_ACCOUNT_HEADER]: accountId } : {}),
+    ...(pathnameOf(path).startsWith("/api/mail/v1/")
+      ? { [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION) }
+      : {}),
     ...(hasBody ? { "content-type": "application/json" } : {}),
   };
 }

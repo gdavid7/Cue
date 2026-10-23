@@ -1,6 +1,10 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackendMailboxSource } from "@inboxzero/mail-core/protocol/backend-adapter";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 import { createScopedLogger } from "@/utils/logger";
 import { POST } from "./route";
 
@@ -9,6 +13,7 @@ vi.mock("server-only", () => ({}));
 const getMessagesWithPagination = vi.fn();
 const enumerated = vi.hoisted(() => ({
   page: null as null | Record<string, unknown>,
+  oldEngine: undefined as unknown,
 }));
 
 // Lets a case stand in for the source's page, such as one a Gmail sync
@@ -21,6 +26,7 @@ vi.mock("@/utils/mail-api/source", async (original) => {
       input: Parameters<typeof actual.createEmailProviderMailboxSource>[0],
     ) => {
       const source = actual.createEmailProviderMailboxSource(input);
+      enumerated.oldEngine = input.oldEngine;
       return {
         ...source,
         enumerate: (request: Parameters<typeof source.enumerate>[0]) =>
@@ -63,6 +69,48 @@ describe("POST /enumeration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     enumerated.page = null;
+    enumerated.oldEngine = undefined;
+  });
+
+  describe("engine revision", () => {
+    const browser = "Mozilla/5.0 (Macintosh) Chrome/140.0 Safari/537.36";
+
+    it.each([
+      [
+        "an engine below the minimum",
+        { "user-agent": browser, [MAIL_ENGINE_REVISION_HEADER]: "0" },
+        "below_minimum",
+      ],
+      [
+        "an engine whose revision is not a number",
+        { "user-agent": browser, [MAIL_ENGINE_REVISION_HEADER]: "abc" },
+        "below_minimum",
+      ],
+      [
+        "a current browser engine",
+        {
+          "user-agent": browser,
+          [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
+        },
+        null,
+      ],
+      // Every engine built before the header sends none, well-behaved ones
+      // included, so until the minimum rises above 1 they all count as current.
+      [
+        "a browser engine that sends no revision",
+        { "user-agent": browser },
+        null,
+      ],
+      [
+        "a desktop engine that sends no revision",
+        { "user-agent": "node" },
+        null,
+      ],
+    ])("tells the source about %s", async (_name, headers, expected) => {
+      enumerated.page = pagedResult();
+      await routeBackedSource(headers).enumerate(enumerationInput());
+      expect(enumerated.oldEngine).toBe(expected);
+    });
   });
 
   it("carries the budget's wait for the next page to the client", async () => {
@@ -105,7 +153,7 @@ describe("POST /enumeration", () => {
   });
 });
 
-function routeBackedSource() {
+function routeBackedSource(headers: Record<string, string> = {}) {
   return createBackendMailboxSource({
     accountId: "acc-1",
     async request(input) {
@@ -113,7 +161,7 @@ function routeBackedSource() {
         new NextRequest(`http://localhost${input.path}`, {
           method: input.method,
           body: input.body ? JSON.stringify(input.body) : undefined,
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", ...headers },
           signal: input.signal,
         }),
         { params: Promise.resolve({ accountId: "acc-1" }) } as never,

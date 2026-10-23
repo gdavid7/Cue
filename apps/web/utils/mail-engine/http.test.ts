@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { SERVER_BUILD_HEADER } from "@/utils/server-build";
 
@@ -48,6 +52,8 @@ describe("createMailHttpRequest", () => {
     expect(init.headers).toMatchObject({
       accept: "application/octet-stream",
       [EMAIL_ACCOUNT_HEADER]: "acc-1",
+      // The server paces background sync for engines below its minimum.
+      [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
     });
   });
 
