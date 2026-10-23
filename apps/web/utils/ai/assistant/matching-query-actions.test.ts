@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { ModelMessage } from "ai";
 import {
   getMatchingQueryActions,
   toMatchingBulkAction,
   withoutConfirmToken,
+  withoutConfirmTokens,
 } from "./matching-query-actions";
 
 describe("toMatchingBulkAction", () => {
@@ -31,5 +33,29 @@ describe("withoutConfirmToken", () => {
     expect(
       withoutConfirmToken({ status: "needs_confirmation", confirmToken: "t" }),
     ).toEqual({ status: "needs_confirmation" });
+  });
+});
+
+describe("withoutConfirmTokens", () => {
+  it("removes confirm tokens from stored history before anything reads it", () => {
+    const history: ModelMessage[] = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            toolName: "manageInbox",
+            output: {
+              type: "json",
+              value: { status: "needs_confirmation", confirmToken: "secret" },
+            },
+          },
+        ],
+      },
+    ];
+    expect(JSON.stringify(withoutConfirmTokens(history))).not.toContain(
+      "secret",
+    );
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { getMatchingResultCopy } from "@/utils/mail-bulk/follow-matching-jobs";
+import { getMatchingResultCopy } from "@/components/mail-bulk/follow-matching-jobs";
 import type { ListThread } from "./types";
 
 import { MailPanelErrorBoundary } from "@/app/(app)/[emailAccountId]/mail/MailPanelErrorBoundary";

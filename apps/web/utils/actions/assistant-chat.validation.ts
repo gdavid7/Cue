@@ -261,6 +261,10 @@ export type PendingSaveMemoryToolOutput = z.infer<
 
 export const confirmAssistantSaveMemoryBody = confirmAssistantActionBaseBody;
 
+export type ConfirmAssistantSaveMemoryBody = z.infer<
+  typeof confirmAssistantSaveMemoryBody
+>;
+
 // The card's answer to a manageInbox preview over a whole search. The search
 // is sent back so the server can check it against the token's hash; the
 // token itself never holds it.
@@ -274,9 +278,6 @@ export const cancelAssistantMatchingActionBody =
   confirmAssistantActionBaseBody.extend({
     confirmToken: z.string().uuid(),
   });
-export type ConfirmAssistantSaveMemoryBody = z.infer<
-  typeof confirmAssistantSaveMemoryBody
->;
 
 const assistantChatTextPartSchema = z.object({
   type: z.literal("text"),

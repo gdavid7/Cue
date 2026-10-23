@@ -1,3 +1,5 @@
+"use client";
+
 import { toast } from "sonner";
 import type { GetMailBulkJobResponse } from "@/app/api/user/mail/bulk-jobs/[jobId]/route";
 import { toastUndo } from "@/components/Toast";
@@ -16,7 +18,7 @@ const POLL_INTERVAL_MS = 1500;
 const MAX_POLL_MS = 6 * 60 * 60 * 1000;
 const MAX_FAILED_POLLS = 20;
 
-type RunningJob = { accountId: string; jobId: string };
+export type RunningJob = { accountId: string; jobId: string };
 
 /**
  * Follows running select-all jobs with a progress toast that can stop them,

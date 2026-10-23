@@ -1,4 +1,6 @@
+import type { ModelMessage } from "ai";
 import type { MatchingBulkAction } from "@/utils/actions/mail-bulk-matching.validation";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
 
 // manageInbox actions that can run over every email a search matches, by the
 // name each provider's manageInbox gives them. Trash has no confirm-and-undo
@@ -9,7 +11,7 @@ const MATCHING_QUERY_ACTIONS = {
 } as const;
 
 export function getMatchingQueryActions(provider: string): readonly string[] {
-  return provider === "microsoft"
+  return isMicrosoftProvider(provider)
     ? MATCHING_QUERY_ACTIONS.microsoft
     : MATCHING_QUERY_ACTIONS.google;
 }
@@ -48,4 +50,32 @@ export function withoutConfirmToken(output: unknown): unknown {
     unknown
   >;
   return rest;
+}
+
+/**
+ * Stored chat history as model messages, with every manageInbox confirm token
+ * removed, for whatever reads the conversation (the model, memory extraction).
+ */
+export function withoutConfirmTokens(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (message.role !== "tool") return message;
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "tool-result" &&
+        part.toolName === "manageInbox" &&
+        part.output.type === "json"
+          ? {
+              ...part,
+              output: {
+                ...part.output,
+                value: withoutConfirmToken(
+                  part.output.value,
+                ) as typeof part.output.value,
+              },
+            }
+          : part,
+      ),
+    };
+  });
 }

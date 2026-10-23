@@ -11,7 +11,10 @@ import type {
 import type { GetMatchingCountResponse } from "@/app/api/user/mail/matching-count/route";
 import { getActionErrorMessage } from "@/utils/error";
 import { swrFetcher } from "@/providers/swr-fetcher";
-import { followMatchingJobs } from "@/utils/mail-bulk/follow-matching-jobs";
+import {
+  followMatchingJobs,
+  type RunningJob,
+} from "@/components/mail-bulk/follow-matching-jobs";
 
 type MatchingAccount = { id: string; scope: MatchingScope };
 
@@ -65,27 +68,21 @@ export function useSelectAllMatching({
       if (!accounts?.length) return;
       setSelected(null);
       const started = await Promise.all(
-        accounts.map(
-          async (
-            account,
-          ): Promise<{ accountId: string; jobId: string } | null> => {
-            const result = await startMatchingBulkActionAction(account.id, {
-              scope: account.scope,
-              action,
-              labelId: options?.labelId,
-            });
-            const jobId = result?.data?.jobId;
-            if (!jobId) {
-              toast.error(getActionErrorMessage(result ?? {}));
-              return null;
-            }
-            return { accountId: account.id, jobId };
-          },
-        ),
+        accounts.map(async (account): Promise<RunningJob | null> => {
+          const result = await startMatchingBulkActionAction(account.id, {
+            scope: account.scope,
+            action,
+            labelId: options?.labelId,
+          });
+          const jobId = result?.data?.jobId;
+          if (!jobId) {
+            toast.error(getActionErrorMessage(result ?? {}));
+            return null;
+          }
+          return { accountId: account.id, jobId };
+        }),
       );
-      const jobs = started.filter(
-        (job): job is { accountId: string; jobId: string } => Boolean(job),
-      );
+      const jobs = started.filter((job): job is RunningJob => Boolean(job));
       if (!jobs.length) return;
       await followMatchingJobs({ jobs, action, onFinished });
     },

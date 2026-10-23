@@ -4,7 +4,6 @@ import {
   truncatePromptContent,
 } from "@/utils/ai/assistant/prompt-size";
 import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
-import { withoutConfirmToken } from "@/utils/ai/assistant/matching-query-actions";
 
 export const RECENT_TOOL_RESULTS_TO_KEEP = 10;
 const UNTRIMMED_RESULT_CHAR_BUDGET = 200_000;
@@ -139,7 +138,6 @@ const MODEL_OUTPUT_PROJECTIONS: Record<
   (value: JSONValue) => JSONValue
 > = {
   searchInbox: toSearchInboxModelValue,
-  manageInbox: (value) => withoutConfirmToken(value) as JSONValue,
 };
 
 // Their results hold text a later write saves back whole: updateRule's

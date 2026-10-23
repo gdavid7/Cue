@@ -22,6 +22,7 @@ vi.mock("@/utils/redis", () => ({
       store.set(key, value);
       return "OK";
     }),
+    pttl: vi.fn(async (key: string) => (store.has(key) ? 600_000 : -2)),
     getdel: vi.fn(async (key: string) => {
       const value = store.get(key) ?? null;
       store.delete(key);
@@ -190,10 +191,7 @@ describe("confirmMatchingQueryAction", () => {
 
   it("can't be confirmed once cancelled", async () => {
     const token = await previewToken();
-    await cancelMatchingQueryAction({
-      emailAccountId: ACCOUNT,
-      confirmToken: token,
-    });
+    await cancel(token);
 
     await expect(confirm({ confirmToken: token })).rejects.toThrow(
       MATCHING_CONFIRM_EXPIRED,
@@ -201,6 +199,79 @@ describe("confirmMatchingQueryAction", () => {
     expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
   });
 });
+
+describe("Confirm and Cancel racing for one token", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store.clear();
+  });
+
+  // Confirm in one tab, Cancel in another: the card must never say
+  // cancelled while the job runs.
+  it("lets Confirm win and refuses the Cancel that lost", async () => {
+    const token = await previewToken();
+
+    const [confirmed, cancelled] = await Promise.allSettled([
+      confirm({ confirmToken: token }),
+      cancel(token),
+    ]);
+
+    expect(confirmed.status).toBe("fulfilled");
+    expect(cancelled).toMatchObject({
+      status: "rejected",
+      reason: expect.objectContaining({ message: MATCHING_CONFIRM_EXPIRED }),
+    });
+    expect(mockStartMatchingBulkJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets Cancel win and starts nothing", async () => {
+    const token = await previewToken();
+
+    const [cancelled, confirmed] = await Promise.allSettled([
+      cancel(token),
+      confirm({ confirmToken: token }),
+    ]);
+
+    expect(cancelled.status).toBe("fulfilled");
+    expect(confirmed.status).toBe("rejected");
+    expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
+  });
+
+  it("only cancels a token for its own card", async () => {
+    const token = await previewToken();
+
+    await expect(
+      cancelMatchingQueryAction({
+        emailAccountId: ACCOUNT,
+        chatId: "chat-2",
+        toolCallId: CALL,
+        confirmToken: token,
+      }),
+    ).rejects.toThrow(MATCHING_CONFIRM_EXPIRED);
+  });
+
+  it("puts the token back when the job fails to start, so Confirm can be retried", async () => {
+    const token = await previewToken();
+    mockStartMatchingBulkJob.mockRejectedValueOnce(new Error("queue down"));
+
+    await expect(confirm({ confirmToken: token })).rejects.toThrow(
+      "queue down",
+    );
+    await expect(confirm({ confirmToken: token })).resolves.toMatchObject({
+      jobId: "job-1",
+    });
+    expect(mockStartMatchingBulkJob).toHaveBeenCalledTimes(2);
+  });
+});
+
+function cancel(confirmToken: string) {
+  return cancelMatchingQueryAction({
+    emailAccountId: ACCOUNT,
+    chatId: CHAT,
+    toolCallId: CALL,
+    confirmToken,
+  });
+}
 
 function preview(
   overrides: Partial<Parameters<typeof previewMatchingQueryAction>[0]>,

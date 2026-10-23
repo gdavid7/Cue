@@ -160,29 +160,31 @@ export async function confirmMatchingQueryAction({
   query: string;
   logger: Logger;
 }) {
-  const stored = storedConfirmationSchema.safeParse(
-    parseStored(
-      await redis.getdel(confirmationKey(emailAccountId, confirmToken)),
-    ),
-  );
-  if (
-    !stored.success ||
-    stored.data.chatId !== chatId ||
-    stored.data.toolCallId !== toolCallId ||
-    stored.data.queryHash !== hashQuery(emailAccountId, query)
-  )
+  const key = confirmationKey(emailAccountId, confirmToken);
+  const { stored, ttlMs } = await takeConfirmation(key, { chatId, toolCallId });
+  if (!stored || stored.queryHash !== hashQuery(emailAccountId, query))
     throw new SafeError(MATCHING_CONFIRM_EXPIRED);
 
   const matching = toChatMatchingScope({ query }, provider);
   if (!matching) throw new SafeError(FOLDER_OR_CATEGORY_SEARCH);
-  const { action, labelId } = stored.data;
-  const jobId = await startMatchingBulkJob({
-    emailAccountId,
-    scope: matching.scope,
-    action,
-    labelId,
-    logger,
-  });
+  const { action, labelId } = stored;
+  let jobId: string;
+  try {
+    jobId = await startMatchingBulkJob({
+      emailAccountId,
+      scope: matching.scope,
+      action,
+      labelId,
+      logger,
+    });
+  } catch (error) {
+    // Nothing started, so the card can be confirmed again while it lasts.
+    if (ttlMs > 0)
+      await redis
+        .set(key, JSON.stringify(stored), { px: ttlMs })
+        .catch(() => undefined);
+    throw error;
+  }
   return {
     jobId,
     action,
@@ -190,15 +192,46 @@ export async function confirmMatchingQueryAction({
   };
 }
 
-/** Drops a preview's token, so it can't be confirmed any more. */
+/**
+ * Spends a preview's token without starting anything. Like Confirm, it takes
+ * the token in one step, so when Confirm and Cancel race (two tabs) exactly
+ * one of them wins and the other is told the token is gone.
+ */
 export async function cancelMatchingQueryAction({
   emailAccountId,
+  chatId,
+  toolCallId,
   confirmToken,
 }: {
   emailAccountId: string;
+  chatId: string;
+  toolCallId: string;
   confirmToken: string;
 }) {
-  await redis.del(confirmationKey(emailAccountId, confirmToken));
+  const { stored } = await takeConfirmation(
+    confirmationKey(emailAccountId, confirmToken),
+    { chatId, toolCallId },
+  );
+  if (!stored) throw new SafeError(MATCHING_CONFIRM_EXPIRED);
+}
+
+/**
+ * Takes a token in one step (GETDEL) and keeps it only if it belongs to this
+ * card. Also reads how long it had left, so a failed start can put it back.
+ */
+async function takeConfirmation(
+  key: string,
+  card: { chatId: string; toolCallId: string },
+) {
+  const [ttlMs, raw] = await Promise.all([redis.pttl(key), redis.getdel(key)]);
+  const parsed = storedConfirmationSchema.safeParse(parseStored(raw));
+  const stored =
+    parsed.success &&
+    parsed.data.chatId === card.chatId &&
+    parsed.data.toolCallId === card.toolCallId
+      ? parsed.data
+      : null;
+  return { stored, ttlMs: Number(ttlMs) };
 }
 
 function confirmationKey(emailAccountId: string, confirmToken: string) {
@@ -206,9 +239,12 @@ function confirmationKey(emailAccountId: string, confirmToken: string) {
 }
 
 // Keyed by a server secret, so a stored hash can't be checked against
-// guessed searches.
+// guessed searches. The key is derived for this use alone, not the secret.
 function hashQuery(emailAccountId: string, query: string) {
-  return createHmac("sha256", env.EMAIL_ENCRYPT_SECRET)
+  const key = createHmac("sha256", env.EMAIL_ENCRYPT_SECRET)
+    .update("assistant-matching-confirm")
+    .digest();
+  return createHmac("sha256", key)
     .update(`${emailAccountId}\u0000${query.trim()}`)
     .digest("hex");
 }

@@ -191,7 +191,14 @@ export const cancelAssistantMatchingAction = actionClient
       ctx: { emailAccountId, logger },
       parsedInput: { chatId, chatMessageId, toolCallId, confirmToken },
     }) => {
-      await cancelMatchingQueryAction({ emailAccountId, confirmToken });
+      // Throws when Confirm (or another Cancel) already took the token, so
+      // the card is only marked cancelled when nothing started.
+      await cancelMatchingQueryAction({
+        emailAccountId,
+        chatId,
+        toolCallId,
+        confirmToken,
+      });
       await persistAssistantMatchingActionOutcome({
         chatId,
         chatMessageId,

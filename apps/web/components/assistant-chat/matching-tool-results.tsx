@@ -13,7 +13,7 @@ import {
 } from "@/utils/actions/assistant-chat";
 import { toMatchingBulkAction } from "@/utils/ai/assistant/matching-query-actions";
 import { getActionErrorMessage } from "@/utils/error";
-import { followMatchingJobs } from "@/utils/mail-bulk/follow-matching-jobs";
+import { followMatchingJobs } from "@/components/mail-bulk/follow-matching-jobs";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 
 export function CountEmailsResult({ output }: { output: unknown }) {
@@ -109,6 +109,8 @@ export function ManageInboxQueryResult({
     if (result?.serverError || result?.validationErrors) {
       setAnswer(null);
       toastError({ description: getActionErrorMessage(result) });
+      // Confirm may have won in another tab; show what the chat recorded.
+      refreshChat();
       return;
     }
     setAnswer("cancelled");

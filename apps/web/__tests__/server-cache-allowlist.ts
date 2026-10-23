@@ -32,13 +32,13 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/ai/assistant/chat-matching-actions.ts": {
-    writes: 1,
+    writes: 2,
     keys: [
       {
         key: "assistant-matching-confirm:{emailAccountId}:{confirmToken}",
         holds:
           "a chat id, tool call id, bulk-action enum, optional label id and an HMAC (server secret) of the search; never the search itself",
-        ttl: "15m, taken once on Confirm or dropped on Cancel",
+        ttl: "15m, taken once by Confirm or Cancel; put back with its remaining TTL only if the job fails to start",
       },
     ],
   },

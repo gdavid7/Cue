@@ -237,7 +237,7 @@ export async function countEmails({
         logger,
         abortSignal,
         selection: {
-          accounts: (selection.accounts ?? []).filter((account) =>
+          accounts: selection.accounts.filter((account) =>
             others.some((entry) => entry.account.id === account.id),
           ),
           notSearchedCount: selection.notSearchedCount,
