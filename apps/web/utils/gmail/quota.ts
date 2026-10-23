@@ -16,7 +16,10 @@ import {
   getFastRequestSampleRate,
   isFastRequestSampled,
 } from "@/utils/request-sampling";
-import { timeRequestDependency } from "@/utils/request-metrics";
+import {
+  noteGmailDeferral,
+  timeRequestDependency,
+} from "@/utils/request-metrics";
 import { sleep } from "@/utils/sleep";
 
 // The per-user Gmail limit for this Google Cloud project, shared by every
@@ -825,6 +828,7 @@ export async function admitGmailCall({
         1,
       );
       if (stats) stats.deferred += 1;
+      noteGmailDeferral();
       const error = new GmailCallDeferredError(
         wait,
         priority,

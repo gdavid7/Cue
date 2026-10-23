@@ -32,8 +32,8 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-vi.mock("@/utils/actions/email-account-cookie", () => ({
-  setLastEmailAccountAction: cookie.setLastAccount,
+vi.mock("@/utils/last-email-account", () => ({
+  rememberLastEmailAccount: cookie.setLastAccount,
 }));
 
 describe("EmailAccountProvider", () => {
@@ -129,9 +129,7 @@ describe("EmailAccountProvider", () => {
     );
 
     await waitFor(() =>
-      expect(cookie.setLastAccount).toHaveBeenCalledWith({
-        emailAccountId: "account-2",
-      }),
+      expect(cookie.setLastAccount).toHaveBeenCalledWith("account-2"),
     );
     expect(screen.getByTestId("account-id").textContent).toBe("account-2");
   });
@@ -174,9 +172,7 @@ describe("EmailAccountProvider", () => {
     );
 
     await waitFor(() =>
-      expect(cookie.setLastAccount).toHaveBeenCalledWith({
-        emailAccountId: "account-2",
-      }),
+      expect(cookie.setLastAccount).toHaveBeenCalledWith("account-2"),
     );
   });
 
@@ -694,9 +690,7 @@ describe("EmailAccountProvider", () => {
 
     expect(screen.getByTestId("account-id").textContent).toBe("account-4");
     expect(shown.filter((id) => id && id !== "account-4")).toEqual([]);
-    expect(cookie.setLastAccount).not.toHaveBeenCalledWith({
-      emailAccountId: "account-3",
-    });
+    expect(cookie.setLastAccount).not.toHaveBeenCalledWith("account-3");
   });
 
   it("forgets the pinned account's old position once the user navigates", async () => {
@@ -778,9 +772,7 @@ describe("EmailAccountProvider", () => {
     rerender(tree());
 
     expect(screen.getByTestId("account-id").textContent).toBe("account-2");
-    expect(cookie.setLastAccount).not.toHaveBeenCalledWith({
-      emailAccountId: "account-3",
-    });
+    expect(cookie.setLastAccount).not.toHaveBeenCalledWith("account-3");
   });
 
   it("does not replace a global route when remaining accounts exist", async () => {

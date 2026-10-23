@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
 import {
@@ -2611,6 +2612,27 @@ export class OutlookProvider implements EmailProvider {
     });
   }
 
+  async moveMessagesToFolder(
+    messageIds: string[],
+    folderId: string,
+  ): Promise<void> {
+    // A move to a missing folder fails with the same 404 as a missing
+    // message, which the move skips, so the folder is checked once up front.
+    try {
+      await this.client
+        .getClient()
+        .api(`/me/mailFolders/${folderId}`)
+        .select("id")
+        .get();
+    } catch (error) {
+      if (extractErrorInfo(error).status === 404) {
+        throw new ProviderChangeRejectedError("folder_not_found");
+      }
+      throw error;
+    }
+    await this.moveMessageSnapshots(messageIds, folderId);
+  }
+
   async archiveMessage(messageId: string): Promise<void> {
     try {
       await this.client.getClient().api(`/me/messages/${messageId}/move`).post({
@@ -2688,7 +2710,7 @@ export class OutlookProvider implements EmailProvider {
 
   private async moveMessageSnapshots(
     messageIds: string[],
-    destinationId: "archive" | "deleteditems" | "inbox",
+    destinationId: string,
   ) {
     await mapWithConcurrency([...new Set(messageIds)], 4, async (messageId) => {
       try {

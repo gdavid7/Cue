@@ -1,10 +1,13 @@
 import { expect, type Locator, type Page } from "@playwright/test";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
   conversationWithSubject,
+  insertInboxMailInConversation,
   openMail,
   readLatestMailMutation,
+  readProviderAccessToken,
 } from "./mail-test-helpers";
 
 test("drags a row onto a label, which the open Inbox refuses", async ({
@@ -90,6 +93,58 @@ test("drags a selection onto Trash and brings it back with Undo", async ({
   for (const threadId of TRASHED_THREADS) {
     await expectMutation(page, emailAccountId, "untrash", threadId);
   }
+});
+
+test("drags a conversation into an Outlook folder and Undo puts each message back", async ({
+  page,
+}, testInfo) => {
+  test.skip(!isMicrosoftPlaywright(), "Only Outlook has folders");
+  const run = `${testInfo.retry}-${Date.now()}`;
+  const subject = `Folder drop ${run}`;
+  const graph = await outlookGraph(page);
+  const folder = await graph.createFolder(`Drop folder ${run}`);
+  // One conversation in two places: the user's message in Sent and the
+  // reply to it in the inbox.
+  const sentId = await graph.createSentMessage(subject);
+  const replyId = await insertInboxMailInConversation(page, {
+    threadId: "",
+    messageId: sentId,
+    subject,
+    from: "ada@example.com",
+  });
+
+  const { conversations } = await openMail(page);
+  const row = conversationWithSubject(page, conversations, subject);
+  await expect(row).toBeVisible({ timeout: 60_000 });
+  const sidebar = page.getByRole("navigation", { name: "Mailboxes" });
+  const target = sidebar.getByRole("link", {
+    name: new RegExp(`^${folder.displayName}`),
+  });
+  await expect(target).toBeVisible();
+
+  await dragOver(page, row, target);
+  await expect(target).toHaveAttribute("data-drop", "target");
+  await capturePlaywrightCheckpoint(page, testInfo, "drag-over-folder");
+  await page.mouse.up();
+
+  const moved = toast(page, `Moved to ${folder.displayName}`);
+  await expect(moved).toBeVisible();
+  await expect(row).toHaveCount(0);
+  await expect
+    .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
+    .toBe(folder.id);
+  // A folder move leaves the user's own Sent copy where it is.
+  expect(await graph.folderOf(sentId)).toBe("sentitems");
+
+  await moved.getByRole("button", { name: /^Undo/ }).click();
+  await expect(row).toBeVisible();
+  await expect
+    .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
+    .toBe("inbox");
+  await expect
+    .poll(() => graph.folderOf(sentId), { timeout: 60_000 })
+    .toBe("sentitems");
+  await capturePlaywrightCheckpoint(page, testInfo, "folder-move-undone");
 });
 
 test("opens More while a drag rests on its toggle, and closes it after", async ({
@@ -193,4 +248,47 @@ async function expectMutation(
       },
     )
     .toMatchObject({ status: "succeeded" });
+}
+
+/** The Outlook emulator's Graph API, as the provider sees the mailbox. */
+async function outlookGraph(page: Page) {
+  const baseUrl = process.env.MICROSOFT_BASE_URL;
+  if (!baseUrl) throw new Error("MICROSOFT_BASE_URL is missing");
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+    "content-type": "application/json",
+  };
+  const post = async (path: string, data: unknown) => {
+    const response = await page.request.post(`${baseUrl}/v1.0/me${path}`, {
+      headers,
+      data,
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return response.json();
+  };
+  return {
+    createFolder: (displayName: string) =>
+      post("/mailFolders", { displayName }) as Promise<{
+        id: string;
+        displayName: string;
+      }>,
+    async createSentMessage(subject: string) {
+      const draft = (await post("/messages", {
+        subject,
+        body: { contentType: "text", content: "Filed by a drag." },
+        toRecipients: [{ emailAddress: { address: "ada@example.com" } }],
+      })) as { id: string };
+      await post(`/messages/${draft.id}/move`, { destinationId: "sentitems" });
+      return draft.id;
+    },
+    async folderOf(messageId: string) {
+      const response = await page.request.get(
+        `${baseUrl}/v1.0/me/messages/${messageId}`,
+        { headers },
+      );
+      if (!response.ok()) return null;
+      return ((await response.json()) as { parentFolderId?: string })
+        .parentFolderId;
+    },
+  };
 }

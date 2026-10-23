@@ -7,9 +7,18 @@ import { GmailLabel } from "@/utils/gmail/label";
 
 /** A sidebar row conversations can be dropped on. */
 export type SidebarDropTarget =
-  | { kind: "inbox" | "archive" | "trash" | "spam" | "starred" | "folder" }
+  | { kind: "inbox" | "archive" | "trash" | "spam" | "starred" }
   /** A Gmail label or Outlook category, which belongs to one account. */
-  | { kind: "label"; accountId: string; labelId: string };
+  | { kind: "label"; accountId: string; labelId: string }
+  /** An Outlook folder, which belongs to one account. */
+  | OutlookFolderDrop;
+
+type OutlookFolderDrop = {
+  kind: "folder";
+  accountId: string;
+  folderId: string;
+  name: string;
+};
 
 export type DraggedConversation = {
   key: string;
@@ -29,13 +38,14 @@ export type SidebarDropAction =
         | "spam"
         | "star";
     }
-  | { kind: "label"; accountId: string; labelId: string };
+  | { kind: "label"; accountId: string; labelId: string }
+  | OutlookFolderDrop;
 
 /**
  * What dropping these conversations on a sidebar row does, as the toolbar or
  * the label picker would do it, or null where the drop would do nothing or
- * nothing sensible: the open view, mail already there, or a label the
- * conversations' account doesn't have.
+ * nothing sensible: the open view, mail already there, or a label or folder
+ * the conversations' account doesn't have.
  */
 export function resolveSidebarDrop({
   target,
@@ -64,6 +74,9 @@ export function resolveSidebarDrop({
   const inInbox = (conversation: DraggedConversation) =>
     isThreadInInbox(conversation.messages);
 
+  const allFromAccount = (accountId: string) =>
+    all((conversation) => conversation.accountId === accountId);
+
   switch (target.kind) {
     case "inbox":
       // The toolbar's ways back: Restore out of Trash, Not spam out of Spam.
@@ -85,8 +98,7 @@ export function resolveSidebarDrop({
         : { kind: "star" };
     case "label": {
       // A label id names one account's label; other accounts don't have it.
-      if (!all((conversation) => conversation.accountId === target.accountId))
-        return null;
+      if (!allFromAccount(target.accountId)) return null;
       const labelled = (conversation: DraggedConversation) =>
         conversation.messages.some((message) =>
           message.labelIds?.includes(target.labelId),
@@ -99,7 +111,9 @@ export function resolveSidebarDrop({
       };
     }
     case "folder":
-      // Nothing in the app moves mail to an Outlook folder yet.
-      return null;
+      // A folder id names one account's folder. Moving keeps trash or spam
+      // marked as such, so that mail has to come out of there first.
+      if (!allFromAccount(target.accountId) || touchesTrashOrSpam) return null;
+      return { ...target };
   }
 }

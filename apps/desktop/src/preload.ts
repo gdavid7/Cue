@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { DESKTOP_MAIL_ENGINE_CAPABILITIES } from "./mail-engine/capabilities";
 
 contextBridge.exposeInMainWorld("inboxZeroDesktop", {
   setUnreadCount: (count: number) =>
@@ -8,6 +9,7 @@ contextBridge.exposeInMainWorld("inboxZeroDesktop", {
   startAuth: (provider: string, options?: { callbackPath?: string }) =>
     ipcRenderer.invoke("desktop-auth:start", provider, options),
   mailEngine: (payload: unknown) => ipcRenderer.invoke("mail-engine", payload),
+  mailEngineCapabilities: DESKTOP_MAIL_ENGINE_CAPABILITIES,
   mailEngineSubscribe: (input: unknown) =>
     ipcRenderer.invoke("mail-engine-subscribe", input),
   mailEngineUnsubscribe: (subscriptionId: string) =>

@@ -17,7 +17,7 @@ import {
   useSearchParams,
 } from "next/navigation";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
-import { setLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
+import { rememberLastEmailAccount } from "@/utils/last-email-account";
 import { unownedAccountRedirectUrl } from "@/utils/account-switch-url";
 import { ownedLastEmailAccountId } from "@/utils/cookies";
 import { reindexMailPath } from "@/utils/mail-url";
@@ -154,9 +154,7 @@ export function EmailAccountProvider({
     // loaded list says which account the cookie already remembers.
     if (!data) return;
     if (ownedRouteId && ownedRouteId !== lastKnownEmailAccountId) {
-      setLastEmailAccountAction({ emailAccountId: ownedRouteId }).catch(
-        () => {},
-      );
+      rememberLastEmailAccount(ownedRouteId).catch(() => {});
     }
   }, [data, ownedRouteId, lastKnownEmailAccountId]);
 

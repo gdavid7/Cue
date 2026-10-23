@@ -61,6 +61,7 @@ import { EmailDetails } from "@/components/email-list/EmailDetails";
 import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
 import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
+import { SenderNotice } from "@/components/email-list/SenderNotice";
 import { PersonCardTrigger } from "@/components/person-card/PersonCard";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
@@ -527,6 +528,18 @@ export function EmailMessage({
                 </Button>
               )}
             </>
+          )}
+
+          {/* Mail the user sent, from any of their addresses or aliases,
+              is never checked. */}
+          {!isDraftRow && !message.labelIds?.includes(GmailLabel.SENT) && (
+            <SenderNotice
+              emailAccountId={emailAccountId}
+              from={message.headers.from}
+              receivedAtMs={
+                Number(message.internalDate) || Date.parse(message.date) || 0
+              }
+            />
           )}
 
           {isCalendarInvitationMessage(message) && (

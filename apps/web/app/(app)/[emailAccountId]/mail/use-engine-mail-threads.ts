@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import type { Provider } from "@inboxzero/mail-core/identities";
 import type {
   ConversationSummary,
   MailboxView,
@@ -39,6 +40,7 @@ export function useEngineMailThreads({
   emailAccountId,
   accountIds,
   accounts,
+  providers,
   query,
   predicate,
   search,
@@ -48,6 +50,8 @@ export function useEngineMailThreads({
   emailAccountId: string;
   accountIds?: string[];
   accounts?: Record<string, CombinedListThread["account"]>;
+  /** Each account's provider, which decides what triage reaches in Sent. */
+  providers: ReadonlyMap<string, Provider>;
   query: ThreadsQuery;
   predicate?: MailPredicate;
   /** How to read a typed search: the account's labels and syntax. */
@@ -123,11 +127,13 @@ export function useEngineMailThreads({
         mailbox.data?.conversations ?? NO_CONVERSATIONS,
         conversationQuery.predicate,
         optimisticTriage,
+        providers,
       ),
     [
       mailbox.data?.conversations,
       conversationQuery.predicate,
       optimisticTriage,
+      providers,
     ],
   );
 

@@ -36,6 +36,7 @@ import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engi
 import type { GetSearchIntentResponse } from "@/app/api/user/search-intent/route";
 import { useLabels } from "@/hooks/useLabels";
 import { useAccount } from "@/providers/EmailAccountProvider";
+import { useRoutedAccountProviders } from "@/app/(app)/[emailAccountId]/mail/use-account-providers";
 import { searchProvider } from "@/utils/mail-search/search-query-predicate";
 import { looksLikeNaturalLanguage } from "@/utils/mail-search/natural-language-search";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
@@ -323,8 +324,10 @@ function useCueFoundThreads({
       predicates: [matching, { kind: "read", value: false }],
     };
   }, [searches, timeZone, unreadOnly, userLabels, provider, providerSearches]);
+  const providers = useRoutedAccountProviders(emailAccountId);
   const state = useEngineMailThreads({
     emailAccountId,
+    providers,
     query: PREDICATE_ONLY_QUERY,
     predicate,
     providerSearch: providerSearches !== "none",
@@ -413,8 +416,10 @@ function useSemanticThreads({
         : undefined,
     [matches, emailAccountId],
   );
+  const providers = useRoutedAccountProviders(emailAccountId);
   const state = useEngineMailThreads({
     emailAccountId,
+    providers,
     query: PREDICATE_ONLY_QUERY,
     predicate,
     providerSearch: false,

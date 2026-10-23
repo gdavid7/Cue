@@ -1,16 +1,22 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import type { ConversationQuery } from "@inboxzero/mail-core/queries";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
 import { createBrowserCache } from "@/utils/browser-cache";
+import { isMetadataCoverageComplete } from "@/utils/mail-engine/coverage";
 import type { TodayAccount, TodayThread } from "@/utils/home/merge-home";
 import { isLocalMailReady, localTodayThread } from "./use-local-inbox-rows";
 
 const WAITING_ON_YOU_LIMIT = 5;
 const WINDOW_MS = 14 * 86_400_000;
+// A first sync stores the last few days whole before it backfills older mail
+// (Gmail's first scan is three days of everything). Until the backfill ends,
+// an older conversation may lack the reply the user sent, so only these days
+// show, and older ones join below once the store holds them.
+const SYNCING_WINDOW_MS = 3 * 86_400_000;
 // Read past the five shown, so a few dismissals don't empty the group.
 const READ_LIMIT = 25;
 const NO_ROWS: TodayThread[] = [];
@@ -29,8 +35,9 @@ const dismissals = createBrowserCache<true>({
  * from someone the user writes to, read from this browser's local mail with
  * no model, so a new mailbox has something to answer before Cue has read it.
  * Empty until every account's first sync has finished and the labels Cue
- * files are known. Dismissing a row is kept in this browser only, until the
- * conversation gets a newer message.
+ * files are known. Rows keep their places as more mail syncs in: newer mail
+ * joins on top, older below. Dismissing a row is kept in this browser only,
+ * until the conversation gets a newer message.
  */
 export function useWaitingOnYou({
   accounts,
@@ -73,6 +80,7 @@ export function useWaitingOnYou({
     handledLabelIds !== undefined &&
     inbox.status === "ready" &&
     Boolean(inbox.data && isLocalMailReady(inbox.data, accounts));
+  const syncing = !isMetadataCoverageComplete(inbox.data?.coverage ?? []);
 
   const { data } = useSWR(
     ready && queryWaitingOnYou
@@ -83,13 +91,14 @@ export function useWaitingOnYou({
           inbox.revision?.databaseEpoch,
           inbox.revision?.sequence,
           sent.revision?.sequence,
+          syncing,
         ]
       : null,
     () =>
       queryWaitingOnYou?.({
         accountIds,
         ownAddresses: accounts.map((account) => account.email),
-        receivedSinceMs: Date.now() - WINDOW_MS,
+        receivedSinceMs: Date.now() - (syncing ? SYNCING_WINDOW_MS : WINDOW_MS),
         excludedLabelIds: handledLabelIds,
         limit: READ_LIMIT,
       }) ?? [],
@@ -104,33 +113,39 @@ export function useWaitingOnYou({
   // The browser cache doesn't tell anyone when it changes, so what is
   // dismissed here is also kept here to update at once.
   const [dismissedHere, setDismissedHere] = useState(NO_KEYS);
+  // What showed last, in order. Only ever set to what the same inputs give,
+  // so rendering twice gives the same rows.
+  const shownKeys = useRef<readonly string[]>([]);
   const threads = useMemo(() => {
     if (!ready || !data) return NO_ROWS;
     const byId = new Map(accounts.map((account) => [account.id, account]));
-    return data
-      .filter((conversation) => {
+    const shown = keepShownOrder(
+      shownKeys.current,
+      data.filter((conversation) => {
         const key = dismissalKey(conversation);
         return (
           !dismissedHere.has(`${conversation.accountId}:${key}`) &&
           !isWaitingOnYouDismissed(conversation.accountId, conversation)
         );
-      })
-      .slice(0, WAITING_ON_YOU_LIMIT)
-      .flatMap((conversation) => {
-        const account = byId.get(conversation.accountId);
-        if (!account) return [];
-        const row = localTodayThread({
-          conversationId: conversation.conversationId,
-          messageId: conversation.messageId,
-          counterpart: conversation.from,
-          subject: conversation.subject,
-          preview: conversation.preview,
-          atMs: conversation.receivedAtMs,
-          unread: conversation.unread,
-          starred: conversation.starred,
-        });
-        return [named ? { ...row, account } : row];
+      }),
+      WAITING_ON_YOU_LIMIT,
+    );
+    shownKeys.current = shown.map(shownKey);
+    return shown.flatMap((conversation) => {
+      const account = byId.get(conversation.accountId);
+      if (!account) return [];
+      const row = localTodayThread({
+        conversationId: conversation.conversationId,
+        messageId: conversation.messageId,
+        counterpart: conversation.from,
+        subject: conversation.subject,
+        preview: conversation.preview,
+        atMs: conversation.receivedAtMs,
+        unread: conversation.unread,
+        starred: conversation.starred,
       });
+      return [named ? { ...row, account } : row];
+    });
   }, [ready, data, accounts, dismissedHere, named]);
 
   const dismiss = useCallback(
@@ -166,6 +181,49 @@ export function isWaitingOnYouDismissed(
   conversation: { conversationId: string; messageId: string },
 ) {
   return dismissals.get(accountId, dismissalKey(conversation)) === true;
+}
+
+/**
+ * The newest of `conversations`, up to `limit`, with those already shown kept
+ * in their order: one newer than all of them goes on top, as new mail does,
+ * and any other goes below, so a row that syncs in late never pushes the
+ * rows under it down. `conversations` is newest first.
+ */
+export function keepShownOrder<
+  T extends {
+    accountId: string;
+    conversationId: string;
+    messageId: string;
+    receivedAtMs: number;
+  },
+>(shownBefore: readonly string[], conversations: T[], limit: number): T[] {
+  const byKey = new Map(
+    conversations.map((conversation) => [shownKey(conversation), conversation]),
+  );
+  const kept = shownBefore.flatMap((key) => byKey.get(key) ?? []);
+  const keptKeys = new Set(kept.map(shownKey));
+  const newestKeptMs = Math.max(
+    ...kept.map((conversation) => conversation.receivedAtMs),
+  );
+  const added = conversations.filter(
+    (conversation) => !keptKeys.has(shownKey(conversation)),
+  );
+  return [
+    ...added.filter((conversation) => conversation.receivedAtMs > newestKeptMs),
+    ...kept,
+    ...added.filter(
+      (conversation) => conversation.receivedAtMs <= newestKeptMs,
+    ),
+  ].slice(0, limit);
+}
+
+// A newer message makes it a new row, which goes where new mail does.
+function shownKey(conversation: {
+  accountId: string;
+  conversationId: string;
+  messageId: string;
+}) {
+  return `${conversation.accountId}:${dismissalKey(conversation)}`;
 }
 
 // The newest message is part of it, so a later message brings it back.

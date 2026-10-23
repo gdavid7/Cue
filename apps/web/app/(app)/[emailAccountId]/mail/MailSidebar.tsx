@@ -865,7 +865,16 @@ export function MailboxGroups({
                   name={folder.displayName}
                   count={displayCount(countsById.get(folder.id))}
                   collapsed={collapsed}
-                  dropTarget={FOLDER_DROP_TARGET}
+                  dropTarget={
+                    rowProps.dropAccountId
+                      ? {
+                          kind: "folder",
+                          accountId: rowProps.dropAccountId,
+                          folderId: folder.id,
+                          name: folder.displayName,
+                        }
+                      : undefined
+                  }
                 />
               </EditableMailboxItem>
             ))}
@@ -1329,7 +1338,6 @@ function NavRow({
 }
 
 const INBOX_DROP_TARGET: SidebarDropTarget = { kind: "inbox" };
-const FOLDER_DROP_TARGET: SidebarDropTarget = { kind: "folder" };
 const MORE_REVEAL_DELAY_MS = 600;
 
 /**

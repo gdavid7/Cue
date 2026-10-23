@@ -144,6 +144,7 @@ export function createMockEmailProvider(
     markMessagesReadState: vi.fn().mockResolvedValue(undefined),
     markMessagesStarredState: vi.fn().mockResolvedValue(undefined),
     moveThreadToFolder: vi.fn().mockResolvedValue(undefined),
+    moveMessagesToFolder: vi.fn().mockResolvedValue(undefined),
 
     // Labeling
     labelMessage: vi.fn().mockResolvedValue({}),

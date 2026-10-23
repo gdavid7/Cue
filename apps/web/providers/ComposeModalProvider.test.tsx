@@ -64,8 +64,8 @@ vi.mock("@/utils/fetch-email-accounts", () => ({
   subscribeEmailAccounts: () => () => {},
 }));
 
-vi.mock("@/utils/actions/email-account-cookie", () => ({
-  setLastEmailAccountAction: vi.fn().mockResolvedValue(undefined),
+vi.mock("@/utils/last-email-account", () => ({
+  rememberLastEmailAccount: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/utils/actions/mail", () => ({ deleteDraftAction: vi.fn() }));

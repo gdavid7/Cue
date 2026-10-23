@@ -101,7 +101,7 @@ type CatchUpProps = {
 
 type LastAction = {
   key: string;
-  action: Exclude<CatchUpAction, "snooze">;
+  action: CatchUpAction;
   subject: string;
 };
 
@@ -312,9 +312,7 @@ function CatchUpBody({
     if (actedKeys.has(key)) return;
     actedKeys.add(key);
     setBatch(actOnCatchUp(fresh, key, action));
-    // Snooze has no undo yet (FT-11a), so the last undoable action stays.
-    if (action !== "snooze")
-      setLastAction({ key, action, subject: item.subject });
+    setLastAction({ key, action, subject: item.subject });
 
     actions.addTargets([
       { id: item.threadId, messageIds: [item.latestMessageId] },
@@ -351,9 +349,9 @@ function CatchUpBody({
     undoing.current = true;
     try {
       const restored =
-        last.action === "archive"
-          ? await actions.undo()
-          : await actions.setReadState([last.key], false, false);
+        last.action === "keep"
+          ? await actions.setReadState([last.key], false, false)
+          : await actions.undo();
       // A failed undo leaves the batch as it was; the view's toast says so.
       // Nothing restored at all means the view had nothing left to undo.
       if (!restored.includes(last.key)) {
@@ -528,9 +526,9 @@ function CatchUpBody({
         {lastAction ? (
           <>
             <span className="min-w-0 truncate">
-              {lastAction.action === "archive"
-                ? `Archived “${lastAction.subject || "(no subject)"}”`
-                : `Marked “${lastAction.subject || "(no subject)"}” as read`}
+              {UNDO_LINE[lastAction.action](
+                lastAction.subject || "(no subject)",
+              )}
             </span>
             <Button
               aria-keyshortcuts="Z"
@@ -581,6 +579,12 @@ function CardButton({
     </Button>
   );
 }
+
+const UNDO_LINE: Record<CatchUpAction, (subject: string) => string> = {
+  archive: (subject) => `Archived “${subject}”`,
+  keep: (subject) => `Marked “${subject}” as read`,
+  snooze: (subject) => `Snoozed “${subject}”`,
+};
 
 const ACTION_KEYS: Record<CatchUpAction, string> = {
   archive: "E",

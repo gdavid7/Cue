@@ -45,6 +45,26 @@ describe("activation signals", () => {
     expect(action).toHaveBeenCalledWith(mailbox, { event });
   });
 
+  it("sends the counts and timings of the first time only", async () => {
+    const { reportActivationSignal } = await load();
+    reportActivationSignal("mailbox-waiting", "first_waiting_on_you_item", {
+      itemCount: 2,
+      msSinceTodayOpened: 1200,
+    });
+    reportActivationSignal("mailbox-waiting", "first_waiting_on_you_item", {
+      itemCount: 4,
+      msSinceTodayOpened: 3000,
+    });
+    await flush();
+
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(action).toHaveBeenCalledWith("mailbox-waiting", {
+      event: "first_waiting_on_you_item",
+      itemCount: 2,
+      msSinceTodayOpened: 1200,
+    });
+  });
+
   it("does not report again after a reload once the server has taken it", async () => {
     const first = await load();
     first.reportActivationSignal("mailbox-reload", "first_sync_ready");

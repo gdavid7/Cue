@@ -97,6 +97,24 @@ describe("rate limit utilities", () => {
     });
   });
 
+  // A request that does many units of work is charged for each, so a limit
+  // can be set in units rather than requests.
+  it("charges a request's cost against the limit in one increment", async () => {
+    vi.mocked(redis.eval).mockResolvedValue(30);
+
+    const result = await checkRateLimit({
+      rule: { key: "rate-limit:test", limit: 40, windowSeconds: 60 },
+      cost: 10,
+    });
+
+    expect(result).toEqual({ limited: false, limit: 40, remaining: 10 });
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.stringContaining('redis.call("INCRBY", KEYS[1]'),
+      ["rate-limit:test"],
+      ["60", "10"],
+    );
+  });
+
   it("fails open when Redis is unavailable", async () => {
     vi.mocked(redis.eval).mockRejectedValue(new Error("redis down"));
 
@@ -194,6 +212,25 @@ describe("assertWithinUserRateLimit", () => {
       expect.any(String),
       ["rate-limit:search-answer:user-1"],
       ["300"],
+    );
+  });
+
+  it("charges the user's scope for a request's cost", async () => {
+    vi.mocked(redis.eval).mockResolvedValue(755);
+
+    await expect(
+      assertWithinUserRateLimit({
+        scope: "inbox-insights",
+        userId: "user-1",
+        limit: 750,
+        windowSeconds: 300,
+        cost: 10,
+      }),
+    ).rejects.toMatchObject({ statusCode: 429 });
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      ["rate-limit:inbox-insights:user-1"],
+      ["300", "10"],
     );
   });
 

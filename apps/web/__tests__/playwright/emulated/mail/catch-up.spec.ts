@@ -13,8 +13,10 @@ import {
   deleteSecondEmailAccount,
 } from "./account-test-helpers";
 import {
+  activeSnoozeCount,
   openMail,
   openThreadIdFromUrl,
+  providerConversationInInbox,
   readLatestMailMutation,
   readProviderAccessToken,
   withClient,
@@ -27,7 +29,11 @@ const DISMISSED_HINT = "get-started:dismissed";
 const KEYBOARD_HINT = "get-started:keyboard";
 
 type SavedUser = { id: string; createdAt: Date; dismissedHints: string[] };
-type Touched = { messageId: string; action: "archive" | "keep" };
+type Touched = {
+  messageId: string;
+  threadId: string;
+  action: "archive" | "keep" | "snooze";
+};
 
 let saved: SavedUser | undefined;
 // Conversations each test archived or read, put back as seeded afterwards.
@@ -161,6 +167,40 @@ test("works through the oldest unread mail from the keyboard, with undo", async 
   ).toBeVisible({ timeout: 60_000 });
 });
 
+test("undoes a snooze: the card, the inbox and the server all go back", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { emailAccountId } = await openMail(page);
+  const dialog = await openCatchUp(page);
+  const card = await currentCard(dialog);
+  const startLeft = await leftCount(dialog);
+
+  touched.push({ ...card, action: "snooze" });
+  await page.keyboard.press("h");
+  const picker = page.getByRole("dialog", { name: "Snooze until" });
+  await picker.getByRole("button", { name: /^Tomorrow/ }).click();
+  await expect(dialog.getByText(`${startLeft - 1} left`)).toBeVisible();
+  const undoLine = dialog.getByText(/^Snoozed “/);
+  await expect(undoLine).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "catch-up-snooze-undo");
+
+  await dialog.getByRole("button", { name: /Undo/ }).click();
+  await expect(dialog.getByText(`${startLeft} left`)).toBeVisible();
+  expect((await currentCard(dialog)).threadId).toBe(card.threadId);
+  await expect(undoLine).toBeHidden();
+  await expect
+    .poll(() => providerConversationInInbox(card.threadId), {
+      timeout: 60_000,
+    })
+    .toBe(true);
+  await expect
+    .poll(() => activeSnoozeCount(emailAccountId, card.threadId), {
+      timeout: 60_000,
+    })
+    .toBe(0);
+});
+
 test("finishes a batch from Today on a phone and counts toward Get started", async ({
   page,
 }, testInfo) => {
@@ -253,10 +293,10 @@ async function openCatchUp(page: Page) {
 async function press(
   page: Page,
   key: string,
-  card: { messageId: string },
+  card: { messageId: string; threadId: string },
   action: Touched["action"],
 ) {
-  touched.push({ messageId: card.messageId, action });
+  touched.push({ ...card, action });
   await page.keyboard.press(key);
 }
 
@@ -309,6 +349,17 @@ async function hasHint(hintId: string) {
 // Back in the inbox and unread, as seeded, for a retry or a later spec.
 async function restoreTouched(entries: Touched[]) {
   if (!entries.length) return;
+  const snoozed = entries.filter((entry) => entry.action === "snooze");
+  if (snoozed.length) {
+    await withClient((client) =>
+      client.query(
+        `UPDATE "SnoozedThread" SET status = 'CANCELLED'
+         WHERE "threadId" = ANY($1)
+           AND status IN ('PREPARING', 'PENDING', 'EXECUTING')`,
+        [snoozed.map((entry) => entry.threadId)],
+      ),
+    );
+  }
   if (isMicrosoftPlaywright()) {
     const headers = {
       Authorization: "Bearer playwright_microsoft_fixture_token",
@@ -316,7 +367,7 @@ async function restoreTouched(entries: Touched[]) {
     };
     for (const { messageId, action } of entries) {
       let id = messageId;
-      if (action === "archive") {
+      if (action !== "keep") {
         const moved = await fetch(
           `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${id}/move`,
           {

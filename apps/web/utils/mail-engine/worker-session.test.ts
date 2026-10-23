@@ -1,7 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MailEngine } from "@inboxzero/mail-core/engine";
+import { MAIL_QUERY_FEATURES } from "@inboxzero/mail-core/capabilities";
 import { createMailWorkerHost } from "./worker-session";
 import type { WorkerResponse } from "./worker-protocol";
+
+// What the stub engine, which has no optional methods, reports on start.
+const started = { capabilities: MAIL_QUERY_FEATURES };
+
+describe("mail worker start", () => {
+  it("reports the optional methods its engine answers", async () => {
+    const posts: WorkerResponse[] = [];
+    const host = createMailWorkerHost({
+      async createEngine() {
+        return { ...stubEngine(), async queryPersonCard() {} } as never;
+      },
+      post: (message) => posts.push(message),
+    });
+    await host.handle({
+      id: "start-1",
+      type: "start",
+      input: {
+        accountId: "acc-1",
+        provider: "google",
+        ownedAccountIds: ["acc-1"],
+      },
+    });
+    expect(posts).toEqual([
+      {
+        id: "start-1",
+        type: "ok",
+        value: {
+          capabilities: [...MAIL_QUERY_FEATURES, "method:queryPersonCard"],
+        },
+      },
+    ]);
+  });
+});
 
 describe("mail worker account fencing", () => {
   it("rejects a second account while the first engine is still starting", async () => {
@@ -43,7 +77,7 @@ describe("mail worker account fencing", () => {
 
     expect(createCount).toBe(1);
     expect(posts).toEqual([
-      { id: "start-1", type: "ok" },
+      { id: "start-1", type: "ok", value: started },
       { id: "start-2", type: "error", message: "account_mismatch" },
     ]);
   });
@@ -80,8 +114,8 @@ describe("mail worker account fencing", () => {
 
     expect(createCount).toBe(1);
     expect(posts).toEqual([
-      { id: "start-1", type: "ok" },
-      { id: "start-1b", type: "ok" },
+      { id: "start-1", type: "ok", value: started },
+      { id: "start-1b", type: "ok", value: started },
     ]);
   });
 
@@ -118,9 +152,9 @@ describe("mail worker account fencing", () => {
 
     expect(created).toEqual(["acc-1", "acc-2"]);
     expect(posts).toEqual([
-      { id: "start-1", type: "ok" },
+      { id: "start-1", type: "ok", value: started },
       { id: "close-1", type: "ok" },
-      { id: "start-2", type: "ok" },
+      { id: "start-2", type: "ok", value: started },
     ]);
   });
 });
