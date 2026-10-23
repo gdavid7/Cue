@@ -2,6 +2,7 @@ import type { MailIpcSnapshotEvent } from "@inboxzero/mail-core/protocol/mail-ip
 
 export type InboxZeroDesktopApi = {
   mailEngine: (payload: unknown) => Promise<unknown>;
+  mailEngineCapabilities?: readonly string[];
   mailEngineSubscribe: (input: unknown) => Promise<unknown>;
   mailEngineUnsubscribe: (subscriptionId: string) => Promise<unknown>;
   onMailEngineSnapshot: (

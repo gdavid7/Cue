@@ -63,6 +63,7 @@ import {
   createBroadcastTabBus,
   createTabFollowerClient,
   disposeTabFollowerClient,
+  tabOwnerMessage,
 } from "@/utils/mail-engine/tab-channel";
 import {
   setActiveMailClient,
@@ -343,6 +344,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
             accountId: emailAccountId,
             provider: engineProvider,
             bus,
+            capabilities: message.capabilities,
           }),
           "follower",
           "browser",
@@ -393,7 +395,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
             ensureAccount: engine.ensureAccount,
           });
           bus.post({ type: "ready" });
-          bus.post({ type: "owner", accountId: emailAccountId });
+          bus.post(tabOwnerMessage(engine, emailAccountId));
         }
         await publishClient(engine, "owner", "browser");
       };
