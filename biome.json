@@ -107,7 +107,9 @@
       "!.vscode",
       "!.claude",
       "!prototype",
-      "!**/public/models"
+      "!**/public/models",
+      "!.groundtruth/tests/support",
+      "!.groundtruth/playwright.config.ts"
     ]
   },
   "assist": {

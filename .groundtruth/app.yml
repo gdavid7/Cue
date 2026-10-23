@@ -1,0 +1,37 @@
+version: 1
+# Commands run from the repo root; the helpers in .groundtruth/cue/ cd into apps/web themselves.
+workdir: .
+# The real Cue environment lives in .groundtruth/cue/env.mjs and every command starts from an empty environment
+# plus that list, so nothing in the agent's shell reaches the app. These blanks are a second guard for the
+# production tokens the agent's shell carries: the app must never log to, call or bill a real service.
+env:
+  AXIOM_TOKEN: ""
+  AXIOM_QUERY_TOKEN: ""
+  AXIOM_DATASET: ""
+  VERCEL_TOKEN: ""
+  GH_TOKEN: ""
+  GITHUB_TOKEN: ""
+  AWS_ACCESS_KEY_ID: ""
+  AWS_SECRET_ACCESS_KEY: ""
+  COMPOSIO_API_KEY: ""
+  EXA_API_KEY: ""
+  CUE_FEEDBACK_AGENT_KEY: ""
+# The same workspace install CI uses (skips Electron and the unsubscribe worker).
+install: bash scripts/pnpm-install-without-desktop.sh --frozen-lockfile
+# Production build (build:ci, as CI's browser tests), never a dev server: dev compiles pages on first request.
+build: node .groundtruth/cue/build.mjs
+# One process: throwaway Postgres/Redis containers, migrations, then the fake Gmail, email, Stripe and AI
+# servers plus `next start`, exactly as apps/web/playwright.config.mjs runs them in CI. Stopping it stops all.
+start: node .groundtruth/cue/stack.mjs
+# 3100, not 3000, so it never collides with a dev server.
+port: 3100
+ready:
+  # Answers once Next.js can serve.
+  path: /api/health
+  # Migrations plus five servers starting; CI allows 240 s for the Next.js server alone.
+  timeout_seconds: 300
+# Fresh signed-out Cue with the seeded fake Gmail mailbox (groundtruth-test@gmail.com): resets Groundtruth's own
+# database and Redis containers and every emulator. Never touches the dev database (it's on 5442, not 5432).
+reset: node .groundtruth/cue/reset.mjs
+scenarios: {}
+personas: {}

@@ -1,0 +1,8 @@
+node_modules/
+results/
+videos/
+runs/
+secrets.env
+
+# runtime files written by .groundtruth/cue/stack.mjs and reset.mjs
+cue/.stack.*
