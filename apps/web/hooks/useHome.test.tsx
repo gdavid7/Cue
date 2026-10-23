@@ -11,7 +11,7 @@ import {
   setBrowserCacheUser,
 } from "@/utils/browser-cache";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
-import { useHome, useWarmHome } from "./useHome";
+import { resetPendingStreaksForTesting, useHome, useWarmHome } from "./useHome";
 
 // The zone useHome asks the server to count "today" in.
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -27,6 +27,7 @@ vi.mock("@/utils/swr", () => ({
 describe("useHome", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    resetPendingStreaksForTesting();
   });
   afterEach(() => {
     cleanup();
@@ -91,8 +92,8 @@ describe("useHome", () => {
       .mockResolvedValueOnce(answer(["waiting"]))
       .mockResolvedValue(answer([]));
     renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
-    // Opening Today, its first two retries of the lane still pending, then
-    // a third, which Today asks for by itself.
+    // Opening Today and its first retry of the lane still pending; after two
+    // pending answers, Today asks by itself.
     await advanceInSteps(5000 * 3 + 100);
     // Cue sorted something new.
     await act(async () => {
@@ -103,8 +104,10 @@ describe("useHome", () => {
     expect(requestPaths(fetcher)).toEqual([
       PATH,
       PATH,
-      PATH,
       `${PATH}&refresh=auto`,
+      // The last retry, which finds every lane loaded.
+      `${PATH}&refresh=auto`,
+      // The change.
       `${PATH}&refresh=auto`,
     ]);
   });
@@ -122,9 +125,60 @@ describe("useHome", () => {
       await vi.advanceTimersByTimeAsync(10);
     });
 
-    expect(requestPaths(fetcher)).toContain(PATH);
     const afterFocus = requestPaths(fetcher).slice(4);
     expect(afterFocus).toContain(PATH);
+  });
+
+  it("keeps asking for a pending lane when the sidebar's warm-up loaded Today first", async () => {
+    const fetcher = vi.fn(async () => answer(["waiting"]));
+    const wrap = wrapper(fetcher);
+    // The pointer reached Today's link, then the user opened it.
+    const warm = renderHook(() => useWarmHome("account", true), {
+      wrapper: wrap,
+    });
+    await act(() => vi.advanceTimersByTimeAsync(100));
+    await act(() => vi.advanceTimersByTimeAsync(2900));
+    const { result } = renderHook(
+      () => {
+        useWarmHome("account", true);
+        return useHome("account");
+      },
+      { wrapper: wrap },
+    );
+    warm.unmount();
+
+    await advanceInSteps(5000 * 20);
+
+    const paths = requestPaths(fetcher);
+    expect(paths).toHaveLength(12);
+    expect(paths.slice(0, 2)).toEqual([PATH, PATH]);
+    expect(new Set(paths.slice(2))).toEqual(new Set([`${PATH}&refresh=auto`]));
+    expect(result.current.gaveUp).toBe(true);
+  });
+
+  it("starts counting again for another account", async () => {
+    const fetcher = vi.fn(async (_key: string[]) => answer(["waiting"]));
+    const { result, rerender } = renderHook(
+      ({ accountId }) => useHome(accountId),
+      { wrapper: wrapper(fetcher), initialProps: { accountId: "account" } },
+    );
+    await advanceInSteps(5000 * 20);
+    expect(result.current.gaveUp).toBe(true);
+    const asked = fetcher.mock.calls.length;
+
+    rerender({ accountId: "other" });
+    await advanceInSteps(5000 * 2 + 100);
+
+    expect(result.current.gaveUp).toBe(false);
+    const others = fetcher.mock.calls
+      .slice(asked)
+      .filter(([key]) => key[1] === "other");
+    // Asked for afresh: opened, then retried, as for the first account.
+    expect(others.map(([key]) => key[0])).toEqual([
+      PATH,
+      PATH,
+      `${PATH}&refresh=auto`,
+    ]);
   });
 
   it("reloads when the user comes back to the tab", async () => {
@@ -457,7 +511,10 @@ function pendingLoads() {
   };
 }
 
-function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
+function wrapper(
+  fetcher: (...args: never[]) => Promise<unknown>,
+  dedupingInterval = 0,
+) {
   return ({ children }: { children: ReactNode }) => (
     <SWRConfig value={{ fetcher, provider: () => new Map(), dedupingInterval }}>
       {children}
