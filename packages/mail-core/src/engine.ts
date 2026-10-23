@@ -92,6 +92,10 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // A sync request (a provider push, the tab coming back) refreshes them only
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
+// A paused background backfill waits at least this long, doubling while the
+// budget stays shut, up to the maximum. See `backfillPauseMs`.
+const BACKFILL_PAUSE_MIN_MS = 30_000;
+const BACKFILL_PAUSE_MAX_MS = 5 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
 const COMMAND_REQUEST_RETRY_MIN_MS = 1000;
 const COMMAND_REQUEST_RETRY_MAX_MS = 30_000;
@@ -1503,8 +1507,25 @@ export function createMailEngine(input: {
     requestId: string;
     scopeId?: string;
     scope?: ScopeDescriptor;
+    /** Set for a background backfill, whose pauses back off account-wide. */
+    backfillPause?: BackfillPause;
   }) {
     const scopeId = input.scopeId ?? "primary";
+    // Only a throttled backfill backs off: an unavailable one (the network,
+    // the adapter) retries when it says, like the rest of sync.
+    const pausedFor = (paused: { retryAfterMs: number; reason: string }) => {
+      const pause = input.backfillPause;
+      if (!pause || paused.reason !== "throttled") return paused.retryAfterMs;
+      const delayMs = backfillPauseMs(
+        paused.retryAfterMs,
+        pause.repeats,
+        runtime,
+      );
+      pause.repeats += 1;
+      pause.delayMs = delayMs;
+      pause.untilMs = runtime.nowMs() + delayMs;
+      return delayMs;
+    };
     let scan = await store.readBootstrapScan({
       session: input.session,
       scopeId,
@@ -1523,6 +1544,7 @@ export function createMailEngine(input: {
         windowedBackfill: true,
       });
       if (bootstrap.status !== "ok") {
+        if (bootstrap.status === "paused") pausedFor(bootstrap);
         await noteConnection(input.session.accountId, bootstrap);
         return;
       }
@@ -1579,7 +1601,7 @@ export function createMailEngine(input: {
           page: scan.page,
           nextAttemptAtMs:
             runtime.nowMs() +
-            (paused ? enumerated.retryAfterMs : idleCatchUpIntervalMs),
+            (paused ? pausedFor(enumerated) : idleCatchUpIntervalMs),
           errorCode: paused ? enumerated.reason : "blocked_auth",
         });
       }
@@ -1610,6 +1632,7 @@ export function createMailEngine(input: {
           }),
       });
       if (applied.status === "stale") break;
+      if (input.backfillPause) input.backfillPause.repeats = 0;
       processedPages += 1;
       // A first sync shows each page as it lands rather than after the whole
       // slice, so a new mailbox fills in from its first page of mail.
@@ -1676,6 +1699,13 @@ export function createMailEngine(input: {
     stream: AccountSyncState["streams"][number];
   }) {
     const { session, idleGate, stream } = input;
+    // One pause holds all of the account's background scopes (Gmail's older
+    // mail, Outlook's custom folders): they draw on the same budget, so a
+    // sibling asking meanwhile is only paused too. A pause further off than
+    // it was set for means the clock moved back, and is ignored.
+    const pause = idleGate.backfillPause;
+    const pausedForMs = pause.untilMs - runtime.nowMs();
+    if (pausedForMs > 0 && pausedForMs <= pause.delayMs) return;
     startLane(backfillLaneKey(session.accountId), async (signal) => {
       await ingestBootstrap({
         session,
@@ -1685,6 +1715,7 @@ export function createMailEngine(input: {
         requestId: runtime.randomId(),
         scopeId: stream.streamId,
         scope: idleGate.activeBootstrapScopes.get(stream.streamId),
+        backfillPause: idleGate.backfillPause,
       });
       if (signal.aborted) return;
       await rememberBootstrapContinuation(idleGate, session, stream.streamId);
@@ -2050,6 +2081,7 @@ export function createMailEngine(input: {
     if (existing?.generation === generation) return existing;
     const created: IdleCatchUpGate = {
       activeBootstrapScopes: new Map(),
+      backfillPause: { untilMs: 0, delayMs: 0, repeats: 0 },
       generation,
       lowPriorityStreams: new Set(),
       nextAssistantCatchUpAtMs: 0,
@@ -2390,6 +2422,7 @@ function conversationFetchKey(key: ConversationKey) {
 
 type IdleCatchUpGate = {
   activeBootstrapScopes: Map<string, ScopeDescriptor>;
+  backfillPause: BackfillPause;
   generation: string;
   lowPriorityStreams: Set<string>;
   nextAssistantCatchUpAtMs: number;
@@ -2402,8 +2435,34 @@ type IdleCatchUpGate = {
 
 type CheckStamp = { atMs: number; requestCount: number };
 
+type BackfillPause = { untilMs: number; delayMs: number; repeats: number };
+
 function backfillLaneKey(accountId: string) {
   return `${accountId}\u0000backfill`;
+}
+
+// A paused backfill's retry time is when the server can afford one more page,
+// so asking then buys that page and the next pause: during a long backfill,
+// every other request was a pause. Waiting until the budget refills a run of
+// pages spends the same budget in a fraction of the requests. Pauses with no
+// page in between back off further, and jitter keeps engines that share an
+// account's budget (another device) from asking in step. A server retry time
+// past the low-priority interval is held to it, so a bad answer can't park
+// the backfill for longer than its scope would otherwise wait.
+function backfillPauseMs(
+  retryAfterMs: number,
+  repeats: number,
+  runtime: Pick<HostRuntime, "random">,
+) {
+  const backoffMs = BACKFILL_PAUSE_MIN_MS * 2 ** Math.min(repeats, 8);
+  const jitteredMs = Math.min(
+    BACKFILL_PAUSE_MAX_MS,
+    backoffMs * (1 + runtime.random() / 2),
+  );
+  return Math.max(
+    Math.min(retryAfterMs, LOW_PRIORITY_CATCH_UP_INTERVAL_MS),
+    jitteredMs,
+  );
 }
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {
@@ -2421,6 +2480,7 @@ export function createHostRuntime(
   return {
     nowMs: overrides?.nowMs ?? (() => Date.now()),
     randomId: overrides?.randomId ?? defaultRandomId,
+    random: overrides?.random ?? Math.random,
     sha256: overrides?.sha256 ?? webCryptoSha256,
     storagePressure: overrides?.storagePressure ?? (() => false),
   };
