@@ -1222,6 +1222,27 @@ describe("Middleware", () => {
       });
     });
 
+    it("answers a missing grant at provider creation with the typed reconnect 401", async () => {
+      mockReq = createMockRequest("GET", "http://localhost/api/labels", {
+        [EMAIL_ACCOUNT_HEADER]: mockAccountId,
+      });
+      mockOwnedAccount(mockUserId, mockEmail);
+      mockCreateEmailProvider.mockRejectedValue(
+        new SafeError("No refresh token"),
+      );
+      const handler = vi.fn(async () => NextResponse.json({ ok: true }));
+
+      const response = await withEmailProvider(handler)(mockReq, mockContext);
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toMatchObject({
+        errorCode: "NO_REFRESH_TOKEN",
+        isKnownError: true,
+      });
+      expect(handler).not.toHaveBeenCalled();
+      expect(mockCaptureException).not.toHaveBeenCalled();
+    });
+
     it("checks the account and finds its provider in one read", async () => {
       mockReq = createMockRequest("GET", "http://localhost/api/labels", {
         [EMAIL_ACCOUNT_HEADER]: mockAccountId,

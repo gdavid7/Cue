@@ -195,7 +195,7 @@ export const getOutlookClientWithRefresh = async ({
 }): Promise<OutlookClient> => {
   if (!refreshToken) {
     // expected for disconnected accounts
-    logger.warn("No refresh token", { emailAccountId });
+    logger.info("No refresh token", { emailAccountId });
     await cleanupInvalidTokens({
       emailAccountId,
       reason: "invalid_grant",

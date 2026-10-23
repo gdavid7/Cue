@@ -50,6 +50,40 @@ describe("createMailHttpRequest", () => {
     });
   });
 
+  it("stops asking the server for a route it refused as needing a reconnect", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          error: "Authorization required. Please grant permissions.",
+          errorCode: "NO_REFRESH_TOKEN",
+          isKnownError: true,
+        },
+        { status: 401 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createMailHttpRequest("acc-1", vi.fn());
+    const ask = (route: string) =>
+      request({
+        method: "POST",
+        path: `/api/mail/v1/accounts/acc-1/${route}`,
+        body: {},
+        signal: new AbortController().signal,
+      });
+
+    expect((await ask("changes")).status).toBe(401);
+    const again = await ask("changes");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(again).toMatchObject({
+      status: 401,
+      json: { errorCode: "NO_REFRESH_TOKEN" },
+    });
+    expect(again).not.toHaveProperty("sessionExpired");
+
+    await ask("scopes");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     {
       name: "a signed-out app session",

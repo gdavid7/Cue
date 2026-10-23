@@ -177,6 +177,18 @@ export class SafeError extends Error {
   }
 }
 
+export const NO_REFRESH_TOKEN_MESSAGE = "No refresh token";
+
+/**
+ * The account's grant is gone and it is already marked as needing a
+ * reconnect. Expected for a revoked or disconnected account, not a failure.
+ */
+export function isReconnectRequiredError(error: unknown) {
+  return (
+    error instanceof SafeError && error.message === NO_REFRESH_TOKEN_MESSAGE
+  );
+}
+
 export class DraftNotFoundError extends SafeError {
   constructor(safeMessage: string) {
     super(safeMessage);

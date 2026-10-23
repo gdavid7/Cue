@@ -5,6 +5,11 @@ import {
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
 } from "@/utils/config";
+import {
+  isReconnectRequired,
+  noteReconnectRequired,
+  reconnectRequiredBody,
+} from "@/utils/reconnect-required";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 import {
   getSWRFetchErrorMessage,
@@ -36,6 +41,12 @@ export const swrFetcher = async (
   },
 ) => {
   if (isSigningOut()) return leaving();
+
+  // The account was already offered a reconnect; asking again only repeats
+  // the refusal.
+  if (emailAccountId && isReconnectRequired(emailAccountId, url)) {
+    throw reconnectRequiredError();
+  }
 
   const headers = new Headers(init?.headers);
 
@@ -82,6 +93,7 @@ export const swrFetcher = async (
       errorData.errorCode === MICROSOFT_AUTH_EXPIRED_ERROR_CODE
     ) {
       if (emailAccountId) {
+        noteReconnectRequired(emailAccountId, url);
         const errorMessage =
           errorData.errorCode === MICROSOFT_AUTH_EXPIRED_ERROR_CODE
             ? "Microsoft authorization expired"
@@ -145,6 +157,11 @@ export const swrFetcher = async (
 
   return res.json();
 };
+
+function reconnectRequiredError() {
+  const info = reconnectRequiredBody();
+  return Object.assign(new Error(info.error), { info, status: 401 });
+}
 
 /** Never settles: the page is leaving, so there is nothing to report. */
 function leaving(): Promise<never> {

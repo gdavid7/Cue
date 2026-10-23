@@ -38,13 +38,6 @@ export async function recordEmailAccountProviderIssue({
   const issue = classifyEmailAccountProviderIssue({ error, provider });
   if (!issue) return;
 
-  logger.warn("Recording email account provider issue", {
-    emailAccountId,
-    provider,
-    operation,
-    reason: issue.reason,
-  });
-
   const shouldRecord = await claimProviderIssueCleanup({
     emailAccountId,
     provider,
@@ -53,6 +46,13 @@ export async function recordEmailAccountProviderIssue({
     logger,
   });
   if (!shouldRecord) return;
+
+  logger.warn("Recording email account provider issue", {
+    emailAccountId,
+    provider,
+    operation,
+    reason: issue.reason,
+  });
 
   try {
     const result = await cleanupInvalidTokens({
