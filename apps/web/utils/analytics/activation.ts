@@ -1,4 +1,7 @@
-import type { ActivationSignal } from "@/utils/actions/activation.validation";
+import type {
+  ActivationSignal,
+  ActivationSignalBody,
+} from "@/utils/actions/activation.validation";
 import { createScopedLogger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { redis } from "@/utils/redis";
@@ -21,6 +24,7 @@ export const ACTIVATION_EVENTS = {
   firstSyncReady: "activation.first_sync_ready",
   firstThreadOpened: "activation.first_thread_opened",
   firstTriageAction: "activation.first_triage_action",
+  firstWaitingOnYouItem: "activation.first_waiting_on_you_item",
   activeDay: "activation.active_day",
   firstHourHealth: "activation.first_hour_health",
 } as const;
@@ -128,6 +132,46 @@ export async function recordFirstSyncReady(emailAccountId: string) {
   }
 }
 
+/**
+ * Today first showed Waiting on you from the browser's local mail, measured
+ * from first sign-in, with how many rows showed and how long Today took.
+ */
+export async function recordFirstWaitingOnYouItem(
+  emailAccountId: string,
+  {
+    itemCount,
+    msSinceTodayOpened,
+  }: Pick<ActivationSignalBody, "itemCount" | "msSinceTodayOpened">,
+) {
+  try {
+    if (
+      !(await claimOnce(
+        `activation:first-waiting-on-you-item:${emailAccountId}`,
+      ))
+    )
+      return;
+    const emailAccount = await prisma.emailAccount.findUnique({
+      where: { id: emailAccountId },
+      select: { createdAt: true },
+    });
+    if (!emailAccount) return;
+    const now = new Date();
+    logger.info(ACTIVATION_EVENTS.firstWaitingOnYouItem, {
+      emailAccountId,
+      at: now.toISOString(),
+      firstSignInAt: emailAccount.createdAt.toISOString(),
+      msSinceFirstSignIn: now.getTime() - emailAccount.createdAt.getTime(),
+      itemCount,
+      msSinceTodayOpened,
+    });
+  } catch (error) {
+    logger.warn("Failed to record activation event", {
+      event: ACTIVATION_EVENTS.firstWaitingOnYouItem,
+      error,
+    });
+  }
+}
+
 /** At most once per mailbox per UTC day. */
 export async function recordActiveDay(emailAccountId: string) {
   try {
@@ -179,7 +223,7 @@ async function claimOnce(key: string, ttlSeconds = FIRST_EVENT_TTL_SECONDS) {
 /** What the signed-in client may report, each claimed once per mailbox. */
 export const ACTIVATION_SIGNAL_RECORDERS: Record<
   ActivationSignal,
-  (emailAccountId: string) => Promise<void>
+  (emailAccountId: string, signal: ActivationSignalBody) => Promise<void>
 > = {
   first_sync_ready: recordFirstSyncReady,
   first_thread_opened: recordFirstOnce(
@@ -190,4 +234,5 @@ export const ACTIVATION_SIGNAL_RECORDERS: Record<
     ACTIVATION_EVENTS.firstTriageAction,
     "first-triage-action",
   ),
+  first_waiting_on_you_item: recordFirstWaitingOnYouItem,
 };

@@ -6,6 +6,7 @@ import useSWR, {
   useSWRConfig,
 } from "swr";
 import type { GetHomeDeadlinesResponse } from "@/app/api/user/home/deadlines/route";
+import type { GetHomeCueResponse } from "@/app/api/user/home/cue/route";
 import {
   keepShownLanes,
   type TodayHomeData,
@@ -162,6 +163,25 @@ export function useHomeDeadlines(emailAccountId?: string | null) {
     { focusThrottleInterval: FOCUS_REFRESH_MIN_MS, shouldRetryOnError: false },
   );
   return data?.items;
+}
+
+/**
+ * Whether Cue has read any of the mailbox, which Today's own answer also
+ * says but only after seconds of Gmail reads. Asked only while `enabled`.
+ */
+export function useHomeCue(emailAccountId: string | null, enabled: boolean) {
+  const { data } = useSWR<GetHomeCueResponse>(
+    enabled && emailAccountId
+      ? getAccountScopedKey("/api/user/home/cue", emailAccountId)
+      : null,
+    {
+      revalidateIfStale: false,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      shouldRetryOnError: false,
+    },
+  );
+  return data;
 }
 
 /**
