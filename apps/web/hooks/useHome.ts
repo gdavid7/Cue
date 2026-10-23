@@ -12,6 +12,7 @@ import {
   type TodayHomeData,
 } from "@/utils/home/keep-shown-lanes";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
+import { HOME_CUE_MAX_ACCOUNTS } from "@/utils/home/today-constants";
 import { onTodayChanged } from "@/utils/home/today-changes";
 import { getAccountScopedKey } from "@/utils/swr";
 
@@ -168,12 +169,16 @@ export function useHomeDeadlines(emailAccountId?: string | null) {
 /**
  * By account, whether Cue has read any of each mailbox, which each account's
  * Today also says but only after seconds of Gmail reads. Asked while
- * `enabled`; an account that isn't the user's is missing.
+ * `enabled`; an account that isn't the user's, past the first
+ * HOME_CUE_MAX_ACCOUNTS, or whose reads failed is missing, and so unknown.
  */
 export function useHomeCue(accountIds: string[], enabled: boolean) {
   const { data } = useSWR<GetHomeCueResponse>(
     enabled && accountIds.length
-      ? `/api/user/home/cue?ids=${accountIds.map(encodeURIComponent).join(",")}`
+      ? `/api/user/home/cue?ids=${accountIds
+          .slice(0, HOME_CUE_MAX_ACCOUNTS)
+          .map(encodeURIComponent)
+          .join(",")}`
       : null,
     {
       revalidateIfStale: false,

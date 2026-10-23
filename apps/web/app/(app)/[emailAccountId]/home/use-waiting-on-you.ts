@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 import type {
   ConversationQuery,
   WaitingOnYouConversation,
 } from "@inboxzero/mail-core/queries";
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
 import { createBrowserCache } from "@/utils/browser-cache";
@@ -35,6 +36,13 @@ const NO_SHOWN: {
 } = { shown: [], held: [] };
 const NO_LABEL_IDS: string[] = [];
 
+type DismissedConversation = {
+  conversationId: string;
+  messageId: string;
+  /** The newest message's Message-ID, normalised or not. */
+  messageKey?: string | null;
+};
+
 /** One account on Today, as Waiting on you decides whether to read it. */
 type AccountTodayState = {
   /** The account's own Today, once it answers or from a saved copy. */
@@ -62,8 +70,8 @@ const dismissals = createBrowserCache<true>({
  * Today's Waiting on you: recent inbox conversations whose newest message is
  * from someone the user writes to, read from this browser's local mail with
  * no model, so a new mailbox has something to answer before Cue has read it.
- * Only the accounts in `handledLabelIds` are read, each once its first sync
- * has finished. Rows keep their places as more mail syncs in: newer mail
+ * Only the accounts in `handledLabelIds` are read, once their first sync,
+ * and that of each account in `pendingAccountIds`, has finished. Rows keep their places as more mail syncs in: newer mail
  * joins on top, older below. A message delivered to several of them shows
  * once. Dismissing a row is kept in this browser only, until the
  * conversation gets a newer message.
@@ -114,10 +122,20 @@ export function useWaitingOnYou({
     useMemo(() => newestIn(accountIds, "sent"), [accountIds]),
     { client, enabled: active },
   );
+  // An account whose Needs reply is still coming must have synced too, or
+  // which rows it holds copies of isn't known yet.
+  const waitedAccounts = useMemo(
+    () =>
+      accounts.filter(
+        (account) =>
+          account.id in handledLabelIds || pendingAccountIds.has(account.id),
+      ),
+    [accounts, handledLabelIds, pendingAccountIds],
+  );
   const ready =
     active &&
     inbox.status === "ready" &&
-    Boolean(inbox.data && isLocalMailReady(inbox.data, readAccounts));
+    Boolean(inbox.data && isLocalMailReady(inbox.data, waitedAccounts));
   const syncing = !isMetadataCoverageComplete(
     (inbox.data?.coverage ?? []).filter(
       (item) => item.accountId in handledLabelIds,
@@ -189,18 +207,15 @@ export function useWaitingOnYou({
       held: candidates.filter(isHeld),
     };
   }, [ready, data, handledLabelIds, pendingAccountIds, dismissedHere, before]);
-  useEffect(() => {
-    const next = {
-      shown: shown.map(shownKey),
-      held: new Set([...before.held, ...held.map(shownKey)]),
-    };
-    if (
-      sameKeys(next.shown, before.shown) &&
-      sameKeys([...next.held], [...before.held])
-    )
-      return;
-    setBefore(next);
-  }, [shown, held, before]);
+  // Kept for the next render as React stores what a render saw: set while
+  // rendering, only when it changed, so this render's rows are the same.
+  const shownKeys = shown.map(shownKey);
+  const heldKeys = held.map(shownKey).filter((key) => !before.held.has(key));
+  if (!sameKeys(shownKeys, before.shown) || heldKeys.length)
+    setBefore({
+      shown: shownKeys,
+      held: new Set([...before.held, ...heldKeys]),
+    });
   const threads = useMemo(() => {
     const byId = new Map(accounts.map((account) => [account.id, account]));
     return shown.flatMap((conversation) => {
@@ -232,11 +247,20 @@ export function useWaitingOnYou({
       const conversation = {
         conversationId: thread.threadId,
         messageId: thread.messageId,
+        messageKey: thread.rfcMessageId,
       };
-      dismissWaitingOnYou(accountId, conversation);
-      setDismissedHere((current) =>
-        new Set(current).add(`${accountId}:${dismissalKey(conversation)}`),
-      );
+      // Every copy of the message goes, or another account's would show.
+      const accountIds = [
+        accountId,
+        ...(thread.alsoIn ?? []).map((account) => account.id),
+      ];
+      for (const id of accountIds) dismissWaitingOnYou(id, conversation);
+      setDismissedHere((current) => {
+        const next = new Set(current);
+        for (const id of accountIds)
+          next.add(`${id}:${dismissalKey(conversation)}`);
+        return next;
+      });
     },
     [accounts],
   );
@@ -282,7 +306,7 @@ export function waitingOnYouScope(
 /** Leaves the conversation out in this browser until a newer message. */
 export function dismissWaitingOnYou(
   accountId: string,
-  conversation: { conversationId: string; messageId: string },
+  conversation: DismissedConversation,
 ) {
   dismissals.set(accountId, dismissalKey(conversation), true);
 }
@@ -290,7 +314,7 @@ export function dismissWaitingOnYou(
 /** Whether this browser was asked to leave the conversation out. */
 export function isWaitingOnYouDismissed(
   accountId: string,
-  conversation: { conversationId: string; messageId: string },
+  conversation: DismissedConversation,
 ) {
   return dismissals.get(accountId, dismissalKey(conversation)) === true;
 }
@@ -342,19 +366,20 @@ function shownKey(conversation: {
   conversationId: string;
   messageId: string;
 }) {
-  return `${conversation.accountId}:${dismissalKey(conversation)}`;
+  return `${conversation.accountId}:${conversation.conversationId}:${conversation.messageId}`;
 }
 
 function sameKeys(a: readonly string[], b: readonly string[]) {
   return a.length === b.length && a.every((key, index) => key === b[index]);
 }
 
-// The newest message is part of it, so a later message brings it back.
-function dismissalKey(conversation: {
-  conversationId: string;
-  messageId: string;
-}) {
-  return `${conversation.conversationId}:${conversation.messageId}`;
+// The newest message is part of it, so a later message brings it back. By
+// its Message-ID when known, which is the same for its copy in another
+// account, so dismissing one copy reads as dismissing each.
+function dismissalKey(conversation: DismissedConversation) {
+  return conversation.messageKey
+    ? `message:${normalizeInternetMessageId(conversation.messageKey)}`
+    : `${conversation.conversationId}:${conversation.messageId}`;
 }
 
 function newestIn(

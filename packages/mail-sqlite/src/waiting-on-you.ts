@@ -10,7 +10,7 @@ import type { SqlTransaction } from "./driver";
  * newest message and stops at the limit; the checks on each are index lookups
  * (the conversation's later messages, the message's sender in the contact
  * index, and whether the user ever wrote to them), as is finding the other
- * accounts that hold the same newest message, by its key.
+ * accounts whose inbox holds the same message, by the conversation's key.
  */
 export async function readWaitingOnYou(
   tx: SqlTransaction,
@@ -25,12 +25,25 @@ export async function readWaitingOnYou(
     const excluded = input.excludedLabelIds?.[accountId] ?? [];
     const result = await tx.query(
       `SELECT l.message_id, l.conversation_id, l.from_address, l.subject,
-              l.preview, l.received_at_ms, l.read, l.starred, l.message_key,
-              (SELECT json_group_array(k.account_id)
+              l.preview, l.received_at_ms, l.read, l.starred, own.message_key,
+              -- Other accounts whose conversation has the same key, as All
+              -- inboxes pairs copies, and whose copy is in their inbox.
+              (SELECT json_group_array(DISTINCT k.account_id)
                FROM conversation_message_keys k
-               WHERE k.message_key = l.message_key
-                 AND k.account_id != l.account_id) AS copy_account_ids
+               WHERE k.message_key = own.message_key
+                 AND k.account_id != l.account_id
+                 AND EXISTS (
+                   SELECT 1 FROM effective_messages c
+                   WHERE c.account_id = k.account_id
+                     AND c.conversation_id = k.conversation_id
+                     AND c.message_key = k.message_key
+                     AND c.in_inbox = 1 AND c.in_trash = 0 AND c.in_spam = 0
+                 )) AS copy_account_ids
        FROM effective_messages l
+       -- The conversation's key, the one rule conversation-message-keys.ts keeps.
+       LEFT JOIN conversation_message_keys own
+         ON own.account_id = l.account_id
+         AND own.conversation_id = l.conversation_id
        WHERE l.account_id = ? AND l.in_inbox = 1 AND l.received_at_ms >= ?
          AND l.in_sent = 0 AND l.in_draft = 0 AND l.in_trash = 0 AND l.in_spam = 0
          -- Outlook can file the user's own message in the inbox, not Sent.

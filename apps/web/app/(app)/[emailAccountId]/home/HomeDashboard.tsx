@@ -251,9 +251,21 @@ export function HomeDashboard() {
   });
   // Each conversation shows once on Today: never one it already lists as
   // needing a reply or waiting on someone else, in any of the mailboxes.
+  // Across accounts, every account's own lists: the merge caps each lane,
+  // and a copy past the cap is still Cue's to answer.
   const waitingOnYouShown = useMemo(() => {
     if (!data) return waitingOnYou.threads;
-    const listed = [...data.needsYou, ...data.waiting];
+    const listed: TodayThread[] = merged
+      ? localAccounts.flatMap((account) => {
+          const home = feeds[account.id]?.data;
+          return home
+            ? [...home.needsYou, ...home.waiting].map((thread) => ({
+                ...thread,
+                account,
+              }))
+            : [];
+        })
+      : [...data.needsYou, ...data.waiting];
     const rows = new Set(listed.map(rowKey));
     const messages = new Set(listed.map(todayConversationKey));
     return waitingOnYou.threads.filter(
@@ -261,7 +273,7 @@ export function HomeDashboard() {
         !rows.has(rowKey(thread)) &&
         !messages.has(todayConversationKey(thread)),
     );
-  }, [data, waitingOnYou.threads]);
+  }, [data, merged, localAccounts, feeds, waitingOnYou.threads]);
   const visibleWaitingOnYou = useMemo(
     () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
     [waitingOnYouShown, hidden],

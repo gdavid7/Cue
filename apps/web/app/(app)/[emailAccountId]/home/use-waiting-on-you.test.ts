@@ -182,6 +182,22 @@ describe("useWaitingOnYou", () => {
     expect(mail.queries.at(-1)?.accountIds).toEqual(["a"]);
   });
 
+  it("waits for an account whose Needs reply is coming to sync, to know its copies", async () => {
+    mail.syncing = new Set(["b"]);
+    mail.rows = [conversation("a", "ask", 30)];
+    const { result, rerender } = renderWaitingOnYou({
+      handledLabelIds: { a: [] },
+      pendingAccountIds: new Set(["b"]),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(threadIds(result.current)).toEqual([]);
+
+    mail.syncing = new Set();
+    rerender({ handledLabelIds: { a: [] }, pendingAccountIds: new Set(["b"]) });
+
+    await waitFor(() => expect(threadIds(result.current)).toEqual(["ask"]));
+  });
+
   it("shows a message in two of the accounts once, saying where else it is", async () => {
     mail.rows = [
       conversation("a", "ask", 30, { messageKey: "k@x", copies: ["b"] }),
@@ -199,6 +215,37 @@ describe("useWaitingOnYou", () => {
       account: A,
       alsoIn: [B],
     });
+  });
+
+  it("dismisses every copy of a message, and keeps them dismissed after a reload", async () => {
+    mail.rows = [
+      conversation("a", "ask", 30, { messageKey: "k@x", copies: ["b"] }),
+      conversation("b", "ask-copy", 30, { messageKey: "k@x", copies: ["a"] }),
+      conversation("a", "lunch", 20),
+    ];
+    const first = renderWaitingOnYou({ handledLabelIds: { a: [], b: [] } });
+    await waitFor(() =>
+      expect(threadIds(first.result.current)).toEqual(["ask", "lunch"]),
+    );
+
+    act(() => first.result.current.dismiss(first.result.current.threads[0]));
+
+    expect(threadIds(first.result.current)).toEqual(["lunch"]);
+    first.unmount();
+    // A reload: nothing kept in memory, only what this browser stored.
+    resetBrowserCacheForTesting("user-1");
+    const reloaded = renderWaitingOnYou({ handledLabelIds: { a: [], b: [] } });
+    await waitFor(() =>
+      expect(threadIds(reloaded.result.current)).toEqual(["lunch"]),
+    );
+    // Only while no newer message has come in.
+    expect(
+      isWaitingOnYouDismissed("b", {
+        conversationId: "ask-copy",
+        messageId: "ask-copy-2",
+        messageKey: "<newer@x>",
+      }),
+    ).toBe(false);
   });
 
   it("holds a row whose copy may yet show in another account's Needs reply", async () => {

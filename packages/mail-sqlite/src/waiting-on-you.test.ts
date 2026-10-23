@@ -79,6 +79,49 @@ describe("readWaitingOnYou", () => {
     });
   });
 
+  it("names an account once, though it holds two conversations with the message", async () => {
+    const store = await setup(["a", "b"]);
+    await write(store, [
+      ...wroteToAna(),
+      mail({ id: "ask", from: ANA, at: NOW - HOUR, messageId: "<ask@x>" }),
+    ]);
+    await write(
+      store,
+      [
+        mail({ id: "copy-1", from: ANA, at: NOW - HOUR, messageId: "ask@x" }),
+        mail({ id: "copy-2", from: ANA, at: NOW - HOUR, messageId: "ask@x" }),
+      ],
+      "b",
+    );
+
+    const [row] = await read(store);
+
+    expect(row?.copyAccountIds).toEqual(["b"]);
+  });
+
+  it("leaves out a copy that is archived, in the trash or in spam", async () => {
+    const store = await setup(["a", "b", "c", "d"]);
+    await write(store, [
+      ...wroteToAna(),
+      mail({ id: "ask", from: ANA, at: NOW - HOUR, messageId: "<ask@x>" }),
+    ]);
+    const copy = (roles: ("inbox" | "trash" | "spam")[]) =>
+      mail({
+        id: "copy",
+        from: ANA,
+        at: NOW - HOUR,
+        messageId: "ask@x",
+        roles,
+      });
+    await write(store, [copy([])], "b");
+    await write(store, [copy(["inbox", "trash"])], "c");
+    await write(store, [copy(["inbox", "spam"])], "d");
+
+    const [row] = await read(store);
+
+    expect(row?.copyAccountIds).toEqual([]);
+  });
+
   it("lists a stranger's reply in a conversation you started", async () => {
     const store = await setup();
     await write(store, [
@@ -357,7 +400,7 @@ function mail({
   to?: string[];
   at?: number;
   subject?: string;
-  roles?: ("sent" | "inbox" | "trash")[];
+  roles?: ("sent" | "inbox" | "trash" | "spam")[];
   labels?: string[];
   categories?: string[];
   section?: "focused" | "other" | null;

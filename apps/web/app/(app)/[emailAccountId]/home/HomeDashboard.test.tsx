@@ -1542,6 +1542,36 @@ describe("HomeDashboard across accounts", () => {
       expect(screen.queryByText("Dentist")).toBeNull();
     });
 
+    it("leaves out a copy of mail another account lists in Needs reply past the merged cap", () => {
+      const many = Array.from({ length: 12 }, (_, index) =>
+        thread(`a${index}`, `Request ${index}`),
+      );
+      mocks.waitingOnYou = [
+        {
+          ...thread("b-ask", "Contract"),
+          rfcMessageId: "same@mail",
+          account: B,
+        },
+      ];
+      mocks.homes = {
+        // Its last row is past what Today's merged lane lists.
+        account: homeData([
+          ...many,
+          {
+            ...thread("a-contract", "Contract"),
+            at: "2026-10-01T09:00:00.000Z",
+            priority: "low",
+            rfcMessageId: "<same@mail>",
+          },
+        ]),
+        "account-b": unread(homeData([])),
+      };
+
+      renderToday();
+
+      expect(screen.queryByText("Contract")).toBeNull();
+    });
+
     it("leaves out a copy of mail another account lists in Needs reply, and in the inbox below", () => {
       mocks.waitingOnYou = [
         {

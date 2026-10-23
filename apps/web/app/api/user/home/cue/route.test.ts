@@ -22,6 +22,9 @@ import { GET } from "./route";
 describe("GET /api/user/home/cue", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(hasCueReadMail).mockImplementation(
+      async (emailAccountId) => emailAccountId === "read",
+    );
   });
 
   it("answers for each of the user's own accounts asked for, and no other", async () => {
@@ -54,11 +57,49 @@ describe("GET /api/user/home/cue", () => {
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
-  it("refuses a request that names no account", async () => {
-    const response = await getCue("");
+  it.each([
+    ["no account", ""],
+    ["only separators", "?ids=,,"],
+    [
+      "more accounts than All inboxes holds",
+      `?ids=${Array.from({ length: 21 }, (_, index) => `a${index}`).join(",")}`,
+    ],
+  ])("refuses a request that names %s", async (_case, search) => {
+    const response = await getCue(search);
 
     expect(response.status).toBe(400);
     expect(prisma.emailAccount.findMany).not.toHaveBeenCalled();
+  });
+
+  it("takes ids given as separate parameters too", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([] as never);
+
+    const response = await getCue("?ids=read&ids=new,read");
+
+    expect(response.status).toBe(200);
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ["read", "new"] }, userId: "user-1" },
+      }),
+    );
+  });
+
+  it("leaves out, as unknown, an account whose reads failed", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([
+      { id: "read" },
+      { id: "broken" },
+    ] as never);
+    vi.mocked(hasCueReadMail).mockImplementation(async (id) => {
+      if (id === "broken") throw new Error("Database unavailable");
+      return true;
+    });
+
+    const response = await getCue("?ids=read,broken");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      accounts: [{ id: "read", hasReadMail: true }],
+    });
   });
 });
 

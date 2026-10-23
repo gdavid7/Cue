@@ -261,6 +261,93 @@ test("a new mailbox shows Waiting on you across accounts before Today answers, a
   }
 });
 
+test("mail another account lists in Needs reply shows once there, below Waiting on you", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000);
+  const seeded = await seedMailFromContact(page, `Ski trip ${Date.now()}`);
+  // Reads the primary's mailbox, so the seeded mail reached both accounts.
+  const shared = await createSecondEmailAccount(primaryId, {
+    mailbox: "primary",
+  });
+  await seedNeedsReply(shared.id, seeded.threadId);
+  // Only the primary mailbox is new to Cue.
+  await page.route(
+    (url) => url.pathname === "/api/user/home/cue",
+    (route) => {
+      const ids = new URL(route.request().url()).searchParams.get("ids");
+      return route.fulfill({
+        json: {
+          accounts: (ids ?? "")
+            .split(",")
+            .map((id) => ({ id, hasReadMail: id !== primaryId })),
+        },
+      });
+    },
+  );
+  // The account with the copy in Needs reply answers when let.
+  let release = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      const id = route.request().headers()["x-email-account-id"] ?? "";
+      if (id === shared.id) await released;
+      const response = await route.fetch();
+      const home = await response.json();
+      if (id === primaryId) {
+        home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+        home.needsYou = [];
+      }
+      await route.fulfill({ response, json: home });
+    },
+  );
+  const waitingOnYou = page.getByRole("listbox", {
+    name: "Waiting on you",
+    exact: true,
+  });
+  const needsReply = page.getByRole("listbox", { name: "Needs reply" });
+  const copies = page.locator(`[data-today-thread$=":${seeded.threadId}"]`);
+  try {
+    await page.goto(`/${primaryId}/home?accounts=all`, {
+      waitUntil: "domcontentloaded",
+    });
+    // The primary's other unchecked rows show; the copy waits for the
+    // account that may list it in Needs reply.
+    const firstOption = waitingOnYou.getByRole("option").first();
+    await expect(firstOption).toBeVisible({ timeout: 90_000 });
+    await expect(copies).toHaveCount(0);
+    const before = await firstOption.boundingBox();
+    expect(before).not.toBeNull();
+
+    release();
+    const listed = needsReply.locator(
+      `[data-today-thread="${shared.id}:${seeded.threadId}"]`,
+    );
+    await expect(listed).toBeVisible({ timeout: 60_000 });
+    // Once on Today, in Needs reply, with Waiting on you where it was above.
+    await expect(copies).toHaveCount(1);
+    expect((await firstOption.boundingBox())?.y).toBeCloseTo(
+      before?.y ?? -1,
+      0,
+    );
+    const needsReplyBox = await needsReply.boundingBox();
+    expect(needsReplyBox?.y ?? 0).toBeGreaterThan(before?.y ?? 0);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "today-all-copy-in-needs-reply",
+    );
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await seeded.remove();
+    await deleteSecondEmailAccount(shared.accountId);
+  }
+});
+
 test("All inboxes reads in the split layout, beside the list", async ({
   page,
 }, testInfo) => {
