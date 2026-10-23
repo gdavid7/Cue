@@ -194,6 +194,56 @@ describe("useThread", () => {
     });
   });
 
+  // The fill answers in a moment, so the reader waits for it rather than
+  // holding a row the fill may take back.
+  it("waits for a first sync's fill before showing the conversation", async () => {
+    let complete: (value: { status: "complete" }) => void = () => undefined;
+    mail.client.ensureConversationMessages.mockReturnValue(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    mail.client.observeConversation.mockReturnValue(
+      handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+    );
+    const { result } = renderHook(() =>
+      useThread({ id: "c-1" }, { fillConversation: true }),
+    );
+    await waitFor(() => expect(result.current.data?.thread.id).toBe("c-1"));
+    expect(result.current.localAvailability?.awaitingFill).toBe(true);
+
+    await act(async () => complete({ status: "complete" }));
+    expect(result.current.localAvailability).toMatchObject({
+      awaitingFill: false,
+      hasMore: false,
+    });
+  });
+
+  it("shows the conversation with its row held once a slow fill runs past the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      mail.client.ensureConversationMessages.mockReturnValue(
+        new Promise(() => undefined),
+      );
+      mail.client.observeConversation.mockReturnValue(
+        handle(readySnapshot(view({ coverage: [partialCoverage] }))),
+      );
+      const { result } = renderHook(() =>
+        useThread({ id: "c-1" }, { fillConversation: true }),
+      );
+      expect(result.current.localAvailability?.awaitingFill).toBe(true);
+
+      await act(async () => vi.advanceTimersByTime(2000));
+      expect(result.current.localAvailability).toMatchObject({
+        awaitingFill: false,
+        hasMore: true,
+        filling: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fills nothing in for a mailbox sync has fully covered", async () => {
     mail.client.ensureConversationMessages.mockReturnValue(
       new Promise(() => undefined),

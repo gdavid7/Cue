@@ -14,6 +14,9 @@ import {
   requestMissingMessageContent,
 } from "@/utils/mail-engine/conversation-thread";
 
+// As long as the reader waits for a conversation's iframes to settle.
+const FILL_WAIT_MS = 2000;
+
 const EMPTY_SNAPSHOT: QuerySnapshot<ConversationView> = {
   status: "loading",
   revision: null,
@@ -84,12 +87,18 @@ export function useThread(
   const [completedConversations, setCompletedConversations] = useState(
     () => new Set<string>(),
   );
+  const [fillWaitsOver, setFillWaitsOver] = useState(() => new Set<string>());
   useEffect(() => {
     if (!fillConversation || !client || !emailAccountId || !id) return;
     const key = conversationKey(emailAccountId, id);
     const conversation = { accountId: emailAccountId, conversationId: id };
     let current = true;
     let settled = false;
+    const waitOver = setTimeout(() => {
+      setFillWaitsOver((over) =>
+        over.has(key) ? over : new Set(over).add(key),
+      );
+    }, FILL_WAIT_MS);
     client
       .ensureConversationMessages(conversation)
       .catch(() => undefined)
@@ -102,6 +111,7 @@ export function useThread(
       });
     return () => {
       current = false;
+      clearTimeout(waitOver);
       // Moving on through threads must not leave the one opened next queued
       // behind fills nobody will read.
       if (!settled) {
@@ -132,6 +142,12 @@ export function useThread(
     Boolean(
       view?.coverage.some((coverage) => coverage.metadata !== "complete"),
     );
+  // The fill is an interactive read that usually answers within a frame or
+  // two, so the reader waits for it instead of holding a row it would take
+  // back when the fill finds nothing; a slow one gets the row past the wait.
+  const awaitingFill = Boolean(
+    fillMayFindMessages && openKey && !fillWaitsOver.has(openKey),
+  );
 
   const data = useMemo<ThreadResponse | undefined>(() => {
     if (!id || !view) return;
@@ -167,6 +183,7 @@ export function useThread(
       hasMore: Boolean(view.nextPage) || fillMayFindMessages,
       loadingMore: loadingMore || fillMayFindMessages,
       filling: completing,
+      awaitingFill,
       loadMore: () =>
         setPagination({
           accountId: emailAccountId,
@@ -175,6 +192,7 @@ export function useThread(
         }),
     };
   }, [
+    awaitingFill,
     completing,
     data,
     emailAccountId,

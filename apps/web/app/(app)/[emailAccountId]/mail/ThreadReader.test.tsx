@@ -348,6 +348,21 @@ describe("ThreadReader", () => {
     expect(view.getAttribute("data-leaves-when-discarded")).toBe("false");
   });
 
+  // No row is held that the fill could take back; the previous thread or a
+  // spinner covers the moment instead.
+  it("waits for a first sync's fill before showing the messages", () => {
+    renderReader({
+      refetch: vi.fn(),
+      messages: [createMessage("message-1", "Office hours", ["INBOX"])],
+      localAvailability: { hasMore: true, filling: true, awaitingFill: true },
+    });
+
+    expect(screen.queryByTestId("thread-view")).toBeNull();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Loading email");
+    expect(status.closest("[data-thread-view-loading]")).toBeTruthy();
+  });
+
   it("offers earlier messages the conversation is known to have", () => {
     renderReader({
       refetch: vi.fn(),
@@ -449,7 +464,11 @@ function renderReader({
   layout?: "list" | "split";
   refetch: () => void;
   messages?: ThreadMessage[];
-  localAvailability?: { hasMore: boolean; filling: boolean };
+  localAvailability?: {
+    hasMore: boolean;
+    filling: boolean;
+    awaitingFill?: boolean;
+  };
 }) {
   const element = () => (
     <NuqsTestingAdapter>
@@ -468,6 +487,7 @@ function renderReader({
             sendOperationIds: new Map(),
             loadingMore: false,
             loadMore: vi.fn(),
+            awaitingFill: localAvailability.awaitingFill ?? false,
           }
         }
         messages={messages}
