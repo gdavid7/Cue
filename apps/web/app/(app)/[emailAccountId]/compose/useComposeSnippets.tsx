@@ -34,11 +34,13 @@ const EMPTY_SNIPPETS: SnippetMatchItem[] = [];
 export function useComposeSnippets({
   editorRef,
   onAskCue,
+  onShareFreeTimes,
   to,
 }: {
   editorRef: RefObject<EmailEditorHandle | null>;
   // Opens Cue at the caret with what was typed after "/".
   onAskCue?: (text: string) => void;
+  onShareFreeTimes?: () => void;
   to?: string;
 }) {
   const { data, mutate } = useSnippets();
@@ -113,6 +115,14 @@ export function useComposeSnippets({
                   ? () => {
                       editorRef.current?.replaceSlashTrigger("");
                       onAskCue(slashTrigger.query);
+                    }
+                  : undefined
+              }
+              onSelectFreeTimes={
+                onShareFreeTimes
+                  ? () => {
+                      editorRef.current?.replaceSlashTrigger("");
+                      onShareFreeTimes();
                     }
                   : undefined
               }

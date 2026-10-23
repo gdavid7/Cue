@@ -1,11 +1,14 @@
 import { expect } from "@playwright/test";
+import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
+import { openMail } from "../mail/mail-test-helpers";
 import {
   getCalendarConnectionCount,
   getCalendarTestState,
   openCalendars,
   PLAYWRIGHT_TEST_EMAIL,
   resetCalendarTestState,
+  setBookingLink,
   setupCalendarTestState,
 } from "./calendar-test-helpers";
 
@@ -129,4 +132,33 @@ test("persists the booking link and scheduling timezone", async ({ page }) => {
   await expect(timezonePicker).toHaveText(/^Paris \(GMT/, {
     timeout: 120_000,
   });
+});
+
+test("shares the next free times and booking link from the composer", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(360_000);
+  await setBookingLink("https://cal.example/playwright");
+  await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const editor = dialog.getByRole("textbox", { name: "Email message" });
+  await editor.click();
+
+  await dialog.getByRole("button", { name: "Share my free times" }).click();
+
+  await expect(editor).toContainText("Here are a few times that work for me:", {
+    timeout: 60_000,
+  });
+  // Up to three openings, each in the account's zone (UTC until it sets one).
+  const times = editor.locator("li");
+  await expect(times.first()).toContainText("UTC");
+  expect(await times.count()).toBeLessThanOrEqual(3);
+  await expect(
+    editor.getByRole("link", { name: "https://cal.example/playwright" }),
+  ).toBeVisible();
+  await capturePlaywrightCheckpoint(page, testInfo, "free-times-inserted");
+
+  await dialog.getByRole("button", { name: "Discard draft" }).click();
+  await expect(dialog).toBeHidden();
 });

@@ -16,6 +16,7 @@ import {
   type EmailEditorState,
 } from "@inboxzero/email-editor/web";
 import {
+  CalendarClockIcon,
   ChevronDownIcon,
   CircleAlertIcon,
   FileSearchIcon,
@@ -155,6 +156,7 @@ import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
 import { resolveRemoteImages } from "./resolve-remote-images";
 import { useComposeAssist } from "./useComposeAssist";
 import { useComposeSnippets } from "./useComposeSnippets";
+import { useShareFreeTimes } from "./useShareFreeTimes";
 import {
   getReminderAfterSendTimeChange,
   parseDeliveryTimes,
@@ -686,6 +688,10 @@ function ComposeEmailFormContent({
     formRef,
   });
   const { isOpen: assistIsOpen, focus: focusAssist } = assist;
+  const freeTimes = useShareFreeTimes({
+    editorRef,
+    emailAccountId: selectedEmailAccountId,
+  });
   const {
     onSlashKeyDown,
     onSlashTrigger,
@@ -693,6 +699,7 @@ function ComposeEmailFormContent({
   } = useComposeSnippets({
     editorRef,
     onAskCue: assist.openPrompt,
+    onShareFreeTimes: freeTimes.shareFreeTimes,
     to: watch("to"),
   });
 
@@ -2551,6 +2558,26 @@ function ComposeEmailFormContent({
             </span>
           </Button>
           {snippetToolbar}
+          <Tooltip content="Share my free times">
+            <Button
+              aria-busy={freeTimes.isLoading || undefined}
+              aria-label="Share my free times"
+              className="hover:bg-transparent"
+              disabled={isSubmitting}
+              onClick={freeTimes.shareFreeTimes}
+              // Keeps the caret in the message, where the times go.
+              onPointerDown={(event) => event.preventDefault()}
+              size="icon"
+              type="button"
+              variant="ghostMuted"
+            >
+              {freeTimes.isLoading ? (
+                <Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+              ) : (
+                <CalendarClockIcon className="size-4" />
+              )}
+            </Button>
+          </Tooltip>
           <VoiceInput
             onInsert={(text) => {
               editorRef.current?.insertText(

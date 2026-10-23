@@ -185,7 +185,13 @@
   ],
   "composer-editing.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
-    "components/ShortcutTooltipContent.tsx"
+    "components/ShortcutTooltipContent.tsx",
+    "components/snippets/SnippetPicker.tsx",
+    "app/(app)/[emailAccountId]/compose/useComposeSnippets.tsx",
+    "app/(app)/[emailAccountId]/compose/useShareFreeTimes.ts",
+    "app/(app)/[emailAccountId]/compose/free-times-text.ts",
+    "app/api/user/calendar/free-times/route.ts",
+    "utils/calendar/free-times.ts"
   ],
   "compose-drafts.spec.ts": [
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",

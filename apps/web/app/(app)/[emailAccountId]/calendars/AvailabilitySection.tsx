@@ -11,10 +11,8 @@ import { useDefaultAvailability } from "@/hooks/useDefaultAvailability";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { getActionErrorMessage } from "@/utils/error";
 import { updateDefaultAvailabilityAction } from "@/utils/actions/booking";
-import {
-  collectWindows,
-  DEFAULT_WEEKDAY_WINDOWS,
-} from "./availability-schedule";
+import { DEFAULT_WEEKDAY_WINDOWS } from "@/utils/booking/default-availability";
+import { collectWindows } from "./availability-schedule";
 import { useWeeklyHours, WeeklyHoursEditor } from "./WeeklyHoursEditor";
 
 export function AvailabilitySection() {
