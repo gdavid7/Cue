@@ -7,6 +7,7 @@
         "VERCEL",
         "VERCEL_ENV",
         "VERCEL_URL",
+        "NEXT_DEPLOYMENT_ID",
         "NODE_ENV",
         "SKIP_TYPE_CHECK",
         "INBOX_ZERO_ENV_FILE",

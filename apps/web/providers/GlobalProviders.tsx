@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { usePathname } from "next/navigation";
 import {
   SAVE_OFFLINE_MAIL,
@@ -21,7 +21,6 @@ import {
   shouldPromptDesktopWebUpdate,
 } from "@/utils/desktop-app";
 import { showUpdateAvailableToast } from "@/utils/update-available-toast";
-import { noteBuildReloadNavigation } from "@/utils/build-reload";
 import { ThemeProvider } from "@/components/theme-provider";
 
 const DESKTOP_WEB_UPDATE_PROMPT_GRACE_MS = 3000;
@@ -42,7 +41,6 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
     >
       <ManageServiceWorker />
       <RestoredPageGuard />
-      <LoadNewBuildOnNavigation />
       <SignalDesktopReady />
       <ThemeProvider>
         <SWRConfig value={{ fetcher: swrFetcher, isPaused: isSigningOut }}>
@@ -51,19 +49,6 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
       </ThemeProvider>
     </SerwistProvider>
   );
-}
-
-// A tab running an older build than the server's loads its next route in
-// full, as Next.js does when its own navigations find the build changed.
-function LoadNewBuildOnNavigation() {
-  const pathname = usePathname();
-  const previous = useRef(pathname);
-  useEffect(() => {
-    if (previous.current === pathname) return;
-    previous.current = pathname;
-    noteBuildReloadNavigation();
-  }, [pathname]);
-  return null;
 }
 
 function RestoredPageGuard() {

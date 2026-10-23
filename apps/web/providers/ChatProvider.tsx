@@ -42,7 +42,6 @@ import { answerAssistantSearch } from "@/utils/mail-engine/assistant-search";
 import { LOCAL_MAIL_SEARCH_SYNTAXES } from "@/utils/actions/assistant-chat.validation";
 import { submitLocalMailSearchResult } from "@/utils/actions/assistant-chat";
 import { MAX_CHAT_RUN_MS } from "@/utils/chat/max-run";
-import { holdBuildReload } from "@/utils/build-reload";
 
 const logger = createClientLogger("assistant-chat");
 
@@ -330,8 +329,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const isRunActive =
     chat.status === "submitted" || chat.status === "streaming";
-  // A reload would cut the reply off mid-stream.
-  useEffect(() => (isRunActive ? holdBuildReload() : undefined), [isRunActive]);
   const activeStreamId = data?.activeStreamId ?? null;
   const activeStreamStartedAt = data?.activeStreamStartedAt ?? null;
   // Set when a run outlives the chat route's limit without clearing its

@@ -31,7 +31,7 @@ import {
   workerFoundSessionGone,
 } from "@/utils/session-refresh";
 import { env } from "@/env";
-import { noteServerBuild } from "@/utils/build-reload";
+import { noteServerBuild } from "@/utils/build-update";
 
 export { browserMailEngineCapabilities };
 

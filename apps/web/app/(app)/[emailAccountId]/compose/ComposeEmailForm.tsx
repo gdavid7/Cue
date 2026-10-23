@@ -89,7 +89,6 @@ import {
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { useReplyDraftPersistence } from "@/hooks/useReplyDraftPersistence";
-import { holdBuildReload } from "@/utils/build-reload";
 import {
   MAIL_SHORTCUT_SCOPES,
   TYPING_SURFACE_ATTRIBUTE,
@@ -768,9 +767,6 @@ function ComposeEmailFormContent({
       }),
     [flushDraft],
   );
-  // A new build waits for the composer to close, saved draft or not: the
-  // reload would take the composer, its cursor and its scroll away.
-  useEffect(() => holdBuildReload(), []);
   const getProviderDraftContent = () => {
     const content = getDraftContent();
     if (!content) return;

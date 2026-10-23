@@ -56,7 +56,6 @@ import {
   registerEngineAccountsInTurn,
 } from "@/utils/mail-engine/engine-accounts";
 import { afterFirstMailList } from "@/utils/mail-engine/first-mail-list";
-import { holdBuildReload } from "@/utils/build-reload";
 import {
   MAIL_ENGINE_OWNER_LOCK,
   MAIL_ENGINE_TAB_CHANNEL,
@@ -462,29 +461,6 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
     requestBrowserEngine,
     startAttempt,
   ]);
-
-  // Reloading onto a new build waits until every account's queued changes
-  // and sends have reached the server: the reload stops the engine worker,
-  // and a send it stops mid-request has an outcome nobody can confirm.
-  useEffect(() => {
-    if (inspect?.role !== "owner" || inspect.transport !== "browser") return;
-    const engine = inspect.client;
-    return holdBuildReload(async () => {
-      const accountIds = new Set([
-        viewedAccount.current.accountId,
-        ...ownedAccountIds.current,
-      ]);
-      const diagnostics = await Promise.all(
-        [...accountIds]
-          .filter((accountId): accountId is string => Boolean(accountId))
-          .map((accountId) => engine.getDiagnostics(accountId)),
-      );
-      return diagnostics.every(
-        (account) =>
-          account.pendingOperations === 0 && account.uncertainOperations === 0,
-      );
-    });
-  }, [inspect]);
 
   useEffect(() => {
     if (!inspect || !emailAccountId) return;

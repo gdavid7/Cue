@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { holdBuildReload } from "@/utils/build-reload";
 
 /**
  * Shows a browser confirmation dialog when the user tries to leave the page.
@@ -17,11 +16,6 @@ export function useBeforeUnload(enabled: boolean) {
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
-    // Work the page asks not to leave also keeps it off a new build.
-    const releaseBuildReload = holdBuildReload();
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      releaseBuildReload();
-    };
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [enabled]);
 }
