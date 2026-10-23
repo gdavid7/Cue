@@ -1,5 +1,6 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { SERVER_BUILD_HEADER } from "@/utils/server-build";
 import { isSessionExpiredErrorBody } from "@/utils/session-expired";
 import {
   fetchWithSessionRetry,
@@ -13,10 +14,13 @@ import { isSigningOut } from "@/utils/signing-out";
  * page to redirect, so the engine's host decides how to reach the page. It
  * runs once requests stop, with why; not for the 401s answered here while
  * stopped, nor when a refresh could not tell whether the session is gone.
+ * onServerBuild hears the deployment that answered each response that names
+ * one, so the page can tell when its code is older than the server's.
  */
 export function createMailHttpRequest(
   accountId: string,
   onSessionExpired: (reason: "signed-out" | "rejected") => void,
+  onServerBuild?: (buildId: string) => void,
 ): MailHttpRequestFn {
   return async ({ method, path, body, signal, accept }) => {
     const encoded = encodeRequestBody(body);
@@ -32,6 +36,8 @@ export function createMailHttpRequest(
       },
       body: encoded.body,
     });
+    const serverBuild = response.headers.get(SERVER_BUILD_HEADER);
+    if (serverBuild) onServerBuild?.(serverBuild);
     if (accept === "bytes" && response.ok) {
       const sizeHeader = response.headers.get("content-length");
       return {

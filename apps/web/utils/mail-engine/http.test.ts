@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { SERVER_BUILD_HEADER } from "@/utils/server-build";
 
 let createMailHttpRequest: typeof import("./http").createMailHttpRequest;
 let startSigningOut: typeof import("@/utils/signing-out").startSigningOut;
@@ -48,6 +49,31 @@ describe("createMailHttpRequest", () => {
       accept: "application/octet-stream",
       [EMAIL_ACCOUNT_HEADER]: "acc-1",
     });
+  });
+
+  it("reports the deployment that answered, even on an error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "busy" }), {
+            status: 503,
+            headers: {
+              "content-type": "application/json",
+              [SERVER_BUILD_HEADER]: "dpl_new",
+            },
+          }),
+      ),
+    );
+    const onServerBuild = vi.fn();
+    const request = createMailHttpRequest("acc-1", vi.fn(), onServerBuild);
+    await request({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/enumeration",
+      body: {},
+      signal: new AbortController().signal,
+    });
+    expect(onServerBuild).toHaveBeenCalledWith("dpl_new");
   });
 
   it.each([

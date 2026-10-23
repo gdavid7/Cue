@@ -33,6 +33,7 @@ import {
   workerFoundSessionGone,
 } from "@/utils/session-refresh";
 import { env } from "@/env";
+import { noteServerBuild } from "@/utils/build-update";
 
 export { browserMailEngineCapabilities };
 
@@ -268,6 +269,10 @@ async function createWorkerOwnedEngine(
     }
     if (message.type === "dropped") {
       logDroppedWork(message.drop);
+      return;
+    }
+    if (message.type === "server_build") {
+      noteServerBuild(message.buildId);
       return;
     }
     if (message.type === "session_expired") {

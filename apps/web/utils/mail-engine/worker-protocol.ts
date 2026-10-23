@@ -124,7 +124,9 @@ export type WorkerResponse =
    * The worker stopped sending: no session ("signed-out"), or the gate
    * refused even a refreshed one ("rejected"). Only the page can act.
    */
-  | { type: "session_expired"; reason: "signed-out" | "rejected" };
+  | { type: "session_expired"; reason: "signed-out" | "rejected" }
+  /** A deployment other than the last one named answered a request. */
+  | { type: "server_build"; buildId: string };
 
 export function browserMailEngineCapabilities() {
   return {

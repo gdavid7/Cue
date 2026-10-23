@@ -48,6 +48,8 @@ let preopened:
     }
   | undefined;
 let startReceived = false;
+// Every response names its deployment; the page needs to hear only changes.
+let lastServerBuild: string | undefined;
 
 const host = createMailWorkerHost({
   createEngine: createWorkerEngine,
@@ -99,12 +101,23 @@ async function createWorkerEngine(
   performance.mark("mail-engine:account-ensured");
   const ports = createRoutedBackendAdapter({
     requestFor: (accountId) =>
-      createMailHttpRequest(accountId, (reason) => {
-        self.postMessage({
-          type: "session_expired",
-          reason,
-        } satisfies WorkerResponse);
-      }),
+      createMailHttpRequest(
+        accountId,
+        (reason) => {
+          self.postMessage({
+            type: "session_expired",
+            reason,
+          } satisfies WorkerResponse);
+        },
+        (buildId) => {
+          if (buildId === lastServerBuild) return;
+          lastServerBuild = buildId;
+          self.postMessage({
+            type: "server_build",
+            buildId,
+          } satisfies WorkerResponse);
+        },
+      ),
   });
   const created = createMailEngine({
     store,
