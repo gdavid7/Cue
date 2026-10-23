@@ -73,9 +73,13 @@ test("never paints an empty reader when moving between loaded HTML threads", asy
   ).toBeVisible();
   const samples = await page.evaluate(() => {
     Object.assign(window, { stopReaderPaintSamples: true });
-    return (window as unknown as { readerPaintSamples: boolean[] })
+    return (window as unknown as { readerPaintSamples?: boolean[] })
       .readerPaintSamples;
   });
+  if (!samples)
+    throw new Error(
+      "The page reloaded while moving between threads, which discarded the paint samples.",
+    );
   await testInfo.attach("reader-navigation-frames", {
     body: JSON.stringify({
       frames: samples.length,

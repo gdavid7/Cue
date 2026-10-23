@@ -45,6 +45,7 @@ describe("recordActivationSignalAction", () => {
     ["first_sync_ready", "activation.first_sync_ready"],
     ["first_thread_opened", "activation.first_thread_opened"],
     ["first_triage_action", "activation.first_triage_action"],
+    ["first_waiting_on_you_item", "activation.first_waiting_on_you_item"],
   ] as const)("logs %s once and ignores a repeat", async (event, message) => {
     const mailbox = `mailbox-${event}`;
     const first = await recordActivationSignalAction(mailbox, { event });
@@ -73,6 +74,48 @@ describe("recordActivationSignalAction", () => {
     }
 
     expect(loggedEvents()[0].fields.msSinceFirstSignIn).toBe(3 * 60 * 1000);
+  });
+
+  it("logs the first Waiting on you with only counts and timings", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-16T09:02:00.000Z") });
+    try {
+      await recordActivationSignalAction("mailbox-waiting", {
+        event: "first_waiting_on_you_item",
+        itemCount: 3,
+        msSinceTodayOpened: 1800,
+      });
+      await recordActivationSignalAction("mailbox-waiting", {
+        event: "first_waiting_on_you_item",
+        itemCount: 5,
+        msSinceTodayOpened: 900,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(loggedEvents()).toEqual([
+      {
+        event: "activation.first_waiting_on_you_item",
+        fields: {
+          emailAccountId: "mailbox-waiting",
+          at: "2026-10-16T09:02:00.000Z",
+          firstSignInAt: SIGNED_IN_AT.toISOString(),
+          msSinceFirstSignIn: 2 * 60 * 1000,
+          itemCount: 3,
+          msSinceTodayOpened: 1800,
+        },
+      },
+    ]);
+  });
+
+  it("rejects text where a count belongs", async () => {
+    const result = await recordActivationSignalAction("mailbox-text", {
+      event: "first_waiting_on_you_item",
+      itemCount: "Dinner plans",
+    } as never);
+
+    expect(result?.validationErrors).toBeDefined();
+    expect(loggedEvents()).toEqual([]);
   });
 
   it("logs nothing but the mailbox id and times", async () => {

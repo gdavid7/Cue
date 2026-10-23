@@ -996,12 +996,15 @@ export async function handleLinkAccount(
 
 export const auth = async (
   requestHeaders?: Headers | Awaited<ReturnType<typeof headers>>,
-  { disableCookieCache = false }: { disableCookieCache?: boolean } = {},
+  {
+    disableCookieCache = false,
+    disableRefresh = false,
+  }: { disableCookieCache?: boolean; disableRefresh?: boolean } = {},
 ) => {
   try {
     return await betterAuthConfig.api.getSession({
       headers: requestHeaders ?? (await headers()),
-      query: { disableCookieCache },
+      query: { disableCookieCache, ...(disableRefresh && { disableRefresh }) },
     });
   } catch (error) {
     if (error instanceof APIError && error.statusCode === 401) return null;

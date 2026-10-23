@@ -43,6 +43,7 @@
     "app/(app)/[emailAccountId]/home/BeforeYourMeeting.tsx",
     "app/(app)/[emailAccountId]/home/TodayWeather.tsx",
     "app/(app)/[emailAccountId]/home/use-waiting-on-you.ts",
+    "app/api/user/home/cue/route.ts",
     "app/(app)/[emailAccountId]/mail/ReadingBundle.tsx",
     "app/(app)/[emailAccountId]/mail/reading-lane.ts",
     "app/(app)/[emailAccountId]/mail/use-reading-bulk.ts",
@@ -102,6 +103,11 @@
     "hooks/useDisplayedEmail.ts"
   ],
   "account-removal-routing.spec.ts": ["providers/EmailAccountProvider.tsx"],
+  "account-switch-no-reload.spec.ts": [
+    "app/api/user/last-email-account/route.ts",
+    "utils/last-email-account.ts",
+    "providers/EmailAccountProvider.tsx"
+  ],
   "account-selection.spec.ts": [
     "app/(app)/[emailAccountId]/mail/MailSidebar.tsx",
     "app/(app)/[emailAccountId]/mail/use-combined-mail-threads.ts"
@@ -265,6 +271,16 @@
     "components/email-list/EmailMessage.tsx",
     "components/email-list/EmailDetails.tsx",
     "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"
+  ],
+  "sender-notice.spec.ts": [
+    "components/email-list/SenderNotice.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "components/person-card/PersonCard.tsx",
+    "utils/browser-cache.ts",
+    "utils/mail-engine/create-browser-engine.ts",
+    "utils/mail-engine/tab-channel.ts",
+    "emulate.playwright.config.yaml",
+    "emulate.playwright.microsoft.yaml"
   ],
   "plain-text-links.spec.ts": [
     "components/email-list/EmailMessage.tsx",
@@ -461,6 +477,7 @@
   ],
   "drag-to-sidebar.spec.ts": [
     "app/(app)/[emailAccountId]/mail/sidebar-drop.ts",
-    "app/(app)/[emailAccountId]/mail/mail-drag.tsx"
+    "app/(app)/[emailAccountId]/mail/mail-drag.tsx",
+    "utils/mail-engine/message-folders.ts"
   ]
 }

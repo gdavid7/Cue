@@ -20,8 +20,19 @@ export async function createDesktopMailStore(
   const { driver } = await openOrQuarantineNodeMailbox(path);
   return createSqliteMailStore(
     onTransaction ? timeTransactions(driver, onTransaction) : driver,
-    { runtime: createHostRuntime(nodeMailCrypto()), bodyCodec: nodeBodyCodec },
+    {
+      runtime: createHostRuntime(nodeMailCrypto()),
+      bodyCodec: nodeBodyCodec,
+      debug: logStoreDebug,
+    },
   );
+}
+
+// The engine's utility process logs to its console; the store's debug notes
+// carry ids only.
+function logStoreDebug(message: string, fields: Record<string, string>) {
+  // biome-ignore lint/suspicious/noConsole: engine-process debug trace, ids only
+  console.debug("[mail-store]", message, fields);
 }
 
 export { nodeMailCrypto };

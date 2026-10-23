@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import type { Provider } from "@inboxzero/mail-core/identities";
 import type {
   ConversationSummary,
   MailPredicate,
@@ -91,11 +92,15 @@ export function useOptimisticTriage(client: MailClient | null) {
  * The view's rows with pending triage applied: read and star show on the row,
  * and a conversation the change takes out of the view is left out. A row the
  * change cannot decide stays until the engine's own view settles it.
+ * `providers` names each account's provider, which decides whether a change
+ * reaches the user's own Sent and Drafts copies; an account missing from it
+ * leaves those views to the engine.
  */
 export function applyOptimisticTriage(
   conversations: ConversationSummary[],
   predicate: MailPredicate,
   entries: readonly OptimisticTriage[],
+  providers: ReadonlyMap<string, Provider>,
 ): ConversationSummary[] {
   if (!entries.length) return conversations;
   let changed = false;
@@ -111,7 +116,11 @@ export function applyOptimisticTriage(
       }
       row = withChange(row, entry.change);
       inView =
-        conversationMatchesAfterChange(predicate, entry.change) ?? inView;
+        conversationMatchesAfterChange(
+          predicate,
+          entry.change,
+          providers.get(entry.accountId) ?? null,
+        ) ?? inView;
     }
     if (inView === false) {
       changed = true;

@@ -80,6 +80,11 @@ export function PersonCardScope({
   );
 }
 
+/** Where person cards read from, or null outside a reader. */
+export function usePersonCardScope() {
+  return useContext(PersonCardScopeContext);
+}
+
 /**
  * Opens the card of the open conversation's selected message's sender, or
  * of the newest open message's when none is selected, as the `i` shortcut

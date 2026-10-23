@@ -362,12 +362,15 @@ function stopHolding(current: TrackedSend) {
  */
 async function reportUndoneElsewhere(current: TrackedSend, reopen: () => void) {
   const client = getActiveMailClient() ?? current.watch.client;
-  const draft = await client
-    .readDraft({
+  // An engine still syncing after the reload can be slow to answer, and the
+  // undo has already happened, so the confirmation must not wait on it.
+  const draft = await withTimeout(
+    client.readDraft({
       accountId: current.emailAccountId,
       draftId: current.operationId,
-    })
-    .catch(() => null);
+    }),
+    ENGINE_CANCEL_TIMEOUT_MS,
+  ).catch(() => null);
   toastSendUndoneElsewhere(
     draft?.status === "found"
       ? { id: current.toastId, onEdit: reopen }

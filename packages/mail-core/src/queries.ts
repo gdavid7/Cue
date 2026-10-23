@@ -455,6 +455,38 @@ export type PersonCard = {
   history: { syncing: boolean; sinceMs: number | null };
 };
 
+/**
+ * What the local store knows about a sender's name and address, for the
+ * reader's "New address, familiar name" line. Read from the contact index
+ * alone: it never asks the provider.
+ */
+export type SenderHistoryQuery = {
+  /** The open thread's account, or every account All inboxes includes. */
+  accountIds: string[];
+  /** The message's From address. */
+  email: string;
+  /** The message's From display name. */
+  name: string;
+  /** When the open message arrived, so only earlier mail from them counts. */
+  receivedAtMs: number;
+  /** The user's addresses, which never count as someone else's. */
+  ownAddresses: string[];
+};
+
+export type SenderHistory = {
+  /** False until every scope is listed and the contact index has read it. */
+  ready: boolean;
+  /** The user has sent mail to this address. */
+  writtenTo: boolean;
+  /** This address sent the user mail before the open message. */
+  receivedBefore: boolean;
+  /**
+   * The address the user most recently wrote to under the same full name,
+   * other than this one and the user's own; null when there is none.
+   */
+  knownAddress: string | null;
+};
+
 /** One more than the card lists, so it can leave out the open conversation. */
 export const PERSON_CARD_CONVERSATION_LIMIT = 6;
 

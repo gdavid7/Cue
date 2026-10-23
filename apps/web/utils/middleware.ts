@@ -33,6 +33,7 @@ import {
   toRateLimitProvider,
 } from "@/utils/email/rate-limit-mode-error";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import { mailHttpErrorResponse } from "@inboxzero/mail-core/protocol/mail-http";
 import {
   EMAIL_ACCOUNT_HEADER,
   EMAIL_ACCOUNT_ID_REQUIRED_ERROR,
@@ -53,6 +54,7 @@ import { startRequestTimer } from "@/utils/request-timing";
 import {
   createRequestMetrics,
   getRequestMetricsFields,
+  noteRequestPause,
   runWithRequestMetrics,
   timeRequestDependency,
 } from "@/utils/request-metrics";
@@ -290,19 +292,33 @@ function withMiddleware<T extends NextRequest>(
                   retryAfterMs: deferred.retryAfterMs,
                 },
               );
+              noteRequestPause({
+                source: "quota_gate",
+                reason: deferred.reason,
+                retryAfterMs: deferred.retryAfterMs,
+              });
+              const headers = {
+                "Retry-After": String(Math.ceil(deferred.retryAfterMs / 1000)),
+              };
+              // The mail engine reads only the mail envelope's wait; any other
+              // body leaves it guessing.
+              if (scope?.startsWith("mail/v1/")) {
+                return NextResponse.json(
+                  mailHttpErrorResponse({
+                    requestId,
+                    code: "throttled",
+                    retryable: true,
+                    retryAfterMs: deferred.retryAfterMs,
+                  }),
+                  { status: 503, headers },
+                );
+              }
               return NextResponse.json(
                 {
                   error: "Gmail is busy for this account. Try again shortly.",
                   isKnownError: true,
                 },
-                {
-                  status: 503,
-                  headers: {
-                    "Retry-After": String(
-                      Math.ceil(deferred.retryAfterMs / 1000),
-                    ),
-                  },
-                },
+                { status: 503, headers },
               );
             }
 

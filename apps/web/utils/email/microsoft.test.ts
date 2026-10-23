@@ -5,6 +5,7 @@ import * as outlookLabelModule from "@/utils/outlook/label";
 import { createTestLogger } from "@/__tests__/helpers";
 import { getThreadParticipantNames } from "@/app/(app)/[emailAccountId]/mail/thread-participants";
 import { DraftNotFoundError } from "@/utils/error";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import { OutlookProvider } from "./microsoft";
 import { resolveOutlookFolderId } from "@/utils/outlook/search-scope";
 import { FOLDER_SEPARATOR } from "@/utils/outlook/folders";
@@ -2412,5 +2413,52 @@ describe("OutlookProvider.updateLabel", () => {
 
     expect(patch).toHaveBeenCalledWith({ color: "preset5" });
     expect(invalidateCategoryMapCache).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OutlookProvider.moveMessagesToFolder", () => {
+  it("refuses a destination folder that no longer exists instead of moving nothing quietly", async () => {
+    const post = vi.fn();
+    const api = vi.fn((path: string) => ({
+      select: () => ({
+        get: vi.fn().mockRejectedValue(
+          Object.assign(new Error("The specified object was not found."), {
+            statusCode: 404,
+            code: "ErrorItemNotFound",
+          }),
+        ),
+      }),
+      post,
+      path,
+    }));
+    const provider = new OutlookProvider(
+      { getClient: () => ({ api }) } as never,
+      createTestLogger(),
+    );
+
+    await expect(
+      provider.moveMessagesToFolder(["m1"], "deleted-folder"),
+    ).rejects.toMatchObject({
+      constructor: ProviderChangeRejectedError,
+      code: "folder_not_found",
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("moves each message once the folder is there", async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const api = vi.fn(() => ({
+      select: () => ({ get: vi.fn().mockResolvedValue({ id: "projects" }) }),
+      post,
+    }));
+    const provider = new OutlookProvider(
+      { getClient: () => ({ api }) } as never,
+      createTestLogger(),
+    );
+
+    await provider.moveMessagesToFolder(["m1", "m2"], "projects");
+    expect(api).toHaveBeenCalledWith("/me/messages/m1/move");
+    expect(api).toHaveBeenCalledWith("/me/messages/m2/move");
+    expect(post).toHaveBeenCalledWith({ destinationId: "projects" });
   });
 });

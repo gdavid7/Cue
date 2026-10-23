@@ -44,8 +44,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useAccounts } from "@/hooks/useAccounts";
+import { reportActivationSignal } from "@/hooks/useActivationSignal";
 import { useCalendarTodayEvents } from "@/hooks/useCalendarUpcomingEvents";
-import { useHome, useHomeDeadlines } from "@/hooks/useHome";
+import { useHome, useHomeCue, useHomeDeadlines } from "@/hooks/useHome";
 import {
   ALSO_IN_INBOX_LIMIT,
   removeFromCachedToday,
@@ -98,6 +99,7 @@ const NO_THREADS: ReadonlySet<string> = new Set();
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
+const NO_LABEL_IDS: string[] = [];
 
 /**
  * Today answers "what needs me, and what's next?", then gets out of the way.
@@ -202,6 +204,20 @@ export function HomeDashboard() {
     if (!singleHandledLabelIds) return;
     return { [emailAccountId]: singleHandledLabelIds };
   }, [merged, handledLabelIdsByAccount, emailAccountId, singleHandledLabelIds]);
+  // Before Today's answer, Waiting on you shows from local mail for a mailbox
+  // Cue hasn't read, where that answer can only agree: Needs reply is empty
+  // and Cue has filed nothing. Across accounts it waits for the answer.
+  const earlyCue = useHomeCue(
+    emailAccountId,
+    !data && !allInboxesAccounts && isLoading,
+  );
+  const beforeAnswer = !data && earlyCue?.hasReadMail === false;
+  const waitingOnYouHandledLabelIds = useMemo(
+    () =>
+      handledLabelIds ??
+      (beforeAnswer ? { [emailAccountId]: NO_LABEL_IDS } : undefined),
+    [handledLabelIds, beforeAnswer, emailAccountId],
+  );
   const localInbox = useLocalInboxRows({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
@@ -211,7 +227,7 @@ export function HomeDashboard() {
   const waitingOnYou = useWaitingOnYou({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
-    handledLabelIds,
+    handledLabelIds: waitingOnYouHandledLabelIds,
     // Only for a mailbox Cue hasn't read yet; after that Needs reply is
     // Cue's answer, and this would second-guess it.
     enabled: !data || (!data.cue.hasReadMail && !data.needsYou.length),
@@ -219,18 +235,37 @@ export function HomeDashboard() {
   // Only beside a Needs reply that is known to be empty, and never a
   // conversation Today already lists as waiting on someone else.
   const waitingOnYouShown = useMemo(() => {
-    if (
-      !data ||
-      data.cue.hasReadMail ||
-      data.pending.includes("needsYou") ||
-      data.needsYou.length
-    )
-      return [];
+    if (!data) return beforeAnswer ? waitingOnYou.threads : [];
+    if (data.cue.hasReadMail || data.needsYou.length) return [];
+    // One account Cue hasn't read has no Needs reply even while it loads;
+    // across accounts, another account's may still bring some.
+    if (merged && data.pending.includes("needsYou")) return [];
     const waiting = new Set(data.waiting.map(rowKey));
     return waitingOnYou.threads.filter(
       (thread) => !waiting.has(rowKey(thread)),
     );
-  }, [data, waitingOnYou.threads]);
+  }, [data, beforeAnswer, merged, waitingOnYou.threads]);
+  const visibleWaitingOnYou = useMemo(
+    () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
+    [waitingOnYouShown, hidden],
+  );
+  // Today opened when this mounted, for how long the group took to show.
+  const [openedAtMs] = useState(() => performance.now());
+  const reportWaitingOnYouShown = useStableCallback(
+    (threads: TodayThread[]) => {
+      const counts = new Map<string, number>();
+      for (const thread of threads) {
+        const accountId = thread.account?.id ?? emailAccountId;
+        counts.set(accountId, (counts.get(accountId) ?? 0) + 1);
+      }
+      const msSinceTodayOpened = Math.round(performance.now() - openedAtMs);
+      for (const [accountId, itemCount] of counts)
+        reportActivationSignal(accountId, "first_waiting_on_you_item", {
+          itemCount,
+          msSinceTodayOpened,
+        });
+    },
+  );
   const neverRead = useNeverReadSenders({ accounts: localAccounts });
   const alsoInInbox = useMemo(() => {
     // Each conversation shows once on Today, as in the server's answer, and
@@ -261,12 +296,12 @@ export function HomeDashboard() {
       threads.filter((thread) => !hidden.has(rowKey(thread)));
     return {
       needsYou: visible(data.needsYou),
-      waitingOnYou: visible(waitingOnYouShown),
+      waitingOnYou: visibleWaitingOnYou,
       waiting: visible(data.waiting),
       alsoInInbox: visibleAlsoInInbox,
       reading: visible(data.reading),
     };
-  }, [data, hidden, waitingOnYouShown, visibleAlsoInInbox]);
+  }, [data, hidden, visibleWaitingOnYou, visibleAlsoInInbox]);
   const notice =
     data && lanes && !earlierDay
       ? cueNotice(data.cue, emailAccountId, {
@@ -301,7 +336,7 @@ export function HomeDashboard() {
   );
   // Keyboard order, top to bottom, as the lanes render.
   const rows = useMemo(() => {
-    if (!lanes) return visibleAlsoInInbox;
+    if (!lanes) return [...visibleWaitingOnYou, ...visibleAlsoInInbox];
     // The All clear holds who you're waiting on, above Waiting on you.
     const middle = allClear
       ? [...(waitingShown ? lanes.waiting : []), ...lanes.waitingOnYou]
@@ -312,7 +347,14 @@ export function HomeDashboard() {
       ...lanes.alsoInInbox,
       ...(readingShown ? lanes.reading : []),
     ];
-  }, [lanes, allClear, waitingShown, readingShown, visibleAlsoInInbox]);
+  }, [
+    lanes,
+    allClear,
+    waitingShown,
+    readingShown,
+    visibleWaitingOnYou,
+    visibleAlsoInInbox,
+  ]);
   const focused = rows.find((thread) => rowKey(thread) === focusedId);
   const allRows = useMemo(
     () => [
@@ -714,6 +756,13 @@ export function HomeDashboard() {
         loading={isLoading}
         loadingComponent={
           <>
+            {/* Where it shows once Today answers, so nothing moves then. */}
+            <WaitingOnYouSection
+              threads={visibleWaitingOnYou}
+              rowContext={rowContext}
+              onDismiss={dismissWaitingOnYou}
+              onShown={reportWaitingOnYouShown}
+            />
             <HomeSkeleton layout={isLargeScreen ? "list" : "split"} />
             {/* Cue's lanes wait for the server; the inbox is already here.
                 No Needs reply correction: whether Cue is on isn't known yet. */}
@@ -744,6 +793,7 @@ export function HomeDashboard() {
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
             onDismissWaitingOnYou={dismissWaitingOnYou}
+            onWaitingOnYouShown={reportWaitingOnYouShown}
             neverRead={
               <NeverReadCard
                 accountColorIndexById={accountColorIndexById}
@@ -804,6 +854,7 @@ function HomeLanes({
   threadHref,
   onCorrect,
   onDismissWaitingOnYou,
+  onWaitingOnYouShown,
   neverRead,
   pending,
   outdated,
@@ -841,6 +892,7 @@ function HomeLanes({
   }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
   onDismissWaitingOnYou: (thread: TodayThread) => void;
+  onWaitingOnYouShown: (threads: TodayThread[]) => void;
   /**
    * The first week's clean-up card. Below what needs a reply or waits on
    * someone, which is the day's work; above the rest of the inbox.
@@ -879,10 +931,17 @@ function HomeLanes({
       />
     </Section>
   ) : null;
-  const waitingOnYouDetailId = useId();
 
   return (
     <>
+      {/* Above Cue's notice: it shows before Today's answer, which brings
+          the notice, and stays put when that answer arrives. */}
+      <WaitingOnYouSection
+        threads={lanes.waitingOnYou}
+        rowContext={rowContext}
+        onDismiss={onDismissWaitingOnYou}
+        onShown={onWaitingOnYouShown}
+      />
       {notice ? <CueNoticeStatus notice={notice} /> : null}
 
       {allClear ? (
@@ -904,30 +963,6 @@ function HomeLanes({
             {lanes.waiting.map((thread) => row(thread, { waiting: true }))}
           </ThreadList>
         </AllClear>
-      ) : null}
-      {lanes.waitingOnYou.length > 0 ? (
-        <Section
-          title="Waiting on you"
-          detail="From your mail, not checked by AI"
-          detailId={waitingOnYouDetailId}
-        >
-          <ThreadList
-            describedBy={waitingOnYouDetailId}
-            hasFocusedRow={hasFocus(lanes.waitingOnYou)}
-            label="Waiting on you"
-          >
-            {lanes.waitingOnYou.map((thread) =>
-              row(thread, {
-                note: "May need a reply",
-                correction: {
-                  label: "Dismiss",
-                  icon: XIcon,
-                  onClick: () => onDismissWaitingOnYou(thread),
-                },
-              }),
-            )}
-          </ThreadList>
-        </Section>
       ) : null}
 
       {/* What needs the user comes first; meeting news sits with what's next. */}
@@ -1063,6 +1098,54 @@ function HomeLanes({
         rowContext={rowContext}
       />
     </>
+  );
+}
+
+/**
+ * Local mail from people the user writes to, while Cue hasn't read the
+ * mailbox. Shown means on screen, which `onShown` hears each time it changes.
+ */
+function WaitingOnYouSection({
+  threads,
+  rowContext,
+  onDismiss,
+  onShown,
+}: {
+  threads: TodayThread[];
+  rowContext: TodayRowContext;
+  onDismiss: (thread: TodayThread) => void;
+  onShown: (threads: TodayThread[]) => void;
+}) {
+  const detailId = useId();
+  useEffect(() => {
+    if (threads.length) onShown(threads);
+  }, [threads, onShown]);
+  if (!threads.length) return null;
+  return (
+    <Section
+      title="Waiting on you"
+      detail="From your mail, not checked by AI"
+      detailId={detailId}
+    >
+      <ThreadList
+        describedBy={detailId}
+        hasFocusedRow={threads.some(
+          (thread) => rowKey(thread) === rowContext.focusedId,
+        )}
+        label="Waiting on you"
+      >
+        {threads.map((thread) =>
+          renderTodayRow(thread, rowContext, {
+            note: "May need a reply",
+            correction: {
+              label: "Dismiss",
+              icon: XIcon,
+              onClick: () => onDismiss(thread),
+            },
+          }),
+        )}
+      </ThreadList>
+    </Section>
   );
 }
 

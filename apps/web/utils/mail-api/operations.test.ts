@@ -7,6 +7,8 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   activatePreparedSnoozedThread,
   cancelSnoozedThreadByClientMutationId,
+  cancelSnoozedThreads,
+  getActiveSnoozedThreadIds,
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import {
@@ -14,6 +16,7 @@ import {
   holdEmailForUndo,
 } from "@/utils/scheduled-email/service";
 import type { ScheduledEmail } from "@/generated/prisma/client";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
@@ -30,6 +33,8 @@ vi.mock("@/utils/snooze/scheduler", () => ({
   prepareSnoozedThread: vi.fn(),
   activatePreparedSnoozedThread: vi.fn(),
   cancelSnoozedThreadByClientMutationId: vi.fn(),
+  cancelSnoozedThreads: vi.fn(),
+  getActiveSnoozedThreadIds: vi.fn(async () => new Set()),
 }));
 
 describe("createEmailProviderOperationExecutor", () => {
@@ -84,6 +89,117 @@ describe("createEmailProviderOperationExecutor", () => {
         messageId: { in: ["archived"] },
       },
       data: { inbox: false },
+    });
+  });
+
+  it.each([
+    [{ kind: "archive" }, []],
+    [{ kind: "unarchive" }, ["INBOX"]],
+    [{ kind: "trash" }, ["TRASH"]],
+    [{ kind: "set_spam", spam: true }, ["SPAM"]],
+  ] as const)("%o ends the snoozes of the conversations it moved", async (change, labelIds) => {
+    vi.mocked(getActiveSnoozedThreadIds).mockResolvedValue(
+      new Set(["t-1", "t-2", "t-elsewhere"]),
+    );
+    const getMessagesBatch = vi
+      .fn()
+      // The read-back after the change misses m2...
+      .mockResolvedValueOnce([snoozeTestMessage("m1", "t-1", [...labelIds])])
+      // ...so its conversation is looked up on its own.
+      .mockResolvedValueOnce([snoozeTestMessage("m2", "t-2", [...labelIds])]);
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        archiveMessages: vi.fn(),
+        unarchiveMessages: vi.fn(),
+        trashMessages: vi.fn(),
+        markSpam: vi.fn(),
+        getMessage: vi.fn(async (id: string) => ({ id, threadId: `t-${id}` })),
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+    const operation = metadataOperation([
+      { accountId: "acc-1", messageId: "m1" },
+      { accountId: "acc-1", messageId: "m2" },
+    ]);
+    if (operation.intent.kind === "metadata") operation.intent.change = change;
+
+    const result = await executor.execute({
+      operation,
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe("confirmed");
+    expect(cancelSnoozedThreads).toHaveBeenCalledExactlyOnceWith({
+      emailAccountId: "acc-1",
+      threadIds: ["t-1", "t-2"],
+    });
+  });
+
+  it("makes no provider call for snoozes when the account has none", async () => {
+    vi.mocked(getActiveSnoozedThreadIds).mockResolvedValue(new Set());
+    const getMessagesBatch = vi.fn().mockResolvedValue([]);
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        archiveMessages: vi.fn(),
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+
+    await executor.execute({
+      operation: metadataOperation([{ accountId: "acc-1", messageId: "m1" }]),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    // Only the read-back after the archive itself.
+    expect(getMessagesBatch).toHaveBeenCalledTimes(1);
+    expect(cancelSnoozedThreads).not.toHaveBeenCalled();
+  });
+
+  it("looks up at most 100 conversations to end snoozes, and skips a failed read", async () => {
+    vi.mocked(getActiveSnoozedThreadIds).mockResolvedValue(
+      new Set(["t-never-found"]),
+    );
+    const lookedUp: string[] = [];
+    let call = 0;
+    const getMessagesBatch = vi.fn(async (ids: string[]) => {
+      call += 1;
+      // Every read-back misses, so each message would need a lookup.
+      if (call <= 13) return [];
+      lookedUp.push(...ids);
+      if (call === 14) throw new Error("rate limited");
+      return ids.map((id) => snoozeTestMessage(id, `t-${id}`, []));
+    });
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        archiveMessages: vi.fn(),
+        getMessage: vi.fn().mockRejectedValue(new Error("unreadable")),
+        getMessagesBatch,
+      } as unknown as EmailProvider,
+    });
+    const targets = Array.from({ length: 250 }, (_, index) => ({
+      accountId: "acc-1",
+      messageId: `m${index}`,
+    }));
+
+    const result = await executor.execute({
+      operation: metadataOperation(targets),
+      attemptId: "attempt-1",
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe("confirmed");
+    expect(lookedUp).toHaveLength(100);
+    expect(cancelSnoozedThreads).toHaveBeenCalledExactlyOnceWith({
+      emailAccountId: "acc-1",
+      threadIds: [],
     });
   });
 
@@ -351,6 +467,82 @@ describe("createEmailProviderOperationExecutor", () => {
     });
     expect(result.status).toBe("confirmed");
     expect(markNotSpam).toHaveBeenCalledWith("thread-spam");
+  });
+
+  it("moves only the targeted messages, so undo can return one message without its conversation", async () => {
+    const moveMessagesToFolder = vi.fn();
+    const moveThreadToFolder = vi.fn();
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        moveMessagesToFolder,
+        moveThreadToFolder,
+        getMessagesBatch: vi.fn(async (ids: string[]) =>
+          ids.map((id) => ({
+            id,
+            threadId: "conversation-1",
+            headers: { from: "ada@example.com", to: "me@example.com" },
+            labelIds: [],
+            parentFolderId: "sent-folder",
+            snippet: id,
+          })),
+        ),
+      } as unknown as EmailProvider,
+    });
+    const result = await executor.execute({
+      operation: {
+        ...metadataOperation([{ accountId: "acc-1", messageId: "reply" }]),
+        intent: {
+          kind: "metadata",
+          targets: [{ accountId: "acc-1", messageId: "reply" }],
+          change: { kind: "move", folderId: "sent-folder" },
+        },
+      },
+      attemptId: "a-move",
+      signal: new AbortController().signal,
+    });
+    expect(moveMessagesToFolder).toHaveBeenCalledExactlyOnceWith(
+      ["reply"],
+      "sent-folder",
+    );
+    expect(moveThreadToFolder).not.toHaveBeenCalled();
+    if (result.status !== "confirmed") throw new Error("expected confirmed");
+    expect(result.targets.map((target) => target.outcome)).toEqual(["applied"]);
+  });
+
+  it.each([
+    "folder_not_found",
+    "unsupported",
+  ])("rejects a move the provider refuses (%s) for good, without retrying each message", async (code) => {
+    const moveMessagesToFolder = vi
+      .fn()
+      .mockRejectedValue(new ProviderChangeRejectedError(code));
+    const executor = createEmailProviderOperationExecutor({
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        moveMessagesToFolder,
+      } as unknown as EmailProvider,
+    });
+    const targets = [
+      { accountId: "acc-1", messageId: "m1" },
+      { accountId: "acc-1", messageId: "m2" },
+    ];
+    const result = await executor.execute({
+      operation: {
+        ...metadataOperation(targets),
+        intent: {
+          kind: "metadata",
+          targets,
+          change: { kind: "move", folderId: "deleted-folder" },
+        },
+      },
+      attemptId: "a-move-missing",
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ status: "rejected", code, targets: [] });
+    expect(moveMessagesToFolder).toHaveBeenCalledTimes(1);
   });
 
   it("executes sends through the existing durable receipt ledger", async () => {
@@ -1074,6 +1266,16 @@ function metadataOperation(
       targets,
       change: { kind: "archive" },
     },
+  };
+}
+
+function snoozeTestMessage(id: string, threadId: string, labelIds: string[]) {
+  return {
+    id,
+    threadId,
+    headers: { from: "ada@example.com", to: "me@example.com" },
+    labelIds,
+    snippet: id,
   };
 }
 

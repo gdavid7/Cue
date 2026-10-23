@@ -650,6 +650,25 @@ describe("undo send across a page reload", () => {
     ).toEqual(["emailAccountId", "holdUntil", "operationId"]);
   });
 
+  it("confirms an undo without waiting on a draft lookup the engine is slow to answer", async () => {
+    vi.useFakeTimers();
+    await holdOnFirstPage();
+    const after = await loadPage();
+    const next = createClient();
+    // An engine busy syncing after the reload answers reads late.
+    next.readDraft.mockReturnValue(new Promise(() => {}));
+    after.setActiveMailClient(next.client);
+    after.resumeUndoSend()();
+
+    const undone = after.undoPendingSend();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(undone).resolves.toBe(true);
+    expect(notifications.toastSendUndoneElsewhere).toHaveBeenCalledWith({
+      id: "undo-send:mutation",
+    });
+  });
+
   it("tells the user an undo that landed as the page left went through", async () => {
     await holdOnFirstPage();
     const after = await loadPage();

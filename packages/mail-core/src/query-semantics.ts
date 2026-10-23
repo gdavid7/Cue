@@ -1,5 +1,10 @@
 import type { MetadataChange } from "./commands";
-import { applyMetadataChange } from "./effective-state";
+import {
+  applyMetadataChange,
+  leavesOwnMailInPlace,
+  movesBetweenFolders,
+} from "./effective-state";
+import type { Provider } from "./identities";
 import type { MessageMetadata } from "./messages";
 import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
 
@@ -128,18 +133,21 @@ export function conversationIsUnread(
  * Whether a conversation matches `predicate` once `change` has been applied
  * to every message in it, as conversation triage does. True or false when the
  * change alone decides it; null when the answer also depends on what the
- * change leaves alone, such as a label or the sender. Lets a view drop or keep
- * a row before the engine has written the change.
+ * change leaves alone, such as a label or the sender, or on which messages
+ * the change reaches, as for Sent on a folder-based `provider`. A null
+ * `provider` is one not known yet, which might be folder-based. Lets a view
+ * drop or keep a row before the engine has written the change.
  */
 export function conversationMatchesAfterChange(
   predicate: MailPredicate,
   change: MetadataChange,
+  provider: Provider | null,
 ): boolean | null {
   switch (predicate.kind) {
     case "all": {
       let unknown = false;
       for (const child of predicate.predicates) {
-        const result = conversationMatchesAfterChange(child, change);
+        const result = conversationMatchesAfterChange(child, change, provider);
         if (result === false) return false;
         if (result === null) unknown = true;
       }
@@ -148,7 +156,7 @@ export function conversationMatchesAfterChange(
     case "any": {
       let unknown = false;
       for (const child of predicate.predicates) {
-        const result = conversationMatchesAfterChange(child, change);
+        const result = conversationMatchesAfterChange(child, change, provider);
         if (result === true) return true;
         if (result === null) unknown = true;
       }
@@ -158,17 +166,23 @@ export function conversationMatchesAfterChange(
       const result = conversationMatchesAfterChange(
         predicate.predicate,
         change,
+        provider,
       );
       return result === null ? null : !result;
     }
     case "search": {
       // The provider's own matches keep a conversation the local part drops
       // unless the change rules out the whole query.
-      const local = conversationMatchesAfterChange(predicate.local, change);
+      const local = conversationMatchesAfterChange(
+        predicate.local,
+        change,
+        provider,
+      );
       if (local === true) return true;
       const possible = conversationMatchesAfterChange(
         predicate.possible,
         change,
+        provider,
       );
       return local === false && possible === false ? false : null;
     }
@@ -177,6 +191,10 @@ export function conversationMatchesAfterChange(
     case "read":
     case "starred":
     case "membership": {
+      const mayLeaveOwnMail = provider
+        ? leavesOwnMailInPlace(change, provider)
+        : movesBetweenFolders(change);
+      if (mayLeaveOwnMail && namesOwnMail(predicate)) return null;
       // The change sets the same value on every message. Applied to a message
       // with every flag set and to one with none, it decides the predicate
       // only where both give the same answer.
@@ -461,4 +479,14 @@ function probeMessage(
     roles: everything ? ["inbox", "sent", "draft", "trash", "spam"] : [],
     snoozedUntilMs: everything ? Number.MAX_SAFE_INTEGER : null,
   };
+}
+
+function namesOwnMail(predicate: MailPredicate) {
+  if (predicate.kind === "role") {
+    return predicate.role === "sent" || predicate.role === "draft";
+  }
+  return (
+    predicate.kind === "mailbox" &&
+    (predicate.mailbox === "sent" || predicate.mailbox === "drafts")
+  );
 }

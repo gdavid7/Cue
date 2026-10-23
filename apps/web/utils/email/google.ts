@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import { getCompleteGmailThread } from "@/utils/gmail/thread";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
@@ -2289,6 +2290,14 @@ export class GmailProvider implements EmailProvider {
     _folderName: string,
   ): Promise<void> {
     this.logger.warn("Moving thread to folder is not supported for Gmail");
+  }
+
+  async moveMessagesToFolder(
+    _messageIds: string[],
+    _folderId: string,
+  ): Promise<void> {
+    // Gmail has labels, not folders, so a move can never succeed.
+    throw new ProviderChangeRejectedError("unsupported");
   }
 
   async getOrCreateFolderIdByName(_folderName: string): Promise<string> {

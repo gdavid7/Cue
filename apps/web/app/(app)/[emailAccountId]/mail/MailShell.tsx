@@ -630,6 +630,9 @@ export function MailShell() {
   const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
   // Files are read from the local mailbox's stored attachment details.
   const isFilesView = !searchQuery && scopeType === MAIL_FILES_TYPE;
+  // Triage in Sent and Drafts reaches the user's own copies there too.
+  const triageWholeConversation =
+    !searchQuery && (scopeType === "sent" || scopeType === "draft");
   const isDatabaseView = isScheduledView || isSnoozedView || isFilesView;
   const allInboxesMailboxType =
     isAllInboxesView &&
@@ -1286,10 +1289,12 @@ export function MailShell() {
     emailAccountId,
     readerTarget,
     threads: navThreads,
+    wholeConversation: triageWholeConversation,
   });
   const {
     archive,
     moveToInbox,
+    moveToFolder,
     trash,
     markSpam,
     markNotSpam,
@@ -2683,6 +2688,18 @@ export function MailShell() {
             },
             false,
             false,
+            "next",
+            keys,
+          );
+        case "folder":
+          return runOn(
+            (ids) =>
+              moveToFolder(ids, {
+                folderId: action.folderId,
+                name: action.name,
+              }),
+            true,
+            true,
             "next",
             keys,
           );

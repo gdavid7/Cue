@@ -248,6 +248,24 @@ export function getSnoozedThreadByClientMutationId({
   });
 }
 
+/** The threads of the account a snooze will still act on. */
+export async function getActiveSnoozedThreadIds(emailAccountId: string) {
+  const rows = await prisma.snoozedThread.findMany({
+    where: {
+      emailAccountId,
+      status: {
+        in: [
+          SnoozedThreadStatus.PREPARING,
+          SnoozedThreadStatus.PENDING,
+          SnoozedThreadStatus.EXECUTING,
+        ],
+      },
+    },
+    select: { threadId: true },
+  });
+  return new Set(rows.map((row) => row.threadId));
+}
+
 export async function cancelSnoozedThreads({
   emailAccountId,
   threadIds,

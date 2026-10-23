@@ -129,6 +129,7 @@ const featureGroups = [
       "mail/thread-states.spec.ts",
       "mail/reader-transition.spec.ts",
       "mail/person-card.spec.ts",
+      "mail/sender-notice.spec.ts",
     ],
   },
   {
@@ -176,6 +177,7 @@ const featureGroups = [
     name: "mail-accounts",
     specs: [
       "mail/account-removal-routing.spec.ts",
+      "mail/account-switch-no-reload.spec.ts",
       "mail/compose-from-switch.spec.ts",
       "mail/reply-from-owning-account.spec.ts",
       "mail/team-comments.spec.ts",

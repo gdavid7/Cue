@@ -27,6 +27,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
+import { mailHttpErrorSchema } from "@inboxzero/mail-core/protocol/mail-http";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
 import { timeRequestDependency } from "@/utils/request-metrics";
@@ -368,11 +369,13 @@ describe("Middleware", () => {
         }
       });
 
-      it("samples polling scopes at a lower rate than other routes", () => {
+      it("samples polling scopes lower, and the reader's AI routes higher, than other routes", () => {
         expect(getFastRequestSampleRate("mail-stream")).toBe(0.015);
         expect(getFastRequestSampleRate("mail-version")).toBe(0.015);
         expect(getFastRequestSampleRate("mail/v1/enumeration")).toBe(0.015);
         expect(getFastRequestSampleRate("threads/list")).toBe(0.08);
+        expect(getFastRequestSampleRate("user/inbox-insights")).toBe(0.5);
+        expect(getFastRequestSampleRate("user/thread-brief")).toBe(0.5);
         expect(getFastRequestSampleRate(undefined)).toBe(0.08);
       });
 
@@ -619,6 +622,24 @@ describe("Middleware", () => {
       expect(response.headers.get("Retry-After")).toBe("13");
       expect(mockCaptureException).not.toHaveBeenCalled();
       expect(await response.json()).toMatchObject({ isKnownError: true });
+    });
+
+    it("answers a mail API request deferred by the quota gate in the mail error envelope", async () => {
+      const response = await withError(
+        "mail/v1/enumeration",
+        vi
+          .fn()
+          .mockRejectedValue(new GmailCallDeferredError(12_300, "background")),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("13");
+      const body = mailHttpErrorSchema.parse(await response.json());
+      expect(body.error).toEqual({
+        code: "throttled",
+        retryable: true,
+        retryAfterMs: 12_300,
+      });
     });
 
     it("tells the client when to retry a rate limit on a route with no email account", async () => {

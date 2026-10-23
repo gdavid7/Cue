@@ -286,22 +286,35 @@ jobs:
         working-directory: apps/desktop
         run: node node_modules/electron/install.js
 
+      - name: Read Playwright version
+        id: playwright_version
+        run: echo "version=$(node -p "require('./apps/web/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Browser builds only change with the Playwright version, so a lockfile
+      # change elsewhere keeps the cache.
       - name: Setup Playwright cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
+          key: ${{ runner.os }}-playwright-${{ steps.playwright_version.outputs.version }}
 
       - name: Apply database migrations
         run: pnpm -F inbox-zero-ai exec prisma migrate deploy
 
-      # The apt mirror occasionally stalls to a few kB/s for minutes. Fail a
-      # stalled fetch fast and retry instead of spending the job budget on it.
+      # The runner image already ships chromium's shared libraries. What
+      # `--with-deps` adds is extra fonts and package upgrades from an apt mirror
+      # that sometimes crawls at ~30 kB/s, which used up the whole job. Go to apt
+      # only when a browser binary is actually missing a library
+      # (see ensure-browser-libs.sh).
       - name: Install Playwright browser
-        timeout-minutes: 15
-        run: $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm -F inbox-zero-ai exec playwright install --with-deps chromium
+        timeout-minutes: 6
+        run: |
+          INSTALL_ATTEMPT_TIMEOUT=120 .github/scripts/install-with-retry.sh pnpm -F inbox-zero-ai exec playwright install chromium
+          binaries=(~/.cache/ms-playwright/chromium*/chrome-linux*/chrome ~/.cache/ms-playwright/chromium_headless_shell*/chrome-headless-shell-linux*/chrome-headless-shell)
+          if [ "$MAIL_REQUIRE_ELECTRON" = 1 ]; then
+            binaries+=(apps/desktop/node_modules/electron/dist/electron)
+          fi
+          .github/scripts/ensure-browser-libs.sh pnpm -F inbox-zero-ai exec playwright install-deps chromium -- "${binaries[@]}"
 
       - name: Download browser app
         uses: actions/download-artifact@v4

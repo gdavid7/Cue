@@ -104,66 +104,88 @@ describe("conversationMatchesAfterChange", () => {
   };
 
   it("knows an archived conversation leaves the inbox", () => {
-    expect(conversationMatchesAfterChange(inbox, { kind: "archive" })).toBe(
-      false,
-    );
+    expect(
+      conversationMatchesAfterChange(inbox, { kind: "archive" }, "google"),
+    ).toBe(false);
     expect(
       conversationMatchesAfterChange(
         { kind: "role", role: "inbox" },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(false);
   });
 
   it("cannot tell whether an archived conversation stays in a label", () => {
-    expect(conversationMatchesAfterChange(label, { kind: "archive" })).toBe(
-      null,
-    );
+    expect(
+      conversationMatchesAfterChange(label, { kind: "archive" }, "google"),
+    ).toBe(null);
     expect(
       conversationMatchesAfterChange(
         { kind: "mailbox", mailbox: "archive" },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(null);
   });
 
   it("knows a conversation marked read leaves an unread view but not the inbox", () => {
     expect(
-      conversationMatchesAfterChange(unread, { kind: "set_read", read: true }),
+      conversationMatchesAfterChange(
+        unread,
+        { kind: "set_read", read: true },
+        "google",
+      ),
     ).toBe(false);
     expect(
-      conversationMatchesAfterChange(inbox, { kind: "set_read", read: true }),
+      conversationMatchesAfterChange(
+        inbox,
+        { kind: "set_read", read: true },
+        "google",
+      ),
     ).toBe(null);
   });
 
   it("follows starring in and out of the starred mailbox", () => {
     const starred: MailPredicate = { kind: "mailbox", mailbox: "starred" };
     expect(
-      conversationMatchesAfterChange(starred, {
-        kind: "set_starred",
-        starred: false,
-      }),
+      conversationMatchesAfterChange(
+        starred,
+        {
+          kind: "set_starred",
+          starred: false,
+        },
+        "google",
+      ),
     ).toBe(false);
     expect(
-      conversationMatchesAfterChange(starred, {
-        kind: "set_starred",
-        starred: true,
-      }),
+      conversationMatchesAfterChange(
+        starred,
+        {
+          kind: "set_starred",
+          starred: true,
+        },
+        "google",
+      ),
     ).toBe(true);
   });
 
   it("knows trash leaves every mailbox but trash", () => {
-    expect(conversationMatchesAfterChange(label, { kind: "trash" })).toBe(null);
+    expect(
+      conversationMatchesAfterChange(label, { kind: "trash" }, "google"),
+    ).toBe(null);
     expect(
       conversationMatchesAfterChange(
         { kind: "mailbox", mailbox: "all" },
         { kind: "trash" },
+        "google",
       ),
     ).toBe(false);
     expect(
       conversationMatchesAfterChange(
         { kind: "mailbox", mailbox: "trash" },
         { kind: "trash" },
+        "google",
       ),
     ).toBe(true);
   });
@@ -179,18 +201,21 @@ describe("conversationMatchesAfterChange", () => {
       conversationMatchesAfterChange(
         { kind: "all", predicates: [inbox, fromAda] },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(false);
     expect(
       conversationMatchesAfterChange(
         { kind: "any", predicates: [inbox, fromAda] },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(null);
     expect(
       conversationMatchesAfterChange(
         { kind: "not", predicate: inbox },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(true);
   });
@@ -292,18 +317,30 @@ describe("typed searches", () => {
   it("drops a provider match once a change rules out the whole query", () => {
     // Archiving under in:inbox.
     expect(
-      conversationMatchesAfterChange(search(FALSE, inbox), { kind: "archive" }),
+      conversationMatchesAfterChange(
+        search(FALSE, inbox),
+        { kind: "archive" },
+        "google",
+      ),
     ).toBe(false);
     // The provider may still match it on what the change leaves alone.
     expect(
-      conversationMatchesAfterChange(search(FALSE, TRUE), { kind: "archive" }),
+      conversationMatchesAfterChange(
+        search(FALSE, TRUE),
+        { kind: "archive" },
+        "google",
+      ),
     ).toBe(null);
     const starred: MailPredicate = { kind: "mailbox", mailbox: "starred" };
     expect(
-      conversationMatchesAfterChange(search(starred, starred), {
-        kind: "set_starred",
-        starred: true,
-      }),
+      conversationMatchesAfterChange(
+        search(starred, starred),
+        {
+          kind: "set_starred",
+          starred: true,
+        },
+        "google",
+      ),
     ).toBe(true);
   });
 });

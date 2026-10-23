@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordingRedis } from "@/__tests__/mocks/recording-redis.mock";
 import type { EmailProvider } from "@/utils/email/types";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { createScopedLogger } from "@/utils/logger";
 import prisma from "@/utils/__mocks__/prisma";
 import { getInboxInsights } from "./get-inbox-insights";
@@ -169,5 +170,56 @@ describe("getInboxInsights", () => {
     const people = insights["t-big"]?.people ?? [];
     expect(people.length).toBeGreaterThan(0);
     expect(people.length).toBeLessThanOrEqual(25);
+  });
+
+  // PF-9v: the rows' reads run within a Gmail wait budget. What was built
+  // goes back; the rest is named, so the browser asks again for exactly it.
+  it("returns what it built and names the emails it left once a read is deferred", async () => {
+    const getMessage = vi.fn(async (id: string) => {
+      if (id === "m3") throw new GmailCallDeferredError(20_000, "background");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { id, headers: { from: "a@acme.com" }, labelIds: ["INBOX"] };
+    });
+    const ids = Array.from({ length: 10 }, (_, i) => `m${i + 1}`);
+
+    const { insights, deferred } = await getInboxInsights({
+      emailAccountId: "a1",
+      userId: "u1",
+      userEmail: "me@example.com",
+      items: ids.map((messageId) => ({
+        threadId: `t-${messageId}`,
+        messageId,
+      })),
+      emailProvider: { getMessage } as unknown as EmailProvider,
+      logger,
+    });
+
+    expect(Object.keys(insights).sort()).toEqual(["t-m1", "t-m2", "t-m4"]);
+    // The reads already started finish; none is started after the deferral.
+    expect(getMessage).toHaveBeenCalledTimes(4);
+    expect(deferred?.messageIds.sort()).toEqual(
+      ["m3", "m5", "m6", "m7", "m8", "m9", "m10"].sort(),
+    );
+    expect(deferred?.retryAfterMs).toBe(20_000);
+  });
+
+  it("defers the whole request when it built nothing, so the browser waits it out", async () => {
+    const getMessage = vi.fn(async () => {
+      throw new GmailCallDeferredError(20_000, "background");
+    });
+
+    await expect(
+      getInboxInsights({
+        emailAccountId: "a1",
+        userId: "u1",
+        userEmail: "me@example.com",
+        items: [
+          { threadId: "t1", messageId: "m1" },
+          { threadId: "t2", messageId: "m2" },
+        ],
+        emailProvider: { getMessage } as unknown as EmailProvider,
+        logger,
+      }),
+    ).rejects.toBeInstanceOf(GmailCallDeferredError);
   });
 });

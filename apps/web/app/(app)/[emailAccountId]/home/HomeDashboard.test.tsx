@@ -51,6 +51,9 @@ const mocks = vi.hoisted(() => ({
   // What Waiting on you reads from local mail.
   waitingOnYou: [] as HomeThread[],
   dismissWaitingOnYou: vi.fn(),
+  // Whether Cue has read the mailbox, asked before Today's answer.
+  homeCue: undefined as { hasReadMail: boolean } | undefined,
+  reportActivation: vi.fn(),
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -114,8 +117,13 @@ vi.mock("@/hooks/useMailHref", () => ({
     },
 }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsLargeScreen: () => true }));
+vi.mock("@/hooks/useActivationSignal", () => ({
+  reportActivationSignal: mocks.reportActivation,
+}));
 vi.mock("@/hooks/useHome", () => ({
   useHomeDeadlines: () => mocks.deadlines,
+  useHomeCue: (_emailAccountId: string | null, enabled: boolean) =>
+    enabled ? mocks.homeCue : undefined,
   // A stand-in for SWR's cache: local mutations apply, nothing revalidates.
   useHome: (emailAccountId?: string | null) => {
     const [data, setData] = useState(
@@ -972,12 +980,83 @@ describe("HomeDashboard Waiting on you", () => {
     expect(lanes()).toEqual(["Needs reply"]);
   });
 
-  it("waits for Needs reply to load rather than showing beside its placeholder", () => {
+  it("stays while Needs reply loads, which has nothing for a mailbox Cue hasn't read", () => {
     mocks.home.data = { ...unread(homeData([])), pending: ["needsYou"] };
 
     renderToday();
 
-    expect(lanes()).not.toContain("Waiting on you");
+    expect(lanes()).toEqual(["Waiting on you"]);
+  });
+
+  it("sits above Cue's notice, where it showed before Today answered", () => {
+    mocks.home.data = unread(homeData([]));
+
+    renderToday();
+
+    const group = lane("Waiting on you");
+    expect(
+      group.compareDocumentPosition(onlyStatus()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("reports how many rows first showed, and nothing about them", () => {
+    mocks.home.data = unread(homeData([]));
+    mocks.waitingOnYou = [
+      thread("asked", "Lunch on Friday?"),
+      thread("b", "Dentist"),
+    ];
+
+    renderToday();
+
+    expect(mocks.reportActivation).toHaveBeenCalledWith(
+      "account",
+      "first_waiting_on_you_item",
+      { itemCount: 2, msSinceTodayOpened: expect.any(Number) },
+    );
+  });
+
+  describe("before Today answers", () => {
+    beforeEach(() => {
+      mocks.home.isLoading = true;
+      mocks.home.data = undefined;
+    });
+
+    afterEach(() => {
+      mocks.home.isLoading = false;
+      mocks.homeCue = undefined;
+    });
+
+    it("shows from local mail for a mailbox Cue hasn't read", () => {
+      mocks.homeCue = { hasReadMail: false };
+
+      renderToday();
+
+      expect(lanes()[0]).toBe("Waiting on you");
+      expect(optionFor("asked").textContent).toContain("May need a reply");
+      // The rest of Today still loads below it.
+      expect(skeletons()).not.toEqual([]);
+      expect(mocks.reportActivation).toHaveBeenCalledWith(
+        "account",
+        "first_waiting_on_you_item",
+        { itemCount: 1, msSinceTodayOpened: expect.any(Number) },
+      );
+    });
+
+    it("waits for the answer for a mailbox Cue has read, which leaves it to Cue", () => {
+      mocks.homeCue = { hasReadMail: true };
+
+      renderToday();
+
+      expect(lanes()).not.toContain("Waiting on you");
+      expect(mocks.reportActivation).not.toHaveBeenCalled();
+    });
+
+    it("waits while it isn't known whether Cue has read the mailbox", () => {
+      renderToday();
+
+      expect(lanes()).not.toContain("Waiting on you");
+    });
   });
 
   it("dismisses a conversation", () => {
