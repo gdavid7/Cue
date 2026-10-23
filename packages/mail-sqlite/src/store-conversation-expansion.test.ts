@@ -269,12 +269,27 @@ describe("conversation expansion", () => {
   it.each([
     { kind: "set_spam", spam: true } as MetadataChange,
     { kind: "snooze", untilMs: 4_102_444_800_000 } as MetadataChange,
-    { kind: "move", folderId: "folder-1" } as MetadataChange,
   ])("on Outlook, $kind still targets every message in the conversation", async (change) => {
     const store = await repliedThreadStore("microsoft");
     await admitAndPrepare(store, "op-1", change, ["m-in", "m-sent"]);
 
     expect(await targetsOf(store, "op-1")).toEqual(["m-in", "m-sent"]);
+    await store.close();
+  });
+
+  // Folder moves go out per message, so they leave Sent where it is, as
+  // archive and trash do.
+  it("on Outlook, a folder move keeps the Sent reply in place", async () => {
+    const store = await repliedThreadStore("microsoft");
+    await admitAndPrepare(
+      store,
+      "op-1",
+      { kind: "move", folderId: "folder-1" },
+      ["m-in", "m-sent"],
+    );
+
+    expect(await targetsOf(store, "op-1")).toEqual(["m-in"]);
+    expect(await effectiveRoles(store, "m-sent")).toEqual(["sent"]);
     await store.close();
   });
 
