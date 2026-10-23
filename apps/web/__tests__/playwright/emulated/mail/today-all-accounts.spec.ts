@@ -257,8 +257,9 @@ test("a new mailbox shows Waiting on you across accounts before Today answers, a
     );
   } finally {
     for (const id of held.keys()) release(id);
-    // Today refreshes while it loads; one may still be in the route.
-    await page.unrouteAll({ behavior: "ignoreErrors" });
+    // Today refreshes while it loads; one may still be in the route, so it
+    // finishes before the test does.
+    await page.unrouteAll({ behavior: "wait" });
     await seeded.remove();
   }
 });
@@ -368,7 +369,7 @@ test("mail another account may list in Needs reply waits for it, then shows once
     );
   } finally {
     release();
-    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await page.unrouteAll({ behavior: "wait" });
     await seeded.remove();
     await deleteSecondEmailAccount(shared.accountId);
   }

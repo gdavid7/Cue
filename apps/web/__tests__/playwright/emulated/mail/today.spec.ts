@@ -506,8 +506,10 @@ test("a new mailbox shows Waiting on you from local mail before Today answers, a
       "today-waiting-on-you-after-answer",
     );
   } finally {
-    // Today refreshes while it loads; one may still be in the route.
-    await page.unrouteAll({ behavior: "ignoreErrors" });
+    // Today refreshes while it loads; one may still be in the route, so it
+    // is let through and finishes before the test does.
+    release();
+    await page.unrouteAll({ behavior: "wait" });
     await seeded.remove();
   }
 });
