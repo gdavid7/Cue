@@ -1,25 +1,23 @@
-import { ActionType } from "@/generated/prisma/enums";
+import { Prisma } from "@/generated/prisma/client";
+import {
+  HISTORY_ACTIONS,
+  type HistoryAction,
+} from "@/utils/rule/history-action-kinds";
 
 /**
- * The kinds of work Assistant > History can be filtered to, and that Today's
- * "While you were away" counts, so a count and the list it links to agree.
- * Outlook files mail by moving it to a folder, as Gmail does with a label.
+ * The SQL condition for an ExecutedAction row (as `alias`) that did one of
+ * these kinds of work. History's filter and Today's counts both use it, so a
+ * count matches the list it links to: an action that failed or was skipped
+ * didn't happen.
  */
-export const HISTORY_ACTIONS = {
-  sorted: [ActionType.LABEL, ActionType.MOVE_FOLDER],
-  archived: [ActionType.ARCHIVE],
-  drafted: [ActionType.DRAFT_EMAIL],
-} as const satisfies Record<string, readonly ActionType[]>;
-
-export type HistoryAction = keyof typeof HISTORY_ACTIONS;
-
-export const HISTORY_ACTION_NAMES = Object.keys(
-  HISTORY_ACTIONS,
-) as HistoryAction[];
-
-export function isHistoryAction(value: unknown): value is HistoryAction {
-  return (
-    typeof value === "string" &&
-    HISTORY_ACTION_NAMES.includes(value as HistoryAction)
-  );
+export function historyActionCondition(
+  alias: string,
+  actions: readonly HistoryAction[],
+) {
+  const table = Prisma.raw(`"${alias}"`);
+  const types = actions
+    .flatMap((action) => HISTORY_ACTIONS[action])
+    .map((type) => Prisma.sql`${type}::"ActionType"`);
+  return Prisma.sql`${table}.type IN (${Prisma.join(types)})
+    AND (${table}."executionStatus" IS NULL OR ${table}."executionStatus" = 'SUCCEEDED')`;
 }

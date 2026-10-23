@@ -99,10 +99,16 @@ test("filters history to one kind of work, as Today's While you were away links 
     page.getByText(HISTORY_RULE_NAME, { exact: true }),
   );
 
+  // A new filter starts from its first page.
+  await page.goto(
+    `/${emailAccountId}/automation?tab=history&action=archived&page=2`,
+  );
   await page.getByRole("button", { name: "Archived", exact: true }).click();
   await page.getByRole("menuitem", { name: "Drafted replies" }).click();
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("action") === "drafted",
+    (url) =>
+      url.searchParams.get("action") === "drafted" &&
+      !url.searchParams.has("page"),
   );
   await expect(page.getByText("No history", { exact: true })).toBeVisible({
     timeout: 60_000,
@@ -118,6 +124,13 @@ test("filters history to one kind of work, as Today's While you were away links 
     page,
     page.getByText(HISTORY_RULE_NAME, { exact: true }),
   );
+
+  // Emails that matched no rule had nothing done to them.
+  await page.getByRole("button", { name: "All rules" }).click();
+  await page.getByRole("menuitem", { name: "No match" }).click();
+  await expect(
+    page.getByRole("button", { name: "All actions" }),
+  ).toBeDisabled();
 });
 
 test("groups conversations and lazily pages older messages without duplicating the latest", async ({

@@ -4,7 +4,8 @@ import { Fragment, useId } from "react";
 import Link from "next/link";
 import { format, isSameDay, subDays } from "date-fns";
 import { XIcon } from "lucide-react";
-import useSWR from "swr";
+import { useAction } from "next-safe-action/hooks";
+import useSWR, { useSWRConfig } from "swr";
 import type { GetAwaySummaryResponse } from "@/app/api/user/home/away/route";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
@@ -12,37 +13,52 @@ import { Button } from "@/components/ui/button";
 import { dismissAwaySummaryAction } from "@/utils/actions/away-summary";
 import type { TodayAccount } from "@/utils/home/merge-home";
 import { prefixPath } from "@/utils/path";
+import { recordVisit } from "@/utils/user/record-visit";
 import {
   HISTORY_ACTION_NAMES,
   type HistoryAction,
-} from "@/utils/rule/history-actions";
+} from "@/utils/rule/history-action-kinds";
 
 type AccountCounts = GetAwaySummaryResponse["accounts"][number];
 
 // Counts change only as Cue works; tab switches share one load.
 const FOCUS_REFRESH_MIN_MS = 60_000;
 
+type HistoryWindow = { since: string; until: string };
+
 /**
- * What Cue did since the user was last here, loaded on its own beside Today
- * so the lanes never wait for it. Across accounts it sums them, with a line
- * per account whose counts open that account's History.
+ * What Cue did while the user was away, loaded on its own beside Today so the
+ * lanes never wait for it. It asks once this browser has recorded the visit,
+ * so a return just now already counts.
  */
 export function useAwaySummary(emailAccountIds: string[]) {
+  const { fetcher } = useSWRConfig();
   const key = emailAccountIds.length
     ? `/api/user/home/away?${new URLSearchParams({
         accounts: emailAccountIds.join(","),
       })}`
     : null;
   const { data, mutate } = useSWR<GetAwaySummaryResponse>(key, {
+    fetcher: async (url: string) => {
+      await recordVisit();
+      return fetcher?.(url);
+    },
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
     // A card that didn't load is just not shown; Today works without it.
     shouldRetryOnError: false,
   });
+  // Hidden at once; if the server didn't take it, the card comes back as
+  // the server has it.
+  const { execute } = useAction(dismissAwaySummaryAction, {
+    onError: () => mutate(),
+  });
   const dismiss = () => {
-    mutate((current) => current && { ...current, since: null, accounts: [] }, {
+    const lastVisitAt = data?.lastVisitAt;
+    if (!lastVisitAt) return;
+    mutate((current) => current && { ...current, accounts: [] }, {
       revalidate: false,
     });
-    dismissAwaySummaryAction().catch(() => mutate());
+    execute({ lastVisitAt: new Date(lastVisitAt) });
   };
   return { summary: data, dismiss };
 }
@@ -65,7 +81,8 @@ export function WhileYouWereAway({
   accountColorIndexById: Record<string, number>;
 }) {
   const headingId = useId();
-  if (!summary?.since) return null;
+  if (!summary?.since || !summary.until) return null;
+  const historyWindow = { since: summary.since, until: summary.until };
   const active = summary.accounts.filter(hasWork);
   if (!active.length) return null;
 
@@ -86,6 +103,7 @@ export function WhileYouWereAway({
           <WorkSentence
             counts={perAccount ? sum(active) : active[0]}
             emailAccountId={perAccount ? undefined : active[0].emailAccountId}
+            historyWindow={historyWindow}
           />
           .
         </p>
@@ -110,7 +128,11 @@ export function WhileYouWereAway({
                   <span className="min-w-0 truncate">
                     <span className="text-foreground">{account.email}</span>
                     {": "}
-                    <WorkSentence counts={counts} emailAccountId={account.id} />
+                    <WorkSentence
+                      counts={counts}
+                      emailAccountId={account.id}
+                      historyWindow={historyWindow}
+                    />
                   </span>
                 </li>
               );
@@ -135,9 +157,11 @@ export function WhileYouWereAway({
 function WorkSentence({
   counts,
   emailAccountId,
+  historyWindow,
 }: {
   counts: Record<HistoryAction, number>;
   emailAccountId?: string;
+  historyWindow: HistoryWindow;
 }) {
   const parts = HISTORY_ACTION_NAMES.filter((name) => counts[name] > 0);
   // The noun once, on the first count of emails: "sorted 12 emails, archived 8".
@@ -152,10 +176,7 @@ function WorkSentence({
             {emailAccountId ? (
               <Link
                 className="text-foreground underline decoration-muted-foreground/40 underline-offset-2 hover:decoration-current"
-                href={prefixPath(
-                  emailAccountId,
-                  `/automation?tab=history&action=${name}`,
-                )}
+                href={historyHref(emailAccountId, name, historyWindow)}
               >
                 {text}
               </Link>
@@ -167,6 +188,22 @@ function WorkSentence({
       })}
     </>
   );
+}
+
+/** History showing exactly what the count counted. */
+function historyHref(
+  emailAccountId: string,
+  action: HistoryAction,
+  { since, until }: HistoryWindow,
+) {
+  const params = new URLSearchParams({
+    tab: "history",
+    action,
+    since,
+    until,
+    automated: "1",
+  });
+  return prefixPath(emailAccountId, `/automation?${params}`);
 }
 
 function partText(name: HistoryAction, count: number, withNoun: boolean) {
