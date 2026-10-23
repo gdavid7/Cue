@@ -134,10 +134,13 @@ export type MailPredicate =
   /** Messages of these conversations, of `accountId` alone when it is set. */
   | { kind: "conversation"; ids: string[]; accountId?: string }
   /**
-   * Messages whose Message-ID header is one of these, compared as copies of
-   * one message in two mailboxes are (normalizeInternetMessageId), of
-   * `accountId` alone when it is set. Newer than the other kinds: check
-   * `predicate:internet_message_id` with mailClientSupports first.
+   * Whole conversations whose key is one of these, of `accountId` alone when
+   * it is set. A conversation's key is the Message-ID of its latest message
+   * that isn't a draft or in the trash (sent mail counts), normalised by
+   * normalizeInternetMessageId; the ids are keys as summaries give them
+   * (`latestInternetMessageId`), compared as they are. One message delivered
+   * to several accounts has one key in each. Newer than the other kinds:
+   * check `predicate:internet_message_id` with mailClientSupports first.
    */
   | { kind: "internet_message_id"; ids: string[]; accountId?: string }
   | {

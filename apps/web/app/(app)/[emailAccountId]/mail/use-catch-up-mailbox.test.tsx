@@ -30,6 +30,18 @@ describe("useCatchUpMailbox", () => {
     expect(engine.orders()).toEqual(["oldest_first"]);
   });
 
+  it("reads newest first from the start on an engine that reports no oldest_first", async () => {
+    const engine = fakeEngine(unreadMail(5), {
+      legacy: true,
+      capabilities: ["order:newest_first", "predicate:all"],
+    });
+    const { result } = renderHook(() =>
+      useCatchUpMailbox(props(engine.client, null)),
+    );
+    await waitFor(() => expect(result.current.batch.status).toBe("ready"));
+    expect(engine.orders()).toEqual(["newest_first"]);
+  });
+
   it("still finds the oldest unread on an engine that refuses oldest_first", async () => {
     // Older than one page, so only reading every page finds it.
     const engine = fakeEngine(unreadMail(250), { legacy: true });
@@ -151,7 +163,7 @@ describe("useCatchUpCopies", () => {
       useCatchUpCopies({
         client: engine.client,
         accountIds: ["work", "home"],
-        cards: [card("work:c0", "one@example.com"), card("work:c1", "two@x")],
+        cards: [card("work:c0"), card("work:c1", "two@x")],
       }),
     );
     await waitFor(() => expect(result.current.status).toBe("ready"));
@@ -166,7 +178,7 @@ describe("useCatchUpCopies", () => {
     expect(query.accountIds).toEqual(["work", "home"]);
     expect(query.predicate).toEqual({
       kind: "internet_message_id",
-      ids: ["one@example.com", "two@x"],
+      ids: ["shared@example.com", "two@x"],
     });
   });
 
@@ -185,6 +197,54 @@ describe("useCatchUpCopies", () => {
     const read = found(result.current, "work:c0");
     expect(read?.complete).toBe(true);
     expect(read?.conversations).toHaveLength(230);
+  });
+
+  it("reads card by card when the shared read runs past its pages, so one noisy id leaves out only its own card", async () => {
+    const noisy = unreadMail(600, "home", range(600, 1000)).map((row) => ({
+      ...row,
+      latestInternetMessageId: "noisy@x",
+    }));
+    const quiet = {
+      ...unreadMail(1, "home", [5])[0],
+      key: { accountId: "home", conversationId: "quiet" },
+      latestInternetMessageId: "quiet@x",
+    };
+    const engine = fakeEngine([...noisy, quiet], { legacy: false });
+    const { result } = renderHook(() =>
+      useCatchUpCopies({
+        client: engine.client,
+        accountIds: ["home"],
+        cards: [card("work:a", "noisy@x"), card("work:b", "quiet@x")],
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(found(result.current, "work:a")?.complete).toBe(false);
+    expect(found(result.current, "work:b")).toEqual({
+      conversations: [quiet],
+      complete: true,
+    });
+  });
+
+  it("tries a failed read once more before giving up", async () => {
+    const engine = fakeEngine(unreadMail(1, "home", [5]), { legacy: false });
+    let calls = 0;
+    const flaky = {
+      observeMailbox: (query: ConversationQuery) => {
+        calls++;
+        if (calls === 1) throw new Error("engine busy");
+        return engine.client.observeMailbox(query);
+      },
+    } as unknown as MailClient;
+    const { result } = renderHook(() =>
+      useCatchUpCopies({
+        client: flaky,
+        accountIds: ["home"],
+        cards: [card("work:a", "shared@example.com")],
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(found(result.current, "work:a")?.complete).toBe(true);
+    expect(calls).toBe(2);
   });
 
   it("says a read that doesn't end within its pages is incomplete", async () => {
@@ -336,6 +396,7 @@ function unreadMail(
     roles: ["inbox"],
     pendingOperationIds: [],
     latestMessageId: `m${index}`,
+    latestInternetMessageId: "shared@example.com",
   }));
 }
 
@@ -351,16 +412,28 @@ function fakeEngine(
     legacy,
     broken = false,
     unsynced = [],
-  }: { legacy: boolean; broken?: boolean; unsynced?: string[] },
+    capabilities,
+  }: {
+    legacy: boolean;
+    broken?: boolean;
+    unsynced?: string[];
+    /** What the engine reports it can do; unset for one from before. */
+    capabilities?: string[];
+  },
 ) {
   const seen: ConversationQuery[] = [];
   const observeMailboxWindow = (query: ConversationQuery) => {
     seen.push(query);
     const watched = conversationPredicates(query.predicate);
+    const keys =
+      query.predicate.kind === "internet_message_id"
+        ? query.predicate.ids
+        : null;
     const mail = allMail
       .filter(
         (row) =>
           query.accountIds.includes(row.key.accountId) &&
+          (!keys || keys.includes(row.latestInternetMessageId ?? "")) &&
           (!watched ||
             watched.some(
               (predicate) =>
@@ -433,6 +506,7 @@ function fakeEngine(
     client: {
       observeMailboxWindow,
       observeMailbox: observeMailboxWindow,
+      capabilities,
     } as unknown as MailClient,
     orders: () => [...new Set(seen.map((query) => query.order))],
     reads: () => seen.length,

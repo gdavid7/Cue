@@ -371,6 +371,8 @@ function conversationIndexFor(
   predicate: ConversationQuery["predicate"],
 ): ConversationIndex | null {
   if (predicate.kind === "role") return roleIndex(predicate.role);
+  if (predicate.kind === "internet_message_id")
+    return messageKeyIndex(predicate);
   if (predicate.kind === "mailbox" && predicate.mailbox === "inbox") {
     return roleIndex("inbox");
   }
@@ -390,6 +392,32 @@ function conversationIndexFor(
     };
   }
   return null;
+}
+
+// A key names a handful of conversations, found through
+// conversation_message_keys_by_key rather than by scanning messages.
+function messageKeyIndex(
+  predicate: Extract<MailPredicate, { kind: "internet_message_id" }>,
+): ConversationIndex {
+  const keys = predicate.ids.length
+    ? predicate.ids.map(() => "?").join(",")
+    : "NULL";
+  const account = predicate.accountId ? " AND k.account_id = ?" : "";
+  return {
+    source: `(SELECT e.account_id, e.conversation_id,
+                     MAX(e.received_at_ms) AS latest_at_ms,
+                     MAX(1 - e.read) AS unread, MAX(e.starred) AS starred
+              FROM conversation_message_keys k
+              JOIN effective_messages e
+                ON e.account_id = k.account_id
+               AND e.conversation_id = k.conversation_id
+              WHERE k.message_key IN (${keys})${account}
+              GROUP BY e.account_id, e.conversation_id)`,
+    sourceBindings: [
+      ...predicate.ids,
+      ...(predicate.accountId ? [predicate.accountId] : []),
+    ],
+  };
 }
 
 function roleIndex(role: MessageMetadata["roles"][number]): ConversationIndex {

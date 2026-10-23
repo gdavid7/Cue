@@ -324,19 +324,33 @@ describe("withCatchUpCopies", () => {
     expect(next.incomplete).toEqual([]);
   });
 
-  it("finds a copy whose user wrote last, where a sender match would miss it", () => {
-    // In home the user replied: its newest sender is the user, yet its
-    // latest message's Message-ID is still the card's.
+  it("doesn't take a conversation the user replied in as a copy, as its key moved on", () => {
+    // In home the user replied, so home's conversation is keyed by the reply:
+    // it is a conversation of its own, and the card stays whole.
     const next = withCatchUpCopies(
       cardFrom("work", "w1"),
       found("work:w1", [
         shared("home", "h1", {
-          from: "me@home.example",
-          senders: ["Dana <dana@example.com>", "Me <me@home.example>"],
+          latestInternetMessageId: "reply@home.example",
         }),
       ]),
       ALL_INBOXES,
     );
+    expect(next.items[0].copies).toEqual([]);
+    expect(next.incomplete).toEqual([]);
+  });
+
+  it("leaves copies in the trash or spam alone, without counting them as second conversations", () => {
+    const next = withCatchUpCopies(
+      cardFrom("work", "w1"),
+      found("work:w1", [
+        shared("home", "h1"),
+        shared("home", "h2", { roles: ["trash"] }),
+        shared("side", "s1", { roles: ["spam"] }),
+      ]),
+      ALL_INBOXES,
+    );
+    expect(next.incomplete).toEqual([]);
     expect(next.items[0].copies.map((copy) => copy.threadId)).toEqual(["h1"]);
   });
 

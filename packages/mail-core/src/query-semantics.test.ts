@@ -8,30 +8,58 @@ import {
 } from "./query-semantics";
 
 describe("internet_message_id predicates", () => {
-  it("matches a message by its Message-ID however each side writes it, in the account named", () => {
-    const copy = message({
-      roles: ["inbox"],
-      internetMessageId: "<Shared@Example.com>",
-    });
+  const key = (
+    messageId: string,
+    internetMessageId: string,
+    receivedAtMs: number,
+    roles: EffectiveMessage["roles"] = ["inbox"],
+  ) => message({ messageId, internetMessageId, receivedAtMs, roles });
+
+  it("matches a conversation by its key, as summaries give it, in the account named", () => {
+    const conversation = [key("m1", "<Shared@Example.com>", 1)];
     expect(
-      conversationMatchesPredicate([copy], {
+      conversationMatchesPredicate(conversation, {
         kind: "internet_message_id",
         ids: ["shared@example.com"],
       }),
     ).toBe(true);
     expect(
-      conversationMatchesPredicate([copy], {
+      conversationMatchesPredicate(conversation, {
         kind: "internet_message_id",
         ids: ["shared@example.com"],
         accountId: "elsewhere",
       }),
     ).toBe(false);
-    expect(
-      conversationMatchesPredicate([message({ roles: ["inbox"] })], {
+  });
+
+  it("follows the key when the user replies, but not for a newer draft or trash", () => {
+    const received = key("m1", "<shared@example.com>", 1);
+    const draft = key("m2", "<draft@example.com>", 2, ["draft"]);
+    const trashed = key("m3", "<gone@example.com>", 3, ["trash"]);
+    const reply = key("m4", "<reply@example.com>", 4, ["sent"]);
+    const ids = (conversation: EffectiveMessage[]) =>
+      ["shared@example.com", "reply@example.com"].filter((id) =>
+        conversationMatchesPredicate(conversation, {
+          kind: "internet_message_id",
+          ids: [id],
+        }),
+      );
+    expect(ids([received, draft, trashed])).toEqual(["shared@example.com"]);
+    expect(ids([received, draft, trashed, reply])).toEqual([
+      "reply@example.com",
+    ]);
+  });
+
+  it("compares keys as stored, so a key normalised once still matches", () => {
+    // Normalising strips one pair of brackets; the stored key keeps the rest.
+    const conversation = [key("m1", "<<a@b>>", 1)];
+    const matches = (id: string) =>
+      conversationMatchesPredicate(conversation, {
         kind: "internet_message_id",
-        ids: ["shared@example.com"],
-      }),
-    ).toBe(false);
+        ids: [id],
+      });
+    expect(matches("<a@b>")).toBe(true);
+    expect(matches("a@b")).toBe(false);
   });
 
   it("is a predicate the query schema accepts", () => {

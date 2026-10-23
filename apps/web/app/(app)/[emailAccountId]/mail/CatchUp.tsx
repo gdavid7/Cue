@@ -744,8 +744,8 @@ function AccountNotes({
       {incomplete ? (
         <p className="px-1 text-muted-foreground">
           {incomplete === 1
-            ? "1 conversation is left out, as its copies in your other inboxes couldn't all be found."
-            : `${incomplete} conversations are left out, as their copies in your other inboxes couldn't all be found.`}
+            ? "1 conversation is left out, as it couldn't be matched safely across your inboxes."
+            : `${incomplete} conversations are left out, as they couldn't be matched safely across your inboxes.`}
         </p>
       ) : null}
       {waiting.length ? (

@@ -1,4 +1,3 @@
-import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { contactNameMessages, splitNameWords } from "./contact-name-search";
 import type { SqlValue } from "./driver";
@@ -148,20 +147,20 @@ export function compilePredicate(
         bindings: [predicate.accountId, ...predicate.ids],
       };
     }
-    // Matched on each message's stored key, normalised at every write by the
-    // same rule, so ids differing only in case or angle brackets agree.
+    // Whole conversations, by the key their latest message gives them. The
+    // ids are keys as stored, so they are compared as they come.
     case "internet_message_id": {
-      const keys = [
-        ...new Set(
-          predicate.ids.flatMap((id) => normalizeInternetMessageId(id) ?? []),
-        ),
-      ];
-      if (keys.length === 0) return { sql: "0=1", bindings: [] };
-      const ids = `${alias}.message_key IN (${keys.map(() => "?").join(",")})`;
-      if (!predicate.accountId) return { sql: ids, bindings: keys };
+      if (predicate.ids.length === 0) return { sql: "0=1", bindings: [] };
+      const account = predicate.accountId ? " AND k.account_id = ?" : "";
       return {
-        sql: `(${alias}.account_id = ? AND ${ids})`,
-        bindings: [predicate.accountId, ...keys],
+        sql: `EXISTS (SELECT 1 FROM conversation_message_keys k
+                WHERE k.account_id = ${alias}.account_id
+                  AND k.conversation_id = ${alias}.conversation_id
+                  AND k.message_key IN (${predicate.ids.map(() => "?").join(",")})${account})`,
+        bindings: [
+          ...predicate.ids,
+          ...(predicate.accountId ? [predicate.accountId] : []),
+        ],
       };
     }
     case "text":

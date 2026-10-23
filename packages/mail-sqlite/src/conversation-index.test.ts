@@ -439,7 +439,7 @@ describe("transactional conversation index", () => {
     }
   });
 
-  it("reads every account's conversations holding a Message-ID, however it is written", async () => {
+  it("reads every account's conversations by their key, through its index", async () => {
     const driver = createNodeSqliteDriver();
     const store = await createSqliteMailStore(driver);
     try {
@@ -453,7 +453,7 @@ describe("transactional conversation index", () => {
         await insertMessage(tx, "m1", "c1", 10, 0, {
           messageKey: "shared@example.com",
         });
-        // In b the copy was read and replied to: a draft is newest there.
+        // In b the copy was read and a draft started: still b's key.
         await insertMessage(tx, "m2", "c9", 10, 1, {
           account: "b",
           roles: [],
@@ -463,9 +463,16 @@ describe("transactional conversation index", () => {
           account: "b",
           draft: true,
         });
-        await insertMessage(tx, "m4", "c2", 20, 0, {
-          messageKey: "other@example.com",
+        // A reply moves c2's key on, so it isn't the shared message's.
+        await insertMessage(tx, "m4", "c2", 10, 1, {
+          messageKey: "shared@example.com",
         });
+        await insertMessage(tx, "m5", "c2", 40, 1, {
+          roles: ["sent"],
+          messageKey: "reply@example.com",
+        });
+        // Normalising "<<a@b>>" once leaves "<a@b>", which is the key.
+        await insertMessage(tx, "m6", "c3", 50, 0, { messageKey: "<a@b>" });
       });
       const read = (predicate: MailPredicate) =>
         store
@@ -481,21 +488,30 @@ describe("transactional conversation index", () => {
               .map((row) => `${row.key.accountId}:${row.key.conversationId}`)
               .sort(),
           );
+      const keyed = (ids: string[], accountId?: string): MailPredicate => ({
+        kind: "internet_message_id",
+        ids,
+        ...(accountId ? { accountId } : {}),
+      });
 
+      expect(await read(keyed(["shared@example.com"]))).toEqual([
+        "a:c1",
+        "b:c9",
+      ]);
+      expect(await read(keyed(["shared@example.com"], "b"))).toEqual(["b:c9"]);
+      expect(await read(keyed(["<a@b>"]))).toEqual(["a:c3"]);
+      expect(await read(keyed(["a@b"]))).toEqual([]);
+      expect(await read(keyed([]))).toEqual([]);
+      // Inside another condition it reads the same.
       expect(
         await read({
-          kind: "internet_message_id",
-          ids: ["<SHARED@example.com>"],
+          kind: "all",
+          predicates: [
+            { kind: "read", value: false },
+            keyed(["shared@example.com"]),
+          ],
         }),
-      ).toEqual(["a:c1", "b:c9"]);
-      expect(
-        await read({
-          kind: "internet_message_id",
-          ids: ["shared@example.com"],
-          accountId: "b",
-        }),
-      ).toEqual(["b:c9"]);
-      expect(await read({ kind: "internet_message_id", ids: [] })).toEqual([]);
+      ).toEqual(["a:c1"]);
     } finally {
       await store.close();
     }

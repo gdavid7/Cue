@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type { MailClient } from "@inboxzero/mail-core/engine";
 import type {
   ConversationQuery,
@@ -65,7 +66,13 @@ export function useCatchUpMailbox({
   batchRead: number;
   watched: Array<{ accountId: string; threadId: string }> | null;
 }): { batch: CatchUpRead; watch: CatchUpWatch | null } {
-  const [legacy, setLegacy] = useState(false);
+  const [refused, setRefused] = useState(false);
+  // An engine that reports what it can do says up front whether it orders
+  // oldest first; one from before reporting is found out by its refusal.
+  const legacy =
+    refused ||
+    (Boolean(client?.capabilities) &&
+      !mailClientSupports(client, "order:oldest_first"));
   const watching = watched !== null;
   // Strings, so a new array with the same contents reads the same query.
   const accountKey = accountIds.join("\n");
@@ -112,7 +119,7 @@ export function useCatchUpMailbox({
   const mailbox = useMailboxWindow(query, { client, enabled });
   const errored =
     enabled && (mailbox.status === "error" || mailbox.status === "unavailable");
-  if (errored && !legacy) setLegacy(true);
+  if (errored && !legacy) setRefused(true);
 
   const view = enabled && mailbox.status === "ready" ? mailbox.data : null;
   const pages = view
@@ -155,9 +162,11 @@ export type CatchUpCopiesRead =
  * Reads every conversation in the included accounts holding one of the cards'
  * Message-IDs, read or not, in one query, page by page to the end, so a
  * card's copies are found even where the batch's unread read didn't reach
- * them. Each card hears all of them, and whether the read reached every
+ * them. Each card hears what was found and whether the read reached every
  * one: a read that fails, is cancelled or doesn't end within its pages says
- * so, rather than guess.
+ * so, rather than guess. A read that fails is tried again once, and one
+ * that runs past its pages, or fails again, is read card by card, so one
+ * noisy Message-ID can't leave the whole batch out.
  *
  * It sees only what each account's local store holds: a copy older than an
  * account's synced window isn't there to find, or to change, until that
@@ -192,17 +201,8 @@ export function useCatchUpCopies({
   useEffect(() => {
     if (!client || !keyed.length) return;
     const signal = { cancelled: false };
-    readCopies(
-      client,
-      accountIds,
-      keyed.map((card) => card.messageKey),
-      signal,
-    ).then(({ conversations, complete }) => {
-      if (signal.cancelled) return;
-      const found = new Map<string, CatchUpCopiesFound>(
-        keyed.map((card) => [card.key, { conversations, complete }]),
-      );
-      setAnswer({ readKey, found });
+    readEveryCardsCopies(client, accountIds, keyed, signal).then((found) => {
+      if (!signal.cancelled) setAnswer({ readKey, found });
     });
     return () => {
       signal.cancelled = true;
@@ -237,17 +237,59 @@ function watchedPredicate(watchKey: string): MailPredicate {
 
 const NO_COPIES_FOUND: ReadonlyMap<string, CatchUpCopiesFound> = new Map();
 
+async function readEveryCardsCopies(
+  client: MailClient,
+  accountIds: string[],
+  cards: Array<{ key: string; messageKey: string }>,
+  signal: { cancelled: boolean },
+): Promise<ReadonlyMap<string, CatchUpCopiesFound>> {
+  const read = (messageKeys: string[]) =>
+    readCopiesTwice(client, accountIds, messageKeys, signal);
+  const shared = await read(cards.map((card) => card.messageKey));
+  if (shared.outcome === "complete")
+    return new Map(
+      cards.map((card) => [
+        card.key,
+        { conversations: shared.conversations, complete: true },
+      ]),
+    );
+  const found = new Map<string, CatchUpCopiesFound>();
+  for (const card of cards) {
+    const own = await read([card.messageKey]);
+    found.set(card.key, {
+      conversations: own.conversations,
+      complete: own.outcome === "complete",
+    });
+  }
+  return found;
+}
+
+/** A read, tried again once if it failed rather than ran past its pages. */
+async function readCopiesTwice(
+  client: MailClient,
+  accountIds: string[],
+  messageKeys: string[],
+  signal: { cancelled: boolean },
+) {
+  const first = await readCopies(client, accountIds, messageKeys, signal);
+  if (first.outcome !== "failed" || signal.cancelled) return first;
+  return readCopies(client, accountIds, messageKeys, signal);
+}
+
 async function readCopies(
   client: MailClient,
   accountIds: string[],
   messageKeys: string[],
   signal: { cancelled: boolean },
-): Promise<{ conversations: ConversationSummary[]; complete: boolean }> {
+): Promise<{
+  conversations: ConversationSummary[];
+  outcome: "complete" | "overflow" | "failed";
+}> {
   const conversations: ConversationSummary[] = [];
-  if (!accountIds.length) return { conversations, complete: false };
+  if (!accountIds.length) return { conversations, outcome: "failed" };
   let after: string | null = null;
   for (let page = 0; page < COPY_MAX_PAGES; page++) {
-    if (signal.cancelled) return { conversations, complete: false };
+    if (signal.cancelled) return { conversations, outcome: "failed" };
     const view = await readMailboxPage(client, {
       accountIds,
       predicate: { kind: "internet_message_id", ids: messageKeys },
@@ -255,12 +297,12 @@ async function readCopies(
       pageSize: COPY_PAGE_SIZE,
       after,
     });
-    if (!view) return { conversations, complete: false };
+    if (!view) return { conversations, outcome: "failed" };
     conversations.push(...view.conversations);
-    if (!view.nextPage) return { conversations, complete: true };
+    if (!view.nextPage) return { conversations, outcome: "complete" };
     after = view.nextPage;
   }
-  return { conversations, complete: false };
+  return { conversations, outcome: "overflow" };
 }
 
 /**

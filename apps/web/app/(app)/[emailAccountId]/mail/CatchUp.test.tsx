@@ -419,7 +419,7 @@ describe("Catch up in All inboxes", () => {
     expect(screen.getByRole("heading", { name: "Work newest" })).toBeTruthy();
     expect(
       screen.getByText(
-        "1 conversation is left out, as its copies in your other inboxes couldn't all be found.",
+        "1 conversation is left out, as it couldn't be matched safely across your inboxes.",
       ),
     ).toBeTruthy();
   });
@@ -439,7 +439,7 @@ describe("Catch up in All inboxes", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "1 conversation is left out, as its copies in your other inboxes couldn't all be found.",
+        "1 conversation is left out, as it couldn't be matched safely across your inboxes.",
       ),
     ).toBeTruthy();
     // Read again past it, so the batch could fill.

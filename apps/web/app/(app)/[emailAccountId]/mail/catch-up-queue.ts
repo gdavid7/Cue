@@ -1,4 +1,3 @@
-import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { ConversationSummary } from "@inboxzero/mail-core/queries";
 import { getListThreadKey } from "@/app/(app)/[emailAccountId]/mail/types";
 import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
@@ -25,7 +24,11 @@ export type CatchUpItem = {
   threadId: string;
   accountId: string;
   latestMessageId: string;
-  /** The latest message's Message-ID, normalized, which its copies share. */
+  /**
+   * The conversation's key, as the engine gives it: its latest message's
+   * Message-ID (not a draft or in the trash; sent counts), normalised. Its
+   * copies in other accounts share it.
+   */
   messageKey: string | null;
   /** Whether the conversation is in its inbox. */
   inInbox: boolean;
@@ -119,8 +122,7 @@ export function toCatchUpItem(
     threadId: conversationId,
     accountId,
     latestMessageId: conversation.latestMessageId,
-    messageKey:
-      normalizeInternetMessageId(conversation.latestInternetMessageId) ?? null,
+    messageKey: conversation.latestInternetMessageId ?? null,
     inInbox: conversation.roles.includes("inbox"),
     unread: conversation.unread,
     copies,
@@ -163,7 +165,12 @@ export function toCatchUpItems(
 /**
  * Completes each card's copies from the read for them, which isn't limited to
  * unread mail or to the page the batch came from: archive, read and snooze
- * must reach every copy. A card is left out of the batch, its key added to
+ * must reach every copy. Copies follow the conversation key, the Message-ID
+ * of a conversation's latest message that isn't a draft or in the trash
+ * (sent mail counts), the rule showCopiesOnce groups the list by: where the
+ * user replied in one account, that conversation's key moved on, and it is a
+ * conversation of its own rather than a copy. Copies in the trash or spam
+ * are left alone. A card is left out of the batch, its key added to
  * `incomplete`, when that read didn't reach every possible copy, when some
  * account (its own included) has a second conversation for its message, or
  * when it would become a card acted on already or in the batch twice, as
@@ -190,12 +197,10 @@ export function withCatchUpCopies(
     }
     const perAccount = new Map<string, ConversationSummary[]>();
     for (const match of read.conversations) {
-      // A copy is a conversation whose latest message is this one; one that
-      // only holds it further back is a conversation of its own.
-      if (
-        normalizeInternetMessageId(match.latestInternetMessageId) !==
-        item.messageKey
-      )
+      // The read may hold other cards' keys too.
+      if (match.latestInternetMessageId !== item.messageKey) continue;
+      // Deleted or junk mail is no copy to act on, nor a second conversation.
+      if (match.roles.includes("trash") || match.roles.includes("spam"))
         continue;
       const own =
         match.key.accountId === item.accountId &&
