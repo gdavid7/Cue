@@ -1609,6 +1609,7 @@ export function createMailEngine(input: {
       return;
     }
     let processedPages = 0;
+    let landedLastPage = false;
     while (scan.page) {
       if (processedPages > 0) await yieldToHost();
       if (input.signal?.aborted) return;
@@ -1681,6 +1682,7 @@ export function createMailEngine(input: {
           }),
       });
       if (applied.status === "stale") break;
+      landedLastPage = enumerated.value.nextPage === null;
       if (input.backfillPause) input.backfillPause.repeats = 0;
       processedPages += 1;
       // A first sync shows each page as it lands rather than after the whole
@@ -1726,6 +1728,7 @@ export function createMailEngine(input: {
       };
     }
     await refreshViews();
+    return landedLastPage;
   }
 
   // Each account syncs in its own lane, so a slow account or a slow request
@@ -1974,7 +1977,7 @@ export function createMailEngine(input: {
           startBackfill({ session, idleGate, stream });
           continue;
         }
-        await ingestBootstrap({
+        const finished = await ingestBootstrap({
           session,
           from: stream,
           deadlineMs: runtime.nowMs() + SYNC_LANE_BOOTSTRAP_SLICE_MS,
@@ -1984,6 +1987,13 @@ export function createMailEngine(input: {
           scope: idleGate.activeBootstrapScopes.get(stream.streamId),
         });
         await rememberBootstrapContinuation(idleGate, session, stream.streamId);
+        if (finished) {
+          await resumeHeldBackfill(
+            idleGate,
+            session,
+            streams.map((candidate) => candidate.streamId),
+          );
+        }
         continue;
       }
       if (!catchUpDue) continue;
@@ -2180,6 +2190,46 @@ export function createMailEngine(input: {
       idleGate.requestCount > checked.requestCount &&
       runtime.nowMs() - checked.atMs >= minIntervalMs
     );
+  }
+
+  // The server holds background scans while a scan the user waits on runs,
+  // so a backfill paused meanwhile was waiting for that scan, not for budget:
+  // once the last such scan of the account ends, it asks again at once and
+  // backs off afresh. A server that refuses for its budget (PF-12a-3 would
+  // tell the two apart) costs one more ask per finished scan.
+  async function resumeHeldBackfill(
+    idleGate: IdleCatchUpGate,
+    session: { accountId: string; generation: string },
+    scopeIds: string[],
+  ) {
+    const nowMs = runtime.nowMs();
+    if (idleGate.backfillPause.untilMs <= nowMs) return;
+    for (const scopeId of scopeIds) {
+      if (idleGate.lowPriorityStreams.has(scopeId)) continue;
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (scan?.page) return;
+    }
+    idleGate.backfillPause.untilMs = 0;
+    idleGate.backfillPause.repeats = 0;
+    for (const scopeId of idleGate.lowPriorityStreams) {
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (
+        !scan?.page ||
+        scan.errorCode !== "throttled" ||
+        scan.nextAttemptAtMs === null ||
+        scan.nextAttemptAtMs <= nowMs
+      ) {
+        continue;
+      }
+      await store.deferBootstrapScan({
+        session,
+        scopeId,
+        bootstrapId: scan.bootstrapId,
+        page: scan.page,
+        nextAttemptAtMs: nowMs,
+        errorCode: null,
+      });
+    }
   }
 
   async function rememberBootstrapContinuation(

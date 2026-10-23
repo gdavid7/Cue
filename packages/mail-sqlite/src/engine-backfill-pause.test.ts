@@ -69,9 +69,14 @@ describe("engine backfill pauses", () => {
 
     await drive(engine, 30 * 60_000);
 
-    const gaps = server.paused
+    // Pauses met while the primary scan ran end with it (see below), so the
+    // back-off is measured from the first ask after it.
+    const paused = server.paused.filter(
+      (pause) => pause.atMs >= (server.primaryDoneAtMs ?? 0),
+    );
+    const gaps = paused
       .slice(1)
-      .map((pause, index) => pause.atMs - (server.paused[index]?.atMs ?? 0));
+      .map((pause, index) => pause.atMs - (paused[index]?.atMs ?? 0));
     expect(gaps.length).toBeGreaterThan(3);
     for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(30_000);
     expect(gaps[1]).toBeGreaterThan(gaps[0]!);
@@ -89,7 +94,11 @@ describe("engine backfill pauses", () => {
 
     await drive(engine, 20_000);
 
-    expect(server.paused.map((pause) => pause.scopeId)).toEqual(["older-a"]);
+    // Asked again once, when the primary scan it may have waited for ends.
+    expect(server.paused.map((pause) => pause.scopeId)).toEqual([
+      "older-a",
+      "older-a",
+    ]);
     await engine.close();
   });
 
@@ -103,7 +112,8 @@ describe("engine backfill pauses", () => {
 
     await drive(engine, 20_000);
 
-    expect(server.backfillBootstraps).toBe(1);
+    // Once more when the primary scan ends, then held.
+    expect(server.backfillBootstraps).toBe(2);
     await engine.close();
   });
 
@@ -140,6 +150,69 @@ describe("engine backfill pauses", () => {
     expect(server.paused.length).toBeGreaterThan(5);
     await engine.close();
   });
+
+  // The server holds background scans while a first sync's primary scan runs,
+  // so a pause met then says nothing about the budget: it ends with the scan.
+  it("starts a backfill held behind the primary scan as soon as that scan ends", async () => {
+    const server = budgetedServer({
+      backfillScopes: ["history"],
+      holdBackfillDuringPrimary: true,
+    });
+    const { engine } = await openEngine(server.source);
+
+    await drive(engine, 30_000);
+
+    expect(server.paused.length).toBeGreaterThan(0);
+    expect(server.primaryDoneAtMs).not.toBeNull();
+    const firstServedAtMs = server.served[0] ?? Number.POSITIVE_INFINITY;
+    expect(firstServedAtMs - server.primaryDoneAtMs!).toBeLessThan(5000);
+    await engine.close();
+  });
+
+  it("keeps holding the backfill while another scan it waits behind still runs", async () => {
+    const server = budgetedServer({
+      backfillScopes: ["history"],
+      foregroundScopes: ["folder-b"],
+      holdBackfillDuringPrimary: true,
+    });
+    const { engine } = await openEngine(server.source);
+
+    await drive(engine, 60_000);
+
+    const primaryDoneAtMs = server.foregroundDoneAtMs.get("primary")!;
+    const folderDoneAtMs = server.foregroundDoneAtMs.get("folder-b")!;
+    expect(folderDoneAtMs).toBeGreaterThan(primaryDoneAtMs);
+    // Nothing asked between the primary scan ending and the last one ending.
+    const askedBetween = [
+      ...server.paused.map((pause) => pause.atMs),
+      ...server.served,
+    ].filter((atMs) => atMs > primaryDoneAtMs && atMs < folderDoneAtMs);
+    expect(askedBetween).toEqual([]);
+    const firstServedAtMs = server.served[0] ?? Number.POSITIVE_INFINITY;
+    expect(firstServedAtMs - folderDoneAtMs).toBeLessThan(5000);
+    await engine.close();
+  });
+
+  it("adds no backfill asks for sync requests once the primary scan has ended", async () => {
+    const run = async (wakeEveryMs?: number) => {
+      const server = budgetedServer({
+        backfillScopes: ["history"],
+        shutBackfill: true,
+      });
+      const { engine } = await openEngine(server.source);
+      await drive(engine, 10 * 60_000, { wakeEveryMs });
+      await engine.close();
+      return server.paused.filter(
+        (pause) => pause.atMs > (server.primaryDoneAtMs ?? 0),
+      ).length;
+    };
+
+    const scheduled = await run();
+    const woken = await run(2000);
+
+    expect(scheduled).toBeGreaterThan(2);
+    expect(woken).toBeLessThanOrEqual(scheduled);
+  }, 60_000);
 
   it("keeps reading new mail while the backfill is paused", async () => {
     const server = budgetedServer({
@@ -214,9 +287,14 @@ function budgetedServer({
   shutBackfill = false,
   pauseBootstrap = false,
   pauseReason = "throttled",
+  holdBackfillDuringPrimary = false,
+  foregroundScopes = [],
 }: {
   backfillScopes: string[];
   shutBackfill?: boolean;
+  holdBackfillDuringPrimary?: boolean;
+  /** Further scopes the server holds background scans behind, as primary. */
+  foregroundScopes?: string[];
   pauseBootstrap?: boolean;
   pauseReason?: "throttled" | "unavailable";
 }) {
@@ -235,10 +313,16 @@ function budgetedServer({
     shut: shutBackfill,
     backfillBootstraps: 0,
     primaryDoneAtMs: null as number | null,
+    foregroundDoneAtMs: new Map<string, number>(),
     changesReads: 0,
   };
   const scopes: ScopeDescriptor[] = [
     { id: "primary", kind: "account", folderId: null },
+    ...foregroundScopes.map((id) => ({
+      id,
+      kind: "account" as const,
+      folderId: null,
+    })),
     ...backfillScopes.map((id) => ({
       id,
       kind: "account" as const,
@@ -246,6 +330,8 @@ function budgetedServer({
       priority: "low" as const,
     })),
   ];
+  const isForeground = (scopeId: string) =>
+    scopeId === "primary" || foregroundScopes.includes(scopeId);
   const source: MailboxSource = {
     async describe() {
       return {
@@ -262,7 +348,7 @@ function budgetedServer({
       return { status: "ok", value: { scopes, nextPage: null } };
     },
     async beginBootstrap({ scope, session }) {
-      if (scope.id !== "primary") {
+      if (!isForeground(scope.id)) {
         state.backfillBootstraps += 1;
         if (pauseBootstrap)
           return { status: "paused", retryAfterMs: 1000, reason: pauseReason };
@@ -283,22 +369,27 @@ function budgetedServer({
     async enumerate({ page, session }) {
       const [scopeId = "", index = "1"] = page.split(":");
       const pageIndex = Number(index);
-      if (scopeId !== "primary") {
+      if (!isForeground(scopeId)) {
         const nowMs = Date.now();
         tokens = Math.min(
           BACKFILL_CAPACITY,
           tokens + ((nowMs - refilledAtMs) * BACKFILL_CAPACITY) / 60_000,
         );
         refilledAtMs = nowMs;
-        if (state.shut || tokens < BACKFILL_PAGE_COST) {
-          const retryAfterMs = state.shut
-            ? 1000
-            : Math.max(
-                1000,
-                Math.ceil(
-                  ((BACKFILL_PAGE_COST - tokens) * 60_000) / BACKFILL_CAPACITY,
-                ),
-              );
+        const held =
+          holdBackfillDuringPrimary &&
+          state.foregroundDoneAtMs.size < foregroundScopes.length + 1;
+        if (state.shut || held || tokens < BACKFILL_PAGE_COST) {
+          const retryAfterMs =
+            state.shut || held
+              ? 1000
+              : Math.max(
+                  1000,
+                  Math.ceil(
+                    ((BACKFILL_PAGE_COST - tokens) * 60_000) /
+                      BACKFILL_CAPACITY,
+                  ),
+                );
           if (nowMs < knownPauseUntilMs) state.pausedInsideKnownWindow += 1;
           knownPauseUntilMs = nowMs + retryAfterMs;
           state.paused.push({ atMs: nowMs, retryAfterMs, scopeId });
@@ -309,8 +400,12 @@ function budgetedServer({
       await sleep(REQUEST_MS);
       pageNumber += 1;
       const changes = [messagePatch(`m-${scopeId}-${pageNumber}`)];
-      if (scopeId === "primary" && pageIndex >= PRIMARY_PAGES) {
-        state.primaryDoneAtMs = Date.now();
+      // Further scopes are longer, so they run on after the primary scan.
+      const lastPage =
+        scopeId === "primary" ? PRIMARY_PAGES : PRIMARY_PAGES * 4;
+      if (isForeground(scopeId) && pageIndex >= lastPage) {
+        state.foregroundDoneAtMs.set(scopeId, Date.now());
+        if (scopeId === "primary") state.primaryDoneAtMs = Date.now();
         return {
           status: "ok",
           value: {
@@ -328,7 +423,7 @@ function budgetedServer({
           },
         };
       }
-      if (scopeId !== "primary") state.served.push(Date.now());
+      if (!isForeground(scopeId)) state.served.push(Date.now());
       return {
         status: "ok",
         value: {
