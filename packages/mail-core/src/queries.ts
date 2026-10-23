@@ -6,6 +6,7 @@ import {
 } from "./identities";
 import {
   inboxSectionSchema,
+  MAX_INTERNET_MESSAGE_ID_LENGTH,
   mailboxRoleSchema,
   type MessageAttachmentDescriptor,
 } from "./messages";
@@ -79,6 +80,13 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       accountId: accountIdSchema.optional(),
     }),
     z.object({
+      kind: z.literal("internet_message_id"),
+      ids: z
+        .array(z.string().min(1).max(MAX_INTERNET_MESSAGE_ID_LENGTH))
+        .max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
+    }),
+    z.object({
       kind: z.literal("text"),
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
@@ -129,6 +137,16 @@ export type MailPredicate =
    * `mailClientSupports` before sending it to an engine.
    */
   | { kind: "conversation"; ids: string[]; accountId?: string }
+  /**
+   * Whole conversations whose key is one of these, of `accountId` alone when
+   * it is set. A conversation's key is the Message-ID of its latest message
+   * that isn't a draft or in the trash (sent mail counts), normalised by
+   * normalizeInternetMessageId; the ids are keys as summaries give them
+   * (`latestInternetMessageId`), compared as they are. One message delivered
+   * to several accounts has one key in each. Newer than the other kinds:
+   * check `predicate:internet_message_id` with mailClientSupports first.
+   */
+  | { kind: "internet_message_id"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";

@@ -5,7 +5,7 @@ import {
   movesBetweenFolders,
 } from "./effective-state";
 import type { Provider } from "./identities";
-import type { MessageMetadata } from "./messages";
+import { type MessageMetadata, normalizeInternetMessageId } from "./messages";
 import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
 
 export type EffectiveMessage = MessageMetadata & {
@@ -84,6 +84,14 @@ export function messageMatchesPredicate(
       if (predicate.accountId && predicate.accountId !== message.accountId)
         return false;
       return predicate.ids.includes(message.conversationId);
+    // Alone, a message is its own conversation's latest; the conversation
+    // matchers below decide it by the conversation's key instead.
+    case "internet_message_id":
+      return keyMatches(
+        predicate,
+        message.accountId,
+        normalizeInternetMessageId(message.internetMessageId),
+      );
     case "text":
       return textMatches(
         message,
@@ -114,19 +122,37 @@ export function conversationMatchesPredicate(
   if (predicate.kind === "mailbox") {
     return conversationMatchesMailbox(messages, predicate.mailbox);
   }
-  return messages.some((message) =>
-    messageMatchesPredicate(message, predicate),
-  );
+  const bound = withConversationKey(predicate, messages);
+  return messages.some((message) => messageMatchesPredicate(message, bound));
 }
 
 export function conversationIsUnread(
   messages: EffectiveMessage[],
   predicate: MailPredicate,
 ): boolean {
+  const bound = withConversationKey(predicate, messages);
   return messages.some(
     (message) =>
-      messageMatchesPredicate(message, predicate) && message.read === false,
+      messageMatchesPredicate(message, bound) && message.read === false,
   );
+}
+
+/**
+ * A conversation's key: the normalised Message-ID of its latest message that
+ * isn't a draft or in the trash (sent mail counts), else of its latest. One
+ * message delivered to several accounts has the same key in each, as the
+ * local store's conversation_message_keys has it.
+ */
+export function conversationMessageKey(
+  messages: EffectiveMessage[],
+): string | null {
+  const latest = [...messages].sort(
+    (a, b) =>
+      Number(isKeyed(b)) - Number(isKeyed(a)) ||
+      b.receivedAtMs - a.receivedAtMs ||
+      (b.messageId > a.messageId ? 1 : b.messageId < a.messageId ? -1 : 0),
+  )[0];
+  return normalizeInternetMessageId(latest?.internetMessageId);
 }
 
 /**
@@ -489,4 +515,66 @@ function namesOwnMail(predicate: MailPredicate) {
     predicate.kind === "mailbox" &&
     (predicate.mailbox === "sent" || predicate.mailbox === "drafts")
   );
+}
+
+const ALWAYS: MailPredicate = { kind: "all", predicates: [] };
+const NEVER: MailPredicate = { kind: "any", predicates: [] };
+
+/**
+ * The predicate with each `internet_message_id` decided for this
+ * conversation by its key, which no single message can answer.
+ */
+function withConversationKey(
+  predicate: MailPredicate,
+  messages: EffectiveMessage[],
+): MailPredicate {
+  if (!mentionsMessageKeys(predicate)) return predicate;
+  const key = conversationMessageKey(messages);
+  const accountId = messages[0]?.accountId ?? "";
+  const bind = (node: MailPredicate): MailPredicate => {
+    switch (node.kind) {
+      case "internet_message_id":
+        return keyMatches(node, accountId, key) ? ALWAYS : NEVER;
+      case "all":
+      case "any":
+        return { ...node, predicates: node.predicates.map(bind) };
+      case "not":
+        return { ...node, predicate: bind(node.predicate) };
+      case "search":
+        return { ...node, local: bind(node.local) };
+      default:
+        return node;
+    }
+  };
+  return bind(predicate);
+}
+
+function mentionsMessageKeys(predicate: MailPredicate): boolean {
+  switch (predicate.kind) {
+    case "internet_message_id":
+      return true;
+    case "all":
+    case "any":
+      return predicate.predicates.some(mentionsMessageKeys);
+    case "not":
+      return mentionsMessageKeys(predicate.predicate);
+    case "search":
+      return mentionsMessageKeys(predicate.local);
+    default:
+      return false;
+  }
+}
+
+/** Keys are compared as stored: the ids given are keys already. */
+function keyMatches(
+  predicate: Extract<MailPredicate, { kind: "internet_message_id" }>,
+  accountId: string,
+  key: string | null,
+) {
+  if (predicate.accountId && predicate.accountId !== accountId) return false;
+  return key !== null && predicate.ids.includes(key);
+}
+
+function isKeyed(message: EffectiveMessage) {
+  return !message.roles.includes("draft") && !message.roles.includes("trash");
 }

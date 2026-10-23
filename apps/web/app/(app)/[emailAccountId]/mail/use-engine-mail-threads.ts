@@ -312,6 +312,7 @@ function collapsedThread(
     copies: copies.map((copy) => ({
       accountId: copy.key.accountId,
       threadId: copy.key.conversationId,
+      inInbox: copy.roles.includes("inbox"),
     })),
   };
 }

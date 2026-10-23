@@ -1,3 +1,8 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
+import {
+  conversationMessageKey,
+  type EffectiveMessage,
+} from "@inboxzero/mail-core/query-semantics";
 import { expect, it } from "vitest";
 import type { SqliteDriver } from "./driver";
 import { createNodeSqliteDriver } from "./node-sqlite";
@@ -88,6 +93,84 @@ it("keeps message keys and shared copies equal to a full rebuild through random 
     await store.close();
   }
 }, 120_000);
+
+it("keys each conversation as mail-core's conversationMessageKey does", async () => {
+  const driver = createNodeSqliteDriver();
+  const store = await createSqliteMailStore(driver);
+  try {
+    for (const accountId of ACCOUNTS)
+      await store.ensureAccount({
+        accountId,
+        provider: "google",
+        generation: "g",
+      });
+    let seed = 11;
+    const random = (n: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed % n;
+    };
+    // Raw headers in the forms providers give, normalised as the store does
+    // at every write.
+    const forms = (n: number) =>
+      [`<k${n}@x>`, `K${n}@X`, ` <k${n}@x> `, `<<k${n}@x>>`][random(4)];
+    const written = new Map<string, EffectiveMessage>();
+    for (let step = 0; step < 600; step++) {
+      const accountId = ACCOUNTS[random(ACCOUNTS.length)];
+      const messageId = `m${random(60)}`;
+      const raw = random(6) === 0 ? undefined : forms(random(5));
+      const draft = random(5) === 0;
+      const trash = random(5) === 0;
+      const message = {
+        accountId,
+        messageId,
+        conversationId: `c${random(8)}`,
+        receivedAtMs: random(20),
+        internetMessageId: raw,
+        roles: draft ? ["draft"] : trash ? ["trash"] : ["inbox"],
+      } as EffectiveMessage;
+      written.set(`${accountId}\t${messageId}`, message);
+      await driver.write((tx) =>
+        tx.execute(UPSERT, [
+          accountId,
+          messageId,
+          message.conversationId,
+          message.receivedAtMs,
+          0,
+          draft ? 1 : 0,
+          trash ? 1 : 0,
+          normalizeInternetMessageId(raw),
+        ]),
+      );
+    }
+
+    const stored = await driver.read((tx) =>
+      tx.query(
+        "SELECT account_id, conversation_id, message_key FROM conversation_message_keys",
+      ),
+    );
+    const byConversation = new Map<string, EffectiveMessage[]>();
+    for (const message of written.values()) {
+      const key = `${message.accountId}\t${message.conversationId}`;
+      byConversation.set(key, [...(byConversation.get(key) ?? []), message]);
+    }
+    const expected = [...byConversation]
+      .flatMap(([key, messages]) => {
+        const messageKey = conversationMessageKey(messages);
+        return messageKey ? [`${key}\t${messageKey}`] : [];
+      })
+      .sort();
+    expect(
+      stored
+        .map(
+          (row) =>
+            `${row.account_id}\t${row.conversation_id}\t${row.message_key}`,
+        )
+        .sort(),
+    ).toEqual(expected);
+  } finally {
+    await store.close();
+  }
+});
 
 async function expectRebuilt(driver: SqliteDriver) {
   const [keys, rebuiltKeys, shared, rebuiltShared] = await driver.read(

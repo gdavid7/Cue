@@ -102,7 +102,7 @@ describe("localInboxRows", () => {
           conversation("t2", { accountId: BOB.id }),
           conversation("bob-copy", {
             accountId: BOB.id,
-            internetMessageId: "SAME@mail",
+            internetMessageId: "<same@mail>",
           }),
         ],
         [ADA.id, BOB.id],

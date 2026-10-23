@@ -1,3 +1,4 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import { TZDate } from "@date-fns/tz";
 import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
 import { startOfDay } from "date-fns";
@@ -104,7 +105,8 @@ export type HomeThread = {
   messageId: string;
   /**
    * That message's Message-ID header, the same in every mailbox it is in, so
-   * Today across accounts can show a conversation once.
+   * Today across accounts can show a conversation once. Normalised once, as
+   * the local store keys conversations, and compared as given after that.
    */
   rfcMessageId?: string;
   starred: boolean;
@@ -664,6 +666,7 @@ function toHomeThread(
     );
   const preview = (other ?? latest).snippet || thread.snippet || "";
   const unread = labelIds.has("UNREAD");
+  const rfcMessageId = normalizeInternetMessageId(latest.headers["message-id"]);
 
   return {
     threadId: thread.id,
@@ -685,9 +688,7 @@ function toHomeThread(
     }),
     unread,
     messageId: latest.id,
-    ...(latest.headers["message-id"]
-      ? { rfcMessageId: latest.headers["message-id"] }
-      : {}),
+    ...(rfcMessageId ? { rfcMessageId } : {}),
     starred: labelIds.has("STARRED"),
     inInbox: labelIds.has("INBOX"),
   };

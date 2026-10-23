@@ -144,9 +144,9 @@ describe("useThreadActions", () => {
   });
 
   describe("a row standing for one message in two accounts", () => {
-    // All inboxes shows the message once; reading, archiving and starring it
-    // reach every copy, each in its own account, while the rest of the
-    // actions stay with the copy shown.
+    // All inboxes shows the message once; reading, archiving, snoozing and
+    // starring it reach every copy, each in its own account, while the rest
+    // of the actions stay with the copy shown.
     const row = {
       ...createThread(["INBOX", "UNREAD"], "shown"),
       account: { id: "one", email: "one@example.com", name: null, image: null },
@@ -170,6 +170,11 @@ describe("useThreadActions", () => {
       [
         "star",
         (actions: Actions) => actions.setStarredState(["one:shown"], true),
+      ],
+      [
+        "snooze",
+        (actions: Actions) =>
+          actions.snooze(["one:shown"], new Date(Date.now() + 60_000)),
       ],
     ])("%s changes every copy, counted as one conversation", async (_, act_) => {
       const { result } = renderActions({ threads: [row] });
@@ -233,7 +238,7 @@ describe("useThreadActions", () => {
       });
     });
 
-    it("counts the row as failed when a copy's account refuses", async () => {
+    it("counts the row as failed when a copy's account refuses, but offers undo for what changed", async () => {
       mail.client.submitConversations.mockImplementation(
         async (command: { accountId: string }) =>
           command.accountId === "two"
@@ -248,8 +253,12 @@ describe("useThreadActions", () => {
       });
 
       expect(archived).toEqual([]);
-      expect(toastUndo).not.toHaveBeenCalled();
-      expect(notifications.error).toHaveBeenCalled();
+      expect(toastUndo).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Archived" }),
+      );
+      expect(notifications.error).toHaveBeenCalledWith(
+        "Couldn't queue archiving in every inbox",
+      );
     });
 
     it("keeps what one account changed undoable when another's submit throws", async () => {
@@ -293,6 +302,128 @@ describe("useThreadActions", () => {
 
       expect(restored).toEqual([]);
       expect(notifications.error).toHaveBeenLastCalledWith("Couldn't restore");
+    });
+
+    it("doesn't snooze a copy outside its inbox into it", async () => {
+      const outside = {
+        ...row,
+        copies: [{ accountId: "two", threadId: "hidden", inInbox: false }],
+      } as ListThread;
+      const { result } = renderActions({ threads: [outside] });
+      await act(() =>
+        result.current.snooze(["one:shown"], new Date(Date.now() + 60_000)),
+      );
+
+      expect(submitted()).toEqual([["one", ["shown"], "snooze"]]);
+    });
+
+    it("undoes an archive copy by copy, each back where it was", async () => {
+      mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+      // The copy in two was already out of its inbox, behind a label.
+      const mixed = {
+        ...row,
+        copies: [{ accountId: "two", threadId: "hidden", inInbox: false }],
+      } as ListThread;
+      const { result } = renderActions({ threads: [mixed] });
+      await act(() => result.current.archive(["one:shown"]));
+      mail.client.submitConversations.mockClear();
+
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+
+      expect(restored).toEqual(["one:shown"]);
+      expect(submitted().sort()).toEqual([
+        ["one", ["shown"], "unarchive"],
+        ["two", ["hidden"], "archive"],
+      ]);
+    });
+
+    it("marks unread again only the conversations it is given", async () => {
+      const { result } = renderActions({ threads: [row] });
+      let outcome: Awaited<ReturnType<Actions["changeCard"]>> | undefined;
+      await act(async () => {
+        outcome = await result.current.changeCard(["one:shown"], {
+          kind: "mark_unread",
+          conversations: [{ accountId: "two", threadId: "hidden" }],
+        });
+      });
+
+      expect(submitted()).toEqual([["two", ["hidden"], "set_read"]]);
+      expect(outcome?.actedRows).toEqual(["one:shown"]);
+    });
+
+    it("names the account that refused when only a copy was refused", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) =>
+          command.accountId === "two"
+            ? { status: "rejected", code: "stale_selection" }
+            : { status: "queued" },
+      );
+      const { result } = renderActions({ threads: [row] });
+
+      let outcome: Awaited<ReturnType<Actions["changeCard"]>> | undefined;
+      await act(async () => {
+        outcome = await result.current.changeCard(["one:shown"], {
+          kind: "archive",
+        });
+      });
+
+      // Not the whole row, but changed where it is shown, and undoable.
+      expect(outcome).toEqual({
+        rows: [],
+        actedRows: ["one:shown"],
+        refusedAccountIds: ["two"],
+      });
+      mail.client.submitConversations.mockResolvedValue({ status: "queued" });
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual(["one:shown"]);
+    });
+
+    it("keeps one copy per account when a card adds the same account's", async () => {
+      const { result } = renderActions({ threads: [row] });
+      act(() =>
+        result.current.addTargets([
+          {
+            id: "shown",
+            account: { id: "one" },
+            messageIds: ["shown-message"],
+            copies: [{ accountId: "two", threadId: "other" }],
+          },
+        ]),
+      );
+      await act(() => result.current.archive(["one:shown"]));
+
+      expect(submitted()).toEqual([
+        ["one", ["shown"], "archive"],
+        ["two", ["other"], "archive"],
+      ]);
+    });
+
+    it("keeps the copies the list found when a card adds its own", async () => {
+      const { result } = renderActions({ threads: [row] });
+      // A card that found a third copy, and none of the list's.
+      act(() =>
+        result.current.addTargets([
+          {
+            id: "shown",
+            account: { id: "one" },
+            messageIds: ["shown-message"],
+            copies: [{ accountId: "three", threadId: "third" }],
+          },
+        ]),
+      );
+      await act(() => result.current.archive(["one:shown"]));
+
+      expect(submitted()).toEqual([
+        ["one", ["shown"], "archive"],
+        ["two", ["hidden"], "archive"],
+        ["three", ["third"], "archive"],
+      ]);
     });
 
     it("deletes only the copy shown", async () => {

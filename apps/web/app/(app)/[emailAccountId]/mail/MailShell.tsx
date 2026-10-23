@@ -119,7 +119,10 @@ import { WhatsNewTour } from "@/app/(app)/[emailAccountId]/mail/WhatsNewTour";
 import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
-import { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import {
+  type CatchUpAllInboxes,
+  CatchUpEntry,
+} from "@/app/(app)/[emailAccountId]/mail/CatchUp";
 import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import { MailLoadingNote } from "@/app/(app)/[emailAccountId]/mail/MailListPlaceholder";
 import { useStableCallback } from "@/app/(app)/[emailAccountId]/mail/use-stable-callback";
@@ -1437,6 +1440,29 @@ export function MailShell() {
     forgetPageParam(OPEN_REPLY_PARAM);
     requestReaderReply();
   }, [replyRequested, openReaderThreadKey, requestReaderReply]);
+
+  // In All inboxes, Catch up walks every included account's inbox, and names
+  // the ones it leaves out the way the list does.
+  const { failedAccountIds: combinedFailedAccountIds } = combinedThreadState;
+  const combinedFirstSyncAccounts = combinedThreadState.firstSyncAccounts;
+  const catchUpAllInboxes = useMemo<CatchUpAllInboxes | undefined>(
+    () =>
+      isAllAccounts
+        ? {
+            accounts: combinedAccounts,
+            waitingAccountIds: combinedFirstSyncAccounts.map(
+              (account) => account.id,
+            ),
+            failedAccountIds: combinedFailedAccountIds,
+          }
+        : undefined,
+    [
+      combinedAccounts,
+      combinedFailedAccountIds,
+      combinedFirstSyncAccounts,
+      isAllAccounts,
+    ],
+  );
 
   // Catch up's Reply opens the conversation the way Today's does, asking for
   // a reply through the address.
@@ -2934,15 +2960,20 @@ export function MailShell() {
               {!isAllAccounts && (
                 <TodayIntroLine ready={!isTourOpen && !isFirstSync} />
               )}
-              {showSplitTabs && !isAllAccounts && !isTourOpen && (
-                <CatchUpEntry
-                  actions={threadActions}
-                  className="mx-3 my-2"
-                  emailAccountId={emailAccountId}
-                  onReply={replyFromCatchUp}
-                  query={query}
-                />
-              )}
+              {/* All inboxes offers it on the Inbox tab alone, where every
+                  card and every copy is inbox mail. */}
+              {showSplitTabs &&
+                !isTourOpen &&
+                (!isAllAccounts || !activeSplit?.filters.length) && (
+                  <CatchUpEntry
+                    actions={threadActions}
+                    allInboxes={catchUpAllInboxes}
+                    className="mx-3 my-2"
+                    emailAccountId={emailAccountId}
+                    onReply={replyFromCatchUp}
+                    query={isAllAccounts ? INBOX_THREADS_QUERY : query}
+                  />
+                )}
               {!isAllAccounts && (
                 <NotificationsOffHint ready={!isTourOpen && !isFirstSync} />
               )}

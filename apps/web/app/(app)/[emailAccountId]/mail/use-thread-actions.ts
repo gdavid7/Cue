@@ -72,16 +72,46 @@ type ThreadActionTarget = Omit<ThreadSnapshot, "mutationId"> & {
   copies?: ActionableThread["copies"];
 };
 
-// Reading, archiving (and its inverse) and starring a row that stands for one
-// message in several accounts reach every copy, each in its own account, so
-// the row doesn't come back from another account; deleting, labelling and
-// moving it stay with the copy shown, as changes the user should make there.
+// Reading, archiving (and its inverse), snoozing and starring a row that
+// stands for one message in several accounts reach every copy, each in its
+// own account, so the message behaves as one thing and the row doesn't come
+// back from another account; deleting, labelling and moving it stay with the
+// copy shown, as changes the user should make there.
 const REACHES_COPIES = new Set<ThreadMutationPayload["kind"]>([
   "archive",
   "unarchive",
+  "snooze",
   "set_read_state",
   "set_starred_state",
 ]);
+
+/**
+ * What a change to rows did, for a caller that acts on one row at a time and
+ * must tell a copy refused in another account from the row itself refused.
+ */
+export type ThreadActionOutcome = {
+  /** Rows changed in every account they are in. */
+  rows: string[];
+  /** Rows changed in at least one account, so their change can be undone. */
+  actedRows: string[];
+  /** Accounts where some part of the change wasn't queued. */
+  refusedAccountIds: string[];
+};
+
+/** A change Catch up makes to its card, reported as a ThreadActionOutcome. */
+export type CardChange =
+  | { kind: "archive" }
+  | { kind: "mark_read" }
+  | { kind: "snooze"; until: Date }
+  /**
+   * Undoing Keep: unread again for exactly these conversations, the ones that
+   * were unread before, each in its own account; the row's other copies stay
+   * as they are.
+   */
+  | {
+      kind: "mark_unread";
+      conversations: Array<{ accountId: string; threadId: string }>;
+    };
 
 type UndoableBatch = {
   /** How undo puts back a command the engine has already sent. */
@@ -152,10 +182,11 @@ export function useThreadActions({
   }, [emailAccountId, readerTarget, threads]);
 
   // For conversations acted on from outside the list, such as Catch up's
-  // cards, which the list may not have loaded.
+  // cards, which the list may not have loaded. Copies found either way are
+  // kept, so neither the list nor the card loses one the other found.
   const addTargets = useCallback(
     (extra: ActionableThread[]) =>
-      rememberTargets(listTargetsByKey.current, extra, emailAccountId),
+      rememberTargets(listTargetsByKey.current, extra, emailAccountId, true),
     [emailAccountId],
   );
 
@@ -179,20 +210,23 @@ export function useThreadActions({
       payload: ThreadMutationPayload,
     ) => {
       const targets = REACHES_COPIES.has(payload.kind)
-        ? rowTargets.flatMap((target) => [target, ...copyTargets(target)])
+        ? rowTargets.flatMap((target) => [
+            target,
+            ...copyTargets(target, payload.kind),
+          ])
         : rowTargets;
-      if (!targets.length)
-        return { snapshots: [], rows: [], rejectionCodes: [] };
+      const nothingQueued = (rejectionCodes: string[]) => ({
+        snapshots: [],
+        rows: [],
+        refusedAccountIds: refusedAccounts(targets, []),
+        rejectionCodes,
+      });
+      if (!targets.length) return nothingQueued([]);
       // The mail screen shows while the engine starts, so a triage can come
       // before there is anything to queue it on.
-      if (!client)
-        return {
-          snapshots: [],
-          rows: [],
-          rejectionCodes: [ENGINE_STARTING],
-        };
+      if (!client) return nothingQueued([ENGINE_STARTING]);
       const change = mutationPayloadToChange(payload);
-      if (!change) return { snapshots: [], rows: [], rejectionCodes: [] };
+      if (!change) return nothingQueued([]);
       const startedAt = performance.now();
       const rumAction = RUM_TRIAGE_ACTIONS[payload.kind];
       // The first command registers its optimistic change before its first
@@ -253,6 +287,7 @@ export function useThreadActions({
       return {
         snapshots,
         rows: completeRows(targets, snapshots),
+        refusedAccountIds: refusedAccounts(targets, snapshots),
         rejectionCodes,
       };
     },
@@ -429,27 +464,31 @@ export function useThreadActions({
         undone: false,
       };
       lastAction.current = batch;
-      const { rows, snapshots, rejectionCodes } = await enqueued.catch(
-        (error) => {
+      const { rows, snapshots, refusedAccountIds, rejectionCodes } =
+        await enqueued.catch((error) => {
           if (lastAction.current === batch) lastAction.current = previous;
           throw error;
-        },
-      );
-      if (!rows.length) {
-        // Copies that did change stay undoable with the shortcut.
-        if (!snapshots.length && lastAction.current === batch)
-          lastAction.current = previous;
+        });
+      const outcome: ThreadActionOutcome = {
+        rows,
+        actedRows: rowKeys(snapshots),
+        refusedAccountIds,
+      };
+      // A row changed in some account is undoable, even where a copy in
+      // another account refused.
+      if (!outcome.actedRows.length) {
+        if (lastAction.current === batch) lastAction.current = previous;
         if (threadKeys.length) {
           toast.error(
             enqueueFailureCopy(`Couldn't queue ${copy.noun}`, rejectionCodes),
           );
         }
-        return [];
+        return outcome;
       }
 
       const failedCount = threadKeys.length - rows.length;
       toastUndo({
-        message: copy.done(rows.length),
+        message: copy.done(outcome.actedRows.length),
         shortcut: getShortcutHint("undo"),
         onUndo: () => {
           undoBatch(batch);
@@ -458,12 +497,14 @@ export function useThreadActions({
       if (failedCount) {
         toast.error(
           enqueueFailureCopy(
-            `Couldn't queue ${failedCount} of ${threadKeys.length} for ${copy.noun}`,
+            failedCount === threadKeys.length
+              ? `Couldn't queue ${copy.noun} in every inbox`
+              : `Couldn't queue ${failedCount} of ${threadKeys.length} for ${copy.noun}`,
             rejectionCodes,
           ),
         );
       }
-      return rows;
+      return outcome;
     },
     [enqueueTargets, resolveTargets, undoBatch, wholeConversation],
   );
@@ -485,12 +526,15 @@ export function useThreadActions({
   );
 
   const moveToFolder = useCallback(
-    (threadKeys: string[], folder: { folderId: string; name: string }) => {
+    async (
+      threadKeys: string[],
+      folder: { folderId: string; name: string },
+    ) => {
       const payload: ThreadMutationPayload = {
         kind: "move_to_folder",
         folderId: folder.folderId,
       };
-      return runUndoable({
+      const outcome = await runUndoable({
         threadKeys,
         payload,
         restore: { kind: "move_back", movedToFolderId: folder.folderId },
@@ -542,17 +586,23 @@ export function useThreadActions({
           }
         },
       });
+      return outcome.rows;
     },
     [client, runUndoable],
   );
 
-  const setReadState = useCallback(
-    async (threadKeys: string[], read: boolean, notifySuccess = true) => {
+  const changeReadState = useCallback(
+    async (
+      threadKeys: string[],
+      read: boolean,
+      notifySuccess: boolean,
+    ): Promise<ThreadActionOutcome> => {
       const targets = resolveTargets(threadKeys);
-      const { rows, rejectionCodes } = await enqueueTargets(targets, {
-        kind: "set_read_state",
-        read,
-      });
+      const { rows, snapshots, refusedAccountIds, rejectionCodes } =
+        await enqueueTargets(targets, {
+          kind: "set_read_state",
+          read,
+        });
       const failedCount = threadKeys.length - rows.length;
       if (rows.length && notifySuccess) {
         toast.success(
@@ -571,9 +621,15 @@ export function useThreadActions({
           ),
         );
       }
-      return rows;
+      return { rows, actedRows: rowKeys(snapshots), refusedAccountIds };
     },
     [enqueueTargets, resolveTargets],
+  );
+
+  const setReadState = useCallback(
+    async (threadKeys: string[], read: boolean, notifySuccess = true) =>
+      (await changeReadState(threadKeys, read, notifySuccess)).rows,
+    [changeReadState],
   );
 
   const setStarredState = useCallback(
@@ -599,12 +655,59 @@ export function useThreadActions({
   );
 
   const snooze = useCallback(
-    (threadKeys: string[], snoozedUntil: Date) =>
-      runUndoableAction(
-        { kind: "snooze", scheduledFor: snoozedUntil.toISOString() },
-        threadKeys,
-      ),
+    async (threadKeys: string[], snoozedUntil: Date) =>
+      (
+        await runUndoableAction(
+          { kind: "snooze", scheduledFor: snoozedUntil.toISOString() },
+          threadKeys,
+        )
+      ).rows,
     [runUndoableAction],
+  );
+
+  const markUnread = useCallback(
+    async (
+      threadKeys: string[],
+      change: Extract<CardChange, { kind: "mark_unread" }>,
+    ): Promise<ThreadActionOutcome> => {
+      const [rowKey] = threadKeys;
+      if (!rowKey) return { rows: [], actedRows: [], refusedAccountIds: [] };
+      const { rows, snapshots, refusedAccountIds, rejectionCodes } =
+        await enqueueTargets(
+          change.conversations.map(({ accountId, threadId }) => ({
+            emailAccountId: accountId,
+            key: `${accountId}:${threadId}`,
+            messageIds: [],
+            threadId,
+            rowKey,
+          })),
+          { kind: "set_read_state", read: false },
+        );
+      if (!rows.length)
+        toast.error(
+          enqueueFailureCopy(
+            "Couldn't queue marking as unread",
+            rejectionCodes,
+          ),
+        );
+      return { rows, actedRows: rowKeys(snapshots), refusedAccountIds };
+    },
+    [enqueueTargets],
+  );
+
+  const changeCard = useCallback(
+    (threadKeys: string[], change: CardChange) => {
+      if (change.kind === "mark_read")
+        return changeReadState(threadKeys, true, false);
+      if (change.kind === "mark_unread") return markUnread(threadKeys, change);
+      if (change.kind === "archive")
+        return runUndoableAction({ kind: "archive" }, threadKeys);
+      return runUndoableAction(
+        { kind: "snooze", scheduledFor: change.until.toISOString() },
+        threadKeys,
+      );
+    },
+    [changeReadState, markUnread, runUndoableAction],
   );
 
   const markSpam = useCallback(
@@ -700,20 +803,21 @@ export function useThreadActions({
 
   return {
     addTargets,
+    changeCard,
     subscribeRestored,
     archive: useCallback(
-      (threadKeys: string[]) =>
-        runUndoableAction({ kind: "archive" }, threadKeys),
+      async (threadKeys: string[]) =>
+        (await runUndoableAction({ kind: "archive" }, threadKeys)).rows,
       [runUndoableAction],
     ),
     moveToInbox: useCallback(
-      (threadKeys: string[]) =>
-        runUndoableAction({ kind: "unarchive" }, threadKeys),
+      async (threadKeys: string[]) =>
+        (await runUndoableAction({ kind: "unarchive" }, threadKeys)).rows,
       [runUndoableAction],
     ),
     trash: useCallback(
-      (threadKeys: string[]) =>
-        runUndoableAction({ kind: "trash" }, threadKeys),
+      async (threadKeys: string[]) =>
+        (await runUndoableAction({ kind: "trash" }, threadKeys)).rows,
       [runUndoableAction],
     ),
     moveToFolder,
@@ -741,7 +845,9 @@ const UNDOABLE_COPY: Record<
   }
 > = {
   archive: {
-    compensation: () => ({ kind: "unarchive" }),
+    // A copy that was outside its inbox, behind a label, stays there.
+    compensation: (snapshot) =>
+      snapshot.inInbox === false ? { kind: "archive" } : { kind: "unarchive" },
     done: (count) => summarise("Archived", count),
     noun: "archiving",
   },
@@ -768,14 +874,39 @@ const UNDOABLE_COPY: Record<
   },
 };
 
-function copyTargets(target: ThreadActionTarget): ThreadActionTarget[] {
-  return (target.copies ?? []).map((copy) => ({
-    emailAccountId: copy.accountId,
-    key: `${copy.accountId}:${copy.threadId}`,
-    messageIds: [],
-    threadId: copy.threadId,
-    rowKey: target.key,
-  }));
+function copyTargets(
+  target: ThreadActionTarget,
+  kind: ThreadMutationPayload["kind"],
+): ThreadActionTarget[] {
+  return (
+    (target.copies ?? [])
+      // Snoozing brings mail back to the inbox, so a copy outside it, behind a
+      // label, isn't snoozed into it.
+      .filter((copy) => !(kind === "snooze" && copy.inInbox === false))
+      .map((copy) => ({
+        emailAccountId: copy.accountId,
+        key: `${copy.accountId}:${copy.threadId}`,
+        inInbox: copy.inInbox,
+        messageIds: [],
+        threadId: copy.threadId,
+        rowKey: target.key,
+      }))
+  );
+}
+
+/** Accounts holding a target whose change wasn't queued. */
+function refusedAccounts(
+  targets: Pick<ThreadSnapshot, "key" | "emailAccountId">[],
+  snapshots: Pick<ThreadSnapshot, "key">[],
+) {
+  const queued = new Set(snapshots.map((snapshot) => snapshot.key));
+  return [
+    ...new Set(
+      targets
+        .filter((target) => !queued.has(target.key))
+        .map((target) => target.emailAccountId),
+    ),
+  ];
 }
 
 /**
@@ -802,25 +933,42 @@ function rowKeys(snapshots: Pick<ThreadSnapshot, "key" | "rowKey">[]) {
   ];
 }
 
+/**
+ * Remembers each thread's target. With `merge`, a target already known keeps
+ * the message ids and copies it had, so an extra source of a row never drops
+ * a copy the list found, nor the other way round.
+ */
 function rememberTargets(
   targets: Map<string, ThreadActionTarget>,
   threads: ActionableThread[],
   emailAccountId: string,
+  merge = false,
 ) {
   for (const thread of threads) {
     const messageIds = [...new Set(getListThreadMessageIds(thread))];
     if (!messageIds.length) continue;
     const key = getListThreadKey(thread);
     const labelled = thread.messages?.filter((message) => message.labelIds);
+    const inInbox =
+      thread.inInbox ??
+      (labelled?.length
+        ? labelled.some((message) => message.labelIds?.includes("INBOX"))
+        : undefined);
+    const known = merge ? targets.get(key) : undefined;
+    // At most one copy per account, the newest source's.
+    const copies = new Map(
+      [...(known?.copies ?? []), ...(thread.copies ?? [])].map((copy) => [
+        copy.accountId,
+        copy,
+      ]),
+    );
     targets.set(key, {
       emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
-      inInbox: labelled?.length
-        ? labelled.some((message) => message.labelIds?.includes("INBOX"))
-        : undefined,
+      inInbox: inInbox ?? known?.inInbox,
       key,
-      messageIds,
+      messageIds: [...new Set([...(known?.messageIds ?? []), ...messageIds])],
       threadId: thread.id,
-      copies: thread.copies,
+      copies: copies.size ? [...copies.values()] : undefined,
     });
   }
 }

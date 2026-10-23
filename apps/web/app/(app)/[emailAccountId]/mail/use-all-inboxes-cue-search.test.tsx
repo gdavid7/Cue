@@ -477,7 +477,7 @@ describe("useAllInboxesCueSearch widening", () => {
         {
           id: "w1",
           subject: "Lease from Sarah",
-          messageId: "<Lease@Sarah.example>",
+          messageId: "lease@sarah.example",
         },
         { id: "w2", subject: "Lease from Sarah" },
       ],

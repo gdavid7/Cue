@@ -1,4 +1,9 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Request,
+} from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
@@ -33,6 +38,8 @@ type Touched = {
   messageId: string;
   threadId: string;
   action: "archive" | "keep" | "snooze";
+  /** Another account's own mailbox token; the primary's when unset. */
+  token?: string;
 };
 
 let saved: SavedUser | undefined;
@@ -248,31 +255,113 @@ test("finishes a batch from Today on a phone and counts toward Get started", asy
   await expect(dialog).toBeHidden();
 });
 
-test("isn't offered across accounts", async ({ page }) => {
-  const { emailAccountId } = await openMail(page);
-  await expect(page.locator("[data-catch-up-entry]")).toBeVisible({
-    timeout: 60_000,
+test("works through the All inboxes Inbox tab, acting and undoing in each card's own account", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { emailAccountId: primaryId } = await openMail(page);
+  const second = await createSecondEmailAccount(primaryId);
+  const tokens: Record<string, string | undefined> = {
+    [second.id]: second.accessToken,
+  };
+  const operations: string[] = [];
+  page.context().on("request", (request: Request) => {
+    if (request.method() === "PUT" && request.url().includes("/operations/"))
+      operations.push(request.url());
   });
-  const second = await createSecondEmailAccount(emailAccountId);
   try {
-    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
-    // Loaded: the combined list shows rows, which a single inbox would show
-    // alongside its Catch up line.
+    await page.goto(`/${primaryId}/mail?accountScope=all`);
+    // Both accounts synced, so the batch draws on both.
     await expect(
       page
         .getByRole("listbox", { name: "Conversations" })
         .getByRole("option")
         .first(),
     ).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/^Loading mail from /)).toHaveCount(0, {
+      timeout: 120_000,
+    });
+
+    const dialog = await openCatchUp(page);
+    const total = await leftCount(dialog);
+    const seen = new Set<string>();
+    let previousAt = 0;
+    // Archive the first card, then keep cards until both accounts have had
+    // one: each change goes to the card's own account.
+    for (let step = 0; step < total && seen.size < 2; step++) {
+      const card = await currentCard(dialog);
+      const account = await cardAccount(dialog);
+      const at = await cardTime(dialog);
+      // One order across accounts: oldest first.
+      expect(at).toBeGreaterThanOrEqual(previousAt);
+      previousAt = at;
+      if (seen.size === 0 && step === 0)
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          "catch-up-all-inboxes-light",
+        );
+      const before = countFor(operations, account);
+      await press(
+        page,
+        step === 0 ? "e" : "s",
+        card,
+        step === 0 ? "archive" : "keep",
+        tokens[account],
+      );
+      await expect
+        .poll(() => countFor(operations, account), { timeout: 60_000 })
+        .toBeGreaterThan(before);
+      seen.add(account);
+      // The mailboxes share thread ids, so a card is its account and thread.
+      if (step < total - 1)
+        await expect
+          .poll(
+            async () =>
+              `${await cardAccount(dialog)}:${(await currentCard(dialog)).threadId}`,
+          )
+          .not.toBe(`${account}:${card.threadId}`);
+    }
+    expect([...seen].sort()).toEqual([primaryId, second.id].sort());
+
+    // Undo takes back the last card's change in that card's account.
+    const last = [...seen].at(-1) ?? "";
+    const otherAccount = [...seen].find((account) => account !== last) ?? "";
+    const otherBefore = countFor(operations, otherAccount);
+    const lastBefore = countFor(operations, last);
+    await page.keyboard.press("z");
+    await expect(dialog.getByText(/^Marked “/)).toBeHidden();
+    await expect.poll(() => cardAccount(dialog)).toBe(last);
+    await expect
+      .poll(() => countFor(operations, last), { timeout: 60_000 })
+      .toBeGreaterThan(lastBefore);
+    expect(countFor(operations, otherAccount)).toBe(otherBefore);
+    await page.emulateMedia({ colorScheme: "dark" });
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "catch-up-all-inboxes-dark",
+    );
+    await page.emulateMedia({ colorScheme: "light" });
+
+    // In All inboxes it's offered on the Inbox tab only, not a split tab.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page.locator("[data-catch-up-entry]")).toBeVisible();
+    const unreadTab = page.getByRole("button", { name: "Unread", exact: true });
+    await unreadTab.click();
+    await expect(unreadTab).toHaveAttribute("aria-current", "true");
     await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
 
-    await page.goto(`/${emailAccountId}/home?accounts=all`);
-    // Loaded: Today across accounts shows its conversations.
+    // Today across accounts keeps its own lanes, without Catch up.
+    await page.goto(`/${primaryId}/home?accounts=all`);
     await expect(page.locator("[data-today-thread]").first()).toBeVisible({
       timeout: 60_000,
     });
     await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
   } finally {
+    await restoreTouched(touched);
+    touched = [];
     await deleteSecondEmailAccount(second.accountId);
   }
 });
@@ -295,9 +384,32 @@ async function press(
   key: string,
   card: { messageId: string; threadId: string },
   action: Touched["action"],
+  token?: string,
 ) {
-  touched.push({ ...card, action });
+  touched.push({ ...card, action, token });
   await page.keyboard.press(key);
+}
+
+async function cardAccount(dialog: Locator) {
+  const account = await dialog
+    .locator("[data-catch-up-account]")
+    .getAttribute("data-catch-up-account");
+  if (!account) throw new Error("The Catch up card names no account");
+  return account;
+}
+
+async function cardTime(dialog: Locator) {
+  const value = await dialog
+    .locator("[data-catch-up-card] time")
+    .getAttribute("datetime");
+  return value ? Date.parse(value) : 0;
+}
+
+/** Operations the server was sent for an account, by their URL. */
+function countFor(urls: string[], accountId: string) {
+  return urls.filter((url) =>
+    url.includes(`/accounts/${encodeURIComponent(accountId)}/operations/`),
+  ).length;
 }
 
 async function currentCard(dialog: Locator) {
@@ -349,6 +461,19 @@ async function hasHint(hintId: string) {
 // Back in the inbox and unread, as seeded, for a retry or a later spec.
 async function restoreTouched(entries: Touched[]) {
   if (!entries.length) return;
+  // Each mailbox is put back with its own token.
+  const others = entries.filter((entry) => entry.token);
+  for (const token of new Set(others.map((entry) => entry.token))) {
+    await restoreMailbox(
+      others.filter((entry) => entry.token === token),
+      token,
+    );
+  }
+  await restoreMailbox(entries.filter((entry) => !entry.token));
+}
+
+async function restoreMailbox(entries: Touched[], token?: string) {
+  if (!entries.length) return;
   const snoozed = entries.filter((entry) => entry.action === "snooze");
   if (snoozed.length) {
     await withClient((client) =>
@@ -362,7 +487,7 @@ async function restoreTouched(entries: Touched[]) {
   }
   if (isMicrosoftPlaywright()) {
     const headers = {
-      Authorization: "Bearer playwright_microsoft_fixture_token",
+      Authorization: `Bearer ${token ?? "playwright_microsoft_fixture_token"}`,
       "content-type": "application/json",
     };
     for (const { messageId, action } of entries) {
@@ -391,7 +516,7 @@ async function restoreTouched(entries: Touched[]) {
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        Authorization: `Bearer ${token ?? (await readProviderAccessToken())}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({
