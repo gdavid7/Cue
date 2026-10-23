@@ -29,6 +29,7 @@ vi.mock("@/utils/middleware", async () => {
   return createWithEmailProviderTestMiddleware(mockEmailProvider);
 });
 
+import { currentGmailQuotaContext } from "@/utils/gmail/quota";
 import { GET } from "./route";
 
 function sender(from: string) {
@@ -110,6 +111,22 @@ describe("GET /api/user/stats/newsletters", () => {
     const body = await response.json();
     expect(body.filtersAvailable).toBe(false);
     expect(body.newsletters[0].autoArchived).toBeUndefined();
+  });
+
+  it("gives the provider filters a short Gmail wait so a busy gate cannot hold the list", async () => {
+    let waitBudget: number | undefined;
+    mockEmailProvider.getFiltersList.mockImplementation(async () => {
+      waitBudget = currentGmailQuotaContext().maxTotalWaitMs;
+      return [];
+    });
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/user/stats/newsletters"),
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(waitBudget).toBeLessThanOrEqual(5000);
   });
 
   it("rejects a limit below 1", async () => {
