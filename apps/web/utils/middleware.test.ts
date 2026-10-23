@@ -368,11 +368,13 @@ describe("Middleware", () => {
         }
       });
 
-      it("samples polling scopes at a lower rate than other routes", () => {
+      it("samples polling scopes lower, and the reader's AI routes higher, than other routes", () => {
         expect(getFastRequestSampleRate("mail-stream")).toBe(0.015);
         expect(getFastRequestSampleRate("mail-version")).toBe(0.015);
         expect(getFastRequestSampleRate("mail/v1/enumeration")).toBe(0.015);
         expect(getFastRequestSampleRate("threads/list")).toBe(0.08);
+        expect(getFastRequestSampleRate("user/inbox-insights")).toBe(0.5);
+        expect(getFastRequestSampleRate("user/thread-brief")).toBe(0.5);
         expect(getFastRequestSampleRate(undefined)).toBe(0.08);
       });
 

@@ -15,6 +15,8 @@ export type RequestMetrics = Record<
   Dependency,
   { ms: number; calls: number }
 > & {
+  /** Gmail calls the quota gate deferred rather than admitted. */
+  gmailDeferred: number;
   pause?: Pause;
   enumeration?: EnumerationPage;
 };
@@ -39,6 +41,7 @@ export function createRequestMetrics(): RequestMetrics {
     gmail: { ms: 0, calls: 0 },
     gmailBatch: { ms: 0, calls: 0 },
     wait: { ms: 0, calls: 0 },
+    gmailDeferred: 0,
   };
 }
 
@@ -70,6 +73,15 @@ export function noteRequestPause(pause: Pause) {
   if (metrics) metrics.pause = pause;
 }
 
+/**
+ * Counts a Gmail call the quota gate deferred, so the request's line says
+ * whether it answered with less, or with a retry time, for lack of budget.
+ */
+export function noteGmailDeferral() {
+  const metrics = metricsContext.getStore();
+  if (metrics) metrics.gmailDeferred += 1;
+}
+
 /** Tells the "Request completed" line which kind of enumeration page this was. */
 export function noteEnumerationPage(page: EnumerationPage) {
   const metrics = metricsContext.getStore();
@@ -88,6 +100,7 @@ export function getRequestMetricsFields(metrics: RequestMetrics) {
     gmailBatchMs: Math.round(metrics.gmailBatch.ms),
     gmailBatchCalls: metrics.gmailBatch.calls,
     waitMs: Math.round(metrics.wait.ms),
+    gmailDeferredCalls: metrics.gmailDeferred,
     pausedSource: metrics.pause?.source,
     pausedReason: metrics.pause?.reason,
     pausedRetryAfterMs: metrics.pause?.retryAfterMs,
