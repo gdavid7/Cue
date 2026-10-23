@@ -3,10 +3,15 @@
 import { memo, useState, useSyncExternalStore } from "react";
 import { CloudUploadIcon } from "lucide-react";
 import useSWR from "swr";
-import type { MailClient, MailDiagnostics } from "@inboxzero/mail-core/engine";
+import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
+import type {
+  MailClient,
+  MailWaitingSummary,
+} from "@inboxzero/mail-core/engine";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { RailTooltip } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
+import { toastError } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -27,12 +32,14 @@ import {
 import { getConnectedEngineAccounts } from "@/utils/mail-engine/engine-accounts";
 import { reconnectMailAccount } from "@/utils/mail-engine/reconnect-account";
 
-// The engine has no diagnostics subscription, so this reads them: often
-// enough to follow changes already waiting, rarely while nothing is.
+// The engine has no subscription for this, so it's read: often enough to
+// follow changes already waiting, rarely while nothing is.
 const WATCHING_REFRESH_MS = 10_000;
-const IDLE_REFRESH_MS = 30_000;
+const IDLE_REFRESH_MS = 60_000;
 // A follower tab's read can hang once its channel closes.
 const READ_TIMEOUT_MS = 5000;
+// What one read may ask the engine about, as its IPC schema allows.
+const MAX_ACCOUNTS_PER_READ = 50;
 
 const STATE_LABELS: Record<WaitingAccountState, string> = {
   waiting: "Waiting",
@@ -70,23 +77,33 @@ export const ChangesWaiting = memo(function ChangesWaiting({
         (account) => account.accountId,
       ),
     ]),
-  ];
-  const { data, mutate } = useSWR(
-    client && accountIds.length > 0
+  ].slice(0, MAX_ACCOUNTS_PER_READ);
+  // Engines that can't answer cheaply show nothing; the full diagnostics
+  // read is far too heavy to poll.
+  const supported = mailClientSupports(client, "method:getWaitingSummary");
+  // A failed read keeps the last good one, marked stale: not having heard
+  // back says nothing about whether changes are still waiting.
+  const { data, error, mutate } = useSWR(
+    client && supported && accountIds.length > 0
       ? ["mail-changes-waiting", accountIds.join(",")]
       : null,
-    () => (client ? readWaitingChanges(client, accountIds) : null),
+    () => readWaitingSummary(client, accountIds),
     {
       refreshInterval: (latest) =>
-        latest?.watching ? WATCHING_REFRESH_MS : IDLE_REFRESH_MS,
+        latest && hasPendingChanges(latest.summaries)
+          ? WATCHING_REFRESH_MS
+          : IDLE_REFRESH_MS,
       refreshWhenOffline: true,
       shouldRetryOnError: false,
       dedupingInterval: WATCHING_REFRESH_MS / 2,
     },
   );
 
-  const waiting = data?.accounts ?? [];
+  const waiting = data
+    ? summarizeWaitingChanges(data.summaries, { nowMs: data.readAt, online })
+    : [];
   if (waiting.length === 0) return null;
+  const stale = Boolean(error);
 
   const accountById = new Map(
     emailAccounts.map((account) => [account.id, account]),
@@ -150,6 +167,11 @@ export const ChangesWaiting = memo(function ChangesWaiting({
             <p className="text-muted-foreground text-xs">
               {popoverDescription(hasChanges, online)}
             </p>
+            {stale ? (
+              <p className="text-muted-foreground text-xs">
+                Couldn't check just now. Showing the last known status.
+              </p>
+            ) : null}
           </div>
           <ul className="divide-y divide-border border-border border-t">
             {waiting.map((account) => (
@@ -169,13 +191,12 @@ export const ChangesWaiting = memo(function ChangesWaiting({
                 disabled={!online || trying}
                 onClick={() => {
                   setTrying(true);
-                  client
-                    ?.requestSync(
-                      waiting
-                        .filter((account) => account.state !== "reconnect")
-                        .map((account) => account.accountId),
-                    )
-                    .catch(() => undefined)
+                  tryNow(
+                    client,
+                    waiting
+                      .filter((account) => account.state !== "reconnect")
+                      .map((account) => account.accountId),
+                  )
                     .then(() => mutate())
                     .finally(() => setTrying(false));
                 }}
@@ -238,34 +259,40 @@ function WaitingAccountRow({
   );
 }
 
-async function readWaitingChanges(client: MailClient, accountIds: string[]) {
-  const diagnostics = (
-    await Promise.all(
-      accountIds.map((accountId) => readDiagnostics(client, accountId)),
-    )
-  ).filter((value): value is MailDiagnostics => value !== null);
-  return {
-    accounts: summarizeWaitingChanges(diagnostics, Date.now()),
-    watching: hasPendingChanges(diagnostics),
-  };
-}
-
-// An engine that can't report diagnostics (an older desktop app) shows
-// nothing rather than an error.
-async function readDiagnostics(client: MailClient, accountId: string) {
+async function readWaitingSummary(
+  client: MailClient | null,
+  accountIds: string[],
+): Promise<{ summaries: MailWaitingSummary[]; readAt: number }> {
+  if (!client?.getWaitingSummary) throw new Error("Not supported");
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([
-      client.getDiagnostics(accountId),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), READ_TIMEOUT_MS);
+    const summaries = await Promise.race([
+      client.getWaitingSummary(accountIds),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Timed out")),
+          READ_TIMEOUT_MS,
+        );
       }),
     ]);
-  } catch {
-    return null;
+    return { summaries, readAt: Date.now() };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function tryNow(client: MailClient | null, accountIds: string[]) {
+  const admission = await client?.requestSync(accountIds).catch(() => null);
+  if (
+    admission?.status === "scheduled" ||
+    admission?.status === "already_satisfied"
+  ) {
+    return;
+  }
+  toastError({
+    title: "Couldn't try again right now",
+    description: "Your changes are still saved. Cue keeps trying on its own.",
+  });
 }
 
 function waitingHeadline(

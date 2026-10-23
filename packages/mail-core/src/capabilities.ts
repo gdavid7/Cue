@@ -87,6 +87,7 @@ const OPTIONAL_METHODS = {
   ensureAccount: true,
   forgetDeletedDrafts: true,
   ingestMessages: true,
+  getWaitingSummary: true,
 } satisfies Record<OptionalMailClientMethod, true>;
 
 /** The orders and predicate kinds this build's query schema accepts. */

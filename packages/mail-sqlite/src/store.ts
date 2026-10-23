@@ -94,6 +94,7 @@ import {
   type MessageBodyCodec,
 } from "./message-body-codec";
 import { migrateCompressedMessageBodies } from "./message-body-migration";
+import { readWaitingSummary } from "./waiting-summary";
 import {
   connectionStatus,
   metadataFromEffective,
@@ -1698,6 +1699,9 @@ export async function createSqliteMailStore(
           }),
         };
       });
+    },
+    async getWaitingSummary(accountIds, nowMs) {
+      return driver.read((tx) => readWaitingSummary(tx, accountIds, nowMs));
     },
     async inspect(input) {
       return driver.read((tx) => inspectState(tx, input));

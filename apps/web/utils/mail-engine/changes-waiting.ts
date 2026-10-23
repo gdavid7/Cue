@@ -1,5 +1,4 @@
-import type { MailDiagnostics } from "@inboxzero/mail-core/engine";
-import type { OperationStatus } from "@inboxzero/mail-core/operations";
+import type { MailWaitingSummary } from "@inboxzero/mail-core/engine";
 
 /** Changes younger than this are still on their normal way to the provider. */
 export const CHANGES_WAITING_AFTER_MS = 30_000;
@@ -10,62 +9,55 @@ export type WaitingAccount = {
   accountId: string;
   state: WaitingAccountState;
   count: number;
-  /** What the waiting changes do, most common first; never their content. */
+  /**
+   * What the waiting changes do, most common first. Built only from a
+   * change's kind and on/off flags: the summary carries no label, folder or
+   * category names, and none may be added here, since this text is shown.
+   */
   kinds: Array<{ label: string; count: number }>;
 };
 
-// Changes the engine still means to deliver. A partly applied change
-// (needs_attention) is not on its way anywhere, so it isn't counted.
-const WAITING_STATUSES = new Set<OperationStatus>([
-  "preparing",
-  "queued",
-  "executing",
-  "verifying",
-  "retry_wait",
-  "uncertain",
-  "blocked_auth",
-]);
+type WaitingGroup = MailWaitingSummary["groups"][number];
 
 /**
  * The accounts whose changes have waited long enough to mention, or that
- * need reconnecting, from each account's engine diagnostics.
+ * need reconnecting. Changes held for a connection count only while the
+ * device is offline; once it's back the engine releases them.
  */
 export function summarizeWaitingChanges(
-  diagnostics: MailDiagnostics[],
-  nowMs: number,
+  summaries: MailWaitingSummary[],
+  { nowMs, online }: { nowMs: number; online: boolean },
 ): WaitingAccount[] {
-  return diagnostics.flatMap((account) => {
-    const waiting = account.commands.filter((command) =>
-      WAITING_STATUSES.has(command.status),
+  return summaries.flatMap((summary) => {
+    const groups = summary.groups.filter(
+      (group) => online === false || !group.heldOffline,
     );
+    const count = groups.reduce((total, group) => total + group.count, 0);
     const blocked =
-      account.connection === "blocked_auth" ||
-      waiting.some((command) => command.status === "blocked_auth");
-    const overdue =
-      waiting.length > 0 &&
-      account.oldestPendingAtMs !== null &&
-      nowMs - account.oldestPendingAtMs >= CHANGES_WAITING_AFTER_MS;
+      summary.connection === "blocked_auth" ||
+      groups.some((group) => group.status === "blocked_auth");
+    const oldest = Math.min(...groups.map((group) => group.oldestWaitingAtMs));
+    const overdue = count > 0 && nowMs - oldest >= CHANGES_WAITING_AFTER_MS;
     if (!blocked && !overdue) return [];
     return [
       {
-        accountId: account.accountId,
-        state: accountState(blocked, waiting),
-        count: waiting.length,
-        kinds: countKinds(waiting),
+        accountId: summary.accountId,
+        state: accountState(blocked, groups),
+        count,
+        kinds: countKinds(groups),
       },
     ];
   });
 }
 
 /**
- * Whether any account has a change still on its way or is signed out, so the
+ * Whether any account has a change on its way or is signed out, so the
  * indicator may need to show soon.
  */
-export function hasPendingChanges(diagnostics: MailDiagnostics[]) {
-  return diagnostics.some(
-    (account) =>
-      account.connection === "blocked_auth" ||
-      account.commands.some((command) => WAITING_STATUSES.has(command.status)),
+export function hasPendingChanges(summaries: MailWaitingSummary[]) {
+  return summaries.some(
+    (summary) =>
+      summary.connection === "blocked_auth" || summary.groups.length > 0,
   );
 }
 
@@ -78,13 +70,12 @@ export function hasDeliverableChanges(accounts: WaitingAccount[]) {
 
 function accountState(
   blocked: boolean,
-  waiting: MailDiagnostics["commands"],
+  groups: WaitingGroup[],
 ): WaitingAccountState {
   if (blocked) return "reconnect";
   if (
-    waiting.some(
-      (command) =>
-        command.status === "retry_wait" || command.status === "uncertain",
+    groups.some(
+      (group) => group.status === "retry_wait" || group.status === "uncertain",
     )
   ) {
     return "retrying";
@@ -92,42 +83,41 @@ function accountState(
   return "waiting";
 }
 
-function countKinds(commands: MailDiagnostics["commands"]) {
+function countKinds(groups: WaitingGroup[]) {
   const counts = new Map<string, number>();
-  for (const command of commands) {
-    const label = changeKindLabel(command);
-    counts.set(label, (counts.get(label) ?? 0) + 1);
+  for (const group of groups) {
+    const label = changeKindLabel(group);
+    counts.set(label, (counts.get(label) ?? 0) + group.count);
   }
   return [...counts]
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count);
 }
 
-function changeKindLabel(command: MailDiagnostics["commands"][number]) {
-  if (command.kind === "send") return "Send";
-  const change = command.change ?? {};
-  switch (command.changeKind) {
+function changeKindLabel(group: WaitingGroup) {
+  if (group.kind === "send") return "Send";
+  switch (group.changeKind) {
     case "archive":
       return "Archive";
     case "unarchive":
       return "Move to inbox";
     case "set_read":
-      return change.read === false ? "Mark unread" : "Mark read";
+      return group.on === false ? "Mark unread" : "Mark read";
     case "set_starred":
-      return change.starred === false ? "Unstar" : "Star";
+      return group.on === false ? "Unstar" : "Star";
     case "trash":
       return "Delete";
     case "restore_from_trash":
       return "Restore";
     case "set_spam":
-      return change.spam === false ? "Not spam" : "Report spam";
+      return group.on === false ? "Not spam" : "Report spam";
     case "move":
       return "Move";
     case "set_membership":
-      if (change.membership === "category") {
-        return change.present === false ? "Remove category" : "Categorize";
+      if (group.membership === "category") {
+        return group.on === false ? "Remove category" : "Categorize";
       }
-      return change.present === false ? "Remove label" : "Label";
+      return group.on === false ? "Remove label" : "Label";
     case "snooze":
       return "Snooze";
     default:

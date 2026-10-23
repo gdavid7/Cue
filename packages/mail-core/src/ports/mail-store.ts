@@ -54,6 +54,7 @@ import type {
   ProviderChange,
   SyncPage,
 } from "../sync";
+import type { MailWaitingSummary } from "../engine";
 import type { MessageAttachmentDescriptor, MessageMetadata } from "../messages";
 
 export type ConversationView = {
@@ -440,6 +441,11 @@ export interface MailStore {
       conversationIds: string[];
     }>;
   }>;
+  /** See `MailClient.getWaitingSummary`; one entry per account asked for. */
+  getWaitingSummary(
+    accountIds: string[],
+    nowMs: number,
+  ): Promise<MailWaitingSummary[]>;
   indexContactBacklog(): Promise<{ remaining: boolean }>;
   /** Indexes one short batch of stored bodies missing from local search. */
   indexSearchBacklog(): Promise<{ remaining: boolean }>;

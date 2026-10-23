@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MailDiagnostics } from "@inboxzero/mail-core/engine";
+import type { MailWaitingSummary } from "@inboxzero/mail-core/engine";
 import {
   CHANGES_WAITING_AFTER_MS,
   hasDeliverableChanges,
@@ -8,31 +8,29 @@ import {
 } from "@/utils/mail-engine/changes-waiting";
 
 const NOW = 1_000_000;
+const ONLINE = { nowMs: NOW, online: true };
 
 describe("summarizeWaitingChanges", () => {
   it("stays quiet while changes are still on their normal way", () => {
-    const diagnostics = account({
-      oldestPendingAtMs: NOW - CHANGES_WAITING_AFTER_MS + 1000,
-      commands: [command("queued", "archive")],
-    });
-    expect(summarizeWaitingChanges([diagnostics], NOW)).toEqual([]);
-    expect(hasPendingChanges([diagnostics])).toBe(true);
+    const summary = account([
+      group({ oldestWaitingAtMs: NOW - CHANGES_WAITING_AFTER_MS + 1000 }),
+    ]);
+    expect(summarizeWaitingChanges([summary], ONLINE)).toEqual([]);
+    expect(hasPendingChanges([summary])).toBe(true);
   });
 
   it("reports changes that have waited past the threshold, by kind", () => {
     const [summary] = summarizeWaitingChanges(
       [
-        account({
-          oldestPendingAtMs: NOW - CHANGES_WAITING_AFTER_MS,
-          commands: [
-            command("queued", "archive"),
-            command("executing", "archive"),
-            command("queued", null, "send"),
-            command("succeeded", "trash"),
-          ],
-        }),
+        account([
+          group({
+            count: 2,
+            oldestWaitingAtMs: NOW - CHANGES_WAITING_AFTER_MS,
+          }),
+          group({ status: "executing", kind: "send", changeKind: null }),
+        ]),
       ],
-      NOW,
+      ONLINE,
     );
     expect(summary).toEqual({
       accountId: "account-1",
@@ -48,21 +46,26 @@ describe("summarizeWaitingChanges", () => {
   it("calls changes the provider pushed back retrying", () => {
     const [summary] = summarizeWaitingChanges(
       [
-        account({
-          oldestPendingAtMs: 0,
-          commands: [command("retry_wait", "set_membership")],
-        }),
+        account([
+          group({
+            status: "retry_wait",
+            changeKind: "set_membership",
+            membership: "category",
+            on: false,
+            oldestWaitingAtMs: 0,
+          }),
+        ]),
       ],
-      NOW,
+      ONLINE,
     );
     expect(summary?.state).toBe("retrying");
-    expect(summary?.kinds).toEqual([{ label: "Label", count: 1 }]);
+    expect(summary?.kinds).toEqual([{ label: "Remove category", count: 1 }]);
   });
 
   it("shows a signed-out account at once, even with nothing waiting", () => {
     const summaries = summarizeWaitingChanges(
-      [account({ connection: "blocked_auth", oldestPendingAtMs: null })],
-      NOW,
+      [{ ...account([]), connection: "blocked_auth" }],
+      ONLINE,
     );
     expect(summaries).toEqual([
       { accountId: "account-1", state: "reconnect", count: 0, kinds: [] },
@@ -70,43 +73,45 @@ describe("summarizeWaitingChanges", () => {
     expect(hasDeliverableChanges(summaries)).toBe(false);
   });
 
-  it("doesn't count a partly applied change as waiting", () => {
-    const diagnostics = account({
-      oldestPendingAtMs: 0,
-      commands: [command("needs_attention", "archive")],
-    });
-    expect(summarizeWaitingChanges([diagnostics], NOW)).toEqual([]);
-    expect(hasPendingChanges([diagnostics])).toBe(false);
+  it("counts changes held for a connection only while offline", () => {
+    const summary = account([
+      group({
+        kind: "send",
+        changeKind: null,
+        heldOffline: true,
+        oldestWaitingAtMs: 0,
+      }),
+    ]);
+    expect(summarizeWaitingChanges([summary], ONLINE)).toEqual([]);
+    expect(
+      summarizeWaitingChanges([summary], { nowMs: NOW, online: false }),
+    ).toEqual([expect.objectContaining({ count: 1, state: "waiting" })]);
   });
 });
 
-function account(overrides: Partial<MailDiagnostics>): MailDiagnostics {
+function account(groups: MailWaitingSummary["groups"]): MailWaitingSummary {
   return {
     accountId: "account-1",
-    revision: { databaseEpoch: "epoch", sequence: 1 },
     connection: "ready",
-    coverage: [],
-    pendingOperations: 0,
-    uncertainOperations: 0,
-    pendingJobs: 0,
-    oldestPendingAtMs: null,
-    commands: [],
-    ...overrides,
+    oldestWaitingAtMs: groups.length
+      ? Math.min(...groups.map((item) => item.oldestWaitingAtMs))
+      : null,
+    groups,
   };
 }
 
-function command(
-  status: MailDiagnostics["commands"][number]["status"],
-  changeKind: string | null,
-  kind = "conversations",
-): MailDiagnostics["commands"][number] {
+function group(
+  overrides: Partial<MailWaitingSummary["groups"][number]>,
+): MailWaitingSummary["groups"][number] {
   return {
-    operationId: `${status}-${changeKind}-${kind}-${Math.random()}`,
-    status,
-    kind,
-    changeKind,
-    change: changeKind ? { kind: changeKind } : null,
-    messageIds: [],
-    conversationIds: [],
+    status: "queued",
+    kind: "conversations",
+    changeKind: "archive",
+    on: null,
+    membership: null,
+    heldOffline: false,
+    count: 1,
+    oldestWaitingAtMs: NOW - 60_000,
+    ...overrides,
   };
 }

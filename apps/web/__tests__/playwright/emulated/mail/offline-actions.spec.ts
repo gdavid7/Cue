@@ -51,9 +51,10 @@ test("archives offline, says so, and lands the archive after reconnecting", asyn
     await expect(offlineStatus).toBeVisible();
     await capturePlaywrightCheckpoint(page, testInfo, "archive-queued-offline");
 
-    // A change that can't go out for a while says so in the sidebar.
+    // A change that can't go out for a while says so in the sidebar. With
+    // nothing pending the sidebar checks once a minute, then every 10 s.
     const changesWaiting = page.getByRole("button", { name: CHANGES_WAITING });
-    await expect(changesWaiting).toBeVisible({ timeout: 60_000 });
+    await expect(changesWaiting).toBeVisible({ timeout: 90_000 });
     await changesWaiting.click();
     const popover = page.getByRole("dialog");
     await expect(popover.getByText("Changes waiting")).toBeVisible();

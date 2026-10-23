@@ -195,7 +195,8 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   const changesWaiting = page.getByRole("button", {
     name: `${providerName} needs reconnecting`,
   });
-  await expect(changesWaiting).toBeVisible({ timeout: 45_000 });
+  // The sidebar checks once a minute while nothing is pending.
+  await expect(changesWaiting).toBeVisible({ timeout: 90_000 });
   await changesWaiting.click();
   const popover = page.getByRole("dialog");
   await expect(popover.getByText("Needs reconnect")).toBeVisible();

@@ -29,4 +29,9 @@ export const LOCAL_MIGRATIONS = {
     id: 17,
     name: "0017-conversation-message-keys",
   },
+  // 18 is taken by important people (FT-16) on another branch.
+  operationsAccountStatusIndex: {
+    id: 19,
+    name: "0019-operations-account-status-index",
+  },
 } as const;

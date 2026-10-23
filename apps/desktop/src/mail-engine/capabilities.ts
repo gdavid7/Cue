@@ -13,4 +13,5 @@ export const DESKTOP_MAIL_ENGINE_CAPABILITIES: MailEngineCapabilities = [
   ...MAIL_QUERY_FEATURES,
   "method:observeMailboxWindow",
   "method:forgetDeletedDrafts",
+  "method:getWaitingSummary",
 ];
