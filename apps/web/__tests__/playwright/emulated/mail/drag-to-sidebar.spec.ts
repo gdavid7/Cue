@@ -133,9 +133,8 @@ test("drags a conversation into an Outlook folder and Undo puts each message bac
   await expect
     .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
     .toBe(folder.id);
-  await expect
-    .poll(() => graph.folderOf(sentId), { timeout: 60_000 })
-    .toBe(folder.id);
+  // A folder move leaves the user's own Sent copy where it is.
+  expect(await graph.folderOf(sentId)).toBe("sentitems");
 
   await moved.getByRole("button", { name: /^Undo/ }).click();
   await expect(row).toBeVisible();
