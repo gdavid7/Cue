@@ -99,6 +99,7 @@ export const ChangesWaiting = memo(function ChangesWaiting({
     (account) => account.state === "reconnect",
   );
   const canTry = hasDeliverableChanges(waiting);
+  const hasChanges = waiting.some((account) => account.count > 0);
 
   const icon = (
     <CloudUploadIcon
@@ -131,7 +132,9 @@ export const ChangesWaiting = memo(function ChangesWaiting({
               )}
             >
               {icon}
-              {collapsed ? null : <span className="truncate">{headline}</span>}
+              {collapsed ? null : (
+                <span className="line-clamp-2">{headline}</span>
+              )}
             </button>
           </PopoverTrigger>
         </RailTooltip>
@@ -142,14 +145,10 @@ export const ChangesWaiting = memo(function ChangesWaiting({
         >
           <div className="space-y-1 px-4 pt-3.5 pb-3">
             <p className="font-medium text-sm">
-              {waiting.some((account) => account.count > 0)
-                ? "Changes waiting"
-                : "Reconnect needed"}
+              {hasChanges ? "Changes waiting" : "Reconnect needed"}
             </p>
             <p className="text-muted-foreground text-xs">
-              {online
-                ? "Saved on this device. They go through as soon as your mailbox responds."
-                : "You're offline. Saved changes go through when you're back online."}
+              {popoverDescription(hasChanges, online)}
             </p>
           </div>
           <ul className="divide-y divide-border border-border border-t">
@@ -286,6 +285,14 @@ function waitingHeadline(
   return providers.size === 1
     ? `${onlyProvider} needs reconnecting`
     : "Accounts need reconnecting";
+}
+
+function popoverDescription(hasChanges: boolean, online: boolean) {
+  if (!hasChanges) return "Sign in again so your mail keeps syncing.";
+  if (!online) {
+    return "You're offline. Saved changes go through when you're back online.";
+  }
+  return "Saved on this device. They go through as soon as your mailbox responds.";
 }
 
 function changesCount(count: number) {
