@@ -192,7 +192,9 @@ test("a new mailbox shows Waiting on you across accounts before Today answers, a
     async (route) => {
       const id = route.request().headers()["x-email-account-id"] ?? "";
       await answers.get(id);
-      const response = await route.fetch();
+      // Released as the test ends, the page may already be gone.
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
       const home = await response.json();
       if (id === primaryId) {
         home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
@@ -307,7 +309,9 @@ test("mail another account may list in Needs reply waits for it, then shows once
     async (route) => {
       const id = route.request().headers()["x-email-account-id"] ?? "";
       if (id === shared.id) await released;
-      const response = await route.fetch();
+      // Released as the test ends, the page may already be gone.
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
       const home = await response.json();
       if (id === primaryId) {
         home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };

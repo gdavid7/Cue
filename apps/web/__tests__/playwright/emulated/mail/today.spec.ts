@@ -460,7 +460,9 @@ test("a new mailbox shows Waiting on you from local mail before Today answers, a
     (url) => url.pathname === "/api/user/home",
     async (route) => {
       await released;
-      const response = await route.fetch();
+      // Released as the test ends, the page may already be gone.
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
       const home = await response.json();
       home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
       home.needsYou = [];
