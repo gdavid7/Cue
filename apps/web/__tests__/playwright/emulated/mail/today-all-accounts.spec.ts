@@ -264,13 +264,25 @@ test("a new mailbox shows Waiting on you across accounts before Today answers, a
 test("mail another account lists in Needs reply shows once there, below Waiting on you", async ({
   page,
 }, testInfo) => {
-  test.setTimeout(300_000);
+  test.setTimeout(360_000);
   const seeded = await seedMailFromContact(page, `Ski trip ${Date.now()}`);
   // Reads the primary's mailbox, so the seeded mail reached both accounts.
   const shared = await createSecondEmailAccount(primaryId, {
     mailbox: "primary",
   });
   await seedNeedsReply(shared.id, seeded.threadId);
+  // The new account syncs in this browser first, from All inboxes, where
+  // the mail shows once, naming the other account. Until then Waiting on
+  // you waits too: which copies the account holds isn't known.
+  await page.goto(`/${primaryId}/mail?accountScope=all`);
+  const conversations = page.getByRole("listbox", { name: "Conversations" });
+  await expect(conversations).toBeVisible({ timeout: 60_000 });
+  await expect(
+    conversations
+      .getByRole("option")
+      .filter({ hasText: seeded.subject })
+      .getByText(/^Also in /),
+  ).toHaveCount(1, { timeout: 120_000 });
   // Only the primary mailbox is new to Cue.
   await page.route(
     (url) => url.pathname === "/api/user/home/cue",

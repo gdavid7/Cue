@@ -608,6 +608,7 @@ export async function seedMailFromContact(page: Page, subject: string) {
     };
     return {
       threadId: message.conversationId,
+      subject,
       remove: async () => {
         for (const id of [message.id, sentId])
           await page.request.post(`${base}/messages/${id}/permanentDelete`, {
@@ -647,6 +648,7 @@ export async function seedMailFromContact(page: Page, subject: string) {
   const message = (await inserted.json()) as { id: string };
   return {
     threadId: first.threadId,
+    subject,
     remove: async () => {
       for (const id of [message.id, first.id])
         await page.request.delete(`${base}/messages/${id}`, { headers });
