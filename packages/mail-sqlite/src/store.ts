@@ -411,7 +411,7 @@ export async function createSqliteMailStore(
             accountId: input.accountId,
             commandId: input.commandId,
             conversationId: input.page.conversation.conversationId,
-            change: operationChange(operation),
+            ...operationIntent(operation),
           })),
         );
         await recomputeTargets(tx, newTargets);
@@ -936,7 +936,7 @@ export async function createSqliteMailStore(
               accountId,
               commandId: String(row.command_id),
               conversationId,
-              change: operationChange(row),
+              ...operationIntent(row),
             })),
           );
         }
@@ -2369,6 +2369,7 @@ async function admitConversations(
     kind: "conversations",
     conversations: input.conversations,
     change: input.change,
+    ...(input.wholeConversation ? { wholeConversation: true } : {}),
   };
   const hash = await digest(payload);
   if (existing) {
@@ -2401,6 +2402,7 @@ async function admitConversations(
       messages.map((row) => ({ row, roles: parseRoles(row.roles_json) })),
       input.change,
       provider,
+      input.wholeConversation === true,
     ).map(({ row }) => row);
     knownTargets.push(
       ...targets.map((row) => ({
@@ -3158,6 +3160,7 @@ async function narrowConversationTargets(
     commandId: string;
     conversationId: string;
     change: SubmitMetadataCommand["change"];
+    wholeConversation: boolean;
   },
 ): Promise<MessageKey[]> {
   const provider = await accountProvider(tx, input.accountId);
@@ -3174,9 +3177,12 @@ async function narrowConversationTargets(
     roles: row.roles_json == null ? null : parseRoles(row.roles_json),
   }));
   const kept = new Set(
-    conversationTargets(targeted, input.change, provider).map(
-      (target) => target.messageId,
-    ),
+    conversationTargets(
+      targeted,
+      input.change,
+      provider,
+      input.wholeConversation,
+    ).map((target) => target.messageId),
   );
   const dropped: MessageKey[] = [];
   for (const { messageId, roles } of targeted) {
@@ -3210,12 +3216,15 @@ async function accountProvider(
   return provider === "google" || provider === "microsoft" ? provider : null;
 }
 
-function operationChange(row: { payload_json?: unknown }) {
-  return (
-    JSON.parse(String(row.payload_json)) as {
-      change: SubmitMetadataCommand["change"];
-    }
-  ).change;
+function operationIntent(row: { payload_json?: unknown }) {
+  const payload = JSON.parse(String(row.payload_json)) as {
+    change: SubmitMetadataCommand["change"];
+    wholeConversation?: boolean;
+  };
+  return {
+    change: payload.change,
+    wholeConversation: payload.wholeConversation === true,
+  };
 }
 
 function parseRoles(value: unknown) {
@@ -3238,7 +3247,7 @@ async function queuePreparedOperation(
   if (remaining.length > 0) return false;
   const operation = await loadOperation(tx, accountId, commandId);
   if (operation?.status !== "preparing") return false;
-  const change = operationChange(operation);
+  const { change } = operationIntent(operation);
   const targets = await tx.query(
     `SELECT message_id FROM operation_targets
      WHERE account_id = ? AND command_id = ?`,

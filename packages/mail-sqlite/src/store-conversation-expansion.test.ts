@@ -43,20 +43,42 @@ describe("conversation expansion", () => {
     await store.close();
   });
 
-  // The Sent view names the messages it shows, so its delete reaches them.
-  it("on Outlook, deleting from Sent trashes the Sent copy", async () => {
+  // Sent and Drafts act on the whole conversation, as they always have.
+  it.each([
+    { kind: "trash" } as MetadataChange,
+    { kind: "archive" } as MetadataChange,
+    { kind: "unarchive" } as MetadataChange,
+  ])("on Outlook, $kind from Sent reaches every message, the Sent copy included", async (change) => {
     const store = await repliedThreadStore("microsoft");
-    const admission = await store.admitMetadata({
-      accountId: "acc-1",
-      commandId: "op-1",
-      targets: [{ accountId: "acc-1", messageId: "m-sent" }],
-      change: { kind: "trash" },
+    await admitAndPrepare(store, "op-1", change, ["m-in", "m-sent"], [], {
+      wholeConversation: true,
     });
 
-    expect(admission.status).toBe("queued");
+    expect(await executableTargetsOf(store, "op-1")).toEqual([
+      "m-in",
+      "m-sent",
+    ]);
+    await store.close();
+  });
+
+  it("on Outlook, a whole-conversation delete of a known conversation reaches the Sent copy", async () => {
+    const store = await repliedThreadStore("microsoft");
+    await admitAndPrepare(store, "op-1", { kind: "set_read", read: true }, [
+      "m-in",
+      "m-sent",
+    ]);
+    const queued = await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "op-2",
+      conversations: [{ accountId: "acc-1", conversationId: "c1" }],
+      change: { kind: "trash" },
+      wholeConversation: true,
+      observedRevision: await store.readRevision(),
+    });
+
+    expect(queued.status).toBe("queued");
+    expect(await targetsOf(store, "op-2")).toEqual(["m-in", "m-sent"]);
     expect(await effectiveRoles(store, "m-sent")).toEqual(["trash"]);
-    expect(await effectiveRoles(store, "m-in")).toEqual(["inbox"]);
-    expect(await listed(store, "sent")).toEqual([]);
     await store.close();
   });
 
@@ -350,12 +372,14 @@ async function admitAndPrepare(
   change: MetadataChange,
   membership: string[],
   changes: ProviderChange[] = [],
+  options: { wholeConversation?: boolean } = {},
 ) {
   const admission = await store.admitConversations({
     accountId: "acc-1",
     commandId,
     conversations: [{ accountId: "acc-1", conversationId: "c1" }],
     change,
+    ...options,
     observedRevision: await store.readRevision(),
   });
   expect(admission.status).toBe("preparing");

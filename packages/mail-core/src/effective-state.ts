@@ -93,15 +93,21 @@ export function applyMetadataChange(
  * away doesn't count what is already in Trash or Spam, so deleting a
  * conversation that is only your reply and old deleted mail still deletes the
  * reply. A message with no stored copy (`roles: null`) can't be told apart
- * from the user's own mail, so it is left out there.
+ * from the user's own mail, so it is left out there. A `wholeConversation`
+ * command, made in Sent or Drafts, reaches every message.
  */
 export function conversationTargets<T extends { roles: MailboxRole[] | null }>(
   messages: T[],
   change: MetadataChange,
   provider: Provider | null,
+  wholeConversation: boolean,
 ): T[] {
   const direction = folderMove(change);
-  if (!provider || !PROVIDER_CAPABILITIES[provider].folderBasedRoles) {
+  if (
+    wholeConversation ||
+    !provider ||
+    !PROVIDER_CAPABILITIES[provider].folderBasedRoles
+  ) {
     return messages;
   }
   if (!direction) return messages;

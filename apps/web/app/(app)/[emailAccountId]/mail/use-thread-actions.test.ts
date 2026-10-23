@@ -16,10 +16,8 @@ const mail = vi.hoisted(() => ({
   client: {
     cancelOperation: vi.fn(),
     getDiagnostics: vi.fn(),
-    observeConversation: vi.fn(),
     observeOperation: vi.fn(),
     submitConversations: vi.fn(),
-    submitMetadata: vi.fn(),
   },
 }));
 
@@ -35,13 +33,7 @@ describe("useThreadActions", () => {
     mail.started = true;
     mail.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mail.client.submitConversations.mockResolvedValue({ status: "queued" });
-    mail.client.submitMetadata.mockResolvedValue({ status: "queued" });
-    mail.client.observeConversation.mockReturnValue(
-      conversationHandle([
-        { messageId: "received", roles: ["trash"] },
-        { messageId: "reply", roles: ["sent"] },
-      ]),
-    );
+
     mail.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
   });
 
@@ -341,10 +333,8 @@ describe("useThreadActions", () => {
     const nextClient = {
       cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
       getDiagnostics: vi.fn(),
-      observeConversation: vi.fn(),
       observeOperation: vi.fn(),
       submitConversations: vi.fn(),
-      submitMetadata: vi.fn(),
     };
     mail.client = nextClient;
     try {
@@ -382,10 +372,8 @@ describe("useThreadActions", () => {
     const nextClient = {
       cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
       getDiagnostics: vi.fn(),
-      observeConversation: vi.fn(),
       observeOperation: vi.fn(),
       submitConversations: vi.fn(),
-      submitMetadata: vi.fn(),
     };
     mail.client = nextClient;
     try {
@@ -401,51 +389,45 @@ describe("useThreadActions", () => {
     }
   });
 
-  // Outlook files the user's own copies in Sent and Drafts, so a delete made
-  // there reaches them, and undo brings back exactly those.
-  it("deletes the Sent copies from an Outlook Sent view and undoes exactly those", async () => {
+  // Sent and Drafts act on the whole conversation, the user's own copies
+  // included, and so does their undo.
+  it("deletes the whole conversation from Sent and undoes it the same way", async () => {
     mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
-    const { result } = renderActions({
-      ownMailView: {
-        role: "sent",
-        providers: new Map([["account", "microsoft"]]),
-      },
-    });
+    const { result } = renderActions({ wholeConversation: true });
 
     await act(() => result.current.trash(["thread"]));
 
-    expect(mail.client.submitConversations).not.toHaveBeenCalled();
-    expect(mail.client.submitMetadata).toHaveBeenCalledWith({
+    expect(mail.client.submitConversations).toHaveBeenCalledWith({
       accountId: "account",
       commandId: expect.any(String),
-      targets: [{ accountId: "account", messageId: "reply" }],
+      conversations: [{ accountId: "account", conversationId: "thread" }],
       change: { kind: "trash" },
+      wholeConversation: true,
+      observedRevision: 1,
     });
 
     await act(() => result.current.undo());
 
-    expect(mail.client.submitConversations).not.toHaveBeenCalled();
-    expect(mail.client.submitMetadata).toHaveBeenLastCalledWith({
+    expect(mail.client.submitConversations).toHaveBeenLastCalledWith({
       accountId: "account",
       commandId: expect.any(String),
-      targets: [{ accountId: "account", messageId: "reply" }],
+      conversations: [{ accountId: "account", conversationId: "thread" }],
       change: { kind: "restore_from_trash" },
+      wholeConversation: true,
+      observedRevision: 1,
     });
   });
 
-  it("acts on the whole conversation from a Gmail Sent view", async () => {
-    const { result } = renderActions({
-      ownMailView: {
-        role: "sent",
-        providers: new Map([["account", "google"]]),
-      },
-    });
+  it("moves the whole conversation to the Inbox from Sent", async () => {
+    const { result } = renderActions({ wholeConversation: true });
 
-    await act(() => result.current.trash(["thread"]));
+    await act(() => result.current.moveToInbox(["thread"]));
 
-    expect(mail.client.submitMetadata).not.toHaveBeenCalled();
     expect(mail.client.submitConversations).toHaveBeenCalledWith(
-      expect.objectContaining({ change: { kind: "trash" } }),
+      expect.objectContaining({
+        change: { kind: "unarchive" },
+        wholeConversation: true,
+      }),
     );
   });
 
@@ -473,36 +455,18 @@ describe("useThreadActions", () => {
 
 function renderActions({
   threads = [createThread(["INBOX", "UNREAD"])],
-  ownMailView,
+  wholeConversation,
 }: {
   threads?: ListThread[];
-  ownMailView?: Parameters<typeof useThreadActions>[0]["ownMailView"];
+  wholeConversation?: boolean;
 } = {}) {
   return renderHook(() =>
     useThreadActions({
       emailAccountId: "account",
       threads,
-      ownMailView,
+      wholeConversation,
     }),
   );
-}
-
-function conversationHandle(
-  messages: Array<{ messageId: string; roles: string[] }>,
-) {
-  return {
-    getSnapshot: () => ({
-      status: "ready",
-      data: {
-        messages: messages.map(({ messageId, roles }) => ({
-          key: { accountId: "account", messageId },
-          metadata: { roles },
-        })),
-      },
-    }),
-    subscribe: () => () => {},
-    close: vi.fn(),
-  };
 }
 
 function createThread(labelIds: string[], id = "thread"): ListThread {

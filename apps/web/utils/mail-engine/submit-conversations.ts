@@ -4,12 +4,7 @@ import type {
   MetadataChange,
   SubmitConversationCommand,
 } from "@inboxzero/mail-core/commands";
-import type {
-  ConversationKey,
-  LocalRevision,
-  MessageKey,
-} from "@inboxzero/mail-core/identities";
-import type { MailboxRole } from "@inboxzero/mail-core/messages";
+import type { LocalRevision } from "@inboxzero/mail-core/identities";
 import { beginOptimisticTriage } from "@/utils/mail-engine/optimistic-triage";
 import { randomUuid } from "@/utils/uuid";
 
@@ -49,6 +44,8 @@ export async function submitConversationChanges(input: {
   accountId: string;
   conversationIds: string[];
   change: MetadataChange;
+  /** Made in Sent or Drafts: reaches the user's own copies too. */
+  wholeConversation?: boolean;
 }) {
   const accepted: Array<{ conversationId: string; commandId: string }> = [];
   const rejectionCodes: string[] = [];
@@ -68,6 +65,7 @@ export async function submitConversationChanges(input: {
         conversationId,
       })),
       change: input.change,
+      ...(input.wholeConversation ? { wholeConversation: true } : {}),
     });
     if (admission.status === "rejected") {
       rejectionCodes.push(admission.code);
@@ -78,55 +76,6 @@ export async function submitConversationChanges(input: {
     }
   }
   return { accepted, rejectionCodes };
-}
-
-/**
- * A change made in a view of the user's own mail on a folder-based provider,
- * such as Outlook's Sent Items, reaches the messages that view shows rather
- * than the whole conversation, so one command names those messages. That
- * view's rows stay until the engine settles them, as the overlay leaves Sent
- * and Drafts to it there.
- */
-export async function submitMessagesInView(input: {
-  client: MailClient;
-  accountId: string;
-  conversationIds: string[];
-  role: Extract<MailboxRole, "sent" | "draft">;
-  change: MetadataChange;
-}) {
-  const conversationIds = [...new Set(input.conversationIds)];
-  const targets: MessageKey[] = [];
-  const shown: string[] = [];
-  for (const conversationId of conversationIds) {
-    const messages = await readConversationMessages(input.client, {
-      accountId: input.accountId,
-      conversationId,
-    });
-    const inView = messages.filter((message) =>
-      message.metadata.roles.includes(input.role),
-    );
-    if (inView.length === 0) continue;
-    shown.push(conversationId);
-    targets.push(...inView.map((message) => message.key));
-  }
-  if (targets.length === 0) {
-    return { accepted: [], targets, rejectionCodes: ["invalid"] };
-  }
-  const commandId = randomUuid();
-  const admission = await input.client.submitMetadata({
-    accountId: input.accountId,
-    commandId,
-    targets,
-    change: input.change,
-  });
-  if (admission.status === "rejected") {
-    return { accepted: [], targets, rejectionCodes: [admission.code] };
-  }
-  return {
-    accepted: shown.map((conversationId) => ({ conversationId, commandId })),
-    targets,
-    rejectionCodes: [],
-  };
 }
 
 async function submitWithObservedRevision(
@@ -181,31 +130,4 @@ async function readObservedRevision(client: MailClient, accountId: string) {
   revisions.set(accountId, revision);
   observedRevisions.set(client, revisions);
   return revision;
-}
-
-// The view the change was made in already shows these messages, so the
-// store has them; a large page reads the whole conversation at once.
-const VIEW_CONVERSATION_PAGE_SIZE = 500;
-
-function readConversationMessages(client: MailClient, key: ConversationKey) {
-  const handle = client.observeConversation(key, {
-    after: null,
-    pageSize: VIEW_CONVERSATION_PAGE_SIZE,
-  });
-  return new Promise<
-    NonNullable<ReturnType<typeof handle.getSnapshot>["data"]>["messages"]
-  >((resolve) => {
-    let unsubscribe: (() => void) | null = null;
-    let settled = false;
-    const check = () => {
-      const snapshot = handle.getSnapshot();
-      if (settled || snapshot.status === "loading") return;
-      settled = true;
-      unsubscribe?.();
-      handle.close();
-      resolve(snapshot.data?.messages ?? []);
-    };
-    unsubscribe = handle.subscribe(check);
-    check();
-  });
 }

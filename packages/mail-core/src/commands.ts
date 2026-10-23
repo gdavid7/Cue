@@ -42,6 +42,12 @@ export const submitConversationCommandSchema = z.object({
   commandId: z.string().min(1).max(128),
   conversations: z.array(conversationKeySchema).min(1).max(500),
   change: metadataChangeSchema,
+  /**
+   * Reach every message, the user's own Sent and Drafts copies included, as
+   * a change made in Sent or Drafts does. Engines that predate it ignore it
+   * and already act on every message.
+   */
+  wholeConversation: z.boolean().optional(),
   observedRevision: localRevisionSchema,
 });
 export type SubmitConversationCommand = z.infer<
