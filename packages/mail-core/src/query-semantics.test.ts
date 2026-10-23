@@ -7,6 +7,44 @@ import {
   resolveSearchPredicates,
 } from "./query-semantics";
 
+describe("internet_message_id predicates", () => {
+  it("matches a message by its Message-ID however each side writes it, in the account named", () => {
+    const copy = message({
+      roles: ["inbox"],
+      internetMessageId: "<Shared@Example.com>",
+    });
+    expect(
+      conversationMatchesPredicate([copy], {
+        kind: "internet_message_id",
+        ids: ["shared@example.com"],
+      }),
+    ).toBe(true);
+    expect(
+      conversationMatchesPredicate([copy], {
+        kind: "internet_message_id",
+        ids: ["shared@example.com"],
+        accountId: "elsewhere",
+      }),
+    ).toBe(false);
+    expect(
+      conversationMatchesPredicate([message({ roles: ["inbox"] })], {
+        kind: "internet_message_id",
+        ids: ["shared@example.com"],
+      }),
+    ).toBe(false);
+  });
+
+  it("is a predicate the query schema accepts", () => {
+    expect(
+      mailPredicateSchema.safeParse({
+        kind: "internet_message_id",
+        ids: ["<a@b>"],
+        accountId: "account",
+      }).success,
+    ).toBe(true);
+  });
+});
+
 describe("mailbox predicates", () => {
   it("treats archive as a conversation with no inbox, trash, or spam members", () => {
     expect(

@@ -1,3 +1,4 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { contactNameMessages, splitNameWords } from "./contact-name-search";
 import type { SqlValue } from "./driver";
@@ -145,6 +146,22 @@ export function compilePredicate(
       return {
         sql: `(${alias}.account_id = ? AND ${ids})`,
         bindings: [predicate.accountId, ...predicate.ids],
+      };
+    }
+    // Matched on each message's stored key, normalised at every write by the
+    // same rule, so ids differing only in case or angle brackets agree.
+    case "internet_message_id": {
+      const keys = [
+        ...new Set(
+          predicate.ids.flatMap((id) => normalizeInternetMessageId(id) ?? []),
+        ),
+      ];
+      if (keys.length === 0) return { sql: "0=1", bindings: [] };
+      const ids = `${alias}.message_key IN (${keys.map(() => "?").join(",")})`;
+      if (!predicate.accountId) return { sql: ids, bindings: keys };
+      return {
+        sql: `(${alias}.account_id = ? AND ${ids})`,
+        bindings: [predicate.accountId, ...keys],
       };
     }
     case "text":

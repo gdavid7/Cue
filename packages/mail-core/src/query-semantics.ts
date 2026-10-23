@@ -1,6 +1,6 @@
 import type { MetadataChange } from "./commands";
 import { applyMetadataChange } from "./effective-state";
-import type { MessageMetadata } from "./messages";
+import { type MessageMetadata, normalizeInternetMessageId } from "./messages";
 import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
 
 export type EffectiveMessage = MessageMetadata & {
@@ -79,6 +79,15 @@ export function messageMatchesPredicate(
       if (predicate.accountId && predicate.accountId !== message.accountId)
         return false;
       return predicate.ids.includes(message.conversationId);
+    case "internet_message_id": {
+      if (predicate.accountId && predicate.accountId !== message.accountId)
+        return false;
+      const key = normalizeInternetMessageId(message.internetMessageId);
+      return (
+        key !== null &&
+        predicate.ids.some((id) => normalizeInternetMessageId(id) === key)
+      );
+    }
     case "text":
       return textMatches(
         message,

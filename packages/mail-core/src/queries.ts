@@ -6,6 +6,7 @@ import {
 } from "./identities";
 import {
   inboxSectionSchema,
+  MAX_INTERNET_MESSAGE_ID_LENGTH,
   mailboxRoleSchema,
   type MessageAttachmentDescriptor,
 } from "./messages";
@@ -79,6 +80,13 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       accountId: accountIdSchema.optional(),
     }),
     z.object({
+      kind: z.literal("internet_message_id"),
+      ids: z
+        .array(z.string().min(1).max(MAX_INTERNET_MESSAGE_ID_LENGTH))
+        .max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
+    }),
+    z.object({
       kind: z.literal("text"),
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
@@ -125,6 +133,13 @@ export type MailPredicate =
   | { kind: "message"; ids: string[]; accountId?: string }
   /** Messages of these conversations, of `accountId` alone when it is set. */
   | { kind: "conversation"; ids: string[]; accountId?: string }
+  /**
+   * Messages whose Message-ID header is one of these, compared as copies of
+   * one message in two mailboxes are (normalizeInternetMessageId), of
+   * `accountId` alone when it is set. Newer than the other kinds: check
+   * `predicate:internet_message_id` with mailClientSupports first.
+   */
+  | { kind: "internet_message_id"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";
