@@ -399,6 +399,100 @@ describe("useThreadActions", () => {
     );
   });
 
+  it("offers undo on a snooze, which puts a sent snooze back in the inbox", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const { result } = renderActions();
+    const until = new Date("2026-10-23T09:00:00");
+    await act(() => result.current.snooze(["thread"], until));
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        change: { kind: "snooze", untilMs: until.getTime() },
+      }),
+    );
+    expect(toastUndo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Snoozed until Fri, Oct 23 at 9:00 AM",
+      }),
+    );
+    mail.client.submitConversations.mockClear();
+
+    let restored: string[] = [];
+    await act(async () => {
+      restored = await result.current.undo();
+    });
+    expect(restored).toEqual(["thread"]);
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ change: { kind: "unarchive" } }),
+    );
+  });
+
+  it("undoes a snooze from outside the inbox without moving it there", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const { result } = renderActions({ threads: [createThread(["SENT"])] });
+    await act(() =>
+      result.current.snooze(["thread"], new Date(Date.now() + 1)),
+    );
+    mail.client.submitConversations.mockClear();
+    await act(() => result.current.undo());
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ change: { kind: "archive" } }),
+    );
+  });
+
+  it("undoes a mixed snooze, each conversation back where it was", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const threads = [
+      createThread(["INBOX"], "in-inbox"),
+      createThread(["SENT"], "archived"),
+    ];
+    const { result } = renderActions({ threads });
+    await act(() =>
+      result.current.snooze(
+        threads.map((thread) => thread.id),
+        new Date(Date.now() + 1),
+      ),
+    );
+    mail.client.submitConversations.mockClear();
+
+    let restored: string[] = [];
+    await act(async () => {
+      restored = await result.current.undo();
+    });
+
+    expect(restored.sort()).toEqual(["archived", "in-inbox"]);
+    expect(
+      mail.client.submitConversations.mock.calls
+        .map(([command]) => ({
+          ids: command.conversations.map(
+            (conversation: { conversationId: string }) =>
+              conversation.conversationId,
+          ),
+          change: command.change,
+        }))
+        .sort((a, b) => a.ids[0].localeCompare(b.ids[0])),
+    ).toEqual([
+      { ids: ["archived"], change: { kind: "archive" } },
+      { ids: ["in-inbox"], change: { kind: "unarchive" } },
+    ]);
+  });
+
+  it("cancels a snooze still waiting in the engine from the toast", async () => {
+    const { result } = renderActions();
+    await act(() =>
+      result.current.snooze(["thread"], new Date(Date.now() + 1)),
+    );
+    const [{ onUndo }] = vi.mocked(toastUndo).mock.calls[0];
+    mail.client.submitConversations.mockClear();
+    await act(async () => {
+      onUndo();
+    });
+    await vi.waitFor(() =>
+      expect(notifications.success).toHaveBeenLastCalledWith("Restored"),
+    );
+    expect(mail.client.cancelOperation).toHaveBeenCalledTimes(1);
+    expect(mail.client.submitConversations).not.toHaveBeenCalled();
+  });
+
   it("does not archive a missing row", async () => {
     const { result } = renderActions({ threads: [] });
     await act(() => result.current.archive(["missing-thread"]));

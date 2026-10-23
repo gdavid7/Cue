@@ -31,6 +31,7 @@ import {
 } from "@/utils/mail-engine/message-folders";
 import { mapWithConcurrency } from "@/utils/async";
 import type { MetadataChange } from "@inboxzero/mail-core/commands";
+import { undoConversationChange } from "@/utils/mail-engine/undo-change";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 import {
   observeRumConfirmation,
@@ -51,10 +52,12 @@ const RUM_TRIAGE_ACTIONS: Partial<
   set_read_state: "mark_read",
 };
 
-type UndoableAction = "archive" | "unarchive" | "trash";
+type UndoableAction = "archive" | "unarchive" | "trash" | "snooze";
 
 type ThreadSnapshot = {
   emailAccountId: string;
+  /** False when the row showed it outside the inbox; unknown counts as in. */
+  inInbox?: boolean;
   key: string;
   messageIds: string[];
   mutationId: string;
@@ -83,7 +86,10 @@ const REACHES_COPIES = new Set<ThreadMutationPayload["kind"]>([
 type UndoableBatch = {
   /** How undo puts back a command the engine has already sent. */
   restore:
-    | { kind: "conversations"; change: MetadataChange }
+    | {
+        kind: "conversations";
+        compensation: (snapshot: ThreadSnapshot) => MetadataChange;
+      }
     | { kind: "move_back"; movedToFolderId: string };
   wholeConversation: boolean;
   // Resolves once the engine has admitted the command, so an undo pressed
@@ -269,75 +275,78 @@ export function useThreadActions({
       Object.values(groupBy(snapshots, (snapshot) => snapshot.mutationId)).map(
         async (snapshots) => {
           const { emailAccountId, mutationId } = snapshots[0];
-          const cancelled =
-            (
-              await client.cancelOperation({
-                accountId: emailAccountId,
-                operationId: mutationId,
-              })
-            ).status === "cancelled";
-          if (cancelled) {
+          if (restore.kind === "move_back") {
+            const cancelled =
+              (
+                await client.cancelOperation({
+                  accountId: emailAccountId,
+                  operationId: mutationId,
+                })
+              ).status === "cancelled";
             // Never sent, so there is nothing to put back.
-          } else if (restore.kind === "move_back") {
-            // Each message goes back where it was, which may differ within
-            // one conversation (a reply in Sent, a message filed elsewhere).
-            // Read again now for any message the move took that its own
-            // read never saw.
-            const current = await mapWithConcurrency(
-              snapshots,
-              FOLDER_READ_CONCURRENCY,
-              (snapshot) =>
-                readStoredMessageFolders(client, {
-                  accountId: emailAccountId,
-                  conversationId: snapshot.threadId,
-                }).catch(() => []),
-            );
-            const commands = moveBackChanges(
-              snapshots.flatMap((snapshot) => snapshot.sourceFolders ?? []),
-              restore.movedToFolderId,
-              current.flat(),
-            ).flatMap(({ change, messageIds }) =>
-              chunk(messageIds, MOVE_BACK_TARGETS_PER_COMMAND).map((ids) => ({
-                change,
-                ids,
-              })),
-            );
-            const admissions = await Promise.allSettled(
-              commands.map(({ change, ids }) =>
-                client.submitMetadata({
-                  accountId: emailAccountId,
-                  commandId: randomUuid(),
-                  targets: ids.map((messageId) => ({
+            if (!cancelled) {
+              // Each message goes back where it was, which may differ within
+              // one conversation (a reply in Sent, a message filed elsewhere).
+              // Read again now for any message the move took that its own
+              // read never saw.
+              const current = await mapWithConcurrency(
+                snapshots,
+                FOLDER_READ_CONCURRENCY,
+                (snapshot) =>
+                  readStoredMessageFolders(client, {
                     accountId: emailAccountId,
-                    messageId,
-                  })),
+                    conversationId: snapshot.threadId,
+                  }).catch(() => []),
+              );
+              const commands = moveBackChanges(
+                snapshots.flatMap((snapshot) => snapshot.sourceFolders ?? []),
+                restore.movedToFolderId,
+                current.flat(),
+              ).flatMap(({ change, messageIds }) =>
+                chunk(messageIds, MOVE_BACK_TARGETS_PER_COMMAND).map((ids) => ({
                   change,
-                }),
-              ),
-            );
-            // Restored only once every place it came from has its mail back.
-            const failed = admissions.find(
-              (admission) =>
-                admission.status === "rejected" ||
-                admission.value.status === "rejected",
-            );
-            if (failed) throw new Error("move_back_incomplete");
-          } else {
-            const diagnostics = await client.getDiagnostics(emailAccountId);
-            const admission = await client.submitConversations({
-              accountId: emailAccountId,
-              commandId: randomUuid(),
-              conversations: snapshots.map((snapshot) => ({
-                accountId: emailAccountId,
-                conversationId: snapshot.threadId,
-              })),
-              change: restore.change,
-              ...(batch.wholeConversation ? { wholeConversation: true } : {}),
-              observedRevision: diagnostics.revision,
-            });
-            if (admission.status === "rejected") {
-              throw new Error(admission.code);
+                  ids,
+                })),
+              );
+              const admissions = await Promise.allSettled(
+                commands.map(({ change, ids }) =>
+                  client.submitMetadata({
+                    accountId: emailAccountId,
+                    commandId: randomUuid(),
+                    targets: ids.map((messageId) => ({
+                      accountId: emailAccountId,
+                      messageId,
+                    })),
+                    change,
+                  }),
+                ),
+              );
+              // Restored only once every place it came from has its mail back.
+              const failed = admissions.find(
+                (admission) =>
+                  admission.status === "rejected" ||
+                  admission.value.status === "rejected",
+              );
+              if (failed) throw new Error("move_back_incomplete");
             }
+          } else {
+            // A command whose conversations were in different places before
+            // it needs a different compensation for each.
+            const compensations = Object.values(
+              groupBy(snapshots, (snapshot) =>
+                JSON.stringify(restore.compensation(snapshot)),
+              ),
+            ).map((group) => ({
+              conversationIds: group.map((snapshot) => snapshot.threadId),
+              change: restore.compensation(group[0]),
+            }));
+            await undoConversationChange({
+              client,
+              accountId: emailAccountId,
+              operationId: mutationId,
+              compensations,
+              wholeConversation: batch.wholeConversation,
+            });
           }
           return snapshots;
         },
@@ -460,13 +469,16 @@ export function useThreadActions({
   );
 
   const runUndoableAction = useCallback(
-    (action: UndoableAction, threadKeys: string[]) => {
-      const { compensation, done, noun } = UNDOABLE_COPY[action];
+    (
+      payload: Extract<ThreadMutationPayload, { kind: UndoableAction }>,
+      threadKeys: string[],
+    ) => {
+      const { compensation, done, noun } = UNDOABLE_COPY[payload.kind];
       return runUndoable({
         threadKeys,
-        payload: { kind: action },
-        restore: { kind: "conversations", change: compensation },
-        copy: { done, noun },
+        payload,
+        restore: { kind: "conversations", compensation },
+        copy: { done: (count) => done(count, payload), noun },
       });
     },
     [runUndoable],
@@ -587,35 +599,12 @@ export function useThreadActions({
   );
 
   const snooze = useCallback(
-    async (threadKeys: string[], snoozedUntil: Date) => {
-      const targets = resolveTargets(threadKeys);
-      const { snapshots, rejectionCodes } = await enqueueTargets(targets, {
-        kind: "snooze",
-        scheduledFor: snoozedUntil.toISOString(),
-      });
-      const failedCount = threadKeys.length - snapshots.length;
-      if (snapshots.length) {
-        toast.success(
-          snapshots.length === 1
-            ? `Snoozed until ${format(snoozedUntil, "EEE, MMM d 'at' p")}`
-            : `Snoozed ${snapshots.length} conversations`,
-        );
-      }
-      if (failedCount) {
-        toast.error(
-          enqueueFailureCopy(
-            failedCount === threadKeys.length
-              ? threadKeys.length === 1
-                ? "Couldn't queue snoozing"
-                : "Couldn't queue snoozing conversations"
-              : `Couldn't queue ${failedCount} of ${threadKeys.length} for snoozing`,
-            rejectionCodes,
-          ),
-        );
-      }
-      return snapshots.map((snapshot) => snapshot.key);
-    },
-    [enqueueTargets, resolveTargets],
+    (threadKeys: string[], snoozedUntil: Date) =>
+      runUndoableAction(
+        { kind: "snooze", scheduledFor: snoozedUntil.toISOString() },
+        threadKeys,
+      ),
+    [runUndoableAction],
   );
 
   const markSpam = useCallback(
@@ -713,15 +702,18 @@ export function useThreadActions({
     addTargets,
     subscribeRestored,
     archive: useCallback(
-      (threadKeys: string[]) => runUndoableAction("archive", threadKeys),
+      (threadKeys: string[]) =>
+        runUndoableAction({ kind: "archive" }, threadKeys),
       [runUndoableAction],
     ),
     moveToInbox: useCallback(
-      (threadKeys: string[]) => runUndoableAction("unarchive", threadKeys),
+      (threadKeys: string[]) =>
+        runUndoableAction({ kind: "unarchive" }, threadKeys),
       [runUndoableAction],
     ),
     trash: useCallback(
-      (threadKeys: string[]) => runUndoableAction("trash", threadKeys),
+      (threadKeys: string[]) =>
+        runUndoableAction({ kind: "trash" }, threadKeys),
       [runUndoableAction],
     ),
     moveToFolder,
@@ -743,26 +735,36 @@ export function useThreadActions({
 const UNDOABLE_COPY: Record<
   UndoableAction,
   {
-    compensation: MetadataChange;
-    done: (count: number) => string;
+    compensation: (snapshot: ThreadSnapshot) => MetadataChange;
+    done: (count: number, payload: ThreadMutationPayload) => string;
     noun: string;
   }
 > = {
   archive: {
-    compensation: { kind: "unarchive" },
+    compensation: () => ({ kind: "unarchive" }),
     done: (count) => summarise("Archived", count),
     noun: "archiving",
   },
   unarchive: {
-    compensation: { kind: "archive" },
+    compensation: () => ({ kind: "archive" }),
     done: (count) =>
       count === 1 ? "Moved to inbox" : `Moved ${count} conversations to inbox`,
     noun: "moving to inbox",
   },
   trash: {
-    compensation: { kind: "restore_from_trash" },
+    compensation: () => ({ kind: "restore_from_trash" }),
     done: (count) => summarise("Deleted", count),
     noun: "deletion",
+  },
+  // Both end the snooze on the server, so it is put back where it was.
+  snooze: {
+    compensation: (snapshot) =>
+      snapshot.inInbox === false ? { kind: "archive" } : { kind: "unarchive" },
+    done: (count, payload) =>
+      count === 1 && payload.kind === "snooze"
+        ? `Snoozed until ${format(new Date(payload.scheduledFor), "EEE, MMM d 'at' p")}`
+        : `Snoozed ${count} conversations`,
+    noun: "snoozing",
   },
 };
 
@@ -809,8 +811,12 @@ function rememberTargets(
     const messageIds = [...new Set(getListThreadMessageIds(thread))];
     if (!messageIds.length) continue;
     const key = getListThreadKey(thread);
+    const labelled = thread.messages?.filter((message) => message.labelIds);
     targets.set(key, {
       emailAccountId: getListThreadEmailAccountId(thread, emailAccountId),
+      inInbox: labelled?.length
+        ? labelled.some((message) => message.labelIds?.includes("INBOX"))
+        : undefined,
       key,
       messageIds,
       threadId: thread.id,
