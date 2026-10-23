@@ -749,7 +749,7 @@ describe("engine bootstrap coverage", () => {
     await engine.close();
   });
 
-  it("runs a user's action at once while a refused scan backs off", async () => {
+  it("still runs a user's action at once while a refused scan backs off (guard)", async () => {
     let now = 1000;
     const store = await createSqliteMailStore(createNodeSqliteDriver());
     await store.ensureAccount({
@@ -791,6 +791,168 @@ describe("engine bootstrap coverage", () => {
     await engine.runUntil(now + 4000);
 
     expect(execute).toHaveBeenCalledTimes(1);
+    await engine.close();
+  });
+
+  it("doubles from the hint at the jitter's low end, up to the foreground cap", async () => {
+    let now = 1000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        enumerationRefusals: new Array(6).fill(1000),
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now, random: () => 0 }),
+    });
+    await engine.requestSync(["acc-1"]);
+    const delays = await refusalDelays(engine, store, 6, {
+      now: () => now,
+      advanceTo: (at) => {
+        now = at;
+      },
+    });
+    expect(delays).toEqual([1000, 1000, 2000, 4000, 7500, 7500]);
+    await engine.close();
+  });
+
+  it("waits exactly the hint, even under a second, on a first refusal", async () => {
+    let now = 1000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        enumerationRefusals: [700],
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    const delays = await refusalDelays(engine, store, 1, {
+      now: () => now,
+      advanceTo: (at) => {
+        now = at;
+      },
+    });
+    expect(delays).toEqual([700]);
+    await engine.close();
+  });
+
+  it("does not grow the wait for refusals that are not throttling", async () => {
+    let now = 1000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        enumerationRefusals: new Array(6).fill({
+          retryAfterMs: 1000,
+          reason: "unavailable",
+        }),
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    const delays = await refusalDelays(engine, store, 6, {
+      now: () => now,
+      advanceTo: (at) => {
+        now = at;
+      },
+    });
+    expect(delays).toEqual(new Array(6).fill(1000));
+    await engine.close();
+  });
+
+  it("starts over from the hint when someone asks for a sync", async () => {
+    let now = 1000;
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        enumerationRefusals: new Array(6).fill(1000),
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    const clock = {
+      now: () => now,
+      advanceTo: (at: number) => {
+        now = at;
+      },
+    };
+    const before = await refusalDelays(engine, store, 5, clock);
+    expect(before[4]).toBeGreaterThanOrEqual(7500);
+
+    await engine.requestSync(["acc-1"]);
+    expect(await refusalDelays(engine, store, 1, clock)).toEqual([1000]);
+    await engine.close();
+  });
+
+  it("starts a re-added account's refusals over from the hint", async () => {
+    let now = 1000;
+    const refusals: Array<number | null> = new Array(6).fill(1000);
+    const store = await createSqliteMailStore(createNodeSqliteDriver());
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    const engine = createMailEngine({
+      store,
+      source: slowBootstrapSource({
+        onBootstrap: () => {},
+        onEnumerate: () => {},
+        enumerationRefusals: refusals,
+      }),
+      executor: uncertainExecutor(),
+      runtime: createHostRuntime({ nowMs: () => now }),
+    });
+    await engine.requestSync(["acc-1"]);
+    const clock = {
+      now: () => now,
+      advanceTo: (at: number) => {
+        now = at;
+      },
+    };
+    const before = await refusalDelays(engine, store, 5, clock);
+    expect(before[4]).toBeGreaterThanOrEqual(7500);
+
+    await engine.purgeAccount("acc-1");
+    await store.ensureAccount({
+      accountId: "acc-1",
+      provider: "google",
+      generation: "g1",
+    });
+    expect(await refusalDelays(engine, store, 1, clock)).toEqual([1000]);
     await engine.close();
   });
 
@@ -1056,8 +1218,15 @@ function slowBootstrapSource(hooks: {
   onBeginScope?: (scope: ScopeDescriptor) => void;
   repeatNextPage?: boolean;
   pauseFirstEnumerationMs?: number;
-  /** One entry per enumerate call: a refusal's retryAfterMs, or null to answer. */
-  enumerationRefusals?: Array<number | null>;
+  /**
+   * One entry per enumerate call: a throttled refusal's retryAfterMs, a
+   * refusal with its reason, or null to answer.
+   */
+  enumerationRefusals?: Array<
+    | number
+    | { retryAfterMs: number; reason: "throttled" | "unavailable" }
+    | null
+  >;
   nextPageRetryAfterMs?: number;
   windowStartMs?: number;
   catchUpRounds?: boolean;
@@ -1125,6 +1294,7 @@ function slowBootstrapSource(hooks: {
       if (typeof refusal === "number") {
         return { status: "paused", retryAfterMs: refusal, reason: "throttled" };
       }
+      if (refusal) return { status: "paused", ...refusal };
       const change =
         changesByPage.get(input.page) ??
         messagePatch("m-missing", "c-missing", ["inbox"]);
