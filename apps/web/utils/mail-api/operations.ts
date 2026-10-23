@@ -39,6 +39,7 @@ import { isInvalidGrantError } from "@/utils/error";
 import { EmailSendOperationStatus } from "@/generated/prisma/enums";
 import type { ParsedMessage } from "@/utils/types";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 
 const logger = createScopedLogger("mail-api/operations");
 const HELD_SEND_POLL_MS = 2000;
@@ -86,6 +87,9 @@ export function createEmailProviderOperationExecutor(input: {
             reason: "blocked_auth",
             retryAfterMs: null,
           };
+        }
+        if (error instanceof ProviderChangeRejectedError) {
+          return { status: "rejected", code: error.code, targets: [] };
         }
         // One bad message fails the whole bulk call; per-message retries
         // isolate it so the rest still apply.
@@ -358,14 +362,9 @@ async function applyChange(
     }
     case "move": {
       if (!change.folderId) return;
-      for (const messageId of messageIds) {
-        const message = await provider.getMessage(messageId);
-        await provider.moveThreadToFolder(
-          message.threadId,
-          message.headers.to || "",
-          change.folderId,
-        );
-      }
+      // The targets already name every message of a moved conversation, and
+      // an undo returns its messages to different folders one by one.
+      await provider.moveMessagesToFolder(messageIds, change.folderId);
       return;
     }
     case "set_membership": {

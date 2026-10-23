@@ -17,9 +17,12 @@ const mail = vi.hoisted(() => ({
   started: true,
   client: {
     cancelOperation: vi.fn(),
+    ensureConversationMessages: vi.fn(),
     getDiagnostics: vi.fn(),
+    observeConversation: vi.fn(),
     observeOperation: vi.fn(),
     submitConversations: vi.fn(),
+    submitMetadata: vi.fn(),
   },
 }));
 
@@ -41,6 +44,10 @@ describe("useThreadActions", () => {
     mail.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mail.client.submitConversations.mockResolvedValue({ status: "queued" });
     mail.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
+    mail.client.submitMetadata.mockResolvedValue({ status: "queued" });
+    mail.client.ensureConversationMessages.mockResolvedValue({
+      status: "complete",
+    });
   });
 
   it("archives through the engine with the observed revision", async () => {
@@ -578,6 +585,220 @@ describe("useThreadActions", () => {
     }
   });
 
+  describe("moving to an Outlook folder", () => {
+    beforeEach(() => {
+      // An inbox conversation with a reply from Sent and one message the
+      // user had already filed elsewhere.
+      mail.client.observeConversation.mockReturnValue(
+        conversationHandle([
+          message("from-inbox", "inbox-folder", ["inbox"]),
+          message("from-sent", "sent-folder", ["sent"]),
+          message("from-receipts", "receipts-folder", []),
+        ]),
+      );
+    });
+
+    it("moves the conversation with the engine's move change", async () => {
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      expect(mail.client.submitConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversations: [{ accountId: "account", conversationId: "thread" }],
+          change: { kind: "move", folderId: "projects-folder" },
+        }),
+      );
+      expect(toastUndo).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Moved to Projects" }),
+      );
+    });
+
+    it("reads where each message is before moving it", async () => {
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      expect(mail.client.observeConversation).toHaveBeenCalledWith(
+        { accountId: "account", conversationId: "thread" },
+        expect.anything(),
+      );
+      expect(
+        mail.client.observeConversation.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mail.client.submitConversations.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("undoes a move already sent by returning each message to where it came from", async () => {
+      mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+
+      expect(restored).toEqual(["thread"]);
+      const moves = mail.client.submitMetadata.mock.calls.map(([command]) => ({
+        change: command.change,
+        messageIds: command.targets.map(
+          (target: { messageId: string }) => target.messageId,
+        ),
+      }));
+      expect(moves).toEqual(
+        expect.arrayContaining([
+          { change: { kind: "unarchive" }, messageIds: ["from-inbox"] },
+          {
+            change: { kind: "move", folderId: "sent-folder" },
+            messageIds: ["from-sent"],
+          },
+          {
+            change: { kind: "move", folderId: "receipts-folder" },
+            messageIds: ["from-receipts"],
+          },
+        ]),
+      );
+      expect(moves).toHaveLength(3);
+    });
+
+    it("cancels a move not yet sent rather than moving anything back", async () => {
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      await act(() => result.current.undo());
+      expect(mail.client.cancelOperation).toHaveBeenCalled();
+      expect(mail.client.submitMetadata).not.toHaveBeenCalled();
+    });
+
+    it("has the whole conversation stored before reading where its messages are", async () => {
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      expect(mail.client.ensureConversationMessages).toHaveBeenCalledWith({
+        accountId: "account",
+        conversationId: "thread",
+      });
+      expect(
+        mail.client.ensureConversationMessages.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        mail.client.observeConversation.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("doesn't move a conversation it can't fully fetch, whose missing messages undo couldn't return", async () => {
+      mail.client.ensureConversationMessages.mockResolvedValue({
+        status: "unavailable",
+      });
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      expect(mail.client.submitConversations).not.toHaveBeenCalled();
+      expect(notifications.error).toHaveBeenCalledWith(
+        "Couldn't queue moving to Projects",
+      );
+    });
+
+    it("returns moved messages it never saw to where most of the conversation came from", async () => {
+      mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+      mail.client.observeConversation.mockReturnValue(
+        conversationHandle([message("seen", "inbox-folder", ["inbox"])]),
+      );
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      // By undo time the move has also taken a message stored after the read.
+      mail.client.observeConversation.mockReturnValue(
+        conversationHandle([
+          message("seen", "projects-folder", []),
+          message("late", "projects-folder", []),
+        ]),
+      );
+      await act(() => result.current.undo());
+
+      expect(mail.client.submitMetadata).toHaveBeenCalledTimes(1);
+      expect(mail.client.submitMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          change: { kind: "unarchive" },
+          targets: [
+            { accountId: "account", messageId: "seen" },
+            { accountId: "account", messageId: "late" },
+          ],
+        }),
+      );
+    });
+
+    it("counts a conversation restored only when every message went back, and lets a failed undo be retried", async () => {
+      mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      mail.client.submitMetadata
+        .mockResolvedValueOnce({ status: "queued" })
+        .mockResolvedValueOnce({ status: "rejected", code: "queue_full" });
+      let restored: string[] = [];
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual([]);
+      expect(mail.client.submitMetadata).toHaveBeenCalledTimes(3);
+      expect(notifications.error).toHaveBeenCalledWith("Couldn't restore");
+
+      await act(async () => {
+        restored = await result.current.undo();
+      });
+      expect(restored).toEqual(["thread"]);
+    });
+
+    it("doesn't move mail whose folders it couldn't read, which undo couldn't put back", async () => {
+      mail.client.observeConversation.mockReturnValue(
+        conversationHandle(null, "error"),
+      );
+      const { result } = renderActions();
+      await act(() =>
+        result.current.moveToFolder(["thread"], {
+          folderId: "projects-folder",
+          name: "Projects",
+        }),
+      );
+      expect(mail.client.submitConversations).not.toHaveBeenCalled();
+      expect(notifications.error).toHaveBeenCalledWith(
+        "Couldn't queue moving to Projects",
+      );
+    });
+  });
+
   it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {
     const onRestored = vi.fn();
     const { result } = renderHook(() =>
@@ -634,5 +855,38 @@ function createThread(labelIds: string[], id = "thread"): ListThread {
         headers: { subject: "Subject" },
       },
     ],
+  };
+}
+
+function conversationHandle(
+  messages: ReturnType<typeof message>[] | null,
+  status: "ready" | "error" = "ready",
+) {
+  return {
+    getSnapshot: () => ({
+      status,
+      revision: null,
+      refreshing: false,
+      error: status === "error" ? { code: "boom", retryable: true } : null,
+      data: messages
+        ? {
+            key: { accountId: "account", conversationId: "thread" },
+            messages,
+            nextPage: null,
+            coverage: [],
+          }
+        : null,
+    }),
+    subscribe: () => () => {},
+    close: vi.fn(),
+  };
+}
+
+function message(messageId: string, folderId: string, roles: string[]) {
+  return {
+    key: { accountId: "account", messageId },
+    metadata: { folderId, roles },
+    content: { status: "not_requested" },
+    pendingOperationIds: [],
   };
 }

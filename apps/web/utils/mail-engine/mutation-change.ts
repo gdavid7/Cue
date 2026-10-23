@@ -11,7 +11,9 @@ export type ThreadMutationPayload =
   | { kind: "set_important_state"; important: boolean }
   | { kind: "set_read_state"; read: boolean }
   | { kind: "set_starred_state"; starred: boolean }
-  | { kind: "snooze"; scheduledFor: string };
+  | { kind: "snooze"; scheduledFor: string }
+  /** An Outlook folder; Gmail has none. */
+  | { kind: "move_to_folder"; folderId: string };
 
 export function mutationPayloadToChange(
   payload: ThreadMutationPayload,
@@ -46,6 +48,8 @@ export function mutationPayloadToChange(
         kind: "snooze",
         untilMs: Date.parse(payload.scheduledFor),
       };
+    case "move_to_folder":
+      return { kind: "move", folderId: payload.folderId };
     default:
       return null;
   }

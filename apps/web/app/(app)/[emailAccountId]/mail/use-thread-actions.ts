@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { format } from "date-fns";
+import chunk from "lodash/chunk";
 import groupBy from "lodash/groupBy";
 import { toast } from "sonner";
 import { toastUndo } from "@/components/Toast";
@@ -21,6 +22,15 @@ import {
   type ThreadMutationPayload,
 } from "@/utils/mail-engine/mutation-change";
 import { submitConversationChanges } from "@/utils/mail-engine/submit-conversations";
+import { beginOptimisticTriage } from "@/utils/mail-engine/optimistic-triage";
+import {
+  type MessageFolder,
+  moveBackChanges,
+  readMessageFolders,
+  readStoredMessageFolders,
+} from "@/utils/mail-engine/message-folders";
+import { mapWithConcurrency } from "@/utils/async";
+import type { MetadataChange } from "@inboxzero/mail-core/commands";
 import { admissionRejectionCopy } from "@/utils/mail-engine/admission-notice";
 import {
   observeRumConfirmation,
@@ -29,6 +39,9 @@ import {
 } from "@/utils/analytics/rum-actions";
 
 const ENGINE_STARTING = "engine_starting";
+const FOLDER_READ_CONCURRENCY = 4;
+// Well under the engine's 10,000-target cap for one command.
+const MOVE_BACK_TARGETS_PER_COMMAND = 1000;
 
 const RUM_TRIAGE_ACTIONS: Partial<
   Record<ThreadMutationPayload["kind"], "archive" | "star" | "mark_read">
@@ -48,6 +61,8 @@ type ThreadSnapshot = {
   threadId: string;
   /** The row a hidden copy stands behind; unset for the row's own copy. */
   rowKey?: string;
+  /** Where each message was before a folder move, for its undo. */
+  sourceFolders?: MessageFolder[];
 };
 
 type ThreadActionTarget = Omit<ThreadSnapshot, "mutationId"> & {
@@ -66,7 +81,10 @@ const REACHES_COPIES = new Set<ThreadMutationPayload["kind"]>([
 ]);
 
 type UndoableBatch = {
-  action: UndoableAction;
+  /** How undo puts back a command the engine has already sent. */
+  restore:
+    | { kind: "conversations"; change: MetadataChange }
+    | { kind: "move_back"; movedToFolderId: string };
   // Resolves once the engine has admitted the command, so an undo pressed
   // while it is still being admitted waits for it instead of getting lost.
   snapshots: Promise<ThreadSnapshot[]>;
@@ -238,10 +256,7 @@ export function useThreadActions({
     const snapshots = await batch.snapshots;
     if (!snapshots.length) return [];
 
-    const compensation = mutationPayloadToChange({
-      kind: UNDOABLE_COPY[batch.action].compensation,
-    });
-    if (!compensation) return [];
+    const { restore } = batch;
     const results = await Promise.allSettled(
       Object.values(groupBy(snapshots, (snapshot) => snapshot.mutationId)).map(
         async (snapshots) => {
@@ -253,7 +268,53 @@ export function useThreadActions({
                 operationId: mutationId,
               })
             ).status === "cancelled";
-          if (!cancelled) {
+          if (cancelled) {
+            // Never sent, so there is nothing to put back.
+          } else if (restore.kind === "move_back") {
+            // Each message goes back where it was, which may differ within
+            // one conversation (a reply in Sent, a message filed elsewhere).
+            // Read again now for any message the move took that its own
+            // read never saw.
+            const current = await mapWithConcurrency(
+              snapshots,
+              FOLDER_READ_CONCURRENCY,
+              (snapshot) =>
+                readStoredMessageFolders(client, {
+                  accountId: emailAccountId,
+                  conversationId: snapshot.threadId,
+                }).catch(() => []),
+            );
+            const commands = moveBackChanges(
+              snapshots.flatMap((snapshot) => snapshot.sourceFolders ?? []),
+              restore.movedToFolderId,
+              current.flat(),
+            ).flatMap(({ change, messageIds }) =>
+              chunk(messageIds, MOVE_BACK_TARGETS_PER_COMMAND).map((ids) => ({
+                change,
+                ids,
+              })),
+            );
+            const admissions = await Promise.allSettled(
+              commands.map(({ change, ids }) =>
+                client.submitMetadata({
+                  accountId: emailAccountId,
+                  commandId: randomUuid(),
+                  targets: ids.map((messageId) => ({
+                    accountId: emailAccountId,
+                    messageId,
+                  })),
+                  change,
+                }),
+              ),
+            );
+            // Restored only once every place it came from has its mail back.
+            const failed = admissions.find(
+              (admission) =>
+                admission.status === "rejected" ||
+                admission.value.status === "rejected",
+            );
+            if (failed) throw new Error("move_back_incomplete");
+          } else {
             const diagnostics = await client.getDiagnostics(emailAccountId);
             const admission = await client.submitConversations({
               accountId: emailAccountId,
@@ -262,7 +323,7 @@ export function useThreadActions({
                 accountId: emailAccountId,
                 conversationId: snapshot.threadId,
               })),
-              change: compensation,
+              change: restore.change,
               observedRevision: diagnostics.revision,
             });
             if (admission.status === "rejected") {
@@ -279,6 +340,11 @@ export function useThreadActions({
         result.status === "fulfilled" ? result.value : [],
       ),
     );
+    const restored = new Set(restoredKeys);
+    // A row comes back whole, so a failed row's hidden copies are retried too.
+    const failedSnapshots = snapshots.filter(
+      (snapshot) => !restored.has(snapshot.rowKey ?? snapshot.key),
+    );
     const failedCount = rowKeys(snapshots).length - restoredKeys.length;
 
     if (restoredKeys.length) {
@@ -292,7 +358,10 @@ export function useThreadActions({
           : `Couldn't restore ${failedCount} of ${rowKeys(snapshots).length}`,
       );
     }
-    if (!restoredKeys.length) {
+    if (failedSnapshots.length) {
+      // What didn't come back can be undone again, from the toast or the
+      // shortcut, without repeating what did.
+      batch.snapshots = Promise.resolve(failedSnapshots);
       batch.undone = false;
       // An action taken while this undo ran is now the one to undo.
       if (lastAction.current === null) lastAction.current = batch;
@@ -306,14 +375,34 @@ export function useThreadActions({
   }, [undoBatch]);
 
   const runUndoable = useCallback(
-    async (action: UndoableAction, threadKeys: string[]) => {
+    async ({
+      threadKeys,
+      payload,
+      restore,
+      copy,
+      prepare,
+    }: {
+      threadKeys: string[];
+      payload: ThreadMutationPayload;
+      restore: UndoableBatch["restore"];
+      copy: { done: (count: number) => string; noun: string };
+      /** Reads what undo will need, then queues the change with `enqueue`. */
+      prepare?: (
+        targets: ThreadActionTarget[],
+        enqueue: (
+          prepared: ThreadActionTarget[],
+        ) => ReturnType<typeof enqueueTargets>,
+      ) => ReturnType<typeof enqueueTargets>;
+    }) => {
       const targets = resolveTargets(threadKeys);
-      const enqueued = enqueueTargets(targets, { kind: action });
+      const enqueued = prepare
+        ? prepare(targets, (prepared) => enqueueTargets(prepared, payload))
+        : enqueueTargets(targets, payload);
       // The row leaves on the keypress, before the engine admits the command,
       // so the batch is the one to undo from that moment on.
       const previous = lastAction.current;
       const batch: UndoableBatch = {
-        action,
+        restore,
         snapshots: enqueued.then(
           (result) => result.snapshots,
           () => [],
@@ -333,10 +422,7 @@ export function useThreadActions({
           lastAction.current = previous;
         if (threadKeys.length) {
           toast.error(
-            enqueueFailureCopy(
-              `Couldn't queue ${UNDOABLE_COPY[action].noun}`,
-              rejectionCodes,
-            ),
+            enqueueFailureCopy(`Couldn't queue ${copy.noun}`, rejectionCodes),
           );
         }
         return [];
@@ -344,7 +430,7 @@ export function useThreadActions({
 
       const failedCount = threadKeys.length - rows.length;
       toastUndo({
-        message: UNDOABLE_COPY[action].done(rows.length),
+        message: copy.done(rows.length),
         shortcut: getShortcutHint("undo"),
         onUndo: () => {
           undoBatch(batch);
@@ -353,7 +439,7 @@ export function useThreadActions({
       if (failedCount) {
         toast.error(
           enqueueFailureCopy(
-            `Couldn't queue ${failedCount} of ${threadKeys.length} for ${UNDOABLE_COPY[action].noun}`,
+            `Couldn't queue ${failedCount} of ${threadKeys.length} for ${copy.noun}`,
             rejectionCodes,
           ),
         );
@@ -361,6 +447,81 @@ export function useThreadActions({
       return rows;
     },
     [enqueueTargets, resolveTargets, undoBatch],
+  );
+
+  const runUndoableAction = useCallback(
+    (action: UndoableAction, threadKeys: string[]) => {
+      const { compensation, done, noun } = UNDOABLE_COPY[action];
+      return runUndoable({
+        threadKeys,
+        payload: { kind: action },
+        restore: { kind: "conversations", change: compensation },
+        copy: { done, noun },
+      });
+    },
+    [runUndoable],
+  );
+
+  const moveToFolder = useCallback(
+    (threadKeys: string[], folder: { folderId: string; name: string }) => {
+      const payload: ThreadMutationPayload = {
+        kind: "move_to_folder",
+        folderId: folder.folderId,
+      };
+      return runUndoable({
+        threadKeys,
+        payload,
+        restore: { kind: "move_back", movedToFolderId: folder.folderId },
+        copy: {
+          done: (count) =>
+            count === 1
+              ? `Moved to ${folder.name}`
+              : `Moved ${count} conversations to ${folder.name}`,
+          noun: `moving to ${folder.name}`,
+        },
+        prepare: async (targets, enqueue) => {
+          if (!client) return enqueue(targets);
+          // Shown now, while the engine is read for where each message is.
+          const change = mutationPayloadToChange(payload);
+          const retire = change
+            ? Object.entries(
+                groupBy(targets, (target) => target.emailAccountId),
+              ).map(([accountId, accountTargets]) =>
+                beginOptimisticTriage(client, {
+                  accountId,
+                  conversationIds: accountTargets.map(
+                    (target) => target.threadId,
+                  ),
+                  change,
+                }),
+              )
+            : [];
+          try {
+            const read = await mapWithConcurrency(
+              targets,
+              FOLDER_READ_CONCURRENCY,
+              (target) =>
+                readMessageFolders(client, {
+                  accountId: target.emailAccountId,
+                  conversationId: target.threadId,
+                }).catch(() => null),
+            );
+            // Mail whose folders can't be read stays put: undo couldn't
+            // return it.
+            return await enqueue(
+              targets.flatMap((target, index) => {
+                const sourceFolders = read[index];
+                return sourceFolders ? [{ ...target, sourceFolders }] : [];
+              }),
+            );
+          } finally {
+            // Queued, the command shows the change itself.
+            for (const done of retire) done();
+          }
+        },
+      });
+    },
+    [client, runUndoable],
   );
 
   const setReadState = useCallback(
@@ -542,17 +703,18 @@ export function useThreadActions({
     addTargets,
     subscribeRestored,
     archive: useCallback(
-      (threadKeys: string[]) => runUndoable("archive", threadKeys),
-      [runUndoable],
+      (threadKeys: string[]) => runUndoableAction("archive", threadKeys),
+      [runUndoableAction],
     ),
     moveToInbox: useCallback(
-      (threadKeys: string[]) => runUndoable("unarchive", threadKeys),
-      [runUndoable],
+      (threadKeys: string[]) => runUndoableAction("unarchive", threadKeys),
+      [runUndoableAction],
     ),
     trash: useCallback(
-      (threadKeys: string[]) => runUndoable("trash", threadKeys),
-      [runUndoable],
+      (threadKeys: string[]) => runUndoableAction("trash", threadKeys),
+      [runUndoableAction],
     ),
+    moveToFolder,
     markRead: useCallback(
       (threadKeys: string[]) => setReadState(threadKeys, true, false),
       [setReadState],
@@ -571,24 +733,24 @@ export function useThreadActions({
 const UNDOABLE_COPY: Record<
   UndoableAction,
   {
-    compensation: "archive" | "unarchive" | "untrash";
+    compensation: MetadataChange;
     done: (count: number) => string;
     noun: string;
   }
 > = {
   archive: {
-    compensation: "unarchive",
+    compensation: { kind: "unarchive" },
     done: (count) => summarise("Archived", count),
     noun: "archiving",
   },
   unarchive: {
-    compensation: "archive",
+    compensation: { kind: "archive" },
     done: (count) =>
       count === 1 ? "Moved to inbox" : `Moved ${count} conversations to inbox`,
     noun: "moving to inbox",
   },
   trash: {
-    compensation: "untrash",
+    compensation: { kind: "restore_from_trash" },
     done: (count) => summarise("Deleted", count),
     noun: "deletion",
   },

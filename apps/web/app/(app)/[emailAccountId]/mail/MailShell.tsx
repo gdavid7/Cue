@@ -1290,6 +1290,7 @@ export function MailShell() {
   const {
     archive,
     moveToInbox,
+    moveToFolder,
     trash,
     markSpam,
     markNotSpam,
@@ -2683,6 +2684,18 @@ export function MailShell() {
             },
             false,
             false,
+            "next",
+            keys,
+          );
+        case "folder":
+          return runOn(
+            (ids) =>
+              moveToFolder(ids, {
+                folderId: action.folderId,
+                name: action.name,
+              }),
+            true,
+            true,
             "next",
             keys,
           );

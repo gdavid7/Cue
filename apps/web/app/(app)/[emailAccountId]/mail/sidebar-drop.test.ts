@@ -238,14 +238,84 @@ describe("resolveSidebarDrop", () => {
     });
   });
 
-  it("refuses Outlook folders, which have no move the picker offers", () => {
-    expect(
-      resolveSidebarDrop({
-        target: { kind: "folder" },
-        conversations: [conversation("a", ["INBOX"])],
-        isCurrentView: false,
-      }),
-    ).toBeNull();
+  describe("Outlook folders", () => {
+    const projects: SidebarDropTarget = {
+      kind: "folder",
+      accountId: "acc-1",
+      folderId: "folder-projects",
+      name: "Projects",
+    };
+
+    it("moves conversations into the folder", () => {
+      expect(
+        resolveSidebarDrop({
+          target: projects,
+          conversations: [conversation("a", ["INBOX"]), conversation("b", [])],
+          isCurrentView: false,
+        }),
+      ).toEqual({
+        kind: "folder",
+        accountId: "acc-1",
+        folderId: "folder-projects",
+        name: "Projects",
+      });
+    });
+
+    it("refuses the folder the conversations are being viewed in", () => {
+      expect(
+        resolveSidebarDrop({
+          target: projects,
+          conversations: [conversation("a", [])],
+          isCurrentView: true,
+        }),
+      ).toBeNull();
+    });
+
+    it("allows an All inboxes drop when every conversation is from the folder's account", () => {
+      expect(
+        resolveSidebarDrop({
+          target: projects,
+          conversations: [
+            conversation("acc-1:a", ["INBOX"], "acc-1"),
+            conversation("acc-1:b", ["INBOX"], "acc-1"),
+          ],
+          isCurrentView: false,
+        }),
+      ).toMatchObject({ kind: "folder", folderId: "folder-projects" });
+    });
+
+    it("refuses an All inboxes drop when any conversation is from another account", () => {
+      expect(
+        resolveSidebarDrop({
+          target: projects,
+          conversations: [
+            conversation("acc-1:a", ["INBOX"], "acc-1"),
+            conversation("acc-2:b", ["INBOX"], "acc-2"),
+          ],
+          isCurrentView: false,
+        }),
+      ).toBeNull();
+    });
+
+    it("refuses trashed or spam mail, which the move would leave marked as trash or spam", () => {
+      expect(
+        resolveSidebarDrop({
+          target: projects,
+          conversations: [
+            conversation("a", ["INBOX"]),
+            conversation("b", ["TRASH"]),
+          ],
+          isCurrentView: false,
+        }),
+      ).toBeNull();
+      expect(
+        resolveSidebarDrop({
+          target: projects,
+          conversations: [conversation("a", ["SPAM"])],
+          isCurrentView: false,
+        }),
+      ).toBeNull();
+    });
   });
 });
 
