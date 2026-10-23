@@ -238,6 +238,28 @@ describe("useThreadActions", () => {
       );
     });
 
+    it("unmutes only the conversation whose archive couldn't be queued", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) =>
+          command.accountId === "two"
+            ? { status: "rejected", code: "stale_selection" }
+            : { status: "queued" },
+      );
+      const threads = [
+        { ...createThread(["INBOX"], "a"), account: { id: "one" } },
+        { ...createThread(["INBOX"], "b"), account: { id: "two" } },
+      ] as ListThread[];
+      const { result } = renderActions({ threads });
+
+      let muted: string[] = [];
+      await act(async () => {
+        muted = await result.current.mute(["one:a", "two:b"]);
+      });
+
+      expect(muted).toEqual(["one:a"]);
+      expect(muting.unmute.mock.calls).toEqual([["two", { threadIds: ["b"] }]]);
+    });
+
     it("unmutes again when nothing could be archived", async () => {
       mail.started = false;
       const { result } = renderActions({ threads: [row] });

@@ -34,7 +34,8 @@ export type ThreadRowActionHandlers = {
  * Gmail's hover actions for one row: archive (or back to the inbox), delete,
  * read state, star, snooze and mute, without opening or selecting the thread.
  * A mouse shortcut: the same actions are in the toolbar and on the keyboard,
- * so these stay out of the tab order rather than add five tab stops per row.
+ * so these stay out of the tab order rather than add a tab stop per action
+ * to every row.
  * The row shows them on hover and while it has keyboard focus; otherwise they
  * are `display: none` and out of the accessibility tree. When shown they sit
  * beside the row's `role="option"`, not inside it, so they keep their button

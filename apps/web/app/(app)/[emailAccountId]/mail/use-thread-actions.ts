@@ -450,7 +450,6 @@ export function useThreadActions({
         // Copies that did change stay undoable with the shortcut.
         if (!snapshots.length && lastAction.current === batch)
           lastAction.current = previous;
-        if (!snapshots.length) undoExtra?.();
         if (threadKeys.length) {
           toast.error(
             enqueueFailureCopy(`Couldn't queue ${copy.noun}`, rejectionCodes),
@@ -499,28 +498,42 @@ export function useThreadActions({
   // Muting archives through the same path, so the row leaves the same way;
   // the mute itself is kept in Cue's database, never in the mailbox.
   const mute = useCallback(
-    (threadKeys: string[]) => {
+    async (threadKeys: string[]) => {
       const muted = setMuted(resolveTargets(threadKeys), true);
-      return runUndoable({
-        threadKeys,
-        payload: { kind: "archive" },
-        restore: {
-          kind: "conversations",
-          // Archiving ends a snooze, so undo puts it back where it was.
-          compensation: (snapshot) =>
-            snapshot.inInbox === false
-              ? { kind: "archive" }
-              : { kind: "unarchive" },
-        },
-        copy: { done: (count) => summarise("Muted", count), noun: "muting" },
-        undoExtra: async () => {
-          const mutedTargets = await muted;
-          if (!mutedTargets.length) return;
-          const unmuted = await setMuted(mutedTargets, false);
-          if (unmuted.length < mutedTargets.length)
-            toast.error("Couldn't unmute this conversation");
-        },
-      });
+      // A conversation that couldn't be archived isn't left muted unseen.
+      const unmuteUnqueued = async (queuedRows: string[]) => {
+        const queued = new Set(queuedRows);
+        const unqueued = (await muted).filter(
+          (target) => !queued.has(target.rowKey ?? target.key),
+        );
+        if (unqueued.length) await setMuted(unqueued, false);
+      };
+      let rows: string[];
+      try {
+        rows = await runUndoable({
+          threadKeys,
+          payload: { kind: "archive" },
+          // Archiving ends a snooze, as snoozing's own undo has to account
+          // for: the conversation goes back to where it was.
+          restore: {
+            kind: "conversations",
+            compensation: UNDOABLE_COPY.snooze.compensation,
+          },
+          copy: { done: (count) => summarise("Muted", count), noun: "muting" },
+          undoExtra: async () => {
+            const mutedTargets = await muted;
+            if (!mutedTargets.length) return;
+            const unmuted = await setMuted(mutedTargets, false);
+            if (unmuted.length < mutedTargets.length)
+              toast.error("Couldn't unmute this conversation");
+          },
+        });
+      } catch (error) {
+        await unmuteUnqueued([]);
+        throw error;
+      }
+      await unmuteUnqueued(rows);
+      return rows;
     },
     [resolveTargets, runUndoable],
   );

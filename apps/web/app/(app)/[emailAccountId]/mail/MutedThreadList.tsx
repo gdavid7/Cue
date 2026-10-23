@@ -17,6 +17,7 @@ import { extractNameFromEmail } from "@/utils/email";
 import { getActionErrorMessage } from "@/utils/error";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { getAccountScopedKey } from "@/utils/swr";
+import { forgetMutedThreadIds } from "@/utils/web-notifications/muted-thread-ids";
 
 const MUTED_PATH = "/api/user/muted-threads";
 
@@ -112,6 +113,8 @@ function MutedThreadRow({
     unmuteThreadsAction.bind(null, row.accountId),
     {
       onSuccess: () => {
+        // The tab's notifier holds muted ids for a minute.
+        forgetMutedThreadIds(row.accountId);
         toast.success("Unmuted");
         onUnmuted();
       },

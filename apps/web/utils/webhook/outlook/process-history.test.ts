@@ -167,6 +167,26 @@ describe("Outlook processHistoryForUser - Folder Filtering", () => {
     );
   });
 
+  it.each([
+    true,
+    undefined,
+  ])("tells the shared processor whether this is an update (%s), so a backfill still counts as arrival", async (isUpdate) => {
+    const message = getMockParsedMessage({ labelIds: ["INBOX"] });
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      getMessage: vi.fn().mockResolvedValue(message),
+    } as never);
+    await processHistoryForUser({
+      subscriptionId: "sub-123",
+      resourceData: mockResourceData,
+      logger,
+      isUpdate,
+    });
+    expect(processHistoryItem).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ isUpdate: isUpdate ?? false }),
+    );
+  });
+
   it("looks up the account by email when no subscription ID is provided", async () => {
     const inboxMessage = getMockParsedMessage({ labelIds: ["INBOX"] });
     const mockProvider = {

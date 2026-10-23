@@ -160,6 +160,7 @@ async function processNotificationsAsync(
         subscriptionId,
         resourceData,
         isNewMessage: notification.changeType === "created",
+        isUpdate: notification.changeType === "updated",
         logger,
       });
 

@@ -28,10 +28,19 @@ import { sendToReplyPushNotification } from "@/utils/to-reply-push";
 import { sendOtpPushNotification } from "@/utils/otp-push";
 import { internalDateToDate } from "@/utils/date";
 import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
+import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
+import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import { isTransientMessageProcessingError } from "@/utils/webhook/message-processing-failure";
 
 export type SharedProcessHistoryOptions = {
   provider: EmailProvider;
   isNewMessage?: boolean;
+  /**
+   * A change to mail already processed (an Outlook update), not mail
+   * arriving. Arrivals include catch-up and backfill, which leave
+   * isNewMessage unset so they never push.
+   */
+  isUpdate?: boolean;
   rules: RuleWithActions[];
   hasAutomationRules: boolean;
   hasAiAccess: boolean;
@@ -185,7 +194,7 @@ export async function processHistoryItem(
     // archived: the rest of the thread (the user's Sent replies, drafts, mail
     // they moved back) stays where it is, and an update event never re-files.
     const muted =
-      options.isNewMessage && actualThreadId
+      !options.isUpdate && actualThreadId
         ? await prisma.mutedThread.findUnique({
             where: {
               emailAccountId_threadId: {
@@ -200,7 +209,14 @@ export async function processHistoryItem(
       try {
         await provider.archiveMessage(messageId);
         logger.info("Skipping. Muted conversation's new message archived.");
-      } catch {
+      } catch (error) {
+        // Throttling and passing outages go to the existing retry path.
+        if (
+          isEmailProviderRateLimitError({ error, provider: provider.name }) ||
+          isGmailCallDeferredError(error) ||
+          isTransientMessageProcessingError(error)
+        )
+          throw error;
         // Still muted (no rules, no push); the message just stays in the inbox.
         logger.warn("Failed to archive a muted conversation's new message", {
           messageId,

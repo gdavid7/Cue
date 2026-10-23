@@ -163,6 +163,7 @@ export const createMockEmailProvider = (
   getThreadsWithLabel: vi.fn().mockResolvedValue([]),
   getLatestMessageFromThreadSnapshot: vi.fn().mockResolvedValue(null),
   getLatestMessageInThread: vi.fn().mockResolvedValue(null),
+  getThreadHeadline: vi.fn().mockResolvedValue(null),
   getMessagesBatch: vi.fn().mockResolvedValue([]),
   getRawMessage: vi.fn().mockResolvedValue(Buffer.from("")),
   getVacationResponder: vi.fn(),

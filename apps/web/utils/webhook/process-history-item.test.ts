@@ -481,7 +481,10 @@ describe("Provider Edge Cases", () => {
 
     async function processArrival(
       provider: ReturnType<typeof createMockEmailProvider>,
-      isNewMessage = true,
+      {
+        isNewMessage = true,
+        isUpdate,
+      }: { isNewMessage?: boolean; isUpdate?: boolean } = {},
     ) {
       await processHistoryItem(
         { messageId: "muted-message", threadId: "muted-thread" },
@@ -491,6 +494,7 @@ describe("Provider Edge Cases", () => {
           hasAutomationRules: true,
           hasAiAccess: true,
           isNewMessage,
+          isUpdate,
         },
       );
     }
@@ -524,11 +528,38 @@ describe("Provider Edge Cases", () => {
       vi.mocked(runRules).mockResolvedValueOnce([]);
       const { provider } = getArrival();
 
-      await processArrival(provider, false);
+      await processArrival(provider, { isNewMessage: false, isUpdate: true });
 
       expect(prisma.mutedThread.findUnique).not.toHaveBeenCalled();
       expect(provider.archiveMessage).not.toHaveBeenCalled();
       expect(provider.archiveThread).not.toHaveBeenCalled();
+    });
+
+    // Outlook's backfill and catch-up process mail that arrived unnoticed
+    // without isNewMessage, so they never push; it is still new mail.
+    it("archives mail a backfill picks up, which isn't flagged as new", async () => {
+      const { provider } = getArrival();
+
+      await processArrival(provider, { isNewMessage: false });
+
+      expect(provider.archiveMessage).toHaveBeenCalledExactlyOnceWith(
+        "muted-message",
+      );
+      expect(runRules).not.toHaveBeenCalled();
+    });
+
+    it("hands a passing archive failure to the retry path, without running rules", async () => {
+      const timeout = Object.assign(new Error("timed out"), {
+        name: "TimeoutError",
+      });
+      const { provider } = getArrival({
+        archiveMessage: vi.fn().mockRejectedValue(timeout),
+      });
+
+      await expect(processArrival(provider)).rejects.toBe(timeout);
+
+      expect(runRules).not.toHaveBeenCalled();
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
     });
 
     it("stays muted when archiving fails: no rules or pushes, and no error", async () => {
