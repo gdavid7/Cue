@@ -75,6 +75,29 @@ vi.mock("@/utils/gmail/oauth", () => ({
   getGoogleGmailApiRootUrl: vi.fn(() => "https://gmail.googleapis.com/"),
 }));
 
+describe("GmailProvider.listUnreadInboxThreadIds", () => {
+  it("lists unread inbox conversations by id, and says when there were more", async () => {
+    const list = vi.fn().mockResolvedValue({
+      data: { threads: [{ id: "t1" }, { id: "t2" }], nextPageToken: "next" },
+    });
+    const provider = new GmailProvider({ users: { threads: { list } } } as any);
+
+    await expect(
+      provider.listUnreadInboxThreadIds({
+        after: new Date("2026-10-01T00:00:00.000Z"),
+        maxResults: 2,
+      }),
+    ).resolves.toEqual({ threadIds: ["t1", "t2"], full: true });
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labelIds: ["INBOX"],
+        q: `is:unread after:${Date.parse("2026-10-01T00:00:00.000Z") / 1000}`,
+        fields: "threads/id,nextPageToken",
+      }),
+    );
+  });
+});
+
 describe("GmailProvider.countMessages", () => {
   it.each([
     0, 7, 47,

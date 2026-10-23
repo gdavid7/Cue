@@ -5,6 +5,7 @@ import {
 } from "@inboxzero/mail-core/queries";
 import { isOutlookInboxSection } from "@/utils/outlook/inbox-sections";
 import {
+  type CueFilterValue,
   type CueMembership,
   isCueFilterValue,
   splitUsesCue,
@@ -235,10 +236,21 @@ function splitFilterToPredicate(
   return gmailTokenToPredicate(filter.value || "INBOX");
 }
 
+/**
+ * Cue sorts conversations, so where the membership names them (see
+ * `useCueMembership`) a value covers every message of each; otherwise only the
+ * messages it names, which an older engine still understands.
+ */
 function cuePredicate(
-  value: keyof CueMembership,
+  value: CueFilterValue,
   cueMembership: CueMembership | undefined,
 ): MailPredicate {
+  const threadIds = cueMembership?.threads?.[value];
+  if (threadIds)
+    return {
+      kind: "conversation",
+      ids: threadIds.slice(0, MAX_MESSAGE_PREDICATE_IDS),
+    };
   return {
     kind: "message",
     ids: (cueMembership?.[value] ?? []).slice(0, MAX_MESSAGE_PREDICATE_IDS),

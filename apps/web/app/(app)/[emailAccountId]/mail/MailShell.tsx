@@ -60,6 +60,7 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/ReadingBundle";
 import {
   getReadingRoute,
+  getReadingSources,
   getReadingSummary,
   inboxWithoutReadingQuery,
   isReadingMailView,
@@ -68,6 +69,7 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/reading-lane";
 import { useReadingBulk } from "@/app/(app)/[emailAccountId]/mail/use-reading-bulk";
 import { findReadingLabelId } from "@/utils/label/reading-label";
+import { useCueMembership } from "@/hooks/useCueMembership";
 import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 import { useAllInboxesCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-all-inboxes-cue-search";
 import {
@@ -373,14 +375,30 @@ export function MailShell() {
   const routeFolderId = resolveRouteSlug("folder", mailSlugs.folders);
   const isReadingView = isReadingMailView(routeView);
   const readingLabelId = findReadingLabelId(allLabels);
+  // Cue's own sorting names newsletters too, as it doesn't label the mailbox
+  // by default (see `getReadingSources`). Only the inbox and its tabs bundle
+  // them, and only the lane reads them, so no other view asks.
+  const readsCueMembership =
+    !mailLocation.allInboxes &&
+    (isReadingView || routeView.kind === "inbox" || routeView.kind === "split");
+  const { membership: cueMembership } = useCueMembership(readsCueMembership);
+  const readingSources = useMemo(
+    () => getReadingSources({ labelId: readingLabelId, cueMembership }),
+    [readingLabelId, cueMembership],
+  );
   const readingQuery = useMemo(
-    () => (readingLabelId ? readingLaneQuery(readingLabelId) : null),
-    [readingLabelId],
+    () => readingLaneQuery(readingSources),
+    [readingSources],
+  );
+  const inboxWithoutReading = useMemo(
+    () => inboxWithoutReadingQuery(readingSources),
+    [readingSources],
   );
   const readingRoute = getReadingRoute({
     isReadingView,
     isAllAccounts: Boolean(mailLocation.allInboxes),
-    readingLabelId,
+    hasLaneQuery: Boolean(readingQuery),
+    membershipLoading: readsCueMembership && !cueMembership,
     labelsLoading,
     // Labels aren't asked for while the provider is rate limited, which is a
     // failure to load them, not an account without the label.
@@ -757,11 +775,12 @@ export function MailShell() {
     !scopeQuery &&
     !activeSplit?.filters.length &&
     activeSplit?.id !== OTHER_SPLIT_ID;
-  const bundlesReading = isPlainInbox && Boolean(readingLabelId);
-  // Until the labels say which mail is a newsletter, the plain inbox waits
-  // rather than showing newsletters that then leave the list under the cursor;
-  // but only briefly, as a slow labels request must never hold the inbox.
-  const labelsPending = isPlainInbox && labelsLoading;
+  const bundlesReading = isPlainInbox && Boolean(inboxWithoutReading);
+  // Until the labels and Cue's sorting say which mail is a newsletter, the
+  // plain inbox waits rather than showing newsletters that then leave the
+  // list under the cursor; but only briefly, as a slow request must never
+  // hold the inbox.
+  const labelsPending = isPlainInbox && (labelsLoading || !cueMembership);
   const [labelWaitOver, setLabelWaitOver] = useState(false);
   // A later wait for labels, such as another account's, gets its own time.
   if (!labelsPending && labelWaitOver) setLabelWaitOver(false);
@@ -779,8 +798,7 @@ export function MailShell() {
     // what Gmail's and Outlook's own search boxes do by default.
     if (searchQuery) return { q: searchQuery };
     if (scopeQuery) return scopeQuery;
-    if (bundlesReading && readingLabelId)
-      return inboxWithoutReadingQuery(readingLabelId);
+    if (bundlesReading && inboxWithoutReading) return inboxWithoutReading;
 
     if (activeSplit?.id === OTHER_SPLIT_ID) return otherMailSplitQuery(splits);
     return activeSplit
@@ -792,7 +810,7 @@ export function MailShell() {
     activeSplit,
     splits,
     bundlesReading,
-    readingLabelId,
+    inboxWithoutReading,
   ]);
 
   // Typing searches local mail as you go; the provider is only asked once
@@ -2332,7 +2350,7 @@ export function MailShell() {
     pendingReadingFocus.current = null;
     target?.focus();
   });
-  // All inboxes, or an account with nothing filed as Newsletter, has no lane.
+  // All inboxes, or an account where nothing names a newsletter, has no lane.
   useEffect(() => {
     if (readingRoute !== "redirect") return;
     updateLocation((current) => ({ ...current, view: INBOX_VIEW }));

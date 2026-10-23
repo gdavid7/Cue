@@ -24,7 +24,7 @@ import { HANDLED_WINDOW_DAYS } from "@/utils/home/today-constants";
 // Today shows five, but those the server puts under Needs reply and mail Cue
 // filed are left out, so read the most one page holds: a local read is cheap.
 const PAGE_SIZE = 100;
-const NO_HANDLED_LABELS: Record<string, string[]> = {};
+const NO_IDS_BY_ACCOUNT: Record<string, string[]> = {};
 
 /**
  * The inbox as this browser's local mail store holds it, newest first, as
@@ -36,7 +36,8 @@ const NO_HANDLED_LABELS: Record<string, string[]> = {};
 export function useLocalInboxRows({
   accounts,
   named,
-  handledLabelIds = NO_HANDLED_LABELS,
+  handledLabelIds = NO_IDS_BY_ACCOUNT,
+  newsletterThreadIds = NO_IDS_BY_ACCOUNT,
   enabled,
 }: {
   accounts: TodayAccount[];
@@ -47,6 +48,11 @@ export function useLocalInboxRows({
    * answer. Missing before the first one, when filed mail can still show.
    */
   handledLabelIds?: Record<string, string[]>;
+  /**
+   * By account, the conversations Cue sorted as newsletters lately, which it
+   * files without labelling the mailbox. From a server answer, as above.
+   */
+  newsletterThreadIds?: Record<string, string[]>;
   enabled: boolean;
 }): TodayThread[] | null {
   const client = useOptionalMailClient();
@@ -65,8 +71,15 @@ export function useLocalInboxRows({
   const view = active && mailbox.status === "ready" ? mailbox.data : null;
   return useMemo(
     () =>
-      view ? localInboxRows(view, { accounts, named, handledLabelIds }) : null,
-    [view, accounts, named, handledLabelIds],
+      view
+        ? localInboxRows(view, {
+            accounts,
+            named,
+            handledLabelIds,
+            newsletterThreadIds,
+          })
+        : null,
+    [view, accounts, named, handledLabelIds, newsletterThreadIds],
   );
 }
 
@@ -76,18 +89,26 @@ export function localInboxRows(
   {
     accounts,
     named,
-    handledLabelIds = NO_HANDLED_LABELS,
+    handledLabelIds = NO_IDS_BY_ACCOUNT,
+    newsletterThreadIds = NO_IDS_BY_ACCOUNT,
     now = Date.now(),
   }: {
     accounts: TodayAccount[];
     named: boolean;
     handledLabelIds?: Record<string, string[]>;
+    newsletterThreadIds?: Record<string, string[]>;
     now?: number;
   },
 ): TodayThread[] | null {
   if (!isLocalMailReady(view, accounts)) return null;
   const byId = new Map(accounts.map((account) => [account.id, account]));
   const handledSince = now - HANDLED_WINDOW_DAYS * 86_400_000;
+  const newsletters = new Map(
+    Object.entries(newsletterThreadIds).map(([accountId, threadIds]) => [
+      accountId,
+      new Set(threadIds),
+    ]),
+  );
   const rows = view.conversations.flatMap((conversation) => {
     // Only the accounts asked for, so another mailbox's rows never show.
     const account = byId.get(conversation.key.accountId);
@@ -97,6 +118,14 @@ export function localInboxRows(
     if (
       conversation.latestMessageAtMs >= handledSince &&
       conversation.labelIds.some((id) => handled.includes(id))
+    )
+      return [];
+    // And so is what Cue sorted as a newsletter without labelling it.
+    // As there, only once it's read through: unread, it still shows.
+    if (
+      !conversation.unread &&
+      conversation.latestMessageAtMs >= handledSince &&
+      newsletters.get(account.id)?.has(conversation.key.conversationId)
     )
       return [];
     const row = toTodayThread(conversation, account.email);

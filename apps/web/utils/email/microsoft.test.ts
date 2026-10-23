@@ -99,6 +99,42 @@ describe("OutlookProvider.getAttachment", () => {
   });
 });
 
+describe("OutlookProvider.listUnreadInboxThreadIds", () => {
+  it("names each conversation once, and says a full page of messages is full", async () => {
+    const page = [
+      createMessage({ id: "m1", conversationId: "c1" }),
+      createMessage({ id: "m2", conversationId: "c1" }),
+      createMessage({ id: "m3", conversationId: "c2" }),
+    ];
+    const client = createMockOutlookClient(page);
+    const provider = new OutlookProvider(client, createTestLogger());
+
+    await expect(
+      provider.listUnreadInboxThreadIds({
+        after: new Date("2026-10-01T00:00:00.000Z"),
+        maxResults: 3,
+      }),
+    ).resolves.toEqual({ threadIds: ["c1", "c2"], full: true });
+    expect(client.getRequestLog()).toEqual([
+      {
+        apiPath: "/me/mailFolders/inbox/messages",
+        filter:
+          "receivedDateTime ge 2026-10-01T00:00:00.000Z and isRead eq false",
+        orderby: "receivedDateTime desc",
+        search: undefined,
+      },
+    ]);
+    expect(
+      (
+        await provider.listUnreadInboxThreadIds({
+          after: new Date("2026-10-01T00:00:00.000Z"),
+          maxResults: 500,
+        })
+      ).full,
+    ).toBe(false);
+  });
+});
+
 describe("OutlookProvider.countMessages", () => {
   it.each([
     0, 7, 47,

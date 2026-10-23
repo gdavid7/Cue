@@ -123,7 +123,11 @@ export type MailPredicate =
   | { kind: "has_attachment"; value: boolean }
   /** These messages, of `accountId` alone when it is set. */
   | { kind: "message"; ids: string[]; accountId?: string }
-  /** Messages of these conversations, of `accountId` alone when it is set. */
+  /**
+   * Every message of these conversations, of `accountId` alone when it is
+   * set. Newer than the other kinds: check `predicate:conversation` with
+   * `mailClientSupports` before sending it to an engine.
+   */
   | { kind: "conversation"; ids: string[]; accountId?: string }
   | {
       kind: "text";

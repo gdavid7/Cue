@@ -17,6 +17,8 @@ const REPLY_THREAD = "thr_playwright_1";
 const REPLY_SUBJECT = "Playwright Test Message";
 const TRACKER_PREFIX = "playwright-today-";
 const TODAY_SUBSCRIPTION_ID = "playwright-today-subscription";
+const NEWSLETTER_RULE_ID = "playwright-today-newsletter-rule";
+const NEWSLETTER_RUN_PREFIX = "playwright-today-newsletter-run-";
 
 test.beforeEach(async ({ page }) => {
   const emailAccountId = await getEmailAccountId(page);
@@ -60,6 +62,69 @@ test("archives a conversation from Today and restores it with undo", async ({
   await page.keyboard.press("z");
   await expect(option).toBeVisible();
   await expectEngineMutation(page, emailAccountId, "unarchive");
+});
+
+test("an account without the Newsletter label bundles what Cue sorted as newsletters, on Today and in Mail", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  // Cue sorts without labelling the mailbox by default, so most accounts
+  // have no Newsletter label and only Cue's own records say what's what.
+  const restoreLabel = await removeNewsletterLabel(page);
+  const subject = `Slow Mail digest ${Date.now()}`;
+  const newsletter = await seedNewsletter(page, subject, { labelled: false });
+  const emailAccountId = await getEmailAccountId(page);
+  let unsort: (() => Promise<void>) | undefined;
+  try {
+    unsort = await sortAsNewsletter(emailAccountId, newsletter);
+    await openToday(page);
+    const reading = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: /^Reading/ }) });
+    await expect(
+      reading.getByRole("button", { name: /^From .*Field Notes/ }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(todayRow(page, newsletter.threadId)).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-reading-by-cue");
+
+    const { conversations } = await openMail(page);
+    await waitForMetadataCoverage(page);
+    const bundle = page.getByRole("button", {
+      name: /^Reading, from .*Field Notes/,
+    });
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    await expect(
+      conversations.getByRole("option", { name: subject }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-by-cue");
+
+    await bundle.click();
+    await expect(page).toHaveURL(/\/type\/reading(\/|$|\?)/);
+    const laneRow = page
+      .getByRole("listbox", { name: "Conversations" })
+      .getByRole("option", { name: subject });
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "mail-reading-lane-by-cue",
+    );
+
+    await page.getByRole("button", { name: "Archive all" }).click();
+    await expect(page.getByText("Nothing left to read.")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect
+      .poll(() => newsletter.folderOf(), { timeout: 60_000 })
+      .toBe("archive");
+  } finally {
+    // Each step runs whatever another throws, so the label is put back.
+    await runEach([
+      () => unsort?.(),
+      () => newsletter.remove(),
+      () => restoreLabel(),
+    ]);
+  }
 });
 
 test("bundles unread newsletters into one Reading row that opens in place and marks them all read", async ({
@@ -887,9 +952,14 @@ const KAI = { address: "kai@example.com", name: "Kai Example" };
 
 /**
  * An unread newsletter in the inbox, filed under the Newsletter label (an
- * Outlook category) as Cue's rule would, and what takes it out again.
+ * Outlook category) as Cue's rule would unless `labelled` is false, and what
+ * takes it out again.
  */
-async function seedNewsletter(page: Page, subject: string) {
+async function seedNewsletter(
+  page: Page,
+  subject: string,
+  { labelled = true }: { labelled?: boolean } = {},
+) {
   const token = await readProviderAccessToken();
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
@@ -899,12 +969,14 @@ async function seedNewsletter(page: Page, subject: string) {
   };
   if (isMicrosoftPlaywright()) {
     const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
-    const category = await page.request.post(
-      `${base}/outlook/masterCategories`,
-      { headers, data: { displayName: "Newsletter" } },
-    );
-    // Already there from an earlier run is as good.
-    expect(category.ok() || category.status() === 409).toBe(true);
+    if (labelled) {
+      const category = await page.request.post(
+        `${base}/outlook/masterCategories`,
+        { headers, data: { displayName: "Newsletter" } },
+      );
+      // Already there from an earlier run is as good.
+      expect(category.ok() || category.status() === 409).toBe(true);
+    }
     const draft = await page.request.post(`${base}/messages`, {
       headers,
       data: {
@@ -924,7 +996,7 @@ async function seedNewsletter(page: Page, subject: string) {
             name: "Field Notes",
           },
         },
-        categories: ["Newsletter"],
+        categories: labelled ? ["Newsletter"] : [],
         isRead: false,
       },
     });
@@ -965,6 +1037,7 @@ async function seedNewsletter(page: Page, subject: string) {
     };
     return {
       threadId: message.conversationId,
+      messageId: message.id,
       folderOf: async (): Promise<NewsletterFolder> =>
         (await locate())?.folder ?? "missing",
       remove: async () => {
@@ -984,7 +1057,7 @@ async function seedNewsletter(page: Page, subject: string) {
     (await labels.json()) as { labels: { id: string; name: string }[] }
   ).labels.find((label) => label.name === "Newsletter");
   let labelId = existing?.id;
-  if (!labelId) {
+  if (labelled && !labelId) {
     const created = await page.request.post(`${base}/labels`, {
       headers,
       data: { name: "Newsletter" },
@@ -999,7 +1072,7 @@ async function seedNewsletter(page: Page, subject: string) {
       to: email,
       subject,
       body_text: "Three essays on slow travel.",
-      labelIds: ["INBOX", "UNREAD", labelId],
+      labelIds: ["INBOX", "UNREAD", ...(labelled && labelId ? [labelId] : [])],
       internalDate: String(Date.now()),
     },
   });
@@ -1007,6 +1080,7 @@ async function seedNewsletter(page: Page, subject: string) {
   const message = (await inserted.json()) as { id: string; threadId: string };
   return {
     threadId: message.threadId,
+    messageId: message.id,
     folderOf: async (): Promise<NewsletterFolder> => {
       const current = await page.request.get(`${base}/messages/${message.id}`, {
         headers,
@@ -1195,6 +1269,121 @@ async function openNeedsReplyTrackers(
       [emailAccountId, threadId],
     );
     return result.rowCount ?? 0;
+  });
+}
+
+/** Runs every cleanup step in turn, then throws the first failure, if any. */
+async function runEach(steps: (() => unknown)[]) {
+  let failure: { error: unknown } | undefined;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failure ??= { error };
+    }
+  }
+  if (failure) throw failure.error;
+}
+
+/**
+ * Takes the Newsletter label (an Outlook category) off the account, and
+ * returns what puts it back, so later tests find the account as it was.
+ */
+async function removeNewsletterLabel(page: Page) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me/outlook/masterCategories`;
+    const listed = await page.request.get(base, { headers });
+    expect(listed.ok(), await listed.text()).toBe(true);
+    const { value } = (await listed.json()) as {
+      value: { id: string; displayName: string }[];
+    };
+    const removed = value.filter(
+      (candidate) => candidate.displayName === "Newsletter",
+    );
+    for (const category of removed) {
+      const deleted = await page.request.delete(`${base}/${category.id}`, {
+        headers,
+      });
+      expect(deleted.ok(), await deleted.text()).toBe(true);
+    }
+    return async () => {
+      if (!removed.length) return;
+      await page.request.post(base, {
+        headers,
+        data: { displayName: "Newsletter" },
+      });
+    };
+  }
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/labels`;
+  const listed = await page.request.get(base, { headers });
+  expect(listed.ok(), await listed.text()).toBe(true);
+  const { labels } = (await listed.json()) as {
+    labels: { id: string; name: string }[];
+  };
+  const removed = labels.filter((candidate) => candidate.name === "Newsletter");
+  for (const label of removed) {
+    const deleted = await page.request.delete(`${base}/${label.id}`, {
+      headers,
+    });
+    expect(deleted.ok(), await deleted.text()).toBe(true);
+  }
+  return async () => {
+    if (!removed.length) return;
+    await page.request.post(base, {
+      headers,
+      data: { name: "Newsletter" },
+    });
+  };
+}
+
+/**
+ * What Cue's Newsletter rule records when it sorts a message without
+ * labelling the mailbox: an applied run of that rule. Returns the cleanup.
+ */
+async function sortAsNewsletter(
+  emailAccountId: string,
+  { threadId, messageId }: { threadId: string; messageId: string },
+) {
+  const runId = `${NEWSLETTER_RUN_PREFIX}${messageId}`;
+  return withClient(async (client) => {
+    const existing = await client.query<{ id: string }>(
+      `SELECT id FROM "Rule"
+       WHERE "emailAccountId" = $1 AND "systemType" = 'NEWSLETTER'`,
+      [emailAccountId],
+    );
+    const ruleId = existing.rows[0]?.id ?? NEWSLETTER_RULE_ID;
+    if (!existing.rows[0]) {
+      await client.query(
+        `INSERT INTO "Rule"
+          (id, name, enabled, automate, "runOnThreads", "systemType",
+           "emailAccountId", "createdAt", "updatedAt")
+         VALUES ($1, 'Today spec Newsletter', true, true, false, 'NEWSLETTER',
+                 $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT DO NOTHING`,
+        [NEWSLETTER_RULE_ID, emailAccountId],
+      );
+    }
+    await client.query(
+      `INSERT INTO "ExecutedRule"
+        (id, "createdAt", "updatedAt", "threadId", "messageId", status,
+         automated, "ruleId", "emailAccountId")
+       VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $2, $3, 'APPLIED',
+               true, $4, $5)
+       ON CONFLICT (id) DO NOTHING`,
+      [runId, threadId, messageId, ruleId, emailAccountId],
+    );
+    return () =>
+      withClient(async (cleanup) => {
+        await cleanup.query(`DELETE FROM "ExecutedRule" WHERE id = $1`, [
+          runId,
+        ]);
+        await cleanup.query(`DELETE FROM "Rule" WHERE id = $1`, [
+          NEWSLETTER_RULE_ID,
+        ]);
+      });
   });
 }
 

@@ -603,6 +603,277 @@ describe("getHomeData", () => {
     expect(home.stats.readingCapped).toBe(true);
   });
 
+  it("bundles what Cue sorted as newsletters on an account without the Newsletter label", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const read = thread("read", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Read already",
+      labels: ["INBOX"],
+    });
+    const archived = thread("archived", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Archived",
+      labels: ["UNREAD"],
+    });
+    const dentist = thread("dentist", {
+      from: "Dentist <d@smile.com>",
+      subject: "Your appointment",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly, read, dentist], CUE: [archived] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly", "read", "archived"]);
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    // A read one is filed as the label's are: in neither lane.
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+    expect(home.newsletterThreadIds).toEqual(["weekly", "read", "archived"]);
+  });
+
+  it("shows a newsletter both the label and Cue's sorting name once", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const digest = thread("digest", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Daily",
+      labels: ["INBOX", "UNREAD"],
+    });
+    digest.messages[0].internalDate = String(NOW.getTime() + 60_000);
+    const provider = mockProvider({
+      INBOX: [weekly, digest],
+      Newsletter: [weekly],
+    });
+    sortedAsNewsletters(["weekly", "digest"]);
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["digest", "weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
+    // The label's listing already holds it, so it isn't read again.
+    expect(vi.mocked(provider.getThread)).not.toHaveBeenCalledWith(
+      "weekly",
+      expect.anything(),
+    );
+  });
+
+  it("reads only so many of Cue's newsletters, and still fills Reading's cap", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `n-${i}`);
+    const unread = ids.map((id) =>
+      thread(id, {
+        from: `Letter <${id}@news.example>`,
+        subject: id,
+        labels: ["INBOX", "UNREAD"],
+      }),
+    );
+    const provider = mockProvider(
+      { CUE: unread },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(ids);
+
+    const home = await run(provider);
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
+    // One id-only listing finds the unread ones; only Reading's are read.
+    expect(provider.listUnreadInboxThreadIds).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(provider.getThread)).toHaveBeenCalledTimes(10);
+    expect(home.newsletterThreadIds).toEqual(ids.slice(0, 10));
+  });
+
+  it("leaves an unread newsletter Reading didn't get to in the rest of the inbox", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `n-${i}`);
+    const unread = ids.map((id) =>
+      thread(id, {
+        from: `Letter <${id}@news.example>`,
+        subject: id,
+        labels: ["INBOX", "UNREAD"],
+      }),
+    );
+    const provider = mockProvider(
+      { INBOX: unread.slice(-3) },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    // Cue decided on them newest first.
+    sortedAsNewsletters(ids);
+    // Every one is unread in the inbox, though the inbox lists only three.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: ids,
+      full: false,
+    });
+    vi.mocked(provider.getThread).mockImplementation(
+      async (threadId: string) => {
+        const found = unread.find((t) => t.id === threadId);
+        if (!found) throw new Error("Not found");
+        return found;
+      },
+    );
+
+    const home = await run(provider);
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["n-10", "n-11"]);
+  });
+
+  it("drops only a newsletter Gmail deferred, keeping the rest of Reading", async () => {
+    const labelled = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const digest = thread("digest", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Daily",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const deferred = thread("deferred", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Later",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider({
+      INBOX: [labelled, digest, deferred],
+      Newsletter: [labelled],
+    });
+    sortedAsNewsletters(["deferred", "digest"]);
+    const getThread = vi.mocked(provider.getThread).getMockImplementation()!;
+    vi.mocked(provider.getThread).mockImplementation(async (threadId) => {
+      if (threadId === "deferred")
+        throw new GmailCallDeferredError(5000, "interactive");
+      return getThread(threadId);
+    });
+
+    const home = await run(provider);
+
+    expect(home.pending).not.toContain("reading");
+    expect(home.reading.map((t) => t.threadId).sort()).toEqual([
+      "digest",
+      "weekly",
+    ]);
+    // Unchecked, so it isn't hidden from the rest of the inbox either.
+    expect(home.newsletterThreadIds).toEqual(["digest"]);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["deferred"]);
+  });
+
+  it("hides nothing it didn't see when the unread listing was full, though it named fewer conversations", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const older = thread("older", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Unread, past the listing",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly, older] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly", "older"]);
+    // A full page of messages, many of one conversation (as Outlook lists
+    // them), naming only one.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: ["weekly"],
+      full: true,
+    });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.stats.readingCapped).toBe(true);
+    expect(home.newsletterThreadIds).toEqual(["weekly"]);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["older"]);
+  });
+
+  it("comes back pending when Gmail defers the unread listing", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    provider.listUnreadInboxThreadIds.mockRejectedValue(
+      new GmailCallDeferredError(5000, "interactive"),
+    );
+
+    const home = await run(provider);
+
+    expect(home.pending).toContain("reading");
+    // Nothing was checked, so nothing leaves the rest of the inbox.
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["weekly"]);
+  });
+
+  it("leaves an unread newsletter with an older unread message in the rest of the inbox", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "Read lately, unread before",
+      labels: ["INBOX"],
+    });
+    weekly.messages.unshift({
+      ...weekly.messages[0],
+      id: "weekly-old",
+      labelIds: ["INBOX", "UNREAD"],
+      internalDate: String(NOW.getTime() - 30 * 86_400_000),
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    // Nothing unread since the window opened, so the listing leaves it out.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: [],
+      full: false,
+    });
+
+    const home = await run(provider);
+
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["weekly"]);
+  });
+
+  it("starts no reads once Today's time is up", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    const realNow = Date.now;
+    provider.listUnreadInboxThreadIds.mockImplementation(async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => realNow() + 60_000);
+      return { threadIds: ["weekly"], full: false };
+    });
+
+    try {
+      await run(provider);
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+
+    expect(provider.getThread).not.toHaveBeenCalled();
+  });
+
   it("names the labels Cue files under, so the browser's own inbox can leave filed mail out too", async () => {
     const home = await run(mockProvider({}));
 
@@ -1231,6 +1502,22 @@ const TOOL_RESULTS: Record<string, unknown> = {
   },
 };
 
+/** Cue's latest decisions, newest first, as its Newsletter rule's runs. */
+function sortedAsNewsletters(threadIds: string[]) {
+  prisma.executedRule.findMany.mockImplementation((async ({
+    where,
+  }: {
+    where?: { rule?: unknown };
+  }) =>
+    where?.rule
+      ? threadIds.map((threadId) => ({
+          threadId,
+          messageId: `${threadId}-m`,
+          rule: { systemType: "NEWSLETTER" },
+        }))
+      : []) as never);
+}
+
 function connection(app: string) {
   return {
     id: `connection-${app}`,
@@ -1347,8 +1634,11 @@ function thread(
  * Returns the threads for whichever label a query asks for. NEEDS_REPLY and
  * AWAITING are Cue's open reply trackers rather than labels.
  */
-function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
-  const nameById = new Map(LABELS.map((l) => [l.id, l.name]));
+function mockProvider(
+  threadsByLabel: Record<string, EmailThread[]>,
+  { labels = LABELS }: { labels?: typeof LABELS } = {},
+) {
+  const nameById = new Map(labels.map((l) => [l.id, l.name]));
   const threadsById = new Map(
     Object.values(threadsByLabel)
       .flat()
@@ -1368,7 +1658,19 @@ function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
       if (!found) throw new Error("Not found");
       return found;
     }),
-    getLabels: vi.fn(async () => LABELS),
+    getLabels: vi.fn(async () => labels),
+    // Unread inbox conversations, by id, as the provider lists them.
+    listUnreadInboxThreadIds: vi.fn(async () => ({
+      threadIds: [...threadsById.values()]
+        .filter((t) =>
+          t.messages.some(
+            (m) =>
+              m.labelIds?.includes("INBOX") && m.labelIds?.includes("UNREAD"),
+          ),
+        )
+        .map((t) => t.id),
+      full: false,
+    })),
     getThreadsWithQuery: vi.fn(
       async ({ query }: { query: { labelIds?: string[] } }) => {
         const labelId = query.labelIds?.find((id) => id !== "INBOX") ?? "INBOX";
@@ -1377,6 +1679,7 @@ function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
     ),
   } as unknown as EmailProvider & {
     getLabels: ReturnType<typeof vi.fn>;
+    listUnreadInboxThreadIds: ReturnType<typeof vi.fn>;
     getThreadsWithQuery: ReturnType<typeof vi.fn>;
   };
 }

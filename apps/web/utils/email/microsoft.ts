@@ -2860,6 +2860,47 @@ export class OutlookProvider implements EmailProvider {
     }
   }
 
+  async listUnreadInboxThreadIds({
+    after,
+    maxResults,
+  }: {
+    after: Date;
+    maxResults: number;
+  }): Promise<{ threadIds: string[]; full: boolean }> {
+    const response: {
+      value?: { conversationId?: string | null }[];
+      "@odata.nextLink"?: string;
+    } = await withMicrosoftGraphRetry(
+      () =>
+        this.client
+          .getClient()
+          .api("/me/mailFolders/inbox/messages")
+          .select("conversationId")
+          // Graph wants the ordered property first in the filter.
+          .filter(
+            `receivedDateTime ge ${after.toISOString()} and isRead eq false`,
+          )
+          .orderby("receivedDateTime desc")
+          .top(maxResults)
+          .get(),
+      this.logger,
+    );
+    const messages = response.value ?? [];
+    return {
+      // Messages, not conversations, are listed, so a page holding fewer
+      // conversations than it asked for can still be full.
+      threadIds: [
+        ...new Set(
+          messages.flatMap((message) =>
+            message.conversationId ? [message.conversationId] : [],
+          ),
+        ),
+      ],
+      full:
+        Boolean(response["@odata.nextLink"]) || messages.length >= maxResults,
+    };
+  }
+
   async getInboxStats(): Promise<{ total: number; unread: number }> {
     const folder = await withMicrosoftGraphRetry(
       () =>

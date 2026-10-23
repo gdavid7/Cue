@@ -3299,6 +3299,44 @@ describe("structured mailbox search", () => {
     expect(getMessage).not.toHaveBeenCalled();
   });
 
+  it("searches past a left-out conversation, filtering it from the results", async () => {
+    const searchMessages = vi.fn(async () => ({
+      messages: [searchMessage("left-out"), searchMessage("kept")],
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "microsoft",
+        getMessage: vi.fn(),
+        searchMessages,
+      } as unknown as EmailProvider,
+    });
+    await expect(
+      source.search({
+        session: { accountId: "a", generation: "1" },
+        requestId: "search",
+        signal: new AbortController().signal,
+        page: null,
+        pageSize: 20,
+        predicate: {
+          kind: "all",
+          predicates: [
+            { kind: "text", field: "any", value: "invoice", match: "term" },
+            {
+              kind: "not",
+              predicate: { kind: "conversation", ids: ["left-out"] },
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      value: { matches: [{ messageId: "kept" }] },
+    });
+    expect(searchMessages).toHaveBeenCalled();
+  });
+
   it("loads a missing body projection before rejecting an any-field match and keeps pagination", async () => {
     const getMessage = vi.fn(async () => ({
       ...searchMessage("body-hit"),

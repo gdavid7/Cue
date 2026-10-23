@@ -218,10 +218,23 @@ export function HomeDashboard() {
       (beforeAnswer ? { [emailAccountId]: NO_LABEL_IDS } : undefined),
     [handledLabelIds, beforeAnswer, emailAccountId],
   );
+  const { newsletterThreadIdsByAccount } = all;
+  const singleNewsletterThreadIds = single.data?.newsletterThreadIds;
+  const newsletterThreadIds = useMemo(() => {
+    if (merged) return newsletterThreadIdsByAccount;
+    if (!singleNewsletterThreadIds) return;
+    return { [emailAccountId]: singleNewsletterThreadIds };
+  }, [
+    merged,
+    newsletterThreadIdsByAccount,
+    emailAccountId,
+    singleNewsletterThreadIds,
+  ]);
   const localInbox = useLocalInboxRows({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
     handledLabelIds,
+    newsletterThreadIds,
     enabled: !data || data.pending.includes("alsoInInbox"),
   });
   const waitingOnYou = useWaitingOnYou({

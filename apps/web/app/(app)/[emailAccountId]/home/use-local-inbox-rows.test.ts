@@ -172,6 +172,33 @@ describe("localInboxRows", () => {
     ]);
   });
 
+  it("leaves out what Cue sorted as a newsletter without labelling it", () => {
+    const rows = localInboxRows(
+      view(
+        [
+          conversation("weekly"),
+          // Still unread, so it isn't Cue's to file away yet.
+          conversation("digest", { unread: true }),
+          conversation("t1"),
+          // The same id in another mailbox is another conversation.
+          conversation("weekly", { accountId: BOB.id }),
+        ],
+        [ADA.id, BOB.id],
+      ),
+      {
+        accounts: [ADA, BOB],
+        named: true,
+        newsletterThreadIds: { [ADA.id]: ["weekly", "digest"] },
+      },
+    );
+
+    expect(rows?.map((row) => `${row.account?.id}:${row.threadId}`)).toEqual([
+      `${ADA.id}:digest`,
+      `${ADA.id}:t1`,
+      `${BOB.id}:weekly`,
+    ]);
+  });
+
   it("can't answer before every account's first sync finishes", () => {
     const rows = localInboxRows(view([conversation("t1")], [ADA.id]), {
       accounts: [ADA, BOB],
