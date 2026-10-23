@@ -258,7 +258,7 @@ describe("toCatchUpItems", () => {
         }),
         conversation({
           key: { accountId: "work", conversationId: "w1" },
-          latestInternetMessageId: "<SAME@example.com>",
+          latestInternetMessageId: "<same@example.com>",
           latestMessageAtMs: 2,
         }),
       ],
@@ -340,6 +340,28 @@ describe("withCatchUpCopies", () => {
     expect(next.incomplete).toEqual([]);
   });
 
+  it("keeps a copy whose conversation has a deleted message but is still in its inbox", () => {
+    const next = withCatchUpCopies(
+      cardFrom("work", "w1"),
+      found("work:w1", [shared("home", "h1", { roles: ["inbox", "trash"] })]),
+      ALL_INBOXES,
+    );
+    expect(next.incomplete).toEqual([]);
+    expect(next.items[0].copies.map((copy) => copy.threadId)).toEqual(["h1"]);
+  });
+
+  it("counts a second conversation still in its inbox as ambiguous, though it has a deleted message", () => {
+    const next = withCatchUpCopies(
+      cardFrom("work", "w1"),
+      found("work:w1", [
+        shared("home", "h1"),
+        shared("home", "h2", { roles: ["inbox", "spam"] }),
+      ]),
+      ALL_INBOXES,
+    );
+    expect(next.incomplete).toEqual(["work:w1"]);
+  });
+
   it("leaves copies in the trash or spam alone, without counting them as second conversations", () => {
     const next = withCatchUpCopies(
       cardFrom("work", "w1"),
@@ -398,18 +420,14 @@ describe("withCatchUpCopies", () => {
     });
   });
 
-  it("keeps the card where the routed account's copy is outside its inbox, adding that copy", () => {
+  it("keeps the card where the routed account's copy is outside its inbox, leaving that one alone", () => {
     const next = withCatchUpCopies(
       cardFrom("home", "h1"),
       found("home:h1", [shared("work", "w1", { roles: [] })]),
       ALL_INBOXES,
     );
-    expect(next.items[0]).toMatchObject({
-      key: "home:h1",
-      copies: [
-        { accountId: "work", threadId: "w1", inInbox: false, unread: true },
-      ],
-    });
+    expect(next.items[0]).toMatchObject({ key: "home:h1", copies: [] });
+    expect(next.incomplete).toEqual([]);
   });
 
   it("leaves out a card that would become one already acted on, or already in the batch", () => {

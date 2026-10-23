@@ -169,8 +169,9 @@ export function toCatchUpItems(
  * of a conversation's latest message that isn't a draft or in the trash
  * (sent mail counts), the rule showCopiesOnce groups the list by: where the
  * user replied in one account, that conversation's key moved on, and it is a
- * conversation of its own rather than a copy. Copies in the trash or spam
- * are left alone. A card is left out of the batch, its key added to
+ * conversation of its own rather than a copy. Only conversations with mail in
+ * their inbox count, as copies or as second conversations; Catch up works the
+ * Inbox tab. A card is left out of the batch, its key added to
  * `incomplete`, when that read didn't reach every possible copy, when some
  * account (its own included) has a second conversation for its message, or
  * when it would become a card acted on already or in the batch twice, as
@@ -199,9 +200,10 @@ export function withCatchUpCopies(
     for (const match of read.conversations) {
       // The read may hold other cards' keys too.
       if (match.latestInternetMessageId !== item.messageKey) continue;
-      // Deleted or junk mail is no copy to act on, nor a second conversation.
-      if (match.roles.includes("trash") || match.roles.includes("spam"))
-        continue;
+      // A conversation's roles gather every message's, so one deleted reply
+      // doesn't make it deleted: only one with nothing left in its inbox is
+      // passed over, as no copy to act on nor a second conversation.
+      if (!match.roles.includes("inbox")) continue;
       const own =
         match.key.accountId === item.accountId &&
         match.key.conversationId === item.threadId;

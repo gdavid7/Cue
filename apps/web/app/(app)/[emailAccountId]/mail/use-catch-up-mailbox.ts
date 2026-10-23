@@ -164,9 +164,9 @@ export type CatchUpCopiesRead =
  * card's copies are found even where the batch's unread read didn't reach
  * them. Each card hears what was found and whether the read reached every
  * one: a read that fails, is cancelled or doesn't end within its pages says
- * so, rather than guess. A read that fails is tried again once, and one
- * that runs past its pages, or fails again, is read card by card, so one
- * noisy Message-ID can't leave the whole batch out.
+ * so, rather than guess. A read that fails is tried again once; one that
+ * runs past its pages is read card by card, so one noisy Message-ID can't
+ * leave the whole batch out.
  *
  * It sees only what each account's local store holds: a copy older than an
  * account's synced window isn't there to find, or to change, until that
@@ -246,15 +246,21 @@ async function readEveryCardsCopies(
   const read = (messageKeys: string[]) =>
     readCopiesTwice(client, accountIds, messageKeys, signal);
   const shared = await read(cards.map((card) => card.messageKey));
-  if (shared.outcome === "complete")
+  // Only a read that ran past its pages is worth splitting; one the engine
+  // couldn't answer twice won't answer card by card either.
+  if (shared.outcome !== "overflow")
     return new Map(
       cards.map((card) => [
         card.key,
-        { conversations: shared.conversations, complete: true },
+        {
+          conversations: shared.conversations,
+          complete: shared.outcome === "complete",
+        },
       ]),
     );
   const found = new Map<string, CatchUpCopiesFound>();
   for (const card of cards) {
+    if (signal.cancelled) return found;
     const own = await read([card.messageKey]);
     found.set(card.key, {
       conversations: own.conversations,

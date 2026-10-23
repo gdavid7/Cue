@@ -421,7 +421,7 @@ describe("useEngineMailThreads", () => {
 describe("useEngineMailThreads in All inboxes", () => {
   it("shows a message delivered to two accounts once, saying where else it is", async () => {
     const { result } = renderAllInboxes([
-      copy("acc-2", "c-new", "<Shared@Example.com>", 3),
+      copy("acc-2", "c-new", "shared@example.com", 3),
       copy("acc-1", "c-old", "shared@example.com", 2),
       copy("acc-1", "c-other", "<other@example.com>", 1),
     ]);

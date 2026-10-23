@@ -1,11 +1,11 @@
-import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
-
 /**
  * All inboxes shows a message delivered to several of the user's accounts
  * once: the newest-first list keeps the first copy, and each later copy from
- * another account is hidden behind it, in `copies`. Copies match only by the
- * Message-ID of each conversation's newest message, and two rows of one
- * account never merge, as they are separate conversations there.
+ * another account is hidden behind it, in `copies`. Copies match only by
+ * each conversation's key, and two rows of one account never merge, as they
+ * are separate conversations there. `messageId` is that key as given: the
+ * local store's (latestInternetMessageId), or a header normalised once with
+ * normalizeInternetMessageId where it was read, never normalised again.
  *
  * Copies that arrived at the same moment are listed in no meaningful order,
  * so `preferAccountId`'s copy (the account the user is in) stands for them.
@@ -40,7 +40,7 @@ export function showCopiesOnce<T>(
   for (const row of rows) {
     const { accountId, messageId, at } = copyOf(row);
     const entry = { row, copies: [] as T[] };
-    const key = normalizeInternetMessageId(messageId);
+    const key = messageId;
     if (!key) {
       shown.push(entry);
       continue;

@@ -247,6 +247,27 @@ describe("useCatchUpCopies", () => {
     expect(calls).toBe(2);
   });
 
+  it("leaves every card incomplete, without reading card by card, when the shared read fails twice", async () => {
+    let calls = 0;
+    const failing = {
+      observeMailbox: () => {
+        calls++;
+        throw new Error("engine gone");
+      },
+    } as unknown as MailClient;
+    const { result } = renderHook(() =>
+      useCatchUpCopies({
+        client: failing,
+        accountIds: ["home"],
+        cards: [card("work:a", "one@x"), card("work:b", "two@x")],
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(found(result.current, "work:a")?.complete).toBe(false);
+    expect(found(result.current, "work:b")?.complete).toBe(false);
+    expect(calls).toBe(2);
+  });
+
   it("says a read that doesn't end within its pages is incomplete", async () => {
     const engine = fakeEngine(unreadMail(600, "home", range(600, 1000)), {
       legacy: false,

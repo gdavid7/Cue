@@ -1,3 +1,4 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import type { Logger } from "@/utils/logger";
 import type { EmailLabel, EmailLabels } from "@/providers/email-label-types";
 import type { ThreadListItem } from "@/utils/threads/load";
@@ -109,7 +110,10 @@ export async function loadCombinedThreads({
     items,
     (thread) => ({
       accountId: thread.account.id,
-      messageId: newestReceivedMessage(thread)?.headers["message-id"],
+      messageId:
+        normalizeInternetMessageId(
+          newestReceivedMessage(thread)?.headers["message-id"],
+        ) ?? undefined,
       at: getThreadTimestamp(thread),
     }),
     accounts[0]?.id,

@@ -179,7 +179,7 @@ describe("mergeHomeData", () => {
         alsoInInbox: [thread("a-copy", { rfcMessageId: "<same@mail>" })],
       }),
       loaded(B, {
-        needsYou: [thread("b-copy", { rfcMessageId: " SAME@mail " })],
+        needsYou: [thread("b-copy", { rfcMessageId: "<same@mail>" })],
       }),
     ]);
 

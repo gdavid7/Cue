@@ -1,6 +1,5 @@
 "use client";
 
-import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
@@ -698,7 +697,7 @@ function countByAccount(threads: ListThread[]) {
 }
 
 function messageIdOf(thread: ListThread) {
-  const id = normalizeInternetMessageId(thread.latestInternetMessageId);
+  const id = thread.latestInternetMessageId;
   return id ? [id] : [];
 }
 
