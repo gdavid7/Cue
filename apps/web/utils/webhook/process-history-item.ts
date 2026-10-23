@@ -150,23 +150,64 @@ export async function processHistoryItem(
       return;
     }
 
+    // Clean up old AI drafts after the response so it never slows processing.
+    // Excludes drafts for the current message since rules may have just
+    // created one.
+    const scheduleDraftCleanup = () => {
+      if (!actualThreadId) return;
+      after(() =>
+        runWithBackgroundLoggerFlush({
+          logger,
+          task: async () => {
+            try {
+              await cleanupThreadAIDrafts({
+                threadId: actualThreadId,
+                emailAccountId,
+                provider,
+                logger,
+                excludeMessageId: messageId,
+              });
+            } catch (error) {
+              logger.error("Error during inbound thread draft cleanup", {
+                error,
+              });
+              captureException(error, { emailAccountId });
+            }
+          },
+          extra: { operation: "cleanup-thread-ai-drafts" },
+        }),
+      );
+    };
+
     // A muted conversation's new mail skips the inbox, the rules (and their
     // model call) and every notification. The mute lives in Cue's database,
-    // never as a mailbox label or filter.
-    const muted = actualThreadId
-      ? await prisma.mutedThread.findUnique({
-          where: {
-            emailAccountId_threadId: {
-              emailAccountId,
-              threadId: actualThreadId,
+    // never as a mailbox label or filter. Only the message that arrived is
+    // archived: the rest of the thread (the user's Sent replies, drafts, mail
+    // they moved back) stays where it is, and an update event never re-files.
+    const muted =
+      options.isNewMessage && actualThreadId
+        ? await prisma.mutedThread.findUnique({
+            where: {
+              emailAccountId_threadId: {
+                emailAccountId,
+                threadId: actualThreadId,
+              },
             },
-          },
-          select: { id: true },
-        })
-      : null;
-    if (muted && actualThreadId) {
-      await provider.archiveThread(actualThreadId, userEmail);
-      logger.info("Skipping. Muted conversation archived.");
+            select: { id: true },
+          })
+        : null;
+    if (muted) {
+      try {
+        await provider.archiveMessage(messageId);
+        logger.info("Skipping. Muted conversation's new message archived.");
+      } catch {
+        // Still muted (no rules, no push); the message just stays in the inbox.
+        logger.warn("Failed to archive a muted conversation's new message", {
+          messageId,
+          threadId: actualThreadId,
+        });
+      }
+      scheduleDraftCleanup();
       return;
     }
 
@@ -362,32 +403,7 @@ export async function processHistoryItem(
       captureException(error, { emailAccountId });
     }
 
-    // Clean up old AI drafts (runs after response to avoid slowing down processing)
-    // Excludes drafts for the current message since rules may have just created one
-    if (actualThreadId) {
-      after(() =>
-        runWithBackgroundLoggerFlush({
-          logger,
-          task: async () => {
-            try {
-              await cleanupThreadAIDrafts({
-                threadId: actualThreadId,
-                emailAccountId,
-                provider,
-                logger,
-                excludeMessageId: messageId,
-              });
-            } catch (error) {
-              logger.error("Error during inbound thread draft cleanup", {
-                error,
-              });
-              captureException(error, { emailAccountId });
-            }
-          },
-          extra: { operation: "cleanup-thread-ai-drafts" },
-        }),
-      );
-    }
+    scheduleDraftCleanup();
   } catch (error: unknown) {
     // Handle provider-specific "not found" errors
     if (error instanceof Error) {

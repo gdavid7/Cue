@@ -11,6 +11,7 @@ export const GET = withEmailProvider("user/muted-threads", async (request) =>
   NextResponse.json(
     await listMutedThreads({
       emailAccountId: request.auth.emailAccountId,
+      ownEmail: request.auth.email,
       provider: request.emailProvider,
       logger: request.logger,
     }),
@@ -19,10 +20,12 @@ export const GET = withEmailProvider("user/muted-threads", async (request) =>
 
 async function listMutedThreads({
   emailAccountId,
+  ownEmail,
   provider,
   logger,
 }: {
   emailAccountId: string;
+  ownEmail: string;
   provider: EmailProvider;
   logger: Logger;
 }) {
@@ -33,18 +36,20 @@ async function listMutedThreads({
     select: { id: true, threadId: true, createdAt: true },
   });
 
-  // The rows only know thread ids; the provider supplies what each one is.
+  // The rows only know thread ids; the provider supplies what each one is,
+  // from headers alone, and nothing of it is stored or cached here (R-1).
   const summaries = await mapWithConcurrency(
     rows,
     SUMMARY_CONCURRENCY,
     async (row) => {
       try {
-        const message = await provider.getLatestMessageInThread(row.threadId);
-        return {
-          subject: message?.headers.subject || message?.subject || "",
-          from: message?.headers.from || "",
-          snippet: message?.snippet || "",
-        };
+        return (
+          (await provider.getThreadHeadline(row.threadId, ownEmail)) ?? {
+            subject: "",
+            from: "",
+            snippet: "",
+          }
+        );
       } catch (error) {
         logger.warn("Failed to load muted thread", {
           threadId: row.threadId,
@@ -65,5 +70,7 @@ async function listMutedThreads({
   };
 }
 
+// The newest mutes only: each costs a provider read, so the view is capped
+// rather than paginated (follow-up if people mute more than this).
 const MAX_LISTED_MUTES = 100;
 const SUMMARY_CONCURRENCY = 5;

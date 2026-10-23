@@ -20,6 +20,7 @@ export const GET = withEmailAccount("user/muted-threads/ids", async (request) =>
 async function getMutedThreadIds(emailAccountId: string) {
   const rows = await prisma.mutedThread.findMany({
     where: { emailAccountId },
+    orderBy: { createdAt: "desc" },
     select: { threadId: true },
     take: MAX_MUTED_IDS,
   });

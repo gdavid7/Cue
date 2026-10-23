@@ -1,3 +1,4 @@
+import type { ThreadHeadline } from "@/utils/email/thread-headline";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
@@ -417,6 +418,14 @@ export interface EmailProvider {
   getSignatures(): Promise<EmailSignature[]>;
   // Thread messages are returned in chronological order with drafts excluded unless requested.
   getThread(threadId: string, options?: GetThreadOptions): Promise<EmailThread>;
+  /**
+   * What a list row shows for a conversation, read from headers only (no
+   * bodies): see pickThreadHeadline. Null when it holds only drafts.
+   */
+  getThreadHeadline(
+    threadId: string,
+    ownEmail: string,
+  ): Promise<ThreadHeadline | null>;
   getThreadMessages(threadId: string): Promise<ParsedMessage[]>;
   getThreadMessagesInInbox(threadId: string): Promise<ParsedMessage[]>;
   getThreads(folderId?: string): Promise<EmailThread[]>;

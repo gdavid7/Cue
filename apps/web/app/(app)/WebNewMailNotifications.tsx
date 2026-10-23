@@ -11,7 +11,7 @@ import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { BRAND_ICON_URL } from "@/utils/branding";
 import { buildMailPath } from "@/utils/mail-url";
 import type { CueMembershipResponse } from "@/app/api/user/mail-splits/cue-membership/route";
-import type { MutedThreadIdsResponse } from "@/app/api/user/muted-threads/ids/route";
+import { loadMutedThreadIds } from "@/utils/web-notifications/muted-thread-ids";
 import {
   claimNotifierLeadership,
   createNewMailNotifier,
@@ -305,19 +305,6 @@ async function loadBulkMessageIds(accountId: string) {
     if (!response.ok) return null;
     const membership: CueMembershipResponse = await response.json();
     return new Set([...membership.NEWSLETTER, ...membership.MARKETING]);
-  } catch {
-    return null;
-  }
-}
-
-async function loadMutedThreadIds(accountId: string) {
-  try {
-    const response = await fetch("/api/user/muted-threads/ids", {
-      headers: { [EMAIL_ACCOUNT_HEADER]: accountId },
-    });
-    if (!response.ok) return null;
-    const muted: MutedThreadIdsResponse = await response.json();
-    return new Set(muted.threadIds);
   } catch {
     return null;
   }

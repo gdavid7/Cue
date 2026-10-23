@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useAction } from "next-safe-action/hooks";
 import useSWR from "swr";
 import { BellOffIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import { LoadingContent } from "@/components/LoadingContent";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { unmuteThreadsAction } from "@/utils/actions/mute";
 import { extractNameFromEmail } from "@/utils/email";
+import { getActionErrorMessage } from "@/utils/error";
 import { decodeSnippet } from "@/utils/gmail/decode";
 import { getAccountScopedKey } from "@/utils/swr";
 
@@ -37,11 +38,15 @@ export function MutedThreadList({
   onOpenThread: (threadId: string, emailAccountId: string) => void;
 }) {
   const { emailAccountId } = useAccount();
-  const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
+  // Each read costs a provider call per muted thread, so a tab regaining
+  // focus doesn't repeat it.
   const one = useSWR<MutedThreadsResponse>(
     accounts ? null : getAccountScopedKey(MUTED_PATH, emailAccountId),
+    { revalidateOnFocus: false },
   );
-  const all = useAllAccountsList<MutedThreadsResponse>(MUTED_PATH, accounts);
+  const all = useAllAccountsList<MutedThreadsResponse>(MUTED_PATH, accounts, {
+    revalidateOnFocus: false,
+  });
   const { isLoading, error, mutate } = accounts ? all : one;
   const rows: MutedRow[] = accounts
     ? (all.data?.byAccount ?? [])
@@ -56,27 +61,6 @@ export function MutedThreadList({
         ...row,
         accountId: emailAccountId,
       }));
-
-  // Unmuting leaves the conversation where it is, as Gmail does; its next
-  // reply comes to the inbox again.
-  const unmute = async ({ threadId, accountId }: MutedRow) => {
-    setBusyThreadId(threadId);
-    try {
-      const result = await unmuteThreadsAction(accountId, {
-        threadIds: [threadId],
-      });
-      if (!result?.data) {
-        toast.error("Couldn't unmute this conversation");
-        return;
-      }
-      toast.success("Unmuted");
-      await mutate().catch(() => undefined);
-    } catch {
-      toast.error("Couldn't unmute this conversation");
-    } finally {
-      setBusyThreadId(null);
-    }
-  };
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -96,46 +80,80 @@ export function MutedThreadList({
         ) : (
           <ul aria-label="Muted conversations">
             {rows.map((row) => (
-              <li
-                className="flex items-center gap-3 border-border border-b px-4 py-3"
+              <MutedThreadRow
+                accounts={accounts}
                 key={`${row.accountId}:${row.id}`}
-              >
-                <AccountRowMarker
-                  accountId={row.accountId}
-                  accounts={accounts}
-                />
-                <button
-                  className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => onOpenThread(row.threadId, row.accountId)}
-                  type="button"
-                >
-                  <p className="truncate font-medium text-foreground text-sm">
-                    {row.subject.trim() || "(no subject)"}
-                  </p>
-                  <p className="truncate text-muted-foreground text-xs">
-                    {[
-                      extractNameFromEmail(row.from) || row.from,
-                      decodeSnippet(row.snippet),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                </button>
-                <BellOffIcon
-                  aria-hidden
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <InlineActionButton
-                  disabled={busyThreadId !== null}
-                  onClick={() => unmute(row)}
-                >
-                  Unmute
-                </InlineActionButton>
-              </li>
+                onOpenThread={onOpenThread}
+                onUnmuted={() => mutate().catch(() => undefined)}
+                row={row}
+              />
             ))}
           </ul>
         )}
       </LoadingContent>
     </div>
+  );
+}
+
+function MutedThreadRow({
+  row,
+  accounts,
+  onOpenThread,
+  onUnmuted,
+}: {
+  row: MutedRow;
+  accounts?: AllInboxesAccount[];
+  onOpenThread: (threadId: string, emailAccountId: string) => void;
+  onUnmuted: () => void;
+}) {
+  // Unmuting leaves the conversation where it is, as Gmail does; its next
+  // reply comes to the inbox again.
+  const { execute, isExecuting } = useAction(
+    unmuteThreadsAction.bind(null, row.accountId),
+    {
+      onSuccess: () => {
+        toast.success("Unmuted");
+        onUnmuted();
+      },
+      onError: (error) =>
+        toast.error(
+          getActionErrorMessage(error.error, {
+            prefix: "Couldn't unmute this conversation",
+          }),
+        ),
+    },
+  );
+
+  return (
+    <li className="flex items-center gap-3 border-border border-b px-4 py-3">
+      <AccountRowMarker accountId={row.accountId} accounts={accounts} />
+      <button
+        className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => onOpenThread(row.threadId, row.accountId)}
+        type="button"
+      >
+        <p className="truncate font-medium text-foreground text-sm">
+          {row.subject.trim() || "(no subject)"}
+        </p>
+        <p className="truncate text-muted-foreground text-xs">
+          {[
+            extractNameFromEmail(row.from) || row.from,
+            decodeSnippet(row.snippet),
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+      </button>
+      <BellOffIcon
+        aria-hidden
+        className="size-3.5 shrink-0 text-muted-foreground"
+      />
+      <InlineActionButton
+        disabled={isExecuting}
+        onClick={() => execute({ threadIds: [row.threadId] })}
+      >
+        Unmute
+      </InlineActionButton>
+    </li>
   );
 }
