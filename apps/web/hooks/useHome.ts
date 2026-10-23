@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import useSWR, {
   type Cache,
   type BareFetcher,
@@ -166,13 +166,14 @@ export function useHomeDeadlines(emailAccountId?: string | null) {
 }
 
 /**
- * Whether Cue has read any of the mailbox, which Today's own answer also
- * says but only after seconds of Gmail reads. Asked only while `enabled`.
+ * By account, whether Cue has read any of each mailbox, which each account's
+ * Today also says but only after seconds of Gmail reads. Asked while
+ * `enabled`; an account that isn't the user's is missing.
  */
-export function useHomeCue(emailAccountId: string | null, enabled: boolean) {
+export function useHomeCue(accountIds: string[], enabled: boolean) {
   const { data } = useSWR<GetHomeCueResponse>(
-    enabled && emailAccountId
-      ? getAccountScopedKey("/api/user/home/cue", emailAccountId)
+    enabled && accountIds.length
+      ? `/api/user/home/cue?ids=${accountIds.map(encodeURIComponent).join(",")}`
       : null,
     {
       revalidateIfStale: false,
@@ -181,7 +182,14 @@ export function useHomeCue(emailAccountId: string | null, enabled: boolean) {
       shouldRetryOnError: false,
     },
   );
-  return data;
+  return useMemo(
+    () =>
+      data &&
+      Object.fromEntries(
+        data.accounts.map(({ id, hasReadMail }) => [id, hasReadMail]),
+      ),
+    [data],
+  );
 }
 
 /**

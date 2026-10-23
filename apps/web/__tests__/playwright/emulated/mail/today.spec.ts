@@ -7,6 +7,7 @@ import {
   openMail,
   readLatestMailMutation,
   readProviderAccessToken,
+  seedMailFromContact,
   waitForMetadataCoverage,
   withClient,
 } from "./mail-test-helpers";
@@ -296,10 +297,14 @@ test("a first visit shows the inbox from local mail while Today loads", async ({
   const released = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/user/home*", async (route) => {
-    await released;
-    await route.continue();
-  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      await released;
+      await route.continue();
+    },
+  );
 
   await page.goto(`/${emailAccountId}/home`, {
     waitUntil: "domcontentloaded",
@@ -336,15 +341,19 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
   const other = await seedMailFromContact(page, `Book club ${Date.now()}`);
   // A new mailbox: Cue hasn't read its mail, so Needs reply has nothing yet.
   let cueHasRead = false;
-  await page.route("**/api/user/home*", async (route) => {
-    const response = await route.fetch();
-    const home = await response.json();
-    if (!cueHasRead) {
-      home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
-      home.needsYou = [];
-    }
-    await route.fulfill({ response, json: home });
-  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      const response = await route.fetch();
+      const home = await response.json();
+      if (!cueHasRead) {
+        home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+        home.needsYou = [];
+      }
+      await route.fulfill({ response, json: home });
+    },
+  );
   const waitingOnYou = page.getByRole("listbox", {
     name: "Waiting on you",
     exact: true,
@@ -429,21 +438,35 @@ test("a new mailbox shows Waiting on you from local mail before Today answers, a
   const seeded = await seedMailFromContact(page, `Ski trip ${Date.now()}`);
   // A new mailbox: Cue hasn't read it, and Today's answer is held, as Gmail
   // can take seconds to give it during a first sync.
-  await page.route("**/api/user/home/cue*", (route) =>
-    route.fulfill({ json: { hasReadMail: false } }),
+  await page.route(
+    (url) => url.pathname === "/api/user/home/cue",
+    (route) => {
+      const ids = new URL(route.request().url()).searchParams.get("ids");
+      return route.fulfill({
+        json: {
+          accounts: (ids ?? "")
+            .split(",")
+            .map((id) => ({ id, hasReadMail: false })),
+        },
+      });
+    },
   );
   let release = () => {};
   const released = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/user/home*", async (route) => {
-    await released;
-    const response = await route.fetch();
-    const home = await response.json();
-    home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
-    home.needsYou = [];
-    await route.fulfill({ response, json: home });
-  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      await released;
+      const response = await route.fetch();
+      const home = await response.json();
+      home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+      home.needsYou = [];
+      await route.fulfill({ response, json: home });
+    },
+  );
   const waitingOnYou = page.getByRole("listbox", {
     name: "Waiting on you",
     exact: true,
@@ -619,18 +642,22 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
   test.setTimeout(600_000);
   // The real answer, reshaped into each state, so counts and calendar stay real.
   let state: "busy" | "clear" | "new" = "busy";
-  await page.route("**/api/user/home*", async (route) => {
-    const response = await route.fetch();
-    const home = await response.json();
-    // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
-    home.cue = {
-      aiAccess: true,
-      replyTracking: true,
-      hasReadMail: state !== "new",
-    };
-    if (state !== "busy") home.needsYou = [];
-    await route.fulfill({ response, json: home });
-  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      const response = await route.fetch();
+      const home = await response.json();
+      // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
+      home.cue = {
+        aiAccess: true,
+        replyTracking: true,
+        hasReadMail: state !== "new",
+      };
+      if (state !== "busy") home.needsYou = [];
+      await route.fulfill({ response, json: home });
+    },
+  );
   const main = page.getByRole("main");
 
   for (const theme of ["light", "dark"] as const) {
@@ -775,115 +802,6 @@ async function seedNeedsReply(emailAccountId: string, threadIds: string[]) {
     }
   });
 }
-
-/**
- * A conversation the user started with Kai, who answered an hour later: an
- * inbox reply from someone the user writes to, with nothing sent after it.
- * Returns its thread and what takes it out again.
- */
-async function seedMailFromContact(page: Page, subject: string) {
-  const token = await readProviderAccessToken();
-  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
-  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "content-type": "application/json",
-  };
-  const body = "Are we still on for Thursday?";
-  if (isMicrosoftPlaywright()) {
-    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
-    const draft = await page.request.post(`${base}/messages`, {
-      headers,
-      data: {
-        subject,
-        body: { contentType: "text", content: "Dinner Thursday?" },
-        toRecipients: [
-          { emailAddress: { address: KAI.address, name: KAI.name } },
-        ],
-      },
-    });
-    expect(draft.ok(), await draft.text()).toBe(true);
-    const draftId = ((await draft.json()) as { id: string }).id;
-    const sent = await page.request.post(`${base}/messages/${draftId}/move`, {
-      headers,
-      data: { destinationId: "sentitems" },
-    });
-    expect(sent.ok(), await sent.text()).toBe(true);
-    const sentId = ((await sent.json()) as { id: string }).id;
-    const reply = await page.request.post(
-      `${base}/messages/${sentId}/createReply`,
-      { headers },
-    );
-    expect(reply.ok(), await reply.text()).toBe(true);
-    const replyId = ((await reply.json()) as { id: string }).id;
-    const patched = await page.request.patch(`${base}/messages/${replyId}`, {
-      headers,
-      data: {
-        from: { emailAddress: KAI },
-        toRecipients: [{ emailAddress: { address: email } }],
-        body: { contentType: "text", content: body },
-        isRead: false,
-      },
-    });
-    expect(patched.ok(), await patched.text()).toBe(true);
-    const moved = await page.request.post(`${base}/messages/${replyId}/move`, {
-      headers,
-      data: { destinationId: "inbox" },
-    });
-    expect(moved.ok(), await moved.text()).toBe(true);
-    const message = (await moved.json()) as {
-      id: string;
-      conversationId: string;
-    };
-    return {
-      threadId: message.conversationId,
-      remove: async () => {
-        for (const id of [message.id, sentId])
-          await page.request.post(`${base}/messages/${id}/permanentDelete`, {
-            headers,
-          });
-      },
-    };
-  }
-
-  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
-  const sent = await page.request.post(`${base}/messages`, {
-    headers,
-    data: {
-      from: email,
-      to: `${KAI.name} <${KAI.address}>`,
-      subject,
-      body_text: "Dinner Thursday?",
-      labelIds: ["SENT"],
-      internalDate: String(Date.now() - 2 * 3_600_000),
-    },
-  });
-  expect(sent.ok(), await sent.text()).toBe(true);
-  const first = (await sent.json()) as { id: string; threadId: string };
-  const inserted = await page.request.post(`${base}/messages`, {
-    headers,
-    data: {
-      threadId: first.threadId,
-      from: `${KAI.name} <${KAI.address}>`,
-      to: email,
-      subject,
-      body_text: body,
-      labelIds: ["INBOX", "UNREAD"],
-      internalDate: String(Date.now() - 3_600_000),
-    },
-  });
-  expect(inserted.ok(), await inserted.text()).toBe(true);
-  const message = (await inserted.json()) as { id: string };
-  return {
-    threadId: first.threadId,
-    remove: async () => {
-      for (const id of [message.id, first.id])
-        await page.request.delete(`${base}/messages/${id}`, { headers });
-    },
-  };
-}
-
-const KAI = { address: "kai@example.com", name: "Kai Example" };
 
 /**
  * An unread newsletter in the inbox, filed under the Newsletter label (an

@@ -9,7 +9,8 @@ import type { SqlTransaction } from "./driver";
  * account newest first, then merged. Each row walks the inbox index from the
  * newest message and stops at the limit; the checks on each are index lookups
  * (the conversation's later messages, the message's sender in the contact
- * index, and whether the user ever wrote to them).
+ * index, and whether the user ever wrote to them), as is finding the other
+ * accounts that hold the same newest message, by its key.
  */
 export async function readWaitingOnYou(
   tx: SqlTransaction,
@@ -24,7 +25,11 @@ export async function readWaitingOnYou(
     const excluded = input.excludedLabelIds?.[accountId] ?? [];
     const result = await tx.query(
       `SELECT l.message_id, l.conversation_id, l.from_address, l.subject,
-              l.preview, l.received_at_ms, l.read, l.starred
+              l.preview, l.received_at_ms, l.read, l.starred, l.message_key,
+              (SELECT json_group_array(k.account_id)
+               FROM conversation_message_keys k
+               WHERE k.message_key = l.message_key
+                 AND k.account_id != l.account_id) AS copy_account_ids
        FROM effective_messages l
        WHERE l.account_id = ? AND l.in_inbox = 1 AND l.received_at_ms >= ?
          AND l.in_sent = 0 AND l.in_draft = 0 AND l.in_trash = 0 AND l.in_spam = 0
@@ -107,11 +112,18 @@ export async function readWaitingOnYou(
         receivedAtMs: Number(row.received_at_ms),
         unread: Number(row.read) === 0,
         starred: Number(row.starred) === 1,
+        messageKey: row.message_key == null ? null : String(row.message_key),
+        copyAccountIds: jsonStrings(row.copy_account_ids),
       });
   }
   return rows
     .sort((a, b) => b.receivedAtMs - a.receivedAtMs)
     .slice(0, input.limit);
+}
+
+function jsonStrings(value: unknown): string[] {
+  const parsed: unknown = JSON.parse(String(value ?? "[]"));
+  return Array.isArray(parsed) ? parsed.map(String) : [];
 }
 
 function placeholders(values: readonly unknown[]) {

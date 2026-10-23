@@ -17,6 +17,7 @@ import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
+import type { TodayThread } from "@/utils/home/merge-home";
 import type { NextUpItem } from "@/utils/home/next-up";
 import type {
   ConversationSummary,
@@ -49,10 +50,10 @@ const mocks = vi.hoisted(() => ({
   // `undefined` while the calendar is still being read.
   day: { events: [], more: 0 } as GetCalendarTodayEventsResponse | undefined,
   // What Waiting on you reads from local mail.
-  waitingOnYou: [] as HomeThread[],
+  waitingOnYou: [] as TodayThread[],
   dismissWaitingOnYou: vi.fn(),
-  // Whether Cue has read the mailbox, asked before Today's answer.
-  homeCue: undefined as { hasReadMail: boolean } | undefined,
+  // By account, whether Cue has read the mailbox, asked before Today's answer.
+  homeCue: undefined as Record<string, boolean> | undefined,
   reportActivation: vi.fn(),
   home: {
     isLoading: false,
@@ -122,7 +123,7 @@ vi.mock("@/hooks/useActivationSignal", () => ({
 }));
 vi.mock("@/hooks/useHome", () => ({
   useHomeDeadlines: () => mocks.deadlines,
-  useHomeCue: (_emailAccountId: string | null, enabled: boolean) =>
+  useHomeCue: (_accountIds: string[], enabled: boolean) =>
     enabled ? mocks.homeCue : undefined,
   // A stand-in for SWR's cache: local mutations apply, nothing revalidates.
   useHome: (emailAccountId?: string | null) => {
@@ -174,13 +175,23 @@ vi.mock("./use-local-inbox-rows", async (importOriginal) => {
 vi.mock("@/hooks/useCalendarUpcomingEvents", () => ({
   useCalendarTodayEvents: () => ({ data: mocks.day }),
 }));
-vi.mock("./use-waiting-on-you", () => ({
-  // What the hook found, whether or not Today still wants it.
-  useWaitingOnYou: () => ({
-    threads: mocks.waitingOnYou,
-    dismiss: mocks.dismissWaitingOnYou,
-  }),
-}));
+vi.mock("./use-waiting-on-you", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./use-waiting-on-you")>();
+  return {
+    ...actual,
+    // What the hook found in the accounts it reads, whether or not Today
+    // still wants it.
+    useWaitingOnYou: ({
+      accounts,
+      handledLabelIds,
+    }: Parameters<typeof actual.useWaitingOnYou>[0]) => ({
+      threads: mocks.waitingOnYou.filter(
+        (thread) => (thread.account?.id ?? accounts[0]?.id) in handledLabelIds,
+      ),
+      dismiss: mocks.dismissWaitingOnYou,
+    }),
+  };
+});
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -1028,7 +1039,7 @@ describe("HomeDashboard Waiting on you", () => {
     });
 
     it("shows from local mail for a mailbox Cue hasn't read", () => {
-      mocks.homeCue = { hasReadMail: false };
+      mocks.homeCue = { account: false };
 
       renderToday();
 
@@ -1044,7 +1055,7 @@ describe("HomeDashboard Waiting on you", () => {
     });
 
     it("waits for the answer for a mailbox Cue has read, which leaves it to Cue", () => {
-      mocks.homeCue = { hasReadMail: true };
+      mocks.homeCue = { account: true };
 
       renderToday();
 
@@ -1467,6 +1478,102 @@ describe("HomeDashboard across accounts", () => {
     expect(draft.getAttribute("href")).toBe(
       "/mail/u/0/all-inboxes/inbox/b1?account=1&from=today",
     );
+  });
+
+  describe("Waiting on you", () => {
+    const A = { id: "account", email: "a@example.com" };
+    const B = { id: "account-b", email: "b@example.com" };
+
+    beforeEach(() => {
+      mocks.waitingOnYou = [
+        { ...thread("b-ask", "Ski trip"), account: B },
+        { ...thread("a-ask", "Dentist"), account: A },
+      ];
+    });
+
+    afterEach(() => {
+      mocks.waitingOnYou = [];
+      mocks.homeCue = undefined;
+      mocks.home.isLoading = false;
+    });
+
+    it("shows a new mailbox's rows before any account answers, and not one Cue has read", () => {
+      mocks.home.isLoading = true;
+      mocks.homes = { account: undefined, "account-b": undefined };
+      mocks.homeCue = { account: true, "account-b": false };
+
+      renderToday();
+
+      expect(lanes()[0]).toBe("Waiting on you");
+      expect(rowFor("account-b:b-ask")).toBeTruthy();
+      expect(screen.queryByText("Dentist")).toBeNull();
+      expect(skeletons()).not.toEqual([]);
+    });
+
+    it("waits for an account whose state isn't known yet", () => {
+      mocks.home.isLoading = true;
+      mocks.homes = { account: undefined, "account-b": undefined };
+      mocks.homeCue = { account: true };
+
+      renderToday();
+
+      expect(lanes()).not.toContain("Waiting on you");
+    });
+
+    it("stays first while another account's Needs reply loads, and when it lands", () => {
+      mocks.homes = {
+        account: { ...homeData([]), pending: ["needsYou"] },
+        "account-b": unread(homeData([])),
+      };
+
+      const view = renderToday();
+      expect(lanes()[0]).toBe("Waiting on you");
+      expect(rowFor("account-b:b-ask")).toBeTruthy();
+
+      mocks.homes = {
+        account: homeData([thread("a1", "Quarterly numbers")]),
+        "account-b": unread(homeData([])),
+      };
+      view.unmount();
+      renderToday();
+
+      expect(lanes().slice(0, 2)).toEqual(["Waiting on you", "Needs reply"]);
+      expect(rowFor("account-b:b-ask")).toBeTruthy();
+      expect(screen.queryByText("Dentist")).toBeNull();
+    });
+
+    it("leaves out a copy of mail another account lists in Needs reply, and in the inbox below", () => {
+      mocks.waitingOnYou = [
+        {
+          ...thread("b-ask", "Contract"),
+          rfcMessageId: "same@mail",
+          account: B,
+        },
+        {
+          ...thread("b-lunch", "Lunch"),
+          rfcMessageId: "lunch@mail",
+          account: B,
+        },
+      ];
+      mocks.homes = {
+        account: {
+          ...homeData([
+            { ...thread("a1", "Contract"), rfcMessageId: "<same@mail>" },
+          ]),
+          alsoInInbox: [
+            { ...thread("a-lunch", "Lunch"), rfcMessageId: "<Lunch@mail>" },
+          ],
+        },
+        "account-b": unread(homeData([])),
+      };
+
+      renderToday();
+
+      expect(screen.getAllByText("Contract")).toHaveLength(1);
+      expect(within(lane("Needs reply")).getByText("Contract")).toBeTruthy();
+      expect(screen.getAllByText("Lunch")).toHaveLength(1);
+      expect(within(lane("Waiting on you")).getByText("Lunch")).toBeTruthy();
+    });
   });
 
   it("is one account's Today with one account in All inboxes", () => {

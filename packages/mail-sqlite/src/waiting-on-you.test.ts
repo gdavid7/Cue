@@ -46,8 +46,37 @@ describe("readWaitingOnYou", () => {
         receivedAtMs: NOW - HOUR,
         unread: true,
         starred: false,
+        messageKey: null,
+        copyAccountIds: [],
       },
     ]);
+  });
+
+  it("names the other accounts holding the same message", async () => {
+    const store = await setup(["a", "b", "c"]);
+    await write(store, [
+      ...wroteToAna(),
+      mail({ id: "ask", from: ANA, at: NOW - HOUR, messageId: "<Ask@X>" }),
+    ]);
+    // b holds a copy as its own conversation; c holds other mail.
+    await write(
+      store,
+      [mail({ id: "copy", from: ANA, at: NOW - HOUR, messageId: "ask@x" })],
+      "b",
+    );
+    await write(
+      store,
+      [mail({ id: "else", from: ANA, at: NOW - HOUR, messageId: "<else@x>" })],
+      "c",
+    );
+
+    const [row] = await read(store);
+
+    expect(row).toMatchObject({
+      conversationId: "ask",
+      messageKey: "ask@x",
+      copyAccountIds: ["b"],
+    });
   });
 
   it("lists a stranger's reply in a conversation you started", async () => {
@@ -320,6 +349,7 @@ function mail({
   categories = [],
   section = null,
   read = true,
+  messageId,
 }: {
   id: string;
   conversation?: string;
@@ -332,6 +362,8 @@ function mail({
   categories?: string[];
   section?: "focused" | "other" | null;
   read?: boolean;
+  /** The Internet Message-ID header. */
+  messageId?: string;
 }): ProviderChange {
   return {
     kind: "message_patch",
@@ -357,6 +389,7 @@ function mail({
       labelIds: labels,
       categoryIds: categories,
       hasAttachments: false,
+      ...(messageId ? { internetMessageId: messageId } : {}),
     },
   };
 }

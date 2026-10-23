@@ -92,14 +92,13 @@ import {
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
-import { useWaitingOnYou } from "./use-waiting-on-you";
+import { useWaitingOnYou, waitingOnYouScope } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
-const NO_LABEL_IDS: string[] = [];
 
 /**
  * Today answers "what needs me, and what's next?", then gets out of the way.
@@ -204,19 +203,40 @@ export function HomeDashboard() {
     if (!singleHandledLabelIds) return;
     return { [emailAccountId]: singleHandledLabelIds };
   }, [merged, handledLabelIdsByAccount, emailAccountId, singleHandledLabelIds]);
-  // Before Today's answer, Waiting on you shows from local mail for a mailbox
-  // Cue hasn't read, where that answer can only agree: Needs reply is empty
-  // and Cue has filed nothing. Across accounts it waits for the answer.
-  const earlyCue = useHomeCue(
-    emailAccountId,
-    !data && !allInboxesAccounts && isLoading,
+  // Waiting on you reads only mailboxes Cue hasn't read, and shows before
+  // Today's answer for each: whether Cue has read it is two database reads,
+  // while the answer waits on Gmail. Asked while any account's is coming.
+  const { feeds } = all;
+  const localAccountIds = useMemo(
+    () => localAccounts.map((account) => account.id),
+    [localAccounts],
   );
-  const beforeAnswer = !data && earlyCue?.hasReadMail === false;
-  const waitingOnYouHandledLabelIds = useMemo(
+  const homeCue = useHomeCue(
+    localAccountIds,
+    merged ? localAccountIds.some((id) => !feeds[id]?.data) : !single.data,
+  );
+  const waitingOnYouScopeState = useMemo(
     () =>
-      handledLabelIds ??
-      (beforeAnswer ? { [emailAccountId]: NO_LABEL_IDS } : undefined),
-    [handledLabelIds, beforeAnswer, emailAccountId],
+      waitingOnYouScope(
+        localAccounts,
+        Object.fromEntries(
+          localAccounts.map(({ id }) => {
+            const feed = merged
+              ? feeds[id]
+              : { data: single.data, error: single.error, gaveUp };
+            return [
+              id,
+              {
+                home: feed?.data,
+                gaveUp: feed?.gaveUp,
+                hasReadMail: homeCue?.[id],
+                failed: !feed?.data && feed?.error !== undefined,
+              },
+            ];
+          }),
+        ),
+      ),
+    [localAccounts, merged, feeds, single.data, single.error, gaveUp, homeCue],
   );
   const localInbox = useLocalInboxRows({
     accounts: localAccounts,
@@ -227,24 +247,21 @@ export function HomeDashboard() {
   const waitingOnYou = useWaitingOnYou({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
-    handledLabelIds: waitingOnYouHandledLabelIds,
-    // Only for a mailbox Cue hasn't read yet; after that Needs reply is
-    // Cue's answer, and this would second-guess it.
-    enabled: !data || (!data.cue.hasReadMail && !data.needsYou.length),
+    ...waitingOnYouScopeState,
   });
-  // Only beside a Needs reply that is known to be empty, and never a
-  // conversation Today already lists as waiting on someone else.
+  // Each conversation shows once on Today: never one it already lists as
+  // needing a reply or waiting on someone else, in any of the mailboxes.
   const waitingOnYouShown = useMemo(() => {
-    if (!data) return beforeAnswer ? waitingOnYou.threads : [];
-    if (data.cue.hasReadMail || data.needsYou.length) return [];
-    // One account Cue hasn't read has no Needs reply even while it loads;
-    // across accounts, another account's may still bring some.
-    if (merged && data.pending.includes("needsYou")) return [];
-    const waiting = new Set(data.waiting.map(rowKey));
+    if (!data) return waitingOnYou.threads;
+    const listed = [...data.needsYou, ...data.waiting];
+    const rows = new Set(listed.map(rowKey));
+    const messages = new Set(listed.map(todayConversationKey));
     return waitingOnYou.threads.filter(
-      (thread) => !waiting.has(rowKey(thread)),
+      (thread) =>
+        !rows.has(rowKey(thread)) &&
+        !messages.has(todayConversationKey(thread)),
     );
-  }, [data, beforeAnswer, merged, waitingOnYou.threads]);
+  }, [data, waitingOnYou.threads]);
   const visibleWaitingOnYou = useMemo(
     () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
     [waitingOnYouShown, hidden],
@@ -271,17 +288,16 @@ export function HomeDashboard() {
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
     const shown = new Set(waitingOnYouShown.map(rowKey));
-    if (!localInbox)
-      return (data?.alsoInInbox ?? []).filter(
-        (thread) => !shown.has(rowKey(thread)),
-      );
-    for (const thread of data?.needsYou ?? []) shown.add(rowKey(thread));
-    const needsYouMessages = new Set(data?.needsYou.map(todayConversationKey));
-    return localInbox.filter(
-      (thread) =>
-        !shown.has(rowKey(thread)) &&
-        !needsYouMessages.has(todayConversationKey(thread)),
-    );
+    const shownMessages = new Set(waitingOnYouShown.map(todayConversationKey));
+    const notShown = (thread: TodayThread) =>
+      !shown.has(rowKey(thread)) &&
+      !shownMessages.has(todayConversationKey(thread));
+    if (!localInbox) return (data?.alsoInInbox ?? []).filter(notShown);
+    for (const thread of data?.needsYou ?? []) {
+      shown.add(rowKey(thread));
+      shownMessages.add(todayConversationKey(thread));
+    }
+    return localInbox.filter(notShown);
   }, [data, localInbox, waitingOnYouShown]);
   const visibleAlsoInInbox = useMemo(
     () =>
