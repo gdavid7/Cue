@@ -22,6 +22,7 @@
     "./drafts": "./src/drafts.ts",
     "./queries": "./src/queries.ts",
     "./query-semantics": "./src/query-semantics.ts",
+    "./sender-check": "./src/sender-check.ts",
     "./operations": "./src/operations.ts",
     "./effective-state": "./src/effective-state.ts",
     "./sync": "./src/sync.ts",

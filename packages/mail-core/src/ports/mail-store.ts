@@ -43,6 +43,8 @@ import type {
   PersonCardQuery,
   WaitingOnYouConversation,
   WaitingOnYouQuery,
+  SenderHistory,
+  SenderHistoryQuery,
   QuerySnapshot,
   SemanticMatch,
 } from "../queries";
@@ -527,6 +529,7 @@ export interface MailStore {
     limit: number;
     minSimilarity: number;
   }): Promise<SemanticMatch[]>;
+  readSenderHistory(query: SenderHistoryQuery): Promise<SenderHistory>;
   readWaitingOnYou(
     query: WaitingOnYouQuery,
   ): Promise<WaitingOnYouConversation[]>;

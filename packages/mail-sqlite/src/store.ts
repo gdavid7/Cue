@@ -9,6 +9,7 @@ import { readFileSenders, readFiles, readFilesNotOnDevice } from "./files";
 import { readNeverReadSenders } from "./never-read-senders";
 import { readPersonCard } from "./person-card";
 import { readWaitingOnYou } from "./waiting-on-you";
+import { readSenderHistory } from "./sender-history";
 import {
   countMessageEmbeddings,
   deleteAccountMessageEmbeddings,
@@ -193,6 +194,9 @@ export async function createSqliteMailStore(
     },
     readNeverReadSenders(query) {
       return driver.read((tx) => readNeverReadSenders(tx, query));
+    },
+    readSenderHistory(query) {
+      return driver.read((tx) => readSenderHistory(tx, query));
     },
     readFiles(query) {
       return driver.read(async (tx) =>

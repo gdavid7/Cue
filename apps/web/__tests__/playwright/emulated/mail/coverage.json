@@ -265,6 +265,16 @@
     "components/email-list/EmailDetails.tsx",
     "app/(app)/[emailAccountId]/mail/ThreadReader.tsx"
   ],
+  "sender-notice.spec.ts": [
+    "components/email-list/SenderNotice.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "components/person-card/PersonCard.tsx",
+    "utils/browser-cache.ts",
+    "utils/mail-engine/create-browser-engine.ts",
+    "utils/mail-engine/tab-channel.ts",
+    "emulate.playwright.config.yaml",
+    "emulate.playwright.microsoft.yaml"
+  ],
   "plain-text-links.spec.ts": [
     "components/email-list/EmailMessage.tsx",
     "components/email-list/EmailContents.tsx"

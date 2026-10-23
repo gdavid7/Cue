@@ -247,6 +247,20 @@ microsoft:
       parent_folder_id: sentitems
       is_read: true
       received_date_time: "2025-12-31T12:00:00.000Z"
+    # Kai's name from an address the user never wrote to (FT-15).
+    - id: msg_playwright_familiar_name
+      conversation_id: thr_playwright_familiar_name
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: kai.example@lookalike.test
+        name: Kai Example
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Familiar Name Message
+      body_content: A note under a familiar name from a new address.
+      parent_folder_id: inbox
+      is_read: true
+      received_date_time: "2024-12-20T13:06:40.000Z"
     - id: msg_playwright_reply
       conversation_id: thr_playwright_reply
       user_email: __PLAYWRIGHT_TEST_EMAIL__

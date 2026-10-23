@@ -78,6 +78,7 @@ const OPTIONAL_METHODS = {
   queryPersonCard: true,
   queryNeverReadSenders: true,
   queryWaitingOnYou: true,
+  querySenderHistory: true,
   queryFiles: true,
   queryFileSenders: true,
   queryFilesNotOnDevice: true,

@@ -58,6 +58,8 @@ import type {
   NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
+  SenderHistory,
+  SenderHistoryQuery,
   QueryHandle,
   SemanticMatch,
   SemanticSearchQuery,
@@ -175,6 +177,12 @@ export type MailClient = {
   queryNeverReadSenders?(
     query: NeverReadSendersQuery,
   ): Promise<NeverReadSender[]>;
+  /**
+   * What the reader's "New address, familiar name" line needs about a
+   * sender, read once from the local store. Hosts that can't answer off the
+   * UI thread leave it out.
+   */
+  querySenderHistory?(query: SenderHistoryQuery): Promise<SenderHistory>;
   /**
    * A page of the Files view's attachments, read once from the local store.
    * Hosts that can't answer off the UI thread leave it out.
@@ -378,6 +386,9 @@ export function createMailEngine(input: {
     },
     queryNeverReadSenders(query) {
       return store.readNeverReadSenders(query);
+    },
+    querySenderHistory(query) {
+      return store.readSenderHistory(query);
     },
     queryFiles(query) {
       return store.readFiles(query);

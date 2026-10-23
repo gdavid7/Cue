@@ -339,6 +339,7 @@ export function createTabFollowerClient(input: {
     queryPersonCard: (query) => call("queryPersonCard", [query]) as never,
     queryNeverReadSenders: (query) =>
       call("queryNeverReadSenders", [query]) as never,
+    querySenderHistory: (query) => call("querySenderHistory", [query]) as never,
     queryFiles: (query) => call("queryFiles", [query]) as never,
     queryFileSenders: (accountIds) =>
       call("queryFileSenders", [accountIds]) as never,
