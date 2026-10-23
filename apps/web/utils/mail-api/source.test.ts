@@ -1829,6 +1829,92 @@ describe("createEmailProviderMailboxSource", () => {
     });
   });
 
+  describe("an engine older than the server's minimum", () => {
+    async function enumerateAs(
+      oldEngine: "missing_revision" | "below_minimum" | null,
+      page: Record<string, unknown>,
+    ) {
+      const getMessagesWithPagination = vi.fn(async () => ({
+        messages: [],
+        nextPageToken: "next",
+      }));
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        oldEngine,
+        provider: {
+          name: "google",
+          getMessagesWithPagination,
+        } as unknown as EmailProvider,
+      });
+      const metrics = createRequestMetrics();
+      const result = await runWithRequestMetrics(metrics, () =>
+        source.enumerate({
+          session: { accountId: "acc-1", generation: "g1" },
+          requestId: "r1",
+          signal: new AbortController().signal,
+          bootstrapId: "mailbox",
+          page: JSON.stringify(page),
+          pageSize: 50,
+        }),
+      );
+      return {
+        result,
+        fields: getRequestMetricsFields(metrics),
+        listed: getMessagesWithPagination.mock.calls.length,
+      };
+    }
+
+    it.each([
+      [
+        "missing_revision",
+        { scopeId: "history", windowStartMs: 1, phase: "rest" },
+      ],
+      ["below_minimum", { scopeId: "history", pageToken: "p2" }],
+    ] as const)("is refused a background backfill page for ten minutes (%s), before any Gmail call", async (reason, page) => {
+      const { result, fields, listed } = await enumerateAs(reason, page);
+      expect(result).toEqual({
+        status: "paused",
+        reason: "throttled",
+        retryAfterMs: 10 * 60_000,
+      });
+      expect(listed).toBe(0);
+      expect(fields).toMatchObject({
+        pausedSource: "old_engine",
+        pausedReason: reason,
+        pausedRetryAfterMs: 10 * 60_000,
+        gatePriority: "background",
+      });
+    });
+
+    it.each([
+      ["the primary scan", { scopeId: "primary", pageToken: "p2" }],
+      [
+        "a first sync's older inbox",
+        { scopeId: "history", windowStartMs: 1, phase: "inbox", synced: 0 },
+      ],
+    ])("still lists %s, which a person is waiting on", async (_name, page) => {
+      const { result, fields, listed } = await enumerateAs(
+        "missing_revision",
+        page,
+      );
+      expect(result).toMatchObject({ status: "ok" });
+      expect(listed).toBe(1);
+      expect(fields.pausedSource).toBeUndefined();
+    });
+
+    it("leaves a current engine's background backfill to the usual budget", async () => {
+      const { result, fields, listed } = await enumerateAs(null, {
+        scopeId: "history",
+        windowStartMs: 1,
+        phase: "rest",
+      });
+      expect(result).toMatchObject({ status: "ok" });
+      expect(listed).toBe(1);
+      expect(fields.pausedSource).toBeUndefined();
+    });
+  });
+
   it("logs a mailbox's local-budget pause at most once a minute", () => {
     expect(shouldLogLocalBudgetPause("rate-a", 1000)).toBe(true);
     expect(shouldLogLocalBudgetPause("rate-a", 30_000)).toBe(false);

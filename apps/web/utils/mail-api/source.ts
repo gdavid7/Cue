@@ -38,6 +38,10 @@ import { randomUUID } from "node:crypto";
 import { getAuditContext } from "@/utils/audit/context";
 import { noteEnumerationPage, noteRequestPause } from "@/utils/request-metrics";
 import {
+  OLD_ENGINE_RETRY_AFTER_MS,
+  type OldEngineReason,
+} from "@/utils/mail-api/engine-revision";
+import {
   getFastRequestSampleRate,
   isFastRequestSampled,
 } from "@/utils/request-sampling";
@@ -146,8 +150,10 @@ export function createEmailProviderMailboxSource(input: {
   provider: EmailProvider;
   accountId: string;
   logger: Logger;
+  /** Set when the requesting engine is older than the server's minimum. */
+  oldEngine?: OldEngineReason | null;
 }): MailboxSource & Required<Pick<MailboxSource, "readChangesBatch">> {
-  const { provider, accountId, logger } = input;
+  const { provider, accountId, logger, oldEngine } = input;
   const maxPageSize = provider.name === "microsoft" ? 20 : 50;
   const isGmail = provider.name === "google";
   const source: MailboxSource = {
@@ -276,6 +282,17 @@ export function createEmailProviderMailboxSource(input: {
           gatePriority: priority,
           promoted: inboxFirst,
         });
+        // An old engine ignores the 200 page's pacing hint but waits out a
+        // throttled refusal, so its backfill gets one long refusal per page
+        // before it spends any quota. The inbox it is waiting on is sync.
+        if (oldEngine && priority === "background") {
+          noteRequestPause({
+            source: "old_engine",
+            reason: oldEngine,
+            retryAfterMs: OLD_ENGINE_RETRY_AFTER_MS,
+          });
+          return throttled(OLD_ENGINE_RETRY_AFTER_MS);
+        }
         const maxResults = Math.min(
           pageSize,
           maxPageSize,

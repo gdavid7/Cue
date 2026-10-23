@@ -1,4 +1,8 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { isSessionExpiredErrorBody } from "@/utils/session-expired";
 import {
@@ -28,6 +32,7 @@ export function createMailHttpRequest(
         accept:
           accept === "bytes" ? "application/octet-stream" : "application/json",
         [EMAIL_ACCOUNT_HEADER]: accountId,
+        [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
         ...encoded.headers,
       },
       body: encoded.body,
