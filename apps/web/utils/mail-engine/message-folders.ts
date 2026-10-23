@@ -72,7 +72,11 @@ export function moveBackChanges(
     group.messageIds.push(messageId);
     groups.set(key, group);
   };
+  const now = new Map(current.map((m) => [m.messageId, m]));
   for (const message of messages) {
+    // The move left it where it was, such as an Outlook Sent reply.
+    const after = now.get(message.messageId);
+    if (after && after.folderId !== movedToFolderId) continue;
     if (message.inbox) {
       add("inbox", { kind: "unarchive" }, message.messageId);
     } else if (message.folderId && message.folderId !== movedToFolderId) {

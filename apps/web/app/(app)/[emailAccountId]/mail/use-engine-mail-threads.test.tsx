@@ -23,12 +23,15 @@ function wrapper({ children }: { children: ReactNode }) {
   return <MailEngineProvider client={null}>{children}</MailEngineProvider>;
 }
 
+const GMAIL = new Map([["acc-1", "google" as const]]);
+
 describe("useEngineMailThreads", () => {
   it("keeps the disabled empty result stable across query identity changes", async () => {
     const { result, rerender } = renderHook(
       ({ query }: { query: ThreadsQuery }) =>
         useEngineMailThreads({
           emailAccountId: "acc-1",
+          providers: GMAIL,
           query,
           enabled: false,
         }),
@@ -52,6 +55,7 @@ describe("useEngineMailThreads", () => {
       () =>
         useEngineMailThreads({
           emailAccountId: "acc-1",
+          providers: GMAIL,
           query: { type: "inbox" } as ThreadsQuery,
         }),
       { wrapper },
@@ -99,6 +103,7 @@ describe("useEngineMailThreads", () => {
       () =>
         useEngineMailThreads({
           emailAccountId: "acc-1",
+          providers: GMAIL,
           query: { type: "inbox" } as ThreadsQuery,
         }),
       { wrapper: clientWrapper },
@@ -172,7 +177,12 @@ describe("useEngineMailThreads", () => {
       requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
     } as unknown as MailClient;
     return renderHook(
-      () => useEngineMailThreads({ emailAccountId: "acc-1", query: { q } }),
+      () =>
+        useEngineMailThreads({
+          emailAccountId: "acc-1",
+          providers: GMAIL,
+          query: { q },
+        }),
       {
         wrapper: ({ children }: { children: ReactNode }) => (
           <MailEngineProvider client={client}>{children}</MailEngineProvider>
@@ -249,6 +259,7 @@ describe("useEngineMailThreads", () => {
       () =>
         useEngineMailThreads({
           emailAccountId: "acc-1",
+          providers: GMAIL,
           query: { q: "is:unr" },
           providerSearch: false,
         }),
@@ -306,6 +317,7 @@ describe("useEngineMailThreads", () => {
       () =>
         useEngineMailThreads({
           emailAccountId: "acc-1",
+          providers: GMAIL,
           accountIds: ["acc-1", "acc-2"],
           query: { type: "inbox" } as ThreadsQuery,
           predicate,
@@ -347,6 +359,7 @@ describe("useEngineMailThreads", () => {
       () =>
         useEngineMailThreads({
           emailAccountId: "acc-1",
+          providers: GMAIL,
           query: { type: "inbox" } as ThreadsQuery,
         }),
       { wrapper: clientWrapper },
@@ -634,6 +647,7 @@ function renderPushedInbox(initial: MailboxView["conversations"]) {
     () =>
       useEngineMailThreads({
         emailAccountId: "acc-1",
+        providers: GMAIL,
         query: { type: "inbox" } as ThreadsQuery,
       }),
     { wrapper: clientWrapper },

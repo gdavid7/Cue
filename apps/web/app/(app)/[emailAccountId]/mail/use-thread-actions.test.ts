@@ -43,6 +43,7 @@ describe("useThreadActions", () => {
     mail.started = true;
     mail.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mail.client.submitConversations.mockResolvedValue({ status: "queued" });
+
     mail.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
     mail.client.submitMetadata.mockResolvedValue({ status: "queued" });
     mail.client.ensureConversationMessages.mockResolvedValue({
@@ -531,6 +532,7 @@ describe("useThreadActions", () => {
     const nextClient = {
       cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
       getDiagnostics: vi.fn(),
+      observeOperation: vi.fn(),
       submitConversations: vi.fn(),
     };
     mail.client = nextClient;
@@ -569,6 +571,7 @@ describe("useThreadActions", () => {
     const nextClient = {
       cancelOperation: vi.fn().mockResolvedValue({ status: "cancelled" }),
       getDiagnostics: vi.fn(),
+      observeOperation: vi.fn(),
       submitConversations: vi.fn(),
     };
     mail.client = nextClient;
@@ -644,6 +647,14 @@ describe("useThreadActions", () => {
           folderId: "projects-folder",
           name: "Projects",
         }),
+      );
+      // By undo time the move has taken every message.
+      mail.client.observeConversation.mockReturnValue(
+        conversationHandle([
+          message("from-inbox", "projects-folder", []),
+          message("from-sent", "projects-folder", []),
+          message("from-receipts", "projects-folder", []),
+        ]),
       );
       let restored: string[] = [];
       await act(async () => {
@@ -764,6 +775,14 @@ describe("useThreadActions", () => {
           name: "Projects",
         }),
       );
+      // By undo time the move has taken every message.
+      mail.client.observeConversation.mockReturnValue(
+        conversationHandle([
+          message("from-inbox", "projects-folder", []),
+          message("from-sent", "projects-folder", []),
+          message("from-receipts", "projects-folder", []),
+        ]),
+      );
       mail.client.submitMetadata
         .mockResolvedValueOnce({ status: "queued" })
         .mockResolvedValueOnce({ status: "rejected", code: "queue_full" });
@@ -799,6 +818,48 @@ describe("useThreadActions", () => {
     });
   });
 
+  // Sent and Drafts act on the whole conversation, the user's own copies
+  // included, and so does their undo.
+  it("deletes the whole conversation from Sent and undoes it the same way", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const { result } = renderActions({ wholeConversation: true });
+
+    await act(() => result.current.trash(["thread"]));
+
+    expect(mail.client.submitConversations).toHaveBeenCalledWith({
+      accountId: "account",
+      commandId: expect.any(String),
+      conversations: [{ accountId: "account", conversationId: "thread" }],
+      change: { kind: "trash" },
+      wholeConversation: true,
+      observedRevision: 1,
+    });
+
+    await act(() => result.current.undo());
+
+    expect(mail.client.submitConversations).toHaveBeenLastCalledWith({
+      accountId: "account",
+      commandId: expect.any(String),
+      conversations: [{ accountId: "account", conversationId: "thread" }],
+      change: { kind: "restore_from_trash" },
+      wholeConversation: true,
+      observedRevision: 1,
+    });
+  });
+
+  it("moves the whole conversation to the Inbox from Sent", async () => {
+    const { result } = renderActions({ wholeConversation: true });
+
+    await act(() => result.current.moveToInbox(["thread"]));
+
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        change: { kind: "unarchive" },
+        wholeConversation: true,
+      }),
+    );
+  });
+
   it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {
     const onRestored = vi.fn();
     const { result } = renderHook(() =>
@@ -825,13 +886,16 @@ type Actions = ReturnType<typeof useThreadActions>;
 
 function renderActions({
   threads = [createThread(["INBOX", "UNREAD"])],
+  wholeConversation,
 }: {
   threads?: ListThread[];
+  wholeConversation?: boolean;
 } = {}) {
   return renderHook(() =>
     useThreadActions({
       emailAccountId: "account",
       threads,
+      wholeConversation,
     }),
   );
 }

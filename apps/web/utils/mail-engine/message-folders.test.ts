@@ -101,4 +101,14 @@ describe("moveBackChanges", () => {
       { change: { kind: "unarchive" }, messageIds: ["c"] },
     ]);
   });
+
+  it("leaves a Sent copy the move didn't take where it is", () => {
+    expect(
+      moveBackChanges(
+        [{ messageId: "reply", folderId: "sent", inbox: false }],
+        "dest",
+        [{ messageId: "reply", folderId: "sent", inbox: false }],
+      ),
+    ).toEqual([]);
+  });
 });

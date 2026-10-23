@@ -33,6 +33,7 @@ import {
 import {
   applyMetadataChange,
   applyMetadataPatch,
+  conversationTargets,
   deriveEffectiveMessage,
   type ConfirmedMessage,
 } from "@inboxzero/mail-core/effective-state";
@@ -40,6 +41,7 @@ import type {
   ConversationKey,
   LocalRevision,
   MessageKey,
+  Provider,
 } from "@inboxzero/mail-core/identities";
 import {
   type MessageMetadata,
@@ -122,7 +124,11 @@ export type SqliteMailStoreOptions = {
   runtime?: Pick<HostRuntime, "randomId" | "sha256" | "nowMs">;
   /** Defaults to the Compression Streams API; Node hosts pass zlib. */
   bodyCodec?: MessageBodyCodec;
+  /** Debug notes about the store's own decisions. Fields carry ids only. */
+  debug?: StoreDebug;
 };
+
+type StoreDebug = (message: string, fields: Record<string, string>) => void;
 
 export async function createSqliteMailStore(
   driver: SqliteDriver,
@@ -134,6 +140,7 @@ export async function createSqliteMailStore(
   const runtime = resolveStoreRuntime(options.runtime);
   const digest = (value: unknown) => hashCanonical(value, runtime.sha256);
   const bodyCodec = options.bodyCodec ?? streamBodyCodec;
+  const debug: StoreDebug = options.debug ?? (() => {});
   await driver.write(async (tx) => {
     await migrateMailbox(tx, runtime.randomId());
     // A content fetch claimed by the engine that last had this store open (a
@@ -414,6 +421,14 @@ export async function createSqliteMailStore(
           }
           await applyChange(tx, change, read);
         }
+        newTargets.push(
+          ...(await narrowConversationTargets(tx, debug, {
+            accountId: input.accountId,
+            commandId: input.commandId,
+            conversationId: input.page.conversation.conversationId,
+            ...operationIntent(operation),
+          })),
+        );
         await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
@@ -896,7 +911,7 @@ export async function createSqliteMailStore(
         // after opening) covers the ones this page adds, so they don't show
         // it undone until its own preparation lands.
         const preparing = await tx.query(
-          `SELECT c.command_id FROM operation_conversations c
+          `SELECT c.command_id, o.payload_json FROM operation_conversations c
            JOIN operations o
              ON o.account_id = c.account_id AND o.command_id = c.command_id
            WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
@@ -930,6 +945,16 @@ export async function createSqliteMailStore(
           }
           await applyChange(tx, change, read);
         }
+        for (const row of preparing) {
+          newTargets.push(
+            ...(await narrowConversationTargets(tx, debug, {
+              accountId,
+              commandId: String(row.command_id),
+              conversationId,
+              ...operationIntent(row),
+            })),
+          );
+        }
         await recomputeTargets(tx, newTargets);
         if (!input.page.nextPage) {
           await tx.execute(
@@ -938,8 +963,8 @@ export async function createSqliteMailStore(
              ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
             [accountId, conversationId],
           );
-          // The commands now target every message, so this read resolves
-          // their membership too and they skip their own.
+          // The commands now target every message their change reaches, so
+          // this read resolves their membership too and they skip their own.
           for (const row of preparing) {
             const commandId = String(row.command_id);
             await tx.execute(
@@ -2359,6 +2384,7 @@ async function admitConversations(
     kind: "conversations",
     conversations: input.conversations,
     change: input.change,
+    ...(input.wholeConversation ? { wholeConversation: true } : {}),
   };
   const hash = await digest(payload);
   if (existing) {
@@ -2372,6 +2398,7 @@ async function admitConversations(
     return { status: "rejected", code: "invalid" };
   }
   let complete = true;
+  const provider = await accountProvider(tx, input.accountId);
   const knownTargets: Array<MessageKey & { conversationId: string }> = [];
   for (const conversation of input.conversations) {
     if (conversation.accountId !== input.accountId) {
@@ -2383,11 +2410,17 @@ async function admitConversations(
     );
     if (!flag[0] || Number(flag[0].complete) !== 1) complete = false;
     const messages = await tx.query(
-      "SELECT message_id FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
+      "SELECT message_id, roles_json FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
       [conversation.accountId, conversation.conversationId],
     );
+    const targets = conversationTargets(
+      messages.map((row) => ({ row, roles: parseRoles(row.roles_json) })),
+      input.change,
+      provider,
+      input.wholeConversation === true,
+    ).map(({ row }) => row);
     knownTargets.push(
-      ...messages.map((row) => ({
+      ...targets.map((row) => ({
         accountId: conversation.accountId,
         messageId: String(row.message_id),
         conversationId: conversation.conversationId,
@@ -3133,6 +3166,88 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
   }
 }
 
+// Drops the command's targets in this conversation that its change leaves
+// alone, now that the messages a membership page found are stored with their
+// folders. Returns the dropped keys so their effective state is redone.
+async function narrowConversationTargets(
+  tx: SqlTransaction,
+  debug: StoreDebug,
+  input: {
+    accountId: string;
+    commandId: string;
+    conversationId: string;
+    change: SubmitMetadataCommand["change"];
+    wholeConversation: boolean;
+  },
+): Promise<MessageKey[]> {
+  const provider = await accountProvider(tx, input.accountId);
+  const rows = await tx.query(
+    `SELECT t.message_id, m.roles_json
+     FROM operation_targets t
+     LEFT JOIN messages m
+       ON m.account_id = t.account_id AND m.message_id = t.message_id AND m.deleted = 0
+     WHERE t.account_id = ? AND t.command_id = ? AND t.conversation_id = ?`,
+    [input.accountId, input.commandId, input.conversationId],
+  );
+  const targeted = rows.map((row) => ({
+    messageId: String(row.message_id),
+    roles: row.roles_json == null ? null : parseRoles(row.roles_json),
+  }));
+  const kept = new Set(
+    conversationTargets(
+      targeted,
+      input.change,
+      provider,
+      input.wholeConversation,
+    ).map((target) => target.messageId),
+  );
+  const dropped: MessageKey[] = [];
+  for (const { messageId, roles } of targeted) {
+    if (kept.has(messageId)) continue;
+    await tx.execute(
+      "DELETE FROM operation_targets WHERE account_id = ? AND command_id = ? AND message_id = ?",
+      [input.accountId, input.commandId, messageId],
+    );
+    if (roles === null) {
+      debug("Left a listed message with no stored copy out of a command", {
+        accountId: input.accountId,
+        commandId: input.commandId,
+        conversationId: input.conversationId,
+        messageId,
+      });
+    }
+    dropped.push({ accountId: input.accountId, messageId });
+  }
+  return dropped;
+}
+
+async function accountProvider(
+  tx: SqlTransaction,
+  accountId: string,
+): Promise<Provider | null> {
+  const rows = await tx.query(
+    "SELECT provider FROM accounts WHERE account_id = ?",
+    [accountId],
+  );
+  const provider = rows[0]?.provider;
+  return provider === "google" || provider === "microsoft" ? provider : null;
+}
+
+function operationIntent(row: { payload_json?: unknown }) {
+  const payload = JSON.parse(String(row.payload_json)) as {
+    change: SubmitMetadataCommand["change"];
+    wholeConversation?: boolean;
+  };
+  return {
+    change: payload.change,
+    wholeConversation: payload.wholeConversation === true,
+  };
+}
+
+function parseRoles(value: unknown) {
+  return JSON.parse(String(value)) as MessageMetadata["roles"];
+}
+
 // Queues a preparing command once every conversation's membership is known,
 // in the caller's transaction so the two never come apart.
 async function queuePreparedOperation(
@@ -3149,9 +3264,7 @@ async function queuePreparedOperation(
   if (remaining.length > 0) return false;
   const operation = await loadOperation(tx, accountId, commandId);
   if (operation?.status !== "preparing") return false;
-  const payload = JSON.parse(String(operation.payload_json)) as {
-    change: SubmitMetadataCommand["change"];
-  };
+  const { change } = operationIntent(operation);
   const targets = await tx.query(
     `SELECT message_id FROM operation_targets
      WHERE account_id = ? AND command_id = ?`,
@@ -3164,7 +3277,7 @@ async function queuePreparedOperation(
   const executable = {
     kind: "metadata" as const,
     targets: messageTargets,
-    change: payload.change,
+    change,
   };
   await tx.execute(
     `UPDATE operations
@@ -3460,7 +3573,7 @@ function confirmedFromRow(
         : inboxSection(String(row.inbox_section)),
     labelIds: JSON.parse(String(row.label_ids_json)) as string[],
     categoryIds: JSON.parse(String(row.category_ids_json)) as string[],
-    roles: JSON.parse(String(row.roles_json)) as MessageMetadata["roles"],
+    roles: parseRoles(row.roles_json),
     hasAttachments: Number(row.has_attachments) === 1,
     snoozedUntilMs:
       row.snoozed_until_ms == null ? null : Number(row.snoozed_until_ms),

@@ -85,6 +85,7 @@ type UndoableBatch = {
   restore:
     | { kind: "conversations"; change: MetadataChange }
     | { kind: "move_back"; movedToFolderId: string };
+  wholeConversation: boolean;
   // Resolves once the engine has admitted the command, so an undo pressed
   // while it is still being admitted waits for it instead of getting lost.
   snapshots: Promise<ThreadSnapshot[]>;
@@ -95,11 +96,17 @@ export function useThreadActions({
   emailAccountId,
   readerTarget,
   threads,
+  wholeConversation = false,
   onRestored,
 }: {
   emailAccountId: string;
   readerTarget?: ThreadActionTarget;
   threads: ActionableThread[];
+  /**
+   * Set in Sent and Drafts, where triage reaches the user's own copies too,
+   * as it always has; elsewhere Outlook's are left in place.
+   */
+  wholeConversation?: boolean;
   /**
    * Called with the keys an undo brought back, for a list that hides removed
    * rows itself rather than following the mail engine's views.
@@ -200,6 +207,7 @@ export function useThreadActions({
               change,
               client,
               conversationIds: accountTargets.map((target) => target.threadId),
+              wholeConversation,
             });
             rejectionCodes.push(...result.rejectionCodes);
             const commandIds = new Map(
@@ -242,7 +250,7 @@ export function useThreadActions({
         rejectionCodes,
       };
     },
-    [client],
+    [client, wholeConversation],
   );
 
   // A retry or another tab taking over can replace the engine, and an undo
@@ -324,6 +332,7 @@ export function useThreadActions({
                 conversationId: snapshot.threadId,
               })),
               change: restore.change,
+              ...(batch.wholeConversation ? { wholeConversation: true } : {}),
               observedRevision: diagnostics.revision,
             });
             if (admission.status === "rejected") {
@@ -403,6 +412,7 @@ export function useThreadActions({
       const previous = lastAction.current;
       const batch: UndoableBatch = {
         restore,
+        wholeConversation,
         snapshots: enqueued.then(
           (result) => result.snapshots,
           () => [],
@@ -446,7 +456,7 @@ export function useThreadActions({
       }
       return rows;
     },
-    [enqueueTargets, resolveTargets, undoBatch],
+    [enqueueTargets, resolveTargets, undoBatch, wholeConversation],
   );
 
   const runUndoableAction = useCallback(
