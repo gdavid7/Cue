@@ -17,16 +17,6 @@ export const DAY_LABELS = [
   "Saturday",
 ];
 
-// Monday to Friday, 9:00 to 17:00. Mirrors the default schedule created
-// alongside a booking link so the standalone editor feels usable immediately.
-export const DEFAULT_WEEKDAY_WINDOWS: AvailabilityWindowInput[] = [
-  1, 2, 3, 4, 5,
-].map((weekday) => ({
-  weekday,
-  startMinutes: 9 * 60,
-  endMinutes: 17 * 60,
-}));
-
 export function buildDayState(windows: AvailabilityWindowInput[]): DayState[] {
   const byDay = new Map<number, Range[]>();
   for (const window of windows) {

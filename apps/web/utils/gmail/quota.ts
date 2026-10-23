@@ -281,6 +281,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/mail-splits",
     "user/vacation-responder",
     "user/meeting-recorder/meeting-draft",
+    // The composer's "Share my free times", asked for by the person writing.
+    "user/calendar/free-times",
     "labels/counts",
     "/api/labels/create",
     "/api/user/drive/preview",

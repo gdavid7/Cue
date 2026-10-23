@@ -1,6 +1,7 @@
 "use server";
 
 import { SafeError } from "@/utils/error";
+import { DEFAULT_WEEKDAY_WINDOWS } from "@/utils/booking/default-availability";
 import { actionClient } from "@/utils/actions/safe-action";
 import {
   createBookingLinkBody,
@@ -66,7 +67,7 @@ export const createBookingLinkAction = actionClient
                 isDefault: true,
                 emailAccount: { connect: { id: emailAccountId } },
                 windows: {
-                  create: getDefaultWindows(),
+                  create: DEFAULT_WEEKDAY_WINDOWS,
                 },
               },
             },
@@ -359,14 +360,6 @@ function getUpdatedLocationType({
     getProviderVideoLocationType(destinationCalendarProvider) ??
     BookingLinkLocationType.CUSTOM
   );
-}
-
-function getDefaultWindows() {
-  return [1, 2, 3, 4, 5].map((weekday) => ({
-    weekday,
-    startMinutes: 9 * 60,
-    endMinutes: 17 * 60,
-  }));
 }
 
 function emptyToNull(value?: string | null) {
