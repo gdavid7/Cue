@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import useSWR, {
   type Cache,
   type BareFetcher,
@@ -24,11 +18,6 @@ import { getAccountScopedKey } from "@/utils/swr";
 // each ask spends its quota again.
 const PENDING_REFRESH_MS = 5000;
 const PENDING_LOAD_LIMIT = 12;
-// The first loads of a lane still pending are part of opening Today; after
-// those, Today is waiting on Gmail by itself and asks behind people's work.
-const REQUESTED_PENDING_LOADS = 2;
-// Loads further apart than this aren't one streak of asking.
-const STREAK_GAP_MS = PENDING_REFRESH_MS * 3;
 const FOCUS_REFRESH_MIN_MS = 30_000;
 const CHANGE_REFRESH_MIN_MS = 10_000;
 
@@ -42,71 +31,35 @@ const seededCopies = new WeakSet<TodayHomeData>();
  * `retry` asks again from the start.
  */
 export function useHome(emailAccountId?: string | null) {
+  // Loads in a row that came back with a lane still pending. SWR may call
+  // refreshInterval from an earlier render, so it reads the ref.
+  const pendingLoadsRef = useRef(0);
+  const [pendingLoads, setPendingLoads] = useState(0);
+  const countPendingLoads = (loads: number) => {
+    pendingLoadsRef.current = loads;
+    setPendingLoads(loads);
+  };
   const key = homeKey(emailAccountId);
-  const serializedKey = key ? unstable_serialize(key) : null;
   const { cache, mutate: mutateKey, fetcher } = useSWRConfig();
   useSavedHomeSeed(emailAccountId);
-  // Loads in a row that left a lane pending count from when Today opens: a
-  // warm-up from a hover just before is part of that, while what an
-  // earlier visit, or another account, left isn't.
-  const shownKeyRef = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    const switched = shownKeyRef.current !== null;
-    shownKeyRef.current = serializedKey;
-    if (!serializedKey) return;
-    if (switched || pendingStreaks.idleFor(serializedKey) > STREAK_GAP_MS)
-      pendingStreaks.reset(serializedKey);
-  }, [serializedKey]);
-  const pendingLoads = useSyncExternalStore(
-    pendingStreaks.subscribe,
-    () => (serializedKey ? pendingStreaks.get(serializedKey) : 0),
-    () => 0,
-  );
-  // Today's own loads on their way (see `load`).
-  const ownLoadsRef = useRef(0);
   const home = useSWR<TodayHomeData>(key, loadHome(cache, fetcher), {
     // A row action while a load is on its way makes SWR drop that load's
     // answer; ask again so the fresh lanes still arrive. A newer load still
     // running will answer instead: asking again then would replace it, and
     // that one would be dropped in turn, without end.
     onDiscarded: (discarded) => {
-      if (ownLoadsRef.current > 0) return;
       if (key && !cache.get(discarded)?.isValidating) mutateKey(key);
     },
     // Each load spends Gmail quota, so tab switches share one.
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
+    onSuccess: (data) =>
+      countPendingLoads(isRefreshing(data) ? pendingLoadsRef.current + 1 : 0),
+    refreshInterval: (data) =>
+      data && isRefreshing(data) && pendingLoadsRef.current < PENDING_LOAD_LIMIT
+        ? PENDING_REFRESH_MS
+        : 0,
   });
   const { mutate } = home;
-  // Loads Today starts itself go straight into the cache rather than through
-  // SWR's revalidation, which runs whichever hook on the key subscribed
-  // first (the sidebar's warm-up, after a hover) with that hook's fetcher:
-  // so each says for itself whether anyone asked for it.
-  const load = useCallback(
-    ({ requested }: { requested: boolean }) => {
-      if (!key) return;
-      ownLoadsRef.current++;
-      mutate(loadHome(cache, fetcher, { requested })(key), {
-        revalidate: false,
-      })
-        .catch(() => undefined)
-        .finally(() => {
-          ownLoadsRef.current--;
-        });
-    },
-    [key, cache, fetcher, mutate],
-  );
-
-  // A lane Gmail couldn't serve in time is asked for again shortly.
-  const refreshing = Boolean(home.data && isRefreshing(home.data));
-  useEffect(() => {
-    if (!refreshing || pendingLoads === 0 || pendingLoads >= PENDING_LOAD_LIMIT)
-      return;
-    const timer = setTimeout(
-      () => load({ requested: pendingLoads < REQUESTED_PENDING_LOADS }),
-      PENDING_REFRESH_MS,
-    );
-    return () => clearTimeout(timer);
-  }, [refreshing, pendingLoads, load]);
 
   useEffect(() => {
     if (!home.data || seededCopies.has(home.data) || !emailAccountId) return;
@@ -124,25 +77,25 @@ export function useHome(emailAccountId?: string | null) {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let changedSinceLoad = false;
-    const loadChange = () => {
+    const load = () => {
       changedSinceLoad = false;
-      load({ requested: false });
+      mutate();
       timer = setTimeout(() => {
         timer = undefined;
-        if (changedSinceLoad) loadChange();
+        if (changedSinceLoad) load();
       }, CHANGE_REFRESH_MIN_MS);
     };
     const stop = onTodayChanged((changedAccountId) => {
       // Each load spends the account's quota; another account's change is its own.
       if (changedAccountId && changedAccountId !== emailAccountId) return;
       if (timer) changedSinceLoad = true;
-      else loadChange();
+      else load();
     });
     return () => {
       stop();
       clearTimeout(timer);
     };
-  }, [emailAccountId, load]);
+  }, [emailAccountId, mutate]);
 
   return {
     data: home.data,
@@ -156,8 +109,8 @@ export function useHome(emailAccountId?: string | null) {
         pendingLoads >= PENDING_LOAD_LIMIT,
     ),
     retry: () => {
-      if (serializedKey) pendingStreaks.reset(serializedKey);
-      load({ requested: true });
+      countPendingLoads(0);
+      mutate();
     },
   };
 }
@@ -215,75 +168,20 @@ function useSavedHomeSeed(emailAccountId: string | null | undefined) {
   }, [serializedKey, emailAccountId, cache, mutate]);
 }
 
-/**
- * The app's fetcher, keeping what Today shows of each lane still loading, and
- * counting loads in a row that left a lane pending, whichever hook ran them.
- * A load nobody asked for says so, and the server then reads Gmail behind
- * what people are doing rather than ahead of it.
- */
-function loadHome(
-  cache: Cache,
-  fetcher: BareFetcher | undefined,
-  { requested }: { requested: boolean } = { requested: true },
-) {
+/** The app's fetcher, keeping what Today shows of each lane still loading. */
+function loadHome(cache: Cache, fetcher: BareFetcher | undefined) {
   return async (
     key: NonNullable<ReturnType<typeof homeKey>>,
   ): Promise<TodayHomeData> => {
     if (!fetcher) throw new Error("No SWR fetcher configured");
-    const [path, accountId] = key;
-    const serializedKey = unstable_serialize(key);
-    let fresh: TodayHomeData;
-    try {
-      fresh = (await fetcher(
-        requested ? key : [`${path}&refresh=auto`, accountId],
-      )) as TodayHomeData;
-    } catch (error) {
-      // A failed ask counts towards giving up, as one that came back pending.
-      pendingStreaks.record(serializedKey, true);
-      throw error;
-    }
+    const fresh = (await fetcher(key)) as TodayHomeData;
     // Read once it answers, so changes made meanwhile are what is kept.
-    const shown = cache.get(serializedKey)?.data as TodayHomeData | undefined;
-    const data = keepShownLanes(shown, fresh);
-    pendingStreaks.record(serializedKey, isRefreshing(data));
-    return data;
+    const shown = cache.get(unstable_serialize(key))?.data as
+      | TodayHomeData
+      | undefined;
+    return keepShownLanes(shown, fresh);
   };
 }
-
-/**
- * By SWR key, how many loads in a row came back with a lane still pending.
- * Kept outside any one hook, as the sidebar's warm-up and Today share loads.
- */
-const pendingStreaks = (() => {
-  const streaks = new Map<string, number>();
-  const lastLoadAt = new Map<string, number>();
-  const listeners = new Set<() => void>();
-  const set = (key: string, value: number) => {
-    if ((streaks.get(key) ?? 0) === value) return;
-    streaks.set(key, value);
-    for (const listener of listeners) listener();
-  };
-  return {
-    get: (key: string) => streaks.get(key) ?? 0,
-    /** How long since a load of `key` last answered. */
-    idleFor: (key: string) => Date.now() - (lastLoadAt.get(key) ?? 0),
-    record: (key: string, refreshing: boolean) => {
-      lastLoadAt.set(key, Date.now());
-      set(key, refreshing ? (streaks.get(key) ?? 0) + 1 : 0);
-    },
-    reset: (key: string) => set(key, 0),
-    clear: () => {
-      streaks.clear();
-      lastLoadAt.clear();
-    },
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-  };
-})();
 
 /** Lanes still to load, whether shown as placeholders or as kept rows. */
 function isRefreshing(data: TodayHomeData) {
@@ -305,8 +203,4 @@ function browserTimeZone() {
   } catch {
     return "UTC";
   }
-}
-
-export function resetPendingStreaksForTesting() {
-  pendingStreaks.clear();
 }

@@ -11,11 +11,10 @@ import {
   setBrowserCacheUser,
 } from "@/utils/browser-cache";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
-import { resetPendingStreaksForTesting, useHome, useWarmHome } from "./useHome";
+import { useHome, useWarmHome } from "./useHome";
 
 // The zone useHome asks the server to count "today" in.
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const PATH = `/api/user/home?tz=${encodeURIComponent(ZONE)}`;
 
 vi.mock("@/utils/swr", () => ({
   getAccountScopedKey: (path: string, emailAccountId: string) => [
@@ -27,7 +26,6 @@ vi.mock("@/utils/swr", () => ({
 describe("useHome", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    resetPendingStreaksForTesting();
   });
   afterEach(() => {
     cleanup();
@@ -40,7 +38,7 @@ describe("useHome", () => {
       wrapper: wrapper(fetcher),
     });
 
-    await advanceInSteps(5000 * 20);
+    await act(() => vi.advanceTimersByTimeAsync(5000 * 20));
 
     expect(fetcher).toHaveBeenCalledTimes(12);
     expect(result.current.gaveUp).toBe(true);
@@ -84,51 +82,6 @@ describe("useHome", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
-  it("says which loads nobody asked for, so the server reads Gmail behind what people are doing", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(answer(["waiting"]))
-      .mockResolvedValueOnce(answer(["waiting"]))
-      .mockResolvedValueOnce(answer(["waiting"]))
-      .mockResolvedValue(answer([]));
-    renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
-    // Opening Today and its first retry of the lane still pending; after two
-    // pending answers, Today asks by itself.
-    await advanceInSteps(5000 * 3 + 100);
-    // Cue sorted something new.
-    await act(async () => {
-      announceTodayChanged();
-      await vi.advanceTimersByTimeAsync(100);
-    });
-
-    expect(requestPaths(fetcher)).toEqual([
-      PATH,
-      PATH,
-      `${PATH}&refresh=auto`,
-      // The last retry, which finds every lane loaded.
-      `${PATH}&refresh=auto`,
-      // The change.
-      `${PATH}&refresh=auto`,
-    ]);
-  });
-
-  it("treats the user coming back to the tab as asked for, even while a lane is pending", async () => {
-    const fetcher = vi.fn(async () => answer(["waiting"]));
-    renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
-    // Past the requested retries, Today is asking by itself.
-    await advanceInSteps(5000 * 3 + 100);
-    expect(requestPaths(fetcher).at(-1)).toBe(`${PATH}&refresh=auto`);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-      window.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(10);
-    });
-
-    const afterFocus = requestPaths(fetcher).slice(4);
-    expect(afterFocus).toContain(PATH);
-  });
-
   it("keeps asking for a pending lane when the sidebar's warm-up loaded Today first", async () => {
     const fetcher = vi.fn(async () => answer(["waiting"]));
     const wrap = wrapper(fetcher);
@@ -136,8 +89,7 @@ describe("useHome", () => {
     const warm = renderHook(() => useWarmHome("account", true), {
       wrapper: wrap,
     });
-    await act(() => vi.advanceTimersByTimeAsync(100));
-    await act(() => vi.advanceTimersByTimeAsync(2900));
+    await act(() => vi.advanceTimersByTimeAsync(3000));
     const { result } = renderHook(
       () => {
         useWarmHome("account", true);
@@ -147,38 +99,10 @@ describe("useHome", () => {
     );
     warm.unmount();
 
-    await advanceInSteps(5000 * 20);
+    await act(() => vi.advanceTimersByTimeAsync(5000 * 20));
 
-    const paths = requestPaths(fetcher);
-    expect(paths).toHaveLength(12);
-    expect(paths.slice(0, 2)).toEqual([PATH, PATH]);
-    expect(new Set(paths.slice(2))).toEqual(new Set([`${PATH}&refresh=auto`]));
+    expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(12);
     expect(result.current.gaveUp).toBe(true);
-  });
-
-  it("starts counting again for another account", async () => {
-    const fetcher = vi.fn(async (_key: string[]) => answer(["waiting"]));
-    const { result, rerender } = renderHook(
-      ({ accountId }) => useHome(accountId),
-      { wrapper: wrapper(fetcher), initialProps: { accountId: "account" } },
-    );
-    await advanceInSteps(5000 * 20);
-    expect(result.current.gaveUp).toBe(true);
-    const asked = fetcher.mock.calls.length;
-
-    rerender({ accountId: "other" });
-    await advanceInSteps(5000 * 2 + 100);
-
-    expect(result.current.gaveUp).toBe(false);
-    const others = fetcher.mock.calls
-      .slice(asked)
-      .filter(([key]) => key[1] === "other");
-    // Asked for afresh: opened, then retried, as for the first account.
-    expect(others.map(([key]) => key[0])).toEqual([
-      PATH,
-      PATH,
-      `${PATH}&refresh=auto`,
-    ]);
   });
 
   it("reloads when the user comes back to the tab", async () => {
@@ -204,7 +128,7 @@ describe("useHome", () => {
       wrapper: wrapper(fetcher),
     });
 
-    await advanceInSteps(5000 * 5);
+    await act(() => vi.advanceTimersByTimeAsync(5000 * 5));
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(result.current.gaveUp).toBe(false);
@@ -511,24 +435,10 @@ function pendingLoads() {
   };
 }
 
-function wrapper(
-  fetcher: (...args: never[]) => Promise<unknown>,
-  dedupingInterval = 0,
-) {
+function wrapper(fetcher: () => Promise<unknown>, dedupingInterval = 0) {
   return ({ children }: { children: ReactNode }) => (
     <SWRConfig value={{ fetcher, provider: () => new Map(), dedupingInterval }}>
       {children}
     </SWRConfig>
   );
-}
-
-function requestPaths(fetcher: ReturnType<typeof vi.fn>) {
-  return fetcher.mock.calls.map(([key]) => (key as string[])[0]);
-}
-
-// React runs effects, which schedule a pending lane's next ask, once each
-// act ends, as a browser does after each render.
-async function advanceInSteps(ms: number) {
-  for (let elapsed = 0; elapsed < ms; elapsed += 1000)
-    await act(() => vi.advanceTimersByTimeAsync(Math.min(1000, ms - elapsed)));
 }

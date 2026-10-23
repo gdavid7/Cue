@@ -26,7 +26,9 @@ export const GET = withEmailProvider(
       logger: request.logger,
       // "Today" and "after 5 pm" are the browser's, which the server can't see.
       timeZone: validTimeZone(request.nextUrl.searchParams.get("tz")),
-      // Today reloads itself to show a change or a lane still pending.
+      // For a reload Today starts by itself (a change, a lane still
+      // pending). No client sends it yet: deciding that per request is
+      // follow-up work, so every load is still read as asked for.
       requested: request.nextUrl.searchParams.get("refresh") !== "auto",
     });
     after(() => recordActiveDay(emailAccountId));
