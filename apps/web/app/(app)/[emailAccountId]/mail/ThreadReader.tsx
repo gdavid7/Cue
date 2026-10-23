@@ -89,8 +89,6 @@ export type ThreadReaderProps = {
     loadingMore: boolean;
     /** Older messages sync hasn't reached may still be on their way. */
     filling: boolean;
-    /** Whether the messages wait for that fill before they show. */
-    awaitingFill: boolean;
     loadMore: () => unknown;
   };
   userLabels: EmailLabels;
@@ -408,18 +406,22 @@ export function ThreadReader({
         }
       >
         {toolbar}
-        {/* A first sync's fill of this conversation decides whether an
-          earlier-messages row shows, so the messages wait for its answer
-          rather than showing a row it may take back. */}
-        {messages.length > 0 && localAvailability?.awaitingFill ? (
-          <ThreadViewLoading />
-        ) : null}
-        {messages.length > 0 && !localAvailability?.awaitingFill ? (
+        {messages.length > 0 ? (
           <ReplyAssistContext.Provider value={assist}>
             {/* MailShell preloads the thread view, so this rarely shows. Only
               the messages wait for it; the marker keeps BufferedThreadReader
               on the previous thread. */}
-            <Suspense fallback={<ThreadViewLoading />}>
+            <Suspense
+              fallback={
+                <div
+                  className="flex flex-1 items-center justify-center py-16"
+                  data-thread-view-loading
+                  role="status"
+                >
+                  <LoadingEmail />
+                </div>
+              }
+            >
               <EmailThreadLazy
                 messageHeadingLevel={subjectHeadingLevel === 2 ? 3 : 2}
                 onMessageExpansionChange={setMessageExpansion}
@@ -537,19 +539,6 @@ function LoadingEmail() {
       />
       <span className="sr-only">Loading email</span>
     </>
-  );
-}
-
-// The marker keeps BufferedThreadReader on the previous thread meanwhile.
-function ThreadViewLoading() {
-  return (
-    <div
-      className="flex flex-1 items-center justify-center py-16"
-      data-thread-view-loading
-      role="status"
-    >
-      <LoadingEmail />
-    </div>
   );
 }
 
