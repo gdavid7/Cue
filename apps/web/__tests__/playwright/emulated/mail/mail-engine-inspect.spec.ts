@@ -13,9 +13,8 @@ import {
   waitForMetadataCoverage,
 } from "./mail-test-helpers";
 
-const reconnectHeading = `Sign in again to reconnect ${
-  isMicrosoftPlaywright() ? "Outlook" : "Gmail"
-}`;
+const providerName = isMicrosoftPlaywright() ? "Outlook" : "Gmail";
+const reconnectHeading = `Sign in again to reconnect ${providerName}`;
 
 test("exposes engine diagnostics after metadata coverage", async ({
   page,
@@ -192,6 +191,23 @@ test("opens account reconnect from blocked_auth catch-up", async ({
   await page.route("**/api/google/linking/auth-url**", fulfillReconnect);
   await page.route("**/api/outlook/linking/auth-url**", fulfillReconnect);
   await capturePlaywrightCheckpoint(page, testInfo, "mail-engine-blocked-auth");
+
+  const changesWaiting = page.getByRole("button", {
+    name: `${providerName} needs reconnecting`,
+  });
+  await expect(changesWaiting).toBeVisible({ timeout: 45_000 });
+  await changesWaiting.click();
+  const popover = page.getByRole("dialog");
+  await expect(popover.getByText("Needs reconnect")).toBeVisible();
+  await expect(
+    popover.getByRole("button", { name: "Reconnect" }),
+  ).toBeVisible();
+  await capturePlaywrightCheckpoint(
+    page,
+    testInfo,
+    "changes-waiting-reconnect",
+  );
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Sign in again" }).click();
   // The old address redirects to the readable one, keeping the query.
   await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox\?reconnect=blocked$/);
