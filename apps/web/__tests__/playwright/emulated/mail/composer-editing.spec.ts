@@ -787,7 +787,8 @@ test("pastes markdown as formatting that survives sending", async ({
   await capturePlaywrightCheckpoint(page, testInfo, "markdown-sent");
 });
 
-test("says a calendar is needed before sharing free times, from the keyboard", async ({
+// The seeded account signs in with its calendar connected.
+test("shares free times from the slash menu, from the keyboard", async ({
   page,
 }, testInfo) => {
   await openMail(page);
@@ -803,16 +804,15 @@ test("says a calendar is needed before sharing free times, from the keyboard", a
   await expect(share).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("Enter");
 
-  await expect(
-    page.getByText("Connect a calendar to share your free times."),
-  ).toBeVisible({ timeout: 30_000 });
-  await expect(
-    page.getByRole("button", { name: "Open Calendars" }),
-  ).toBeVisible();
-  // No times are made up, and the "/free" typed to find it is gone.
+  await expect(editor).toContainText("Here are a few times that work for me:", {
+    timeout: 60_000,
+  });
+  // The "/free" typed to find it is replaced, not left in the message.
   await expect(editor).not.toContainText("/free");
-  await expect(editor).not.toContainText("times that work");
-  await capturePlaywrightCheckpoint(page, testInfo, "free-times-no-calendar");
+  const times = editor.locator("li");
+  await expect(times.first()).toBeVisible();
+  expect(await times.count()).toBeLessThanOrEqual(3);
+  await capturePlaywrightCheckpoint(page, testInfo, "free-times-from-slash");
 
   await dialog.getByRole("button", { name: "Discard draft" }).click();
   await expect(dialog).toBeHidden();

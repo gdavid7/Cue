@@ -162,3 +162,30 @@ test("shares the next free times and booking link from the composer", async ({
   await dialog.getByRole("button", { name: "Discard draft" }).click();
   await expect(dialog).toBeHidden();
 });
+
+test("says a calendar is needed before sharing free times", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(360_000);
+  await resetCalendarTestState();
+  await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const editor = dialog.getByRole("textbox", { name: "Email message" });
+  await editor.click();
+
+  await dialog.getByRole("button", { name: "Share my free times" }).click();
+
+  await expect(
+    page.getByText("Connect a calendar to share your free times."),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(
+    page.getByRole("button", { name: "Open Calendars" }),
+  ).toBeVisible();
+  // Without a calendar it can't know when the person is free, so it adds nothing.
+  await expect(editor).not.toContainText("times that work");
+  await capturePlaywrightCheckpoint(page, testInfo, "free-times-no-calendar");
+
+  await dialog.getByRole("button", { name: "Discard draft" }).click();
+  await expect(dialog).toBeHidden();
+});
