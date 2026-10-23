@@ -11,21 +11,22 @@ export const MIN_MAIL_ENGINE_REVISION = 1;
 // what a person does in it (opening mail, search, commands) is never refused.
 export const OLD_ENGINE_RETRY_AFTER_MS = 10 * 60_000;
 
-export type OldEngineReason = "missing_revision" | "below_minimum";
+export type OldEngineReason = "below_minimum";
 
 /**
  * Why this request's engine is older than the server's minimum, or null when
- * it is current. Desktop builds from before the header exist and update on
- * their own schedule, so a request with no revision from outside a browser
- * (the desktop engine's Node fetch sends no browser user agent) counts as
- * current; every browser sends a `Mozilla/` user agent.
+ * it is current. A revision that is present but low or not a number is old.
+ *
+ * A request with no revision counts as current for now: no engine built
+ * before the header sends one, including the ones that already follow the
+ * pacing hint, and desktop builds update on their own schedule. Once every
+ * engine has sent the header for a release, raising the minimum above 1
+ * should make a missing revision count as old too (from browsers; desktop
+ * builds send the header from this release on).
  */
 export function oldEngineReason(headers: Headers): OldEngineReason | null {
   const raw = headers.get(MAIL_ENGINE_REVISION_HEADER);
-  if (raw === null) {
-    const userAgent = headers.get("user-agent") ?? "";
-    return userAgent.startsWith("Mozilla/") ? "missing_revision" : null;
-  }
+  if (raw === null) return null;
   const revision = /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
   if (!Number.isSafeInteger(revision) || revision < MIN_MAIL_ENGINE_REVISION)
     return "below_minimum";

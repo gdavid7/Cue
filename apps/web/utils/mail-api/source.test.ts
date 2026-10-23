@@ -1831,7 +1831,7 @@ describe("createEmailProviderMailboxSource", () => {
 
   describe("an engine older than the server's minimum", () => {
     async function enumerateAs(
-      oldEngine: "missing_revision" | "below_minimum" | null,
+      oldEngine: "below_minimum" | null,
       page: Record<string, unknown>,
     ) {
       const getMessagesWithPagination = vi.fn(async () => ({
@@ -1867,12 +1867,15 @@ describe("createEmailProviderMailboxSource", () => {
 
     it.each([
       [
-        "missing_revision",
+        "a backfill rest page",
         { scopeId: "history", windowStartMs: 1, phase: "rest" },
       ],
-      ["below_minimum", { scopeId: "history", pageToken: "p2" }],
-    ] as const)("is refused a background backfill page for ten minutes (%s), before any Gmail call", async (reason, page) => {
-      const { result, fields, listed } = await enumerateAs(reason, page);
+      ["an unphased backfill page", { scopeId: "history", pageToken: "p2" }],
+    ])("is refused %s for ten minutes, before any Gmail call", async (_name, page) => {
+      const { result, fields, listed } = await enumerateAs(
+        "below_minimum",
+        page,
+      );
       expect(result).toEqual({
         status: "paused",
         reason: "throttled",
@@ -1881,7 +1884,7 @@ describe("createEmailProviderMailboxSource", () => {
       expect(listed).toBe(0);
       expect(fields).toMatchObject({
         pausedSource: "old_engine",
-        pausedReason: reason,
+        pausedReason: "below_minimum",
         pausedRetryAfterMs: 10 * 60_000,
         gatePriority: "background",
       });
@@ -1895,7 +1898,7 @@ describe("createEmailProviderMailboxSource", () => {
       ],
     ])("still lists %s, which a person is waiting on", async (_name, page) => {
       const { result, fields, listed } = await enumerateAs(
-        "missing_revision",
+        "below_minimum",
         page,
       );
       expect(result).toMatchObject({ status: "ok" });

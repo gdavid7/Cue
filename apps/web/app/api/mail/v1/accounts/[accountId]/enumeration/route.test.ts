@@ -77,13 +77,13 @@ describe("POST /enumeration", () => {
 
     it.each([
       [
-        "a browser engine that sends no revision",
-        { "user-agent": browser },
-        "missing_revision",
-      ],
-      [
         "an engine below the minimum",
         { "user-agent": browser, [MAIL_ENGINE_REVISION_HEADER]: "0" },
+        "below_minimum",
+      ],
+      [
+        "an engine whose revision is not a number",
+        { "user-agent": browser, [MAIL_ENGINE_REVISION_HEADER]: "abc" },
         "below_minimum",
       ],
       [
@@ -94,8 +94,13 @@ describe("POST /enumeration", () => {
         },
         null,
       ],
-      // Desktop builds from before the header pace themselves and update on
-      // their own, so their sync is left alone.
+      // Every engine built before the header sends none, well-behaved ones
+      // included, so until the minimum rises above 1 they all count as current.
+      [
+        "a browser engine that sends no revision",
+        { "user-agent": browser },
+        null,
+      ],
       [
         "a desktop engine that sends no revision",
         { "user-agent": "node" },
