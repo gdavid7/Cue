@@ -180,13 +180,19 @@ export class SafeError extends Error {
 export const NO_REFRESH_TOKEN_MESSAGE = "No refresh token";
 
 /**
- * The account's grant is gone and it is already marked as needing a
- * reconnect. Expected for a revoked or disconnected account, not a failure.
+ * A mail client found the account's grant gone and the account already marked
+ * as needing a reconnect. Expected for a revoked or disconnected account, not
+ * a failure. Calendar clients throw a plain SafeError with the same message.
  */
+export class ReconnectRequiredError extends SafeError {
+  constructor() {
+    super(NO_REFRESH_TOKEN_MESSAGE);
+    this.name = "ReconnectRequiredError";
+  }
+}
+
 export function isReconnectRequiredError(error: unknown) {
-  return (
-    error instanceof SafeError && error.message === NO_REFRESH_TOKEN_MESSAGE
-  );
+  return error instanceof ReconnectRequiredError;
 }
 
 export class DraftNotFoundError extends SafeError {

@@ -3,6 +3,7 @@ import {
   getErrorMessage,
   isGmailInsufficientPermissionsError,
   isInvalidGrantError,
+  NO_REFRESH_TOKEN_MESSAGE,
 } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import {
@@ -113,7 +114,10 @@ export function classifyEmailAccountProviderIssue({
     return { reason: "mail_service_not_enabled" };
   }
 
-  if (isInvalidGrantError(error) || message?.includes("No refresh token")) {
+  if (
+    isInvalidGrantError(error) ||
+    message?.includes(NO_REFRESH_TOKEN_MESSAGE)
+  ) {
     return { reason: "invalid_grant" };
   }
 

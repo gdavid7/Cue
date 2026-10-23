@@ -9,7 +9,7 @@ import { saveTokens } from "@/utils/auth/save-tokens";
 import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
 import { createScopedLogger, type Logger } from "@/utils/logger";
 import { SCOPES } from "@/utils/gmail/scopes";
-import { SafeError } from "@/utils/error";
+import { ReconnectRequiredError } from "@/utils/error";
 import { classifyEmailAccountProviderIssue } from "@/utils/email/provider-health";
 import { env } from "@/env";
 import {
@@ -89,7 +89,7 @@ export const getGmailClientWithRefresh = async ({
     }).catch((error) =>
       logger.warn("Failed to record missing refresh token", { error }),
     );
-    throw new SafeError("No refresh token");
+    throw new ReconnectRequiredError();
   }
 
   // Without the token's expiry, the auth client refreshes the token and
@@ -179,7 +179,7 @@ export const getGmailClientWithRefresh = async ({
       // missing token (a 401 for API routes, not a 500 and a Sentry event).
       // The cause keeps it recognizable as invalid_grant.
       if (issue.reason === "invalid_grant") {
-        throw Object.assign(new SafeError("No refresh token"), {
+        throw Object.assign(new ReconnectRequiredError(), {
           cause: error,
         });
       }

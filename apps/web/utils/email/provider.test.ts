@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmailProvider } from "@/utils/email/provider";
-import { SafeError } from "@/utils/error";
+import { ReconnectRequiredError } from "@/utils/error";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import { getGmailClientForEmail } from "@/utils/email-account-client";
 import { assertProviderNotRateLimited } from "@/utils/email/rate-limit";
@@ -103,7 +103,7 @@ describe("createEmailProvider", () => {
 
   it("does not warn or record an issue again for an account that needs reconnecting", async () => {
     const logger = createMockLogger();
-    const reconnectRequired = new SafeError("No refresh token");
+    const reconnectRequired = new ReconnectRequiredError();
     vi.mocked(getGmailClientForEmail).mockRejectedValueOnce(reconnectRequired);
 
     await expect(

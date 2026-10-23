@@ -45,6 +45,8 @@ export const swrFetcher = async (
   // The account was already offered a reconnect; asking again only repeats
   // the refusal.
   if (emailAccountId && isReconnectRequired(emailAccountId, url)) {
+    // The first refusal may have come while another account was on screen.
+    promptReconnect(emailAccountId, options?.viewedEmailAccountId);
     throw reconnectRequiredError();
   }
 
@@ -109,15 +111,10 @@ export const swrFetcher = async (
           },
         });
 
-        const redirectUrl = getPermissionsConsentPath(emailAccountId, {
-          expired: true,
-        });
-        if (emailAccountId === options?.viewedEmailAccountId) {
+        if (promptReconnect(emailAccountId, options?.viewedEmailAccountId)) {
           console.log(`${errorMessage}, redirecting to consent page...`);
-          redirectToSafeUrl(redirectUrl);
           return;
         }
-        offerReconnect(emailAccountId, redirectUrl);
       }
     }
 
@@ -166,6 +163,22 @@ function reconnectRequiredError() {
 /** Never settles: the page is leaving, so there is nothing to report. */
 function leaving(): Promise<never> {
   return new Promise(() => {});
+}
+
+/** Sends the account on screen to its reconnect page; offers it for any other. */
+function promptReconnect(
+  emailAccountId: string,
+  viewedEmailAccountId: string | null | undefined,
+) {
+  const reconnectUrl = getPermissionsConsentPath(emailAccountId, {
+    expired: true,
+  });
+  if (emailAccountId === viewedEmailAccountId) {
+    redirectToSafeUrl(reconnectUrl);
+    return true;
+  }
+  offerReconnect(emailAccountId, reconnectUrl);
+  return false;
 }
 
 function offerReconnect(emailAccountId: string, reconnectUrl: string) {

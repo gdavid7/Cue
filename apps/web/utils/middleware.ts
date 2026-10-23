@@ -7,6 +7,7 @@ import {
   checkCommonErrors,
   getEmailProviderRateLimitMessage,
   isReconnectRequiredError,
+  NO_REFRESH_TOKEN_MESSAGE,
   SafeError,
 } from "@/utils/error";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
@@ -220,10 +221,15 @@ function withMiddleware<T extends NextRequest>(
             );
 
             if (error instanceof SafeError) {
-              if (isReconnectRequiredError(error)) {
-                getLogger(requestForError).info("Returning 401", {
-                  reason: "no_refresh_token",
-                });
+              if (error.message === NO_REFRESH_TOKEN_MESSAGE) {
+                // Calendar clients throw a plain SafeError for the same state
+                // and keep logging it as a warning.
+                const log = getLogger(requestForError);
+                (isReconnectRequiredError(error) ? log.info : log.warn).call(
+                  log,
+                  "Returning 401",
+                  { reason: "no_refresh_token" },
+                );
                 if (publicApiRequest) {
                   return publicApiErrorResponse({
                     status: 401,

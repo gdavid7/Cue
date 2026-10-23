@@ -304,6 +304,44 @@ describe("swrFetcher when a mailbox's grant has expired", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("sends the account to its reconnect page when it is viewed after being refused", async () => {
+    const { swrFetcher } = await loadPage();
+
+    await swrFetcher("/api/labels", undefined, "acc-2", {
+      viewedEmailAccountId: "acc-1",
+    }).catch(() => undefined);
+    expect(assign).not.toHaveBeenCalled();
+
+    await swrFetcher("/api/labels", undefined, "acc-2", {
+      viewedEmailAccountId: "acc-2",
+    }).catch(() => undefined);
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-2/permissions/consent?reason=expired",
+    );
+  });
+
+  it("asks again after the tab comes back to the front", async () => {
+    const listeners: Array<() => void> = [];
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: (_: string, listener: () => void) =>
+        listeners.push(listener),
+    });
+    const { swrFetcher } = await loadPage();
+    const ask = () =>
+      swrFetcher("/api/labels", undefined, "acc-2").catch(() => undefined);
+
+    await ask();
+    await ask();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+
+    for (const listener of listeners) listener();
+    await ask();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+
   it("does not retry a refused route", async () => {
     const { swrFetcher, onSWRErrorRetry } = await loadPage();
     const error = await swrFetcher("/api/labels", undefined, "acc-2").catch(

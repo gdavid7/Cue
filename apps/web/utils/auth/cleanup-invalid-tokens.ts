@@ -64,6 +64,7 @@ export async function cleanupInvalidTokens({
       account: {
         select: {
           updatedAt: true,
+          provider: true,
           disconnectedAt: true,
           access_token: true,
           refresh_token: true,
@@ -156,7 +157,10 @@ export async function cleanupInvalidTokens({
     });
   }
 
-  logger.info("Tokens cleared - user must re-authenticate", { reason });
+  logger.warn("Tokens cleared - user must re-authenticate", {
+    reason,
+    provider: account.provider,
+  });
 }
 
 async function sendWatchedAccountReconnectionEmail({

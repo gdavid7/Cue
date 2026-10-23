@@ -13,6 +13,15 @@ const RECHECK_AFTER_MS = 5 * 60_000;
 
 const checkedAgainAt = new Map<string, number>();
 
+// Coming back to the tab is when a reconnect done in another one is most
+// likely. The mail engine's worker has no page to watch, so there the
+// RECHECK_AFTER_MS window is all there is.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkedAgainAt.clear();
+  });
+}
+
 export function isReconnectRequiredBody(body: unknown) {
   if (!body || typeof body !== "object" || !("errorCode" in body)) return false;
   return (

@@ -15,7 +15,11 @@ import {
   requestMicrosoftToken,
 } from "@/utils/outlook/oauth";
 import { SCOPES } from "@/utils/outlook/scopes";
-import { isInvalidGrantError, SafeError } from "@/utils/error";
+import {
+  isInvalidGrantError,
+  ReconnectRequiredError,
+  SafeError,
+} from "@/utils/error";
 import { MailboxConcurrencyMiddleware } from "@/utils/outlook/mailbox-concurrency";
 
 // Add buffer time to prevent token expiry during long-running operations
@@ -205,7 +209,7 @@ export const getOutlookClientWithRefresh = async ({
     }).catch((error) =>
       logger.warn("Failed to record missing refresh token", { error }),
     );
-    throw new SafeError("No refresh token");
+    throw new ReconnectRequiredError();
   }
 
   // Check if token needs refresh

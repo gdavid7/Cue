@@ -41,7 +41,7 @@ import {
   getFastRequestSampleRate,
   isFastRequestSampled,
 } from "@/utils/request-sampling";
-import { isInvalidGrantError } from "@/utils/error";
+import { isInvalidGrantError, NO_REFRESH_TOKEN_MESSAGE } from "@/utils/error";
 import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
 import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
 import type { ParsedMessage } from "@/utils/types";
@@ -829,7 +829,7 @@ export function createEmailProviderMailboxSource(input: {
       extractGmailErrorInfo(error).status === 401 ||
       extractOutlookErrorInfo(error).status === 401 ||
       isInvalidGrantError(error) ||
-      message === "No refresh token" ||
+      message === NO_REFRESH_TOKEN_MESSAGE ||
       message.includes("401") ||
       lowered.includes("unauthorized") ||
       lowered.includes("invalid access token")
