@@ -22,6 +22,6 @@ export const dismissAwaySummaryAction = actionClientUser
 export const recordVisitAction = actionClientUser
   .metadata({ name: "recordVisit" })
   .action(async ({ ctx: { userId } }) => {
-    await recordLastLogin(userId);
-    return { success: true };
+    const returned = await recordLastLogin(userId);
+    return { returned };
   });

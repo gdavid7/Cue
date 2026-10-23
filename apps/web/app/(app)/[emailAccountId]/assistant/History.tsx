@@ -18,7 +18,7 @@ import {
   HistoryActionSelect,
   HistoryWindowNotice,
   useHistoryFilters,
-} from "@/app/(app)/[emailAccountId]/assistant/HistoryActionSelect";
+} from "@/app/(app)/[emailAccountId]/assistant/HistoryFilters";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useChat } from "@/providers/ChatProvider";
 import {

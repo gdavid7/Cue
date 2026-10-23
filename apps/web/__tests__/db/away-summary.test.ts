@@ -63,7 +63,7 @@ describe.skipIf(!RUN_DB_TESTS)(
 
     test("a return after a break keeps when the user was last here and when they came back", async () => {
       // First visit ever: there is no earlier one.
-      await recordLastLogin(userId, at(-20 * HOUR));
+      expect(await recordLastLogin(userId, at(-20 * HOUR))).toBe(false);
       expect(await visit()).toEqual({
         lastLogin: at(-20 * HOUR),
         previousVisitAt: null,
@@ -71,11 +71,11 @@ describe.skipIf(!RUN_DB_TESTS)(
       });
 
       // Still working: the browser's ten-minute records don't start a visit.
-      await recordLastLogin(userId, at(-18 * HOUR));
+      expect(await recordLastLogin(userId, at(-18 * HOUR))).toBe(false);
       expect((await visit()).previousVisitAt).toBeNull();
 
-      // Back the next morning.
-      await recordLastLogin(userId, now);
+      // Back the next morning: this call is the return.
+      expect(await recordLastLogin(userId, now)).toBe(true);
       expect(await visit()).toEqual({
         lastLogin: now,
         previousVisitAt: at(-18 * HOUR),
@@ -83,7 +83,7 @@ describe.skipIf(!RUN_DB_TESTS)(
       });
 
       // Two tabs record the same return: it moves once.
-      await recordLastLogin(userId, at(11 * MINUTE));
+      expect(await recordLastLogin(userId, at(11 * MINUTE))).toBe(false);
       expect(await visit()).toMatchObject({
         previousVisitAt: at(-18 * HOUR),
         visitReturnedAt: now,

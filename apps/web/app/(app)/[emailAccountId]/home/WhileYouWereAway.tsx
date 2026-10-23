@@ -14,6 +14,7 @@ import { dismissAwaySummaryAction } from "@/utils/actions/away-summary";
 import type { TodayAccount } from "@/utils/home/merge-home";
 import { prefixPath } from "@/utils/path";
 import { recordVisit } from "@/utils/user/record-visit";
+import { useUser } from "@/hooks/useUser";
 import {
   HISTORY_ACTION_NAMES,
   type HistoryAction,
@@ -33,15 +34,17 @@ type HistoryWindow = { since: string; until: string };
  */
 export function useAwaySummary(emailAccountIds: string[]) {
   const { fetcher } = useSWRConfig();
+  const { data: user } = useUser();
+  const userId = user?.id;
   const key = emailAccountIds.length
     ? `/api/user/home/away?${new URLSearchParams({
         accounts: emailAccountIds.join(","),
       })}`
     : null;
   const { data, mutate } = useSWR<GetAwaySummaryResponse>(key, {
-    fetcher: async (url: string) => {
-      await recordVisit();
-      return fetcher?.(url);
+    fetcher: async (url: string): Promise<GetAwaySummaryResponse> => {
+      await recordVisit({ userId });
+      return (await fetcher?.(url)) as GetAwaySummaryResponse;
     },
     focusThrottleInterval: FOCUS_REFRESH_MIN_MS,
     // A card that didn't load is just not shown; Today works without it.

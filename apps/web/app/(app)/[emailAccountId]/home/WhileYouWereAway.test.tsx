@@ -9,6 +9,7 @@ vi.mock("@/utils/actions/away-summary", () => ({
   dismissAwaySummaryAction: vi.fn(),
   recordVisitAction: vi.fn(),
 }));
+vi.mock("@/hooks/useUser", () => ({ useUser: () => ({ data: undefined }) }));
 
 const SINCE = "2026-10-22T18:00:00.000Z";
 const UNTIL = "2026-10-23T08:00:00.000Z";

@@ -75,7 +75,9 @@ export async function getAwaySummary({
   // One pass over the window's applied rules, through the
   // [emailAccountId, status, createdAt] index, and each rule's actions
   // through [executedRuleId]. Emails, not actions: two labels on one email
-  // sorted one email.
+  // sorted one email. History lists conversations, one row per thread, so a
+  // count can be higher than the rows its link shows when several of the
+  // emails share a thread (FT-17f).
   const kind = Prisma.sql`CASE ${Prisma.join(
     HISTORY_ACTION_NAMES.map(
       (name) =>
