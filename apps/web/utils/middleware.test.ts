@@ -27,6 +27,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { isProviderRateLimitModeError } from "@/utils/email/rate-limit-mode-error";
 import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
 import { getAuditContext } from "@/utils/audit/context";
+import { mailHttpErrorSchema } from "@inboxzero/mail-core/protocol/mail-http";
 import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import { getRequestDeadline } from "@/utils/request-deadline-reader";
 import { timeRequestDependency } from "@/utils/request-metrics";
@@ -621,6 +622,24 @@ describe("Middleware", () => {
       expect(response.headers.get("Retry-After")).toBe("13");
       expect(mockCaptureException).not.toHaveBeenCalled();
       expect(await response.json()).toMatchObject({ isKnownError: true });
+    });
+
+    it("answers a mail API request deferred by the quota gate in the mail error envelope", async () => {
+      const response = await withError(
+        "mail/v1/enumeration",
+        vi
+          .fn()
+          .mockRejectedValue(new GmailCallDeferredError(12_300, "background")),
+      )(mockReq, mockContext);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("13");
+      const body = mailHttpErrorSchema.parse(await response.json());
+      expect(body.error).toEqual({
+        code: "throttled",
+        retryable: true,
+        retryAfterMs: 12_300,
+      });
     });
 
     it("tells the client when to retry a rate limit on a route with no email account", async () => {
