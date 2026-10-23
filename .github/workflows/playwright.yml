@@ -304,7 +304,8 @@ jobs:
       # The runner image already ships chromium's shared libraries. What
       # `--with-deps` adds is extra fonts and package upgrades from an apt mirror
       # that sometimes crawls at ~30 kB/s, which used up the whole job. Go to apt
-      # only when a browser binary is actually missing a library.
+      # only when a browser binary is actually missing a library
+      # (see ensure-browser-libs.sh).
       - name: Install Playwright browser
         timeout-minutes: 6
         run: |
@@ -313,15 +314,7 @@ jobs:
           if [ "$MAIL_REQUIRE_ELECTRON" = 1 ]; then
             binaries+=(apps/desktop/node_modules/electron/dist/electron)
           fi
-          for binary in "${binaries[@]}"; do
-            test -x "$binary" || { echo "::error::Browser binary not found: $binary"; exit 1; }
-          done
-          missing="$(ldd "${binaries[@]}" | grep 'not found' | sort -u || true)"
-          if [ -n "$missing" ]; then
-            echo "Missing shared libraries:"
-            echo "$missing"
-            INSTALL_ATTEMPT_TIMEOUT=150 .github/scripts/install-with-retry.sh pnpm -F inbox-zero-ai exec playwright install-deps chromium
-          fi
+          .github/scripts/ensure-browser-libs.sh pnpm -F inbox-zero-ai exec playwright install-deps chromium -- "${binaries[@]}"
 
       - name: Download browser app
         uses: actions/download-artifact@v4
