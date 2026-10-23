@@ -54,6 +54,12 @@ const mocks = vi.hoisted(() => ({
   // Whether Cue has read the mailbox, asked before Today's answer.
   homeCue: undefined as { hasReadMail: boolean } | undefined,
   reportActivation: vi.fn(),
+  // The mail engine's view of every account's inbox, which Catch up reads.
+  engineInboxes: {
+    firstSyncAccountIds: [] as string[],
+    failedAccountIds: [] as string[],
+  },
+  catchUpProps: [] as Array<Record<string, unknown>>,
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -181,6 +187,22 @@ vi.mock("./use-waiting-on-you", () => ({
     dismiss: mocks.dismissWaitingOnYou,
   }),
 }));
+vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
+  useEngineMailThreads: () => mocks.engineInboxes,
+}));
+vi.mock("@/app/(app)/[emailAccountId]/mail/CatchUp", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/app/(app)/[emailAccountId]/mail/CatchUp")
+    >();
+  return {
+    ...actual,
+    CatchUpEntry: (props: Record<string, unknown>) => {
+      mocks.catchUpProps.push(props);
+      return null;
+    },
+  };
+});
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -200,6 +222,17 @@ describe("HomeDashboard row actions", () => {
   });
 
   afterEach(cleanup);
+
+  it("offers one account's Catch up, without All inboxes", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    expect(mocks.catchUpProps.at(-1)).toMatchObject({
+      emailAccountId: "account",
+      query: { type: "inbox" },
+      allInboxes: undefined,
+    });
+  });
 
   it("archives through the mail engine, moves focus to the next row, and undo brings it back", async () => {
     renderToday();
@@ -1304,6 +1337,58 @@ describe("HomeDashboard across accounts", () => {
     mocks.searchParams = new URLSearchParams();
     mocks.emailAccounts = [];
     mocks.homes = {};
+  });
+
+  it("offers Catch up on every included account's inbox, leaving out failed ones", () => {
+    mocks.engineInboxes = {
+      firstSyncAccountIds: ["account-b"],
+      failedAccountIds: ["account-b"],
+    };
+    mocks.catchUpProps = [];
+    renderToday();
+
+    expect(mocks.catchUpProps.at(-1)).toMatchObject({
+      query: { type: "inbox" },
+      allInboxes: {
+        accounts: [
+          { id: "account", email: "a@example.com" },
+          { id: "account-b", email: "b@example.com" },
+        ],
+        waitingAccountIds: [],
+        failedAccountIds: ["account-b"],
+      },
+    });
+    mocks.engineInboxes = { firstSyncAccountIds: [], failedAccountIds: [] };
+  });
+
+  it("hides a caught-up card's copies in other accounts, and replies in its own account", () => {
+    mocks.homes = {
+      account: homeData([thread("a1", "Quarterly numbers")]),
+      "account-b": homeData([thread("b1", "Lunch on Friday?")]),
+    };
+    mocks.catchUpProps = [];
+    renderToday();
+    const props = mocks.catchUpProps.at(-1) as {
+      onRemoved: (item: unknown) => void;
+      onReply: (item: unknown) => void;
+    };
+    const item = {
+      key: "account:a1",
+      accountId: "account",
+      threadId: "a1",
+      copies: [
+        { accountId: "account-b", threadId: "b1", inInbox: true, unread: true },
+      ],
+    };
+
+    act(() => props.onRemoved(item));
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.queryByText("Lunch on Friday?")).toBeNull();
+
+    act(() => props.onReply(item));
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/all-inboxes/inbox/a1?account=0&from=today&reply=1",
+    );
   });
 
   it("reads every account's local inbox, each row naming its account", () => {

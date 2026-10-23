@@ -120,9 +120,37 @@ type CatchUpProps = {
   allInboxes?: CatchUpAllInboxes;
   /** Starts the existing reply flow for the conversation, after the overlay closes. */
   onReply: (item: CatchUpItem) => void;
-  /** Conversations whose archive or snooze was queued, for a view that hides rows itself. */
-  onRemoved?: (keys: string[]) => void;
+  /**
+   * A conversation whose archive or snooze was queued, with the copies it
+   * reached, for a view that hides rows itself.
+   */
+  onRemoved?: (item: CatchUpItem) => void;
 };
+
+/**
+ * All inboxes' Catch up for the accounts a view shows together, from the
+ * mail engine's view of their inboxes; undefined for one account's view.
+ */
+export function useCatchUpAllInboxes(
+  accounts: CatchUpAllInboxes["accounts"] | null,
+  engine: { firstSyncAccountIds: string[]; failedAccountIds: string[] },
+): CatchUpAllInboxes | undefined {
+  const { firstSyncAccountIds, failedAccountIds } = engine;
+  return useMemo(
+    () =>
+      accounts
+        ? {
+            accounts,
+            // An account the engine can't reach is named as failed alone.
+            waitingAccountIds: firstSyncAccountIds.filter(
+              (accountId) => !failedAccountIds.includes(accountId),
+            ),
+            failedAccountIds,
+          }
+        : undefined,
+    [accounts, failedAccountIds, firstSyncAccountIds],
+  );
+}
 
 type LastAction = {
   item: CatchUpItem;
@@ -426,7 +454,7 @@ function CatchUpBody({
           source: "shortcut",
           shortcut: ACTION_KEYS[action].toLowerCase(),
         });
-      if (action !== "keep") onRemoved?.([key]);
+      if (action !== "keep") onRemoved?.(item);
       return;
     }
     // Nothing changed (the view's toast says why): the card comes back.

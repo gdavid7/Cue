@@ -255,7 +255,7 @@ test("finishes a batch from Today on a phone and counts toward Get started", asy
   await expect(dialog).toBeHidden();
 });
 
-test("works through the All inboxes Inbox tab, acting and undoing in each card's own account", async ({
+test("works through the All inboxes Inbox tab and Today across accounts, acting and undoing in each card's own account", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -353,12 +353,35 @@ test("works through the All inboxes Inbox tab, acting and undoing in each card's
     await expect(unreadTab).toHaveAttribute("aria-current", "true");
     await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
 
-    // Today across accounts keeps its own lanes, without Catch up.
+    // Today across accounts offers the same Catch up, each card acting in
+    // its own account.
     await page.goto(`/${primaryId}/home?accounts=all`);
     await expect(page.locator("[data-today-thread]").first()).toBeVisible({
       timeout: 60_000,
     });
-    await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
+    const todayDialog = await openCatchUp(page);
+    const todayCard = await currentCard(todayDialog);
+    const todayAccount = await cardAccount(todayDialog);
+    expect([primaryId, second.id]).toContain(todayAccount);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "catch-up-today-all-accounts-light",
+    );
+    await page.emulateMedia({ colorScheme: "dark" });
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "catch-up-today-all-accounts-dark",
+    );
+    await page.emulateMedia({ colorScheme: "light" });
+    const todayBefore = countFor(operations, todayAccount);
+    await press(page, "e", todayCard, "archive", tokens[todayAccount]);
+    await expect
+      .poll(() => countFor(operations, todayAccount), { timeout: 60_000 })
+      .toBeGreaterThan(todayBefore);
+    await page.keyboard.press("Escape");
+    await expect(todayDialog).toBeHidden();
   } finally {
     await restoreTouched(touched);
     touched = [];
