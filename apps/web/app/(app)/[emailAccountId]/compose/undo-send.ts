@@ -71,6 +71,7 @@ type TrackedSend = {
    */
   reopenDraft?: () => void;
   toastId: string;
+  holdUntil: number;
   /** Undo is offered only while the send is held. */
   holding: boolean;
   undoing: boolean;
@@ -182,6 +183,7 @@ function trackSend({
     restoreComposer,
     reopenDraft,
     toastId,
+    holdUntil,
     holding: true,
     undoing: false,
     release: () => {
@@ -246,8 +248,23 @@ export async function undoPendingSend() {
   const current = tracked;
   if (!current?.holding || current.undoing) return false;
   current.undoing = true;
-  const status = await cancelSend(current);
-  current.undoing = false;
+  try {
+    return await reportUndo(current, await cancelSend(current));
+  } catch {
+    // The send's toast never closes by itself, so one left on "Sending…"
+    // with Undo would stay that way.
+    if (tracked === current) stopTracking({ dismiss: true });
+    else toast.dismiss(current.toastId);
+    return false;
+  } finally {
+    current.undoing = false;
+  }
+}
+
+async function reportUndo(
+  current: TrackedSend,
+  status: Awaited<ReturnType<typeof cancelSend>>,
+) {
   if (status === "cancelled" && current.reopenDraft) {
     if (tracked === current) stopTracking({ dismiss: false });
     await reportUndoneElsewhere(current, current.reopenDraft);
@@ -255,8 +272,16 @@ export async function undoPendingSend() {
   }
   if (status === "unavailable") {
     // The send is still held, so the user can try again within the window.
+    // A hold that ended while undo waited is past retrying.
+    const holdEnded = Date.now() >= current.holdUntil;
+    if (holdEnded) {
+      stopHolding(current);
+      if (tracked === current) toastSending({ id: current.toastId });
+    }
     toastError({
-      description: "Couldn't reach the server to undo. Try again.",
+      description: holdEnded
+        ? "Couldn't reach the server to undo."
+        : "Couldn't reach the server to undo. Try again.",
     });
     return false;
   }
@@ -276,7 +301,7 @@ export async function undoPendingSend() {
   toastError({
     description:
       status === "too_late"
-        ? "Too late to undo. This email was already sent."
+        ? "Couldn't undo — it was already sent"
         : "Couldn't undo send",
   });
   return false;
