@@ -81,30 +81,16 @@ export function useEngineMailThreads({
     client,
     enabled: enabled && Boolean(client),
   });
-  const [failedAccountIds, setFailedAccountIds] = useState<string[]>([]);
-
   useEffect(() => {
     if (!client || !enabled) return;
     client.requestSync(resolvedAccountIds).catch(() => undefined);
   }, [client, enabled, resolvedAccountIds]);
 
-  useEffect(() => {
-    if (!client || !enabled) {
-      setFailedAccountIds((current) => (current.length ? [] : current));
-      return;
-    }
-    if (!mailbox.data?.connection || mailbox.data.connection === "ready") {
-      setFailedAccountIds((current) => (current.length ? [] : current));
-      return;
-    }
-    let cancelled = false;
-    readFailedAccountIds(client, resolvedAccountIds).then((accountIds) => {
-      if (!cancelled) setFailedAccountIds(accountIds);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, enabled, mailbox.data?.connection, resolvedAccountIds]);
+  const { failedAccountIds } = useFailedAccountIds(
+    enabled ? client : null,
+    resolvedAccountIds,
+    mailbox.data?.connection,
+  );
 
   const coverage = mailbox.data?.coverage;
   // Every pushed snapshot carries fresh coverage; keyed so consumers only see
@@ -314,6 +300,44 @@ function collapsedThread(
       threadId: copy.key.conversationId,
       inInbox: copy.roles.includes("inbox"),
     })),
+  };
+}
+
+/**
+ * The accounts the engine can't reach, read once a mailbox view over them
+ * says its connection isn't ready. `settled` says whether that read answered
+ * for this connection and these accounts, rather than an earlier one.
+ */
+export function useFailedAccountIds(
+  client: MailClient | null | undefined,
+  accountIds: string[],
+  connection: MailboxView["connection"] | undefined,
+) {
+  const [read, setRead] = useState<{
+    failedAccountIds: string[];
+    accountIds: string[];
+    connection: MailboxView["connection"];
+  } | null>(null);
+  const reads = Boolean(client && connection && connection !== "ready");
+  useEffect(() => {
+    if (!client || !connection || connection === "ready") {
+      setRead((current) => (current?.failedAccountIds.length ? null : current));
+      return;
+    }
+    let cancelled = false;
+    readFailedAccountIds(client, accountIds).then((failed) => {
+      if (!cancelled)
+        setRead({ failedAccountIds: failed, accountIds, connection });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connection, accountIds]);
+  return {
+    failedAccountIds: (reads && read?.failedAccountIds) || NO_ACCOUNT_IDS,
+    settled:
+      !reads ||
+      (read?.connection === connection && read?.accountIds === accountIds),
   };
 }
 

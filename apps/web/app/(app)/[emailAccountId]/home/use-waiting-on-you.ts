@@ -25,6 +25,8 @@ const WINDOW_MS = 14 * 86_400_000;
 const SYNCING_WINDOW_MS = 3 * 86_400_000;
 // Read past the five shown, so a few dismissals don't empty the group.
 const READ_LIMIT = 25;
+// Rows that left, remembered in their places for an undo to bring back.
+const MAX_REMEMBERED = 50;
 const NO_KEYS: ReadonlySet<string> = new Set();
 const NO_ORDER_BEFORE: {
   shown: readonly string[];
@@ -33,7 +35,8 @@ const NO_ORDER_BEFORE: {
 const NO_SHOWN: {
   shown: WaitingOnYouConversation[];
   held: WaitingOnYouConversation[];
-} = { shown: [], held: [] };
+  order: readonly string[];
+} = { shown: [], held: [], order: [] };
 const NO_LABEL_IDS: string[] = [];
 
 type DismissedConversation = {
@@ -173,10 +176,11 @@ export function useWaitingOnYou({
   // The browser cache doesn't tell anyone when it changes, so what is
   // dismissed here is also kept here to update at once.
   const [dismissedHere, setDismissedHere] = useState(NO_KEYS);
-  // What showed last, in order, which the next rows keep, and what was held
-  // back then, which joins below them rather than on top when it shows.
+  // What showed last, in order, with the rows that have since left in their
+  // places, which the next rows keep, and what was held back then, which
+  // joins below them rather than on top when it shows.
   const [before, setBefore] = useState(NO_ORDER_BEFORE);
-  const { shown, held } = useMemo(() => {
+  const { shown, held, order } = useMemo(() => {
     if (!ready || !data) return NO_SHOWN;
     const candidates = data.filter(
       (conversation) =>
@@ -190,30 +194,45 @@ export function useWaitingOnYou({
     );
     const isHeld = (conversation: WaitingOnYouConversation) =>
       conversation.copyAccountIds.some((id) => pendingAccountIds.has(id));
+    const shown = keepShownOrder(
+      before.shown,
+      showCopiesOnce(
+        candidates.filter((conversation) => !isHeld(conversation)),
+        (conversation) => ({
+          accountId: conversation.accountId,
+          messageId: conversation.messageKey ?? undefined,
+          at: conversation.receivedAtMs,
+        }),
+        // Copies that arrived together always fold under the same account's,
+        // so an undone row comes back as the copy that showed.
+        accounts[0]?.id,
+      ).map(({ row }) => row),
+      WAITING_ON_YOU_LIMIT,
+      before.held,
+    );
     return {
-      shown: keepShownOrder(
-        before.shown,
-        showCopiesOnce(
-          candidates.filter((conversation) => !isHeld(conversation)),
-          (conversation) => ({
-            accountId: conversation.accountId,
-            messageId: conversation.messageKey ?? undefined,
-            at: conversation.receivedAtMs,
-          }),
-        ).map(({ row }) => row),
-        WAITING_ON_YOU_LIMIT,
-        before.held,
-      ),
+      shown,
       held: candidates.filter(isHeld),
+      // Held rows and folded copies are still here, not archived.
+      order: rememberShownOrder(before.shown, shown, candidates),
     };
-  }, [ready, data, handledLabelIds, pendingAccountIds, dismissedHere, before]);
+  }, [
+    ready,
+    data,
+    accounts,
+    handledLabelIds,
+    pendingAccountIds,
+    dismissedHere,
+    before,
+  ]);
   // Kept for the next render as React stores what a render saw: set while
   // rendering, only when it changed, so this render's rows are the same.
-  const shownKeys = shown.map(shownKey);
+  // Remembering again what was remembered gives the same order, so this
+  // settles after one more render.
   const heldKeys = held.map(shownKey).filter((key) => !before.held.has(key));
-  if (!sameKeys(shownKeys, before.shown) || heldKeys.length)
+  if (!sameKeys(order, before.shown) || heldKeys.length)
     setBefore({
-      shown: shownKeys,
+      shown: order,
       held: new Set([...before.held, ...heldKeys]),
     });
   const threads = useMemo(() => {
@@ -358,6 +377,35 @@ export function keepShownOrder<
     ...kept,
     ...added.filter((conversation) => !onTop(conversation)),
   ].slice(0, limit);
+}
+
+/**
+ * The order to keep next time: what `shown` holds, with the rows shown
+ * before that have since left the store (archived, snoozed) kept in their
+ * places, so an undo that brings one back puts it where it was rather than
+ * below whatever filled its place. A row still in `conversations` but pushed
+ * past the limit is let go. Past `MAX_REMEMBERED`, the lowest remembered rows
+ * are let go first; the shown ones always stay.
+ */
+export function rememberShownOrder<
+  T extends { accountId: string; conversationId: string; messageId: string },
+>(shownBefore: readonly string[], shown: T[], conversations: T[]): string[] {
+  const present = new Set(conversations.map(shownKey));
+  const order = shown.map(shownKey);
+  const shownKeys = new Set(order);
+  let at = 0;
+  for (const key of shownBefore) {
+    const index = order.indexOf(key);
+    if (index >= 0) at = index + 1;
+    else if (!present.has(key)) order.splice(at++, 0, key);
+  }
+  let over = order.length - Math.max(MAX_REMEMBERED, shownKeys.size);
+  for (let index = order.length - 1; over > 0 && index >= 0; index--) {
+    if (shownKeys.has(order[index])) continue;
+    order.splice(index, 1);
+    over--;
+  }
+  return order;
 }
 
 // A newer message makes it a new row, which goes where new mail does.

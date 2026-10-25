@@ -15,6 +15,7 @@ import {
   dismissWaitingOnYou,
   isWaitingOnYouDismissed,
   keepShownOrder,
+  rememberShownOrder,
   useWaitingOnYou,
   waitingOnYouScope,
 } from "./use-waiting-on-you";
@@ -147,6 +148,62 @@ describe("keepShownOrder", () => {
     );
 
     expect(ids(keepShownOrder(keys(shown), next, 5))).toEqual(["c", "b"]);
+  });
+
+  it("puts a row that left and came back, as an undo does, in its place again", () => {
+    const all = [at("e", 50), at("d", 40), at("c", 30), at("b", 20)];
+    const shown = keepShownOrder([], all, 3);
+    const order = rememberShownOrder([], shown, all);
+    // c is archived: b fills its place.
+    const withoutC = all.filter((row) => row.conversationId !== "c");
+    const filled = keepShownOrder(order, withoutC, 3);
+    expect(ids(filled)).toEqual(["e", "d", "b"]);
+
+    // The undo brings c back where it was.
+    const remembered = rememberShownOrder(order, filled, withoutC);
+    expect(ids(keepShownOrder(remembered, all, 3))).toEqual(["e", "d", "c"]);
+  });
+
+  it("gives the same order when remembering what it remembered", () => {
+    const all = [at("e", 50), at("d", 40), at("c", 30), at("b", 20)];
+    const order = rememberShownOrder([], keepShownOrder([], all, 3), all);
+    const withoutC = all.filter((row) => row.conversationId !== "c");
+    const remembered = rememberShownOrder(
+      order,
+      keepShownOrder(order, withoutC, 3),
+      withoutC,
+    );
+
+    expect(
+      rememberShownOrder(
+        remembered,
+        keepShownOrder(remembered, withoutC, 3),
+        withoutC,
+      ),
+    ).toEqual(remembered);
+  });
+
+  it("lets go of a row still there but not shown, as only an undo brings one back", () => {
+    const all = [at("c", 30), at("b", 20), at("a", 10)];
+    const shown = [at("c", 30)];
+
+    expect(rememberShownOrder(keys(all), shown, all)).toEqual(keys(shown));
+  });
+
+  it("keeps the shown rows and lets the lowest remembered go past fifty", () => {
+    const left = Array.from({ length: 60 }, (_, index) =>
+      at(`left-${index}`, 100 - index),
+    );
+    const shown = [at("b", 20), at("a", 10)];
+    const order = rememberShownOrder(
+      [...keys(left), ...keys(shown)],
+      shown,
+      shown,
+    );
+
+    expect(order).toHaveLength(50);
+    expect(order.slice(-2)).toEqual(keys(shown));
+    expect(order.slice(0, 48)).toEqual(keys(left.slice(0, 48)));
   });
 });
 
@@ -291,6 +348,55 @@ describe("useWaitingOnYou", () => {
     await waitFor(() =>
       expect(threadIds(result.current)).toEqual(["new", "old", "middle"]),
     );
+  });
+
+  it("puts an archived row back in its place when the archive is undone", async () => {
+    const all = [
+      conversation("a", "new", 30),
+      conversation("a", "middle", 20),
+      conversation("a", "old", 10),
+    ];
+    mail.rows = all;
+    const { result, rerender } = renderWaitingOnYou({
+      handledLabelIds: { a: [] },
+    });
+    await waitFor(() =>
+      expect(threadIds(result.current)).toEqual(["new", "middle", "old"]),
+    );
+
+    mail.rows = all.filter((row) => row.conversationId !== "middle");
+    rerender({ handledLabelIds: { a: [] } });
+    await waitFor(() =>
+      expect(threadIds(result.current)).toEqual(["new", "old"]),
+    );
+
+    mail.rows = all;
+    rerender({ handledLabelIds: { a: [] } });
+    await waitFor(() =>
+      expect(threadIds(result.current)).toEqual(["new", "middle", "old"]),
+    );
+  });
+
+  it("shows the same account's copy of a message that reached two at once", async () => {
+    // The store lists copies that arrived together in no set order.
+    const copy = conversation("b", "ask-copy", 30, {
+      messageKey: "k@x",
+      copies: ["a"],
+    });
+    mail.rows = [
+      copy,
+      {
+        ...conversation("a", "ask", 30, { messageKey: "k@x", copies: ["b"] }),
+        receivedAtMs: copy.receivedAtMs,
+      },
+    ];
+
+    const { result } = renderWaitingOnYou({
+      handledLabelIds: { a: [], b: [] },
+    });
+
+    await waitFor(() => expect(threadIds(result.current)).toEqual(["ask"]));
+    expect(result.current.threads[0]).toMatchObject({ account: A });
   });
 
   it("drops an account no longer read, without waiting for the store", async () => {

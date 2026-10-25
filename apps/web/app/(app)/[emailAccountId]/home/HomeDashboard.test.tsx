@@ -9,7 +9,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GetCalendarTodayEventsResponse } from "@/app/api/user/calendar/upcoming-events/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
@@ -25,6 +25,8 @@ import type {
 } from "@inboxzero/mail-core/queries";
 import type { useLocalInboxRows } from "./use-local-inbox-rows";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
+import type { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import { HomeDashboard } from "./HomeDashboard";
 
 const mocks = vi.hoisted(() => ({
@@ -55,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   // By account, whether Cue has read the mailbox, asked before Today's answer.
   homeCue: undefined as Record<string, boolean> | undefined,
   reportActivation: vi.fn(),
+  catchUpProps: [] as Array<Record<string, unknown>>,
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -192,6 +195,19 @@ vi.mock("./use-waiting-on-you", async (importOriginal) => {
     }),
   };
 });
+vi.mock("@/app/(app)/[emailAccountId]/mail/CatchUp", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/app/(app)/[emailAccountId]/mail/CatchUp")
+    >();
+  return {
+    ...actual,
+    CatchUpEntry: (props: Record<string, unknown>) => {
+      mocks.catchUpProps.push(props);
+      return null;
+    },
+  };
+});
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -211,6 +227,17 @@ describe("HomeDashboard row actions", () => {
   });
 
   afterEach(cleanup);
+
+  it("offers one account's Catch up, without All inboxes", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    expect(mocks.catchUpProps.at(-1)).toMatchObject({
+      emailAccountId: "account",
+      query: { type: "inbox" },
+      allInboxes: undefined,
+    });
+  });
 
   it("archives through the mail engine, moves focus to the next row, and undo brings it back", async () => {
     renderToday();
@@ -1317,6 +1344,85 @@ describe("HomeDashboard across accounts", () => {
     mocks.homes = {};
   });
 
+  it("offers Catch up on every included account's inbox", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    expect(mocks.catchUpProps.at(-1)).toMatchObject({
+      query: { type: "inbox" },
+      allInboxes: {
+        accounts: [
+          { id: "account", email: "a@example.com" },
+          { id: "account-b", email: "b@example.com" },
+        ],
+      },
+    });
+  });
+
+  it("hides a caught-up card's copies in other accounts, and replies in its own account", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+    const props = latestCatchUpProps();
+
+    act(() => props.onRemoved(caughtUpCard(), []));
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.queryByText("Lunch on Friday?")).toBeNull();
+
+    act(() => props.onReply(caughtUpCard()));
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/all-inboxes/inbox/a1?account=0&from=today&reply=1",
+    );
+  });
+
+  it("keeps a copy's row where its account refused the change", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    act(() => latestCatchUpProps().onRemoved(caughtUpCard(), ["account-b"]));
+
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.getByText("Lunch on Friday?")).toBeTruthy();
+  });
+
+  it("brings back a caught-up card's copies when its undo restores it", async () => {
+    mocks.catchUpProps = [];
+    render(
+      <StrictMode>
+        <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
+          <HomeDashboard />
+        </ShortcutsProvider>
+      </StrictMode>,
+    );
+    const { actions, onRemoved } = latestCatchUpProps();
+    const card = caughtUpCard();
+
+    await act(async () => {
+      actions.addTargets([
+        {
+          id: card.threadId,
+          account: { id: card.accountId },
+          messageIds: ["a1-message"],
+          inInbox: true,
+          copies: card.copies,
+        },
+      ]);
+      await actions.changeCard([card.key], { kind: "archive" });
+      onRemoved(card, []);
+    });
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.queryByText("Lunch on Friday?")).toBeNull();
+
+    // With another change to Today still pending, React works out the
+    // restore during render, where Strict Mode runs it twice.
+    await act(async () => {
+      onRemoved({ ...caughtUpCard(), key: "account:other", copies: [] }, []);
+      await actions.undo();
+    });
+
+    expect(screen.getByText("Quarterly numbers")).toBeTruthy();
+    expect(screen.getByText("Lunch on Friday?")).toBeTruthy();
+  });
+
   it("reads every account's local inbox, each row naming its account", () => {
     mocks.localInboxArgs = [];
     renderToday();
@@ -1593,7 +1699,8 @@ describe("HomeDashboard across accounts", () => {
             ...thread("a-contract", "Contract"),
             at: "2026-10-01T09:00:00.000Z",
             priority: "low",
-            rfcMessageId: "<same@mail>",
+            // Normalised where its header is read, as the store keys it.
+            rfcMessageId: "same@mail",
           },
         ]),
         "account-b": unread(homeData([])),
@@ -1620,10 +1727,10 @@ describe("HomeDashboard across accounts", () => {
       mocks.homes = {
         account: {
           ...homeData([
-            { ...thread("a1", "Contract"), rfcMessageId: "<same@mail>" },
+            { ...thread("a1", "Contract"), rfcMessageId: "same@mail" },
           ]),
           alsoInInbox: [
-            { ...thread("a-lunch", "Lunch"), rfcMessageId: "<Lunch@mail>" },
+            { ...thread("a-lunch", "Lunch"), rfcMessageId: "lunch@mail" },
           ],
         },
         "account-b": unread(homeData([])),
@@ -1947,6 +2054,34 @@ function savedYesterday() {
   return copy;
 }
 
+type TodayCatchUpProps = Parameters<typeof CatchUpEntry>[0];
+
+function latestCatchUpProps() {
+  const props = mocks.catchUpProps.at(-1) as TodayCatchUpProps | undefined;
+  if (!props?.onRemoved) throw new Error("Today rendered no Catch up");
+  return { ...props, onRemoved: props.onRemoved };
+}
+
+/** Account a's a1, a copy of which is account b's b1. */
+function caughtUpCard(): CatchUpItem {
+  return {
+    key: "account:a1",
+    accountId: "account",
+    threadId: "a1",
+    latestMessageId: "a1-message",
+    messageKey: "<shared@example.com>",
+    inInbox: true,
+    unread: true,
+    copies: [
+      { accountId: "account-b", threadId: "b1", inInbox: true, unread: true },
+    ],
+    sender: "Ada",
+    subject: "Quarterly numbers",
+    preview: "",
+    atMs: 1,
+  };
+}
+
 function renderToday() {
   return render(
     <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
@@ -2070,6 +2205,7 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
     waiting: [],
     alsoInInbox: [],
     reading: [],
+    newsletterThreadIds: [],
     handledLabelIds: [],
     pending: [],
     failed: [],
