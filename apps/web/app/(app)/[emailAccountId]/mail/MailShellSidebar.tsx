@@ -10,6 +10,7 @@ import {
   useMemo,
 } from "react";
 import { toast } from "sonner";
+import { ChangesWaiting } from "@/app/(app)/[emailAccountId]/mail/ChangesWaiting";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import {
@@ -332,14 +333,17 @@ export const MailShellSidebar = memo(function MailShellSidebar({
             collapsed: !isMailSidebarOpen,
             showSidebarToggle: true,
             footer: (
-              <MailAccountSwitcher
-                isDesktopApp={isDesktopApp}
-                isAllAccounts={isAllAccounts}
-                onSelectAccount={onSelectAccount}
-                onSelectAll={onSelectAllAccounts}
-                variant="sidebar"
-                collapsed={!isMailSidebarOpen}
-              />
+              <>
+                <ChangesWaiting collapsed={!isMailSidebarOpen} />
+                <MailAccountSwitcher
+                  isDesktopApp={isDesktopApp}
+                  isAllAccounts={isAllAccounts}
+                  onSelectAccount={onSelectAccount}
+                  onSelectAll={onSelectAllAccounts}
+                  variant="sidebar"
+                  collapsed={!isMailSidebarOpen}
+                />
+              </>
             ),
           })}
           {isMailSidebarOpen ? (
@@ -387,6 +391,7 @@ function MobileSheetFooter({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="mt-2 flex shrink-0 flex-col gap-px border-border border-t pt-2">
+      <ChangesWaiting />
       <button
         type="button"
         className={rowClassName}

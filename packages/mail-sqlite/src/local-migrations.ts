@@ -30,4 +30,8 @@ export const LOCAL_MIGRATIONS = {
     name: "0017-conversation-message-keys",
   },
   importantPeople: { id: 18, name: "0018-important-people" },
+  operationsAccountStatusIndex: {
+    id: 19,
+    name: "0019-operations-account-status-index",
+  },
 } as const;

@@ -158,6 +158,31 @@ export type MailDiagnostics = {
   }>;
 };
 
+/**
+ * How many local changes an account still has on their way to its provider,
+ * grouped by status and what they do. Built for polling: it reads only
+ * changes still on their way and never their content.
+ */
+export type MailWaitingSummary = {
+  accountId: string;
+  connection: "ready" | "offline" | "blocked_auth";
+  /** When the oldest change in `groups` became due; null when there's none. */
+  oldestWaitingAtMs: number | null;
+  groups: Array<{
+    status: OperationState["status"];
+    kind: string;
+    changeKind: string | null;
+    /** The change's on/off value (read, starred, spam, present), if any. */
+    on: boolean | null;
+    /** Whether a membership change is to a label or a category. */
+    membership: "label" | "category" | null;
+    /** Held on purpose until the device is back online. */
+    heldOffline: boolean;
+    count: number;
+    oldestWaitingAtMs: number;
+  }>;
+};
+
 export type ConversationCompletion = { status: "complete" | "unavailable" };
 
 export type MailboxWindowHandle = QueryHandle<MailboxView> & {
@@ -283,6 +308,13 @@ export type MailClient = {
    */
   releaseConversationMessages(key: ConversationKey): Promise<void>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
+  /**
+   * Each account's changes still on their way to the provider, cheap enough
+   * to poll. Changes held on purpose, such as a send in its undo window, and
+   * partly applied ones are left out. Engines older than the web app leave
+   * it out.
+   */
+  getWaitingSummary?(accountIds: string[]): Promise<MailWaitingSummary[]>;
   /**
    * Drops mailbox drafts the provider confirmed deleted, as after a discard,
    * so they stay gone across reloads before sync reports it. Desktop engines
@@ -627,6 +659,9 @@ export function createMailEngine(input: {
     },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
+    },
+    getWaitingSummary(accountIds) {
+      return store.getWaitingSummary(accountIds, runtime.nowMs());
     },
     async forgetDeletedDrafts(input) {
       if (input.messageIds.length === 0) return;

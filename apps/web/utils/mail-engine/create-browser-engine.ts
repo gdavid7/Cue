@@ -434,6 +434,8 @@ async function createWorkerOwnedEngine(
       callWorker<void>(worker, pending, "releaseConversationMessages", [key]),
     getDiagnostics: (accountId) =>
       callWorker(worker, pending, "getDiagnostics", [accountId]),
+    getWaitingSummary: (accountIds) =>
+      callWorker(worker, pending, "getWaitingSummary", [accountIds]),
     forgetDeletedDrafts: (input) =>
       callWorker<void>(worker, pending, "forgetDeletedDrafts", [input]),
     ingestMessages: (input) =>
