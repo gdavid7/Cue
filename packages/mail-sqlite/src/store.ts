@@ -5,7 +5,24 @@ import {
   readContactSuggestions,
 } from "./contact-suggestions";
 import { readMessageSearch } from "./message-search";
+import { readFileSenders, readFiles, readFilesNotOnDevice } from "./files";
+import { readNeverReadSenders } from "./never-read-senders";
+import {
+  deleteAccountImportantPeople,
+  readImportantPeople,
+  writeImportantPerson,
+} from "./important-people";
 import { readPersonCard } from "./person-card";
+import { readWaitingOnYou } from "./waiting-on-you";
+import { readSenderHistory } from "./sender-history";
+import {
+  countMessageEmbeddings,
+  deleteAccountMessageEmbeddings,
+  pruneMessageEmbeddings,
+  readEmbeddingBacklog,
+  readSemanticMatches,
+  writeMessageEmbeddings,
+} from "./message-embeddings";
 import { canonicalJson, hashCanonical } from "@inboxzero/mail-core/canonical";
 import type { HostRuntime } from "@inboxzero/mail-core/ports/runtime";
 import type {
@@ -21,6 +38,7 @@ import {
 import {
   applyMetadataChange,
   applyMetadataPatch,
+  conversationTargets,
   deriveEffectiveMessage,
   type ConfirmedMessage,
 } from "@inboxzero/mail-core/effective-state";
@@ -28,11 +46,11 @@ import type {
   ConversationKey,
   LocalRevision,
   MessageKey,
+  Provider,
 } from "@inboxzero/mail-core/identities";
 import {
-  messageAttachmentDescriptorSchema,
-  type MessageAttachmentDescriptor,
   type MessageMetadata,
+  normalizeInternetMessageId,
 } from "@inboxzero/mail-core/messages";
 import {
   DEFERRED_DISPATCH_MIN_HOLD_MS,
@@ -81,10 +99,12 @@ import {
   type MessageBodyCodec,
 } from "./message-body-codec";
 import { migrateCompressedMessageBodies } from "./message-body-migration";
+import { readWaitingSummary } from "./waiting-summary";
 import {
   connectionStatus,
   metadataFromEffective,
   coversWholeMailbox,
+  parseStoredAttachments,
   readCoverage,
   readRevision,
 } from "./store-read-utils";
@@ -110,7 +130,11 @@ export type SqliteMailStoreOptions = {
   runtime?: Pick<HostRuntime, "randomId" | "sha256" | "nowMs">;
   /** Defaults to the Compression Streams API; Node hosts pass zlib. */
   bodyCodec?: MessageBodyCodec;
+  /** Debug notes about the store's own decisions. Fields carry ids only. */
+  debug?: StoreDebug;
 };
+
+type StoreDebug = (message: string, fields: Record<string, string>) => void;
 
 export async function createSqliteMailStore(
   driver: SqliteDriver,
@@ -122,6 +146,7 @@ export async function createSqliteMailStore(
   const runtime = resolveStoreRuntime(options.runtime);
   const digest = (value: unknown) => hashCanonical(value, runtime.sha256);
   const bodyCodec = options.bodyCodec ?? streamBodyCodec;
+  const debug: StoreDebug = options.debug ?? (() => {});
   await driver.write(async (tx) => {
     await migrateMailbox(tx, runtime.randomId());
     // A content fetch claimed by the engine that last had this store open (a
@@ -180,8 +205,51 @@ export async function createSqliteMailStore(
     readPersonCard(query) {
       return driver.read((tx) => readPersonCard(tx, query));
     },
+    readNeverReadSenders(query) {
+      return driver.read((tx) => readNeverReadSenders(tx, query));
+    },
+    readSenderHistory(query) {
+      return driver.read((tx) => readSenderHistory(tx, query));
+    },
+    readImportantPeople(accountIds) {
+      return driver.read((tx) => readImportantPeople(tx, accountIds));
+    },
+    writeImportantPerson(input) {
+      return driver.write((tx) =>
+        writeImportantPerson(tx, input, runtime.nowMs()),
+      );
+    },
+    readFiles(query) {
+      return driver.read(async (tx) =>
+        readFiles(tx, query, await searchSupport(tx)),
+      );
+    },
+    readFilesNotOnDevice(accountIds) {
+      return driver.read((tx) => readFilesNotOnDevice(tx, accountIds));
+    },
+    readFileSenders(accountIds) {
+      return driver.read((tx) => readFileSenders(tx, accountIds));
+    },
+    readWaitingOnYou(query) {
+      return driver.read((tx) => readWaitingOnYou(tx, query));
+    },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);
+    },
+    readEmbeddingBacklog(input) {
+      return driver.read((tx) => readEmbeddingBacklog(tx, bodyCodec, input));
+    },
+    writeMessageEmbeddings(input) {
+      return driver.write((tx) => writeMessageEmbeddings(tx, input));
+    },
+    pruneMessageEmbeddings(input) {
+      return driver.write((tx) => pruneMessageEmbeddings(tx, input));
+    },
+    countMessageEmbeddings(input) {
+      return driver.read((tx) => countMessageEmbeddings(tx, input));
+    },
+    readSemanticMatches(input) {
+      return driver.read((tx) => readSemanticMatches(tx, input));
     },
     async ensureAccount(input) {
       return driver.write(async (tx) => {
@@ -252,6 +320,8 @@ export async function createSqliteMailStore(
       return driver.write(async (tx) => {
         await deleteAccountSearchIndex(tx, accountId);
         await deleteAccountContactSuggestions(tx, accountId);
+        await deleteAccountMessageEmbeddings(tx, accountId);
+        await deleteAccountImportantPeople(tx, accountId);
         const existing = await tx.query(
           "SELECT 1 AS n FROM accounts WHERE account_id = ?",
           [accountId],
@@ -339,13 +409,12 @@ export async function createSqliteMailStore(
         ) {
           return { status: "stale" };
         }
-        const read = await readOrder(tx, input.requestedAt, digest);
-        for (const change of input.page.changes) {
-          await applyChange(tx, change, read);
-        }
+        // Targets go in first so the messages this page finds show the
+        // change while later pages are still being read.
+        const newTargets: MessageKey[] = [];
         for (const key of input.page.keys) {
           if (key.accountId !== input.accountId) continue;
-          await tx.execute(
+          const inserted = await tx.execute(
             `INSERT OR IGNORE INTO operation_targets(account_id, command_id, message_id, conversation_id)
              VALUES (?, ?, ?, ?)`,
             [
@@ -355,7 +424,27 @@ export async function createSqliteMailStore(
               input.page.conversation.conversationId,
             ],
           );
+          if (inserted.changedRows > 0) newTargets.push(key);
         }
+        const read = await readOrder(tx, input.requestedAt, digest);
+        for (const change of input.page.changes) {
+          if (
+            change.kind === "message_patch" &&
+            (await isStaleMessagePatch(tx, change))
+          ) {
+            continue;
+          }
+          await applyChange(tx, change, read);
+        }
+        newTargets.push(
+          ...(await narrowConversationTargets(tx, debug, {
+            accountId: input.accountId,
+            commandId: input.commandId,
+            conversationId: input.page.conversation.conversationId,
+            ...operationIntent(operation),
+          })),
+        );
+        await recomputeTargets(tx, newTargets);
         const updated = await tx.execute(
           `UPDATE operation_conversations
            SET next_page = ?, complete = ?
@@ -374,7 +463,11 @@ export async function createSqliteMailStore(
             input.previousPage,
           ],
         );
-        if (updated.changedRows === 0) return { status: "stale" };
+        // Checked above in this transaction; throwing rolls back the targets
+        // and changes already written, which returning would commit.
+        if (updated.changedRows === 0) {
+          throw new Error("Preparation page changed during its transaction");
+        }
         if (!input.page.nextPage) {
           await tx.execute(
             `INSERT INTO conversation_completeness(account_id, conversation_id, complete)
@@ -833,7 +926,7 @@ export async function createSqliteMailStore(
         // after opening) covers the ones this page adds, so they don't show
         // it undone until its own preparation lands.
         const preparing = await tx.query(
-          `SELECT c.command_id FROM operation_conversations c
+          `SELECT c.command_id, o.payload_json FROM operation_conversations c
            JOIN operations o
              ON o.account_id = c.account_id AND o.command_id = c.command_id
            WHERE c.account_id = ? AND c.conversation_id = ? AND c.complete = 0
@@ -867,6 +960,16 @@ export async function createSqliteMailStore(
           }
           await applyChange(tx, change, read);
         }
+        for (const row of preparing) {
+          newTargets.push(
+            ...(await narrowConversationTargets(tx, debug, {
+              accountId,
+              commandId: String(row.command_id),
+              conversationId,
+              ...operationIntent(row),
+            })),
+          );
+        }
         await recomputeTargets(tx, newTargets);
         if (!input.page.nextPage) {
           await tx.execute(
@@ -875,8 +978,8 @@ export async function createSqliteMailStore(
              ON CONFLICT(account_id, conversation_id) DO UPDATE SET complete = 1`,
             [accountId, conversationId],
           );
-          // The commands now target every message, so this read resolves
-          // their membership too and they skip their own.
+          // The commands now target every message their change reaches, so
+          // this read resolves their membership too and they skip their own.
           for (const row of preparing) {
             const commandId = String(row.command_id);
             await tx.execute(
@@ -1611,6 +1714,9 @@ export async function createSqliteMailStore(
         };
       });
     },
+    async getWaitingSummary(accountIds, nowMs) {
+      return driver.read((tx) => readWaitingSummary(tx, accountIds, nowMs));
+    },
     async inspect(input) {
       return driver.read((tx) => inspectState(tx, input));
     },
@@ -2296,6 +2402,7 @@ async function admitConversations(
     kind: "conversations",
     conversations: input.conversations,
     change: input.change,
+    ...(input.wholeConversation ? { wholeConversation: true } : {}),
   };
   const hash = await digest(payload);
   if (existing) {
@@ -2309,6 +2416,7 @@ async function admitConversations(
     return { status: "rejected", code: "invalid" };
   }
   let complete = true;
+  const provider = await accountProvider(tx, input.accountId);
   const knownTargets: Array<MessageKey & { conversationId: string }> = [];
   for (const conversation of input.conversations) {
     if (conversation.accountId !== input.accountId) {
@@ -2320,11 +2428,17 @@ async function admitConversations(
     );
     if (!flag[0] || Number(flag[0].complete) !== 1) complete = false;
     const messages = await tx.query(
-      "SELECT message_id FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
+      "SELECT message_id, roles_json FROM messages WHERE account_id = ? AND conversation_id = ? AND deleted = 0",
       [conversation.accountId, conversation.conversationId],
     );
+    const targets = conversationTargets(
+      messages.map((row) => ({ row, roles: parseRoles(row.roles_json) })),
+      input.change,
+      provider,
+      input.wholeConversation === true,
+    ).map(({ row }) => row);
     knownTargets.push(
-      ...messages.map((row) => ({
+      ...targets.map((row) => ({
         accountId: conversation.accountId,
         messageId: String(row.message_id),
         conversationId: conversation.conversationId,
@@ -2583,11 +2697,14 @@ async function resetAccountForGeneration(
 ) {
   await deleteAccountSearchIndex(tx, input.accountId);
   await deleteAccountContactSuggestions(tx, input.accountId);
+  await deleteAccountMessageEmbeddings(tx, input.accountId);
   const derivedTables = [
     "message_content",
     "effective_messages",
     "effective_role_conversations",
     "effective_message_memberships",
+    "conversation_message_keys",
+    "shared_message_copies",
     "sync_streams",
     "bootstrap_seen_messages",
     "bootstrap_existing_messages",
@@ -2992,8 +3109,9 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
     `INSERT INTO messages(
        account_id, message_id, conversation_id, provider, version, subject, preview, external_url,
        from_address, to_json, cc_json, bcc_json, received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json,
-       roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted
-     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted,
+       internet_message_id
+     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(account_id, message_id) DO UPDATE SET
        conversation_id = excluded.conversation_id,
        version = excluded.version,
@@ -3019,7 +3137,8 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
        in_spam = excluded.in_spam,
        has_attachments = excluded.has_attachments,
        snoozed_until_ms = excluded.snoozed_until_ms,
-       deleted = excluded.deleted`,
+       deleted = excluded.deleted,
+       internet_message_id = COALESCE(excluded.internet_message_id, messages.internet_message_id)`,
     [
       message.accountId,
       message.messageId,
@@ -3049,6 +3168,7 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       message.hasAttachments ? 1 : 0,
       message.snoozedUntilMs ?? null,
       message.deleted ? 1 : 0,
+      message.internetMessageId ?? null,
     ],
   );
   await indexContactMessage(tx, message);
@@ -3062,6 +3182,88 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       messageId: message.messageId,
     });
   }
+}
+
+// Drops the command's targets in this conversation that its change leaves
+// alone, now that the messages a membership page found are stored with their
+// folders. Returns the dropped keys so their effective state is redone.
+async function narrowConversationTargets(
+  tx: SqlTransaction,
+  debug: StoreDebug,
+  input: {
+    accountId: string;
+    commandId: string;
+    conversationId: string;
+    change: SubmitMetadataCommand["change"];
+    wholeConversation: boolean;
+  },
+): Promise<MessageKey[]> {
+  const provider = await accountProvider(tx, input.accountId);
+  const rows = await tx.query(
+    `SELECT t.message_id, m.roles_json
+     FROM operation_targets t
+     LEFT JOIN messages m
+       ON m.account_id = t.account_id AND m.message_id = t.message_id AND m.deleted = 0
+     WHERE t.account_id = ? AND t.command_id = ? AND t.conversation_id = ?`,
+    [input.accountId, input.commandId, input.conversationId],
+  );
+  const targeted = rows.map((row) => ({
+    messageId: String(row.message_id),
+    roles: row.roles_json == null ? null : parseRoles(row.roles_json),
+  }));
+  const kept = new Set(
+    conversationTargets(
+      targeted,
+      input.change,
+      provider,
+      input.wholeConversation,
+    ).map((target) => target.messageId),
+  );
+  const dropped: MessageKey[] = [];
+  for (const { messageId, roles } of targeted) {
+    if (kept.has(messageId)) continue;
+    await tx.execute(
+      "DELETE FROM operation_targets WHERE account_id = ? AND command_id = ? AND message_id = ?",
+      [input.accountId, input.commandId, messageId],
+    );
+    if (roles === null) {
+      debug("Left a listed message with no stored copy out of a command", {
+        accountId: input.accountId,
+        commandId: input.commandId,
+        conversationId: input.conversationId,
+        messageId,
+      });
+    }
+    dropped.push({ accountId: input.accountId, messageId });
+  }
+  return dropped;
+}
+
+async function accountProvider(
+  tx: SqlTransaction,
+  accountId: string,
+): Promise<Provider | null> {
+  const rows = await tx.query(
+    "SELECT provider FROM accounts WHERE account_id = ?",
+    [accountId],
+  );
+  const provider = rows[0]?.provider;
+  return provider === "google" || provider === "microsoft" ? provider : null;
+}
+
+function operationIntent(row: { payload_json?: unknown }) {
+  const payload = JSON.parse(String(row.payload_json)) as {
+    change: SubmitMetadataCommand["change"];
+    wholeConversation?: boolean;
+  };
+  return {
+    change: payload.change,
+    wholeConversation: payload.wholeConversation === true,
+  };
+}
+
+function parseRoles(value: unknown) {
+  return JSON.parse(String(value)) as MessageMetadata["roles"];
 }
 
 // Queues a preparing command once every conversation's membership is known,
@@ -3080,9 +3282,7 @@ async function queuePreparedOperation(
   if (remaining.length > 0) return false;
   const operation = await loadOperation(tx, accountId, commandId);
   if (operation?.status !== "preparing") return false;
-  const payload = JSON.parse(String(operation.payload_json)) as {
-    change: SubmitMetadataCommand["change"];
-  };
+  const { change } = operationIntent(operation);
   const targets = await tx.query(
     `SELECT message_id FROM operation_targets
      WHERE account_id = ? AND command_id = ?`,
@@ -3095,7 +3295,7 @@ async function queuePreparedOperation(
   const executable = {
     kind: "metadata" as const,
     targets: messageTargets,
-    change: payload.change,
+    change,
   };
   await tx.execute(
     `UPDATE operations
@@ -3159,8 +3359,9 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
       `INSERT INTO effective_messages(
          account_id, message_id, conversation_id, subject, preview, external_url, from_address, to_json, cc_json, bcc_json,
          received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json, roles_json,
-         in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, pending_operation_ids_json
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, pending_operation_ids_json,
+         message_key
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(account_id, message_id) DO UPDATE SET
          conversation_id = excluded.conversation_id,
          subject = excluded.subject,
@@ -3185,7 +3386,8 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
          in_spam = excluded.in_spam,
          has_attachments = excluded.has_attachments,
          snoozed_until_ms = excluded.snoozed_until_ms,
-         pending_operation_ids_json = excluded.pending_operation_ids_json`,
+         pending_operation_ids_json = excluded.pending_operation_ids_json,
+         message_key = excluded.message_key`,
       [
         effective.accountId,
         effective.messageId,
@@ -3213,6 +3415,7 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
         effective.hasAttachments ? 1 : 0,
         effective.snoozedUntilMs ?? null,
         JSON.stringify(effective.pendingOperationIds),
+        normalizeInternetMessageId(confirmed.internetMessageId),
       ],
     );
   }
@@ -3388,10 +3591,14 @@ function confirmedFromRow(
         : inboxSection(String(row.inbox_section)),
     labelIds: JSON.parse(String(row.label_ids_json)) as string[],
     categoryIds: JSON.parse(String(row.category_ids_json)) as string[],
-    roles: JSON.parse(String(row.roles_json)) as MessageMetadata["roles"],
+    roles: parseRoles(row.roles_json),
     hasAttachments: Number(row.has_attachments) === 1,
     snoozedUntilMs:
       row.snoozed_until_ms == null ? null : Number(row.snoozed_until_ms),
+    internetMessageId:
+      row.internet_message_id == null
+        ? undefined
+        : String(row.internet_message_id),
   };
 }
 
@@ -3466,6 +3673,7 @@ async function insertMessageContent(
     html: body.html,
     text: storedTextPart(body.html, body.text),
   };
+  const attachmentsJson = JSON.stringify(body.attachments ?? []);
   await tx.execute(
     `INSERT INTO message_content(account_id, message_id, version, html, text, attachments_json, is_meeting_invitation)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -3479,13 +3687,16 @@ async function insertMessageContent(
       body.version,
       await encodeMessageBody(codec, stored.html),
       await encodeMessageBody(codec, stored.text),
-      JSON.stringify(body.attachments ?? []),
+      attachmentsJson,
       body.isMeetingInvitation ? 1 : 0,
     ],
   );
   // Indexed from what is stored, so a later rebuild from the stored body
   // produces the same search row.
-  await indexMessageContent(tx, body.key, stored);
+  await indexMessageContent(tx, body.key, {
+    ...stored,
+    attachments: parseStoredAttachments(attachmentsJson),
+  });
 }
 
 type ReadOrder = {
@@ -3839,22 +4050,6 @@ function parseOperationPayload(value: import("./driver").SqlValue) {
       conversationIds: [],
       messageIds: [],
     };
-  }
-}
-
-function parseStoredAttachments(
-  value: import("./driver").SqlValue,
-): MessageAttachmentDescriptor[] {
-  if (value === null || value === undefined) return [];
-  try {
-    const parsed = JSON.parse(String(value)) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((item) => {
-      const result = messageAttachmentDescriptorSchema.safeParse(item);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
   }
 }
 

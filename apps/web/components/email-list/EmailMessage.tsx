@@ -47,6 +47,7 @@ import type { ParsedMessage } from "@/utils/types";
 import { forwardEmailHtml, forwardEmailSubject } from "@/utils/gmail/forward";
 import { extractDraftComposerContent } from "@/utils/parse/extract-reply.client";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
+import { getThreadAddresses } from "@/app/(app)/[emailAccountId]/compose/thread-addresses";
 import { createReplyContent } from "@/utils/gmail/reply";
 import { cn } from "@/utils";
 import { textToHtmlParagraphs } from "@/utils/string";
@@ -60,6 +61,7 @@ import { EmailDetails } from "@/components/email-list/EmailDetails";
 import { HtmlEmail, PlainEmail } from "@/components/email-list/EmailContents";
 import { DarkEmailToggle } from "@/components/email-list/DarkEmailToggle";
 import { EmailAttachments } from "@/components/email-list/EmailAttachments";
+import { SenderNotice } from "@/components/email-list/SenderNotice";
 import { PersonCardTrigger } from "@/components/person-card/PersonCard";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useOwnEmailAddresses } from "@/hooks/useOwnEmailAddresses";
@@ -132,6 +134,7 @@ export function EmailMessage({
   onNavigateMessage,
   sentMessageOpen,
   replyAnchor,
+  threadMessages,
   composerSessionMessageId,
   onReplySent,
   focusComposer = false,
@@ -200,6 +203,8 @@ export function EmailMessage({
   sentMessageOpen?: SentMessageOpenState;
   /** For a reply the provider hasn't sent yet: the message replies thread on. */
   replyAnchor?: ThreadMessage;
+  /** Every message of the thread, only when all of it is loaded. */
+  threadMessages?: ThreadMessage[];
   /** Keeps a composer's draft when this message's id changes under it. */
   composerSessionMessageId?: string;
   /** A reply or forward from this message just left its composer. */
@@ -525,6 +530,18 @@ export function EmailMessage({
             </>
           )}
 
+          {/* Mail the user sent, from any of their addresses or aliases,
+              is never checked. */}
+          {!isDraftRow && !message.labelIds?.includes(GmailLabel.SENT) && (
+            <SenderNotice
+              emailAccountId={emailAccountId}
+              from={message.headers.from}
+              receivedAtMs={
+                Number(message.internalDate) || Date.parse(message.date) || 0
+              }
+            />
+          )}
+
           {isCalendarInvitationMessage(message) && (
             <CalendarInvitation key={message.id} messageId={message.id} />
           )}
@@ -598,6 +615,7 @@ export function EmailMessage({
                   draftMessage={draft}
                   draftSessionMessageId={sessionMessageId}
                   message={message}
+                  threadMessages={threadMessages}
                   onCloseCompose={() => closeMailboxDraft(sessionMessageId)}
                   onRestoreCompose={() =>
                     setDraftDismissed(sessionMessageId, false)
@@ -651,6 +669,7 @@ export function EmailMessage({
                 draftSessionMessageId={composerSessionMessageId}
                 message={message}
                 replyAnchor={replyAnchor}
+                threadMessages={threadMessages}
                 onCloseCompose={onCloseComposeAfterSend}
                 onRestore={onRestoreComposeAfterSend}
                 onRestoreCompose={onRestoreCompose}
@@ -1016,6 +1035,7 @@ function ReplyPanel({
   autoScroll = false,
   bodyAvailable = true,
   replyAnchor,
+  threadMessages,
   replyAll = false,
   ownReply = false,
   ownReplyRequest = 0,
@@ -1038,6 +1058,7 @@ function ReplyPanel({
   autoScroll?: boolean;
   bodyAvailable?: boolean;
   replyAnchor?: ParsedMessage;
+  threadMessages?: ThreadMessage[];
   replyAll?: boolean;
   /** The user's own Reply opened this composer, not Cue. */
   ownReply?: boolean;
@@ -1133,7 +1154,11 @@ function ReplyPanel({
 
   const replyingToEmail = useMemo((): ReplyingToEmail | undefined => {
     if (composeMode === "reply") {
-      if (draftSource) return prepareDraftReplyEmail(draftSource);
+      if (draftSource)
+        return {
+          ...prepareDraftReplyEmail(draftSource),
+          ...(threadMessages && getThreadAddresses(threadMessages)),
+        };
 
       const reply = prepareReplyingToEmail({
         message,
@@ -1143,10 +1168,24 @@ function ReplyPanel({
       });
       return {
         ...reply,
+        ...(threadMessages &&
+          getThreadAddresses(
+            threadMessages.some((item) => item.id === message.id)
+              ? threadMessages
+              : [message, ...threadMessages],
+          )),
         to: suggestedRecipients?.to ?? reply.to,
         cc: suggestedRecipients?.cc ?? reply.cc,
         bcc: suggestedRecipients?.bcc ?? reply.bcc,
         subject: suggestedRecipients?.subject ?? reply.subject,
+        // Only a rule's action sets these, so the user chose them.
+        ruleRecipients: [
+          suggestedRecipients?.to,
+          suggestedRecipients?.cc,
+          suggestedRecipients?.bcc,
+        ]
+          .filter(Boolean)
+          .join(","),
       };
     }
     return forwardSource
@@ -1158,6 +1197,7 @@ function ReplyPanel({
     draftSource,
     forwardSource,
     replyAnchor,
+    threadMessages,
     replyAll,
     ownEmails,
     suggestedRecipients,
@@ -1431,6 +1471,14 @@ const prepareReplyingToEmail = ({
     cc: recipients.cc,
     bcc: recipients.bcc,
     references: threadOn.headers.references,
+    participants: [
+      message.headers.from,
+      message.headers.to,
+      message.headers.cc,
+      message.headers["reply-to"],
+    ]
+      .filter(Boolean)
+      .join(","),
     draftHtml: "",
     quotedContentHtml: html,
   };

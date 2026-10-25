@@ -92,7 +92,6 @@ export const cleanInboxAction = actionClient
           emailAccountId,
           jobId: job.id,
           action,
-          instructions,
           skips,
           markedDoneLabelId,
           processedLabelId,

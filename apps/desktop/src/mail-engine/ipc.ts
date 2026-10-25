@@ -69,6 +69,11 @@ export async function dispatchMailIpc(engine: MailEngine, payload: unknown) {
         status: "ok" as const,
         result: await engine.getDiagnostics(request.payload.accountId),
       };
+    case "getWaitingSummary":
+      return {
+        status: "ok" as const,
+        result: await engine.getWaitingSummary?.(request.payload.accountIds),
+      };
     case "forgetDeletedDrafts":
       await engine.forgetDeletedDrafts?.(request.payload);
       return { status: "ok" as const, result: null };

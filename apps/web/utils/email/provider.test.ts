@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmailProvider } from "@/utils/email/provider";
+import { ReconnectRequiredError } from "@/utils/error";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import { getGmailClientForEmail } from "@/utils/email-account-client";
 import { assertProviderNotRateLimited } from "@/utils/email/rate-limit";
@@ -98,6 +99,24 @@ describe("createEmailProvider", () => {
     expect(recordEmailAccountProviderIssue).toHaveBeenCalledWith(
       expect.objectContaining({ failedAccessToken: "access-token" }),
     );
+  });
+
+  it("does not warn or record an issue again for an account that needs reconnecting", async () => {
+    const logger = createMockLogger();
+    const reconnectRequired = new ReconnectRequiredError();
+    vi.mocked(getGmailClientForEmail).mockRejectedValueOnce(reconnectRequired);
+
+    await expect(
+      createEmailProvider({
+        emailAccountId: "email-account-1",
+        provider: "google",
+        logger,
+      }),
+    ).rejects.toBe(reconnectRequired);
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(recordEmailAccountProviderIssue).not.toHaveBeenCalled();
   });
 
   it("logs and flushes provider creation failures", async () => {

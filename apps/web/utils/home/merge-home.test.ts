@@ -113,7 +113,12 @@ describe("mergeHomeData", () => {
     ]);
 
     expect(data?.needsYou.map((row) => row.threadId)).toEqual(["a1"]);
-    expect(data?.pending).toEqual(["needsYou", "waiting", "alsoInInbox"]);
+    expect(data?.pending).toEqual([
+      "needsYou",
+      "waiting",
+      "alsoInInbox",
+      "reading",
+    ]);
     expect(failedAccountIds).toEqual([]);
   });
 
@@ -139,7 +144,12 @@ describe("mergeHomeData", () => {
     ]);
 
     expect(data?.needsYou).toEqual([]);
-    expect(data?.failed).toEqual(["needsYou", "waiting", "alsoInInbox"]);
+    expect(data?.failed).toEqual([
+      "needsYou",
+      "waiting",
+      "alsoInInbox",
+      "reading",
+    ]);
     expect(failedAccountIds).toEqual([B.id]);
   });
 
@@ -169,7 +179,7 @@ describe("mergeHomeData", () => {
         alsoInInbox: [thread("a-copy", { rfcMessageId: "<same@mail>" })],
       }),
       loaded(B, {
-        needsYou: [thread("b-copy", { rfcMessageId: "<SAME@mail>" })],
+        needsYou: [thread("b-copy", { rfcMessageId: "<same@mail>" })],
       }),
     ]);
 
@@ -252,7 +262,9 @@ describe("mergeHomeData", () => {
       loaded(A, {
         calendar: {
           connected: true,
+          clearThroughTomorrow: false,
           next: {
+            id: "late",
             title: "Late",
             at: "2026-10-14T15:00:00Z",
             url: undefined,
@@ -273,7 +285,9 @@ describe("mergeHomeData", () => {
       loaded(B, {
         calendar: {
           connected: false,
+          clearThroughTomorrow: false,
           next: {
+            id: "early",
             title: "Early",
             at: "2026-10-14T10:00:00Z",
             url: undefined,
@@ -285,7 +299,9 @@ describe("mergeHomeData", () => {
 
     expect(data?.calendar).toEqual({
       connected: true,
+      clearThroughTomorrow: false,
       next: {
+        id: "early",
         title: "Early",
         at: "2026-10-14T10:00:00Z",
         url: undefined,
@@ -293,6 +309,22 @@ describe("mergeHomeData", () => {
       },
     });
     expect(data?.agentTasks.map((task) => task.account)).toEqual([A]);
+  });
+
+  it("calls the calendar clear only when every account that reads it found it clear", () => {
+    const calendar = (connected: boolean, clearThroughTomorrow: boolean) => ({
+      calendar: { connected, clearThroughTomorrow, next: null },
+    });
+    const clear = (...homes: Partial<GetHomeResponse>[]) =>
+      mergeHomeData([loaded(A, homes[0]), loaded(B, homes[1])]).data?.calendar
+        .clearThroughTomorrow;
+
+    expect(clear(calendar(true, true), calendar(true, true))).toBe(true);
+    // An account with no calendar has nothing to say about it.
+    expect(clear(calendar(true, true), calendar(false, false))).toBe(true);
+    // One account couldn't read it in time, or found a meeting.
+    expect(clear(calendar(true, true), calendar(true, false))).toBe(false);
+    expect(clear(calendar(false, false), calendar(false, false))).toBe(false);
   });
 });
 
@@ -367,12 +399,13 @@ function home(): GetHomeResponse {
     needsYou: [],
     waiting: [],
     alsoInInbox: [],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: stats(),
@@ -387,6 +420,7 @@ function stats(): GetHomeResponse["stats"] {
     waiting: 0,
     needsYouCapped: false,
     waitingCapped: false,
+    readingCapped: false,
   };
 }
 

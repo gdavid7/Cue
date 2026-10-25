@@ -7,6 +7,8 @@ export type ListThread = (ThreadListItem | CombinedListThread) & {
    * placeholder message ids, so this is the one to send to the server.
    */
   latestMessageId?: string;
+  /** That message's Message-ID, on rows built from the local mail. */
+  latestInternetMessageId?: string;
   hasAttachments?: boolean;
 };
 export type ListMessage = ListThread["messages"][number];
@@ -36,7 +38,15 @@ export type ActionableThread = {
   id: string;
   account?: { id: string };
   messageIds?: string[];
-  messages?: Array<{ id: string }>;
+  /** Engine rows' labels carry INBOX while a message is in the inbox. */
+  messages?: Array<{ id: string; labelIds?: string[] }>;
+  /** Whether the row is in the inbox, when known without its labels. */
+  inInbox?: boolean;
+  /**
+   * Copies of the row's message in other accounts, hidden behind it, each
+   * with whether it is in its own inbox when that is known.
+   */
+  copies?: Array<{ accountId: string; threadId: string; inInbox?: boolean }>;
 };
 
 export function getListThreadKey(thread: ActionableThread) {
@@ -54,6 +64,30 @@ export function getListThreadEmailAccountId(
   currentEmailAccountId: string,
 ) {
   return thread.account?.id ?? currentEmailAccountId;
+}
+
+/**
+ * The account a sent reply belongs to. A held send settles after the user may
+ * have opened another thread, so the open thread only counts when it is the
+ * one replied to.
+ */
+export function getRepliedThreadEmailAccountId({
+  repliedThreadId,
+  openSelection,
+  threads,
+  currentEmailAccountId,
+}: {
+  repliedThreadId: string;
+  openSelection: ThreadSelection | null;
+  threads: ActionableThread[];
+  currentEmailAccountId: string;
+}) {
+  if (openSelection?.threadId === repliedThreadId)
+    return openSelection.emailAccountId;
+  const thread = threads.find((item) => item.id === repliedThreadId);
+  return thread
+    ? getListThreadEmailAccountId(thread, currentEmailAccountId)
+    : currentEmailAccountId;
 }
 
 export function getListThreadSelection(

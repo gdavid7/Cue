@@ -106,7 +106,8 @@
       "!sw.js",
       "!.vscode",
       "!.claude",
-      "!prototype"
+      "!prototype",
+      "!**/public/models"
     ]
   },
   "assist": {

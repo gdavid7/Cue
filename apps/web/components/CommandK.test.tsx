@@ -70,7 +70,10 @@ vi.mock("@/hooks/useThread", () => ({
 vi.mock("@/providers/ComposeModalProvider", () => ({
   useComposeModal: () => ({ onOpen: vi.fn() }),
 }));
-vi.mock("@/components/Toast", () => ({ toastError: notifications.error }));
+vi.mock("@/components/Toast", () => ({
+  toastError: notifications.error,
+  toastSuccess: vi.fn(),
+}));
 const palette = vi.hoisted(() => ({
   commands: [] as Command[],
   mailCommands: [] as Command[],
@@ -103,6 +106,18 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/snooze-command-palette", () => ({
   buildSnoozeCommandPalette: () => [],
 }));
 vi.mock("@/lib/commands/fuzzy-search", () => ({ fuzzySearch: () => [] }));
+const quiet = vi.hoisted(() => ({
+  canPause: false,
+  quietUntilMs: null as number | null,
+}));
+vi.mock("@/hooks/useNotificationsQuiet", () => ({
+  useNotificationsQuiet: () => quiet,
+}));
+vi.mock("@/utils/web-push/subscription", () => ({
+  isWebPushAvailable: () => false,
+  syncWebPushQuietUntil: vi.fn(async () => true),
+  syncWebPushSubscription: vi.fn(async () => true),
+}));
 vi.mock("@/hooks/useSnoozeDateParser", () => ({
   useSnoozeDateParser: vi.fn(() => null),
 }));
@@ -358,5 +373,38 @@ describe("CommandK across accounts", () => {
     const navigation = screen.getByRole("group", { name: "Navigation" });
     expect(within(navigation).getByText("Go to Rules")).toBeTruthy();
     expect(within(navigation).getByText("a@example.com")).toBeTruthy();
+  });
+});
+
+describe("CommandK pausing notifications", () => {
+  afterEach(() => {
+    cleanup();
+    quiet.canPause = false;
+    quiet.quietUntilMs = null;
+  });
+
+  it("offers a pause only where this browser notifies", () => {
+    displayedEmail.threadId = null;
+    render(<CommandK />);
+    expect(screen.queryByText("Pause notifications…")).toBeNull();
+    cleanup();
+
+    quiet.canPause = true;
+    render(<CommandK />);
+    const settings = screen.getByRole("group", { name: "Settings" });
+    expect(within(settings).getByText("Pause notifications…")).toBeTruthy();
+  });
+
+  it("offers to resume, saying until when, while paused", () => {
+    displayedEmail.threadId = null;
+    quiet.canPause = true;
+    quiet.quietUntilMs = Date.now() + 60 * 60 * 1000;
+
+    render(<CommandK />);
+
+    const settings = screen.getByRole("group", { name: "Settings" });
+    expect(within(settings).getByText("Resume notifications")).toBeTruthy();
+    expect(within(settings).getByText(/^Paused until /)).toBeTruthy();
+    expect(within(settings).queryByText("Pause notifications…")).toBeNull();
   });
 });

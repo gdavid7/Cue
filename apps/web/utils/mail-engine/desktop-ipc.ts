@@ -28,6 +28,7 @@ export function createDesktopIpcMailClient(input?: {
   }
   const client = createMailIpcClient(invoke, {
     provider: input?.provider,
+    capabilities: desktop.mailEngineCapabilities,
     push: { subscribe, unsubscribe, onSnapshot },
   });
   const originalRequestSync = client.requestSync.bind(client);

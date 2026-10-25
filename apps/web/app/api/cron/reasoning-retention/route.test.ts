@@ -5,6 +5,7 @@ const {
   captureExceptionMock,
   enforceRetentionMock,
   enforceDraftSentTextRetentionMock,
+  deleteAbandonedListingsMock,
 } = vi.hoisted(() => ({
   envMock: {
     CRON_SECRET: "cron-secret",
@@ -14,6 +15,13 @@ const {
   captureExceptionMock: vi.fn(),
   enforceRetentionMock: vi.fn(),
   enforceDraftSentTextRetentionMock: vi.fn(),
+  deleteAbandonedListingsMock: vi.fn(),
+}));
+
+vi.mock("@/utils/mail-bulk/job-listing", () => ({
+  mailBulkJobListings: {
+    deleteAbandoned: () => deleteAbandonedListingsMock(),
+  },
 }));
 
 vi.mock("@/env", () => ({
@@ -54,6 +62,7 @@ describe("reasoning retention cron route", () => {
     enforceDraftSentTextRetentionMock.mockResolvedValue({
       draftSendLogs: 4,
     });
+    deleteAbandonedListingsMock.mockResolvedValue(2);
   });
 
   it("rejects GET requests without the cron bearer token", async () => {
@@ -84,6 +93,7 @@ describe("reasoning retention cron route", () => {
       draftSentText: {
         draftSendLogs: 4,
       },
+      mailBulkJobListings: 2,
     });
     expect(enforceRetentionMock).toHaveBeenCalledWith({
       days: 30,
@@ -128,6 +138,7 @@ describe("reasoning retention cron route", () => {
       draftSentText: {
         draftSendLogs: 4,
       },
+      mailBulkJobListings: 2,
     });
     expect(enforceRetentionMock).toHaveBeenCalledWith({
       days: 30,

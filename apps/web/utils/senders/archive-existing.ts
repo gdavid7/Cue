@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import { after } from "next/server";
 import prisma from "@/utils/prisma";
 import type { EmailProvider } from "@/utils/email/types";
 import { resumeAfterGmailDeferral } from "@/utils/gmail/deferred-resume";
+import { getGmailCallDeferredError } from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 
 /** Inbox messages at or under this count are archived in the request. */
@@ -69,6 +69,7 @@ export async function runQueuedSenderArchive({
   emailProvider,
   senderEmail,
   ownerEmail,
+  newsletterId,
   logger,
   startedAt,
   deferrals,
@@ -77,6 +78,8 @@ export async function runQueuedSenderArchive({
   emailProvider: EmailProvider;
   senderEmail: string;
   ownerEmail: string;
+  /** The sender's row, when the caller already has it. */
+  newsletterId?: string;
   logger: Logger;
   /** When the first run of this archive started. */
   startedAt: number;
@@ -89,31 +92,52 @@ export async function runQueuedSenderArchive({
       emailAccountId,
     );
   } catch (error) {
-    const resume = await resumeAfterGmailDeferral({
+    if (!getGmailCallDeferredError(error)) {
+      logger.error("Failed to archive existing sender mail", { error });
+      return;
+    }
+
+    // The resume names the sender by its row so the queue never holds the
+    // sender's or the owner's address (founder rule R-1).
+    let senderId = newsletterId;
+    if (!senderId) {
+      try {
+        const sender = await prisma.newsletter.findFirst({
+          where: {
+            emailAccountId,
+            email: { equals: senderEmail, mode: "insensitive" },
+          },
+          select: { id: true },
+        });
+        senderId = sender?.id;
+      } catch (lookupError) {
+        logger.error(
+          "Failed to look up the sender to resume archiving existing mail",
+          { error: lookupError },
+        );
+        return;
+      }
+    }
+    if (!senderId) {
+      logger.warn(
+        "Deferred archiving existing sender mail and found no sender row to resume it by",
+      );
+      return;
+    }
+
+    await resumeAfterGmailDeferral({
       error,
       path: ARCHIVE_EXISTING_RESUME_PATH,
       body: {
         emailAccountId,
         provider: emailProvider.name,
-        senderEmail,
-        ownerEmail,
+        newsletterId: senderId,
         startedAt,
       },
       deferrals,
-      // QStash shows deduplication ids, so the sender's address is hashed.
-      jobKey: `archive-existing-${emailAccountId}-${hashSender(senderEmail)}-${startedAt}`,
+      jobKey: `archive-existing-${emailAccountId}-${senderId}-${startedAt}`,
       job: "archiving existing sender mail",
       logger,
     });
-    if (resume === "not-deferred") {
-      logger.error("Failed to archive existing sender mail", { error });
-    }
   }
-}
-
-function hashSender(senderEmail: string) {
-  return createHash("sha256")
-    .update(senderEmail.toLowerCase())
-    .digest("hex")
-    .slice(0, 16);
 }

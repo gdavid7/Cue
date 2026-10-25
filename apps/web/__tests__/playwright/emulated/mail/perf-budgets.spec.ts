@@ -289,6 +289,8 @@ test("Today, Rules, Settings and chat are ready quickly", async ({
         ["today", "Today", "home", "^Good (morning|afternoon|evening)"],
         ["rules", "Rules", "automation", "^Rules$"],
       ] as const) {
+        // The first visit has no saved Today to open on; later ones do.
+        const inboxRows = `today-${run === 0 ? "first" : "saved"}-inbox-rows`;
         if (viaLink) {
           await armInteraction(page);
           await page.getByRole("link", { name: link, exact: true }).click();
@@ -296,6 +298,11 @@ test("Today, Rules, Settings and chat are ready quickly", async ({
             flow,
             await timeSinceInput(page, headingMatches, heading),
           );
+          if (flow === "today")
+            recorder.add(
+              inboxRows,
+              await timeSinceInput(page, alsoInInboxRowVisible, undefined),
+            );
         } else {
           await page.goto(`/${emailAccountId}/${path}`, {
             waitUntil: "commit",
@@ -304,6 +311,11 @@ test("Today, Rules, Settings and chat are ready quickly", async ({
             `${flow}-load`,
             await timeSinceNavigation(page, headingMatches, heading),
           );
+          if (flow === "today")
+            recorder.add(
+              `${inboxRows}-load`,
+              await timeSinceNavigation(page, alsoInInboxRowVisible, undefined),
+            );
         }
       }
 
@@ -847,6 +859,15 @@ async function insertNewMail(subject: string) {
     },
   );
   expect(response.ok).toBe(true);
+}
+
+function alsoInInboxRowVisible() {
+  for (const row of document.querySelectorAll(
+    '[role="listbox"][aria-label="Also in your inbox"] [role="option"]',
+  )) {
+    if (row.getBoundingClientRect().height > 0) return performance.now();
+  }
+  return false;
 }
 
 function firstEngineRowVisible() {

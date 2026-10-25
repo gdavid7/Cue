@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { MailSplitFilterKind } from "@/generated/prisma/enums";
 import type { Account } from "better-auth";
 import { setSessionCookie } from "better-auth/cookies";
@@ -11,6 +11,7 @@ import { fetchGoogleOpenIdProfile } from "@/utils/gmail/oauth";
 import { ensureEmailAccountsWatched } from "@/utils/email/watch-manager";
 import { connectCalendarAtSignIn } from "@/utils/calendar/connect-sign-in-calendar";
 import {
+  auth,
   betterAuthConfig,
   handleLinkAccount,
   handleReferralOnSignUp,
@@ -19,6 +20,10 @@ import prisma from "@/utils/__mocks__/prisma";
 import { ACCOUNT_LINKING } from "@/utils/auth/account-linking";
 import { clearAccountDisconnectedErrorIfResolved } from "@/utils/error-messages";
 import { expectReplyTrackingOn } from "@/__tests__/helpers";
+import {
+  signedInBetterAuth,
+  TEST_AUTH_ORIGIN,
+} from "@/__tests__/better-auth-session";
 import { recordFirstSignIn } from "@/utils/analytics/activation";
 import { updateAccountSeats } from "@/utils/premium/seats";
 import { shareChannelsAcrossMailboxes } from "@/utils/messaging/shared-channels";
@@ -208,6 +213,119 @@ describe("betterAuthConfig", () => {
         }),
       ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("session revocation", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("checks the database when asked to bypass the cookie cache", async () => {
+    const getSession = vi.mocked(betterAuthConfig.api.getSession);
+    getSession.mockResolvedValue(null);
+    const requestHeaders = new Headers();
+
+    await auth(requestHeaders, { disableCookieCache: true });
+    expect(getSession).toHaveBeenLastCalledWith({
+      headers: requestHeaders,
+      query: { disableCookieCache: true },
+    });
+
+    await auth(requestHeaders);
+    expect(getSession).toHaveBeenLastCalledWith({
+      headers: requestHeaders,
+      query: { disableCookieCache: false },
+    });
+
+    await auth(requestHeaders, {
+      disableCookieCache: true,
+      disableRefresh: true,
+    });
+    expect(getSession).toHaveBeenLastCalledWith({
+      headers: requestHeaders,
+      query: { disableCookieCache: true, disableRefresh: true },
+    });
+  });
+
+  it("rejects a revoked session at once without the cookie cache and within a minute with it", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date"],
+      now: new Date("2026-01-01T00:00:00Z"),
+    });
+    const {
+      auth: realAuth,
+      cookie,
+      token,
+    } = await signedInWithConfiguredSession();
+    const context = await realAuth.$context;
+
+    await context.internalAdapter.deleteSession(token);
+
+    const cached = () =>
+      realAuth.api.getSession({ headers: new Headers({ cookie }) });
+    const uncached = () =>
+      realAuth.api.getSession({
+        headers: new Headers({ cookie }),
+        query: { disableCookieCache: true },
+      });
+
+    expect(await uncached()).toBeNull();
+    // The residual window: a copied cache cookie still reads as signed in.
+    vi.setSystemTime(new Date("2026-01-01T00:00:59Z"));
+    expect(await cached()).not.toBeNull();
+    vi.setSystemTime(new Date("2026-01-01T00:01:01Z"));
+    expect(await cached()).toBeNull();
+  });
+
+  it("reads the session from the database without writing a cookie when refresh is off", async () => {
+    const { auth: realAuth, cookie } = await signedInWithConfiguredSession();
+    const read = (query: Record<string, boolean>) =>
+      realAuth.api.getSession({
+        headers: new Headers({ cookie }),
+        query,
+        returnHeaders: true,
+      });
+
+    // Next.js re-renders the page for any action that sets a cookie.
+    const refreshing = await read({ disableCookieCache: true });
+    expect(refreshing.headers.getSetCookie()).not.toHaveLength(0);
+
+    const readOnly = await read({
+      disableCookieCache: true,
+      disableRefresh: true,
+    });
+    expect(readOnly.response?.user).toBeDefined();
+    expect(readOnly.headers.getSetCookie()).toHaveLength(0);
+  });
+
+  it("clears the cache cookie on sign-out", async () => {
+    const {
+      auth: realAuth,
+      cookie,
+      token,
+    } = await signedInWithConfiguredSession();
+    const response = await realAuth.handler(
+      new Request(`${TEST_AUTH_ORIGIN}/api/auth/sign-out`, {
+        method: "POST",
+        headers: { cookie, origin: TEST_AUTH_ORIGIN },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    for (const name of ["session_token", "session_data"]) {
+      expect(
+        response.headers
+          .getSetCookie()
+          .some(
+            (setCookie) =>
+              setCookie.startsWith(`better-auth.${name}=`) &&
+              setCookie.includes("Max-Age=0"),
+          ),
+      ).toBe(true);
+    }
+    const context = await realAuth.$context;
+    expect(await context.internalAdapter.findSession(token)).toBeNull();
   });
 });
 
@@ -940,4 +1058,10 @@ function mockNewGoogleMailbox() {
     { id: "email_account_1" },
     { id: "account_1" },
   ] as never);
+}
+
+function signedInWithConfiguredSession() {
+  return signedInBetterAuth({
+    session: (betterAuthConfig as any).options.session,
+  });
 }

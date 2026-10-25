@@ -8,13 +8,15 @@ import { findIntegration } from "@/utils/mcp/integrations";
 import { connectionExecutor } from "@/utils/mcp/provider-connection";
 import { getIntegrationProvider } from "@/utils/mcp/providers/registry";
 import { onePerIntegration } from "@/utils/mcp/user-connections";
-import {
-  onePerExternalAccount,
-  ownedBySameUser,
-} from "@/utils/user/owned-by-same-user";
+import { ownedBySameUser } from "@/utils/user/owned-by-same-user";
 import prisma from "@/utils/prisma";
-import { calendarConnectionsWhere } from "@/utils/calendar/connections";
-import { NEXT_UP_SHOWN, sortByDue } from "@/utils/home/today-constants";
+import {
+  buildSelfAddresses,
+  getCalendarAccounts,
+  isMeetingForUser,
+  shouldLabelCalendars,
+} from "@/utils/calendar/meeting-rules";
+import { sortByDue } from "@/utils/home/today-constants";
 import { redis } from "@/utils/redis";
 import {
   isAppServerError,
@@ -32,6 +34,9 @@ const SOURCE_TIMEOUT_MS = 2500;
 // Comfortably longer than connecting a calendar after sign-in takes.
 const SIGN_IN_CALENDAR_GRACE_MS = 2 * 60 * 1000;
 const DEADLINE_PAUSE_SECONDS = 5 * 60;
+// An app that keeps timing out is asked about less and less often.
+const TIMEOUT_PAUSE_MINUTES = [5, 15, 60];
+const TIMEOUT_COUNT_SECONDS = 24 * 60 * 60;
 const TASK_LIST_CACHE_SECONDS = 7 * 24 * 60 * 60;
 const EVENING_HOUR = 17;
 const SUGGESTION_WINDOW_DAYS = 30;
@@ -84,9 +89,11 @@ const DEADLINE_SOURCES: Record<
 };
 
 /**
- * What's next for the user: their next meeting, and the next few meetings and
- * deadlines from connected apps, soonest first. Every source is optional and
- * bounded by a short timeout, so Today never waits on one.
+ * What's next for the user from their calendars: their next meeting, and the
+ * next few, soonest first. Work due in connected apps isn't asked for here:
+ * an app can take seconds, so the browser loads it after Today with
+ * `getDeadlines` and merges it in. Every source is optional and bounded by a
+ * short timeout, so Today never waits on one.
  */
 export async function getNextUp({
   emailAccountId,
@@ -105,53 +112,51 @@ export async function getNextUp({
   const today = startOfDay(new TZDate(now, timeZone));
   const dayAfter = addDays(today, 2);
 
-  const [calendar, deadlines, calendarAccounts, addresses] = await Promise.all([
-    upcomingEvents({ emailAccountId, now, until: dayAfter, logger }),
-    getDeadlines({
+  const calendarAccountsRead = getCalendarAccounts(emailAccountId);
+  const selfRead = Promise.all([ownAddresses, calendarAccountsRead]).then(
+    ([addresses, calendarAccounts]) =>
+      buildSelfAddresses({ ownAddresses: addresses, calendarAccounts }),
+  );
+  const [calendar, deadlineApps, calendarAccounts, self] = await Promise.all([
+    upcomingEvents({
       emailAccountId,
       now,
-      windowEnd: addDays(today, DEADLINE_WINDOW_DAYS + 1),
-      timeZone,
+      until: dayAfter,
+      selfAddresses: selfRead,
       logger,
     }),
-    prisma.calendarConnection.findMany({
-      where: calendarConnectionsWhere(emailAccountId),
-      select: { id: true, provider: true, email: true, isConnected: true },
-    }),
-    ownAddresses,
+    deadlineConnections({ emailAccountId, logger }),
+    calendarAccountsRead,
+    selfRead,
   ]);
-  const suggestion = deadlines.connected
-    ? null
-    : await connectSuggestion({ emailAccountId, now, logger });
+  // Unknown isn't "none": don't suggest connecting what may be connected.
+  const suggestion =
+    !deadlineApps || deadlineApps.length > 0
+      ? null
+      : await connectSuggestion({ emailAccountId, now, logger });
 
-  // Events come from all of the person's calendars, so a decline by any of
-  // their connected addresses or the calendars' own addresses counts.
-  const self = new Set(
-    [...addresses, ...calendarAccounts.map((account) => account.email)].map(
-      (email) => email.toLowerCase(),
-    ),
-  );
-  const events = calendar.events.filter(
+  const meetings = calendar.events.filter(
     (event) =>
-      !event.allDay &&
-      event.startTime > now &&
-      !event.attendees.some(
-        (a) => a.declined && self.has(a.email.toLowerCase()),
-      ),
+      isMeetingForUser(event, self) &&
+      event.endTime > now &&
+      event.startTime < dayAfter,
   );
-  // With two calendar accounts, each meeting says whose calendar it is on. A
-  // disconnected one, or one connected from two mailboxes, is no second source.
-  const labelCalendars =
-    onePerExternalAccount(
-      calendarAccounts.filter((account) => account.isConnected),
-    ).length > 1;
+  const labelCalendars = shouldLabelCalendars(calendarAccounts);
+  const events = meetings.filter((event) => event.startTime > now);
   const next = pickNextEvent(events, { now, today, timeZone });
 
   return {
     calendar: {
       connected: calendar.connected,
+      /**
+       * Every connected calendar was read in full through tomorrow and has
+       * no meetings left in that time. A slow or failed read is never clear.
+       */
+      clearThroughTomorrow:
+        calendar.connected && calendar.complete && meetings.length === 0,
       next: next
         ? {
+            id: next.event.id,
             title: next.event.title,
             at: next.event.startTime.toISOString(),
             url: next.event.eventUrl,
@@ -159,12 +164,11 @@ export async function getNextUp({
           }
         : null,
     },
-    nextUp: sortByDue([
-      ...events
+    nextUp: sortByDue(
+      events
         .slice(0, EVENTS_SHOWN)
         .map((event) => eventItem(event, labelCalendars)),
-      ...deadlines.items,
-    ]).slice(0, NEXT_UP_SHOWN),
+    ),
     suggestion,
   };
 }
@@ -173,13 +177,20 @@ async function upcomingEvents({
   emailAccountId,
   now,
   until,
+  selfAddresses,
   logger,
 }: {
   emailAccountId: string;
   now: Date;
   until: Date;
+  selfAddresses: Promise<ReadonlySet<string>>;
   logger: Logger;
-}): Promise<{ connected: boolean; events: CalendarEvent[] }> {
+}): Promise<{
+  connected: boolean;
+  /** Every connected calendar answered in time, with nothing left out. */
+  complete: boolean;
+  events: CalendarEvent[];
+}> {
   try {
     const result = await withTimeout(
       fetchCalendarEventsInWindow({
@@ -187,6 +198,7 @@ async function upcomingEvents({
         timeMin: now,
         timeMax: until,
         maxResultsPerProvider: 20,
+        selfAddresses,
         logger,
       }),
       CALENDAR_TIMEOUT_MS,
@@ -197,12 +209,16 @@ async function upcomingEvents({
       result.noCalendarConnected &&
       (await isNewMailbox({ emailAccountId, now }))
     )
-      return { connected: true, events: [] };
-    return { connected: !result.noCalendarConnected, events: result.events };
+      return { connected: true, complete: false, events: [] };
+    return {
+      connected: !result.noCalendarConnected,
+      complete: result.complete,
+      events: result.events,
+    };
   } catch (error) {
     // Unknown isn't "not connected": don't ask a connected user to connect.
     logger.warn("Failed to fetch calendar events for Today", { error });
-    return { connected: true, events: [] };
+    return { connected: true, complete: false, events: [] };
   }
 }
 
@@ -224,45 +240,28 @@ async function isNewMailbox({
 }
 
 /**
- * Work due soon in the user's connected apps. Each app is cached for a few
- * minutes; one that's slow is left out of this answer but still fills the
- * cache when it finishes, so the next visit has it.
+ * Work due in the next week in the user's connected apps, soonest first, for
+ * Next up. An app that is slow or down is left out and paused for a while,
+ * longer each time it times out, so later visits don't wait on it. Nothing
+ * here is cached on the server: the items name the user's own tasks (RD-3).
  */
-async function getDeadlines({
+export async function getDeadlines({
   emailAccountId,
-  now,
-  windowEnd,
   timeZone,
   logger,
+  now,
 }: {
   emailAccountId: string;
-  now: Date;
-  windowEnd: Date;
   timeZone: string;
   logger: Logger;
-}): Promise<{ connected: boolean; items: NextUpItem[] }> {
-  const connections = await prisma.mcpConnection
-    .findMany({
-      where: {
-        isActive: true,
-        integration: { name: { in: Object.keys(DEADLINE_SOURCES) } },
-        ...ownedBySameUser(emailAccountId),
-      },
-      select: {
-        id: true,
-        needsReconnectAt: true,
-        emailAccountId: true,
-        emailAccount: { select: { email: true } },
-        integration: { select: { name: true } },
-      },
-      orderBy: { createdAt: "asc" },
-    })
-    .catch((error) => {
-      logger.warn("Failed to load connected apps for Today", { error });
-      return null;
-    });
-  // Unknown isn't "none": don't suggest connecting what may be connected.
-  if (!connections) return { connected: true, items: [] };
+  now: Date;
+}): Promise<{ items: NextUpItem[] }> {
+  const windowEnd = addDays(
+    startOfDay(new TZDate(now, timeZone)),
+    DEADLINE_WINDOW_DAYS + 1,
+  );
+  const connections = await deadlineConnections({ emailAccountId, logger });
+  if (!connections) return { items: [] };
 
   const results = await Promise.all(
     onePerIntegration(connections, emailAccountId).map(async (connection) => {
@@ -289,10 +288,11 @@ async function getDeadlines({
       const pausedKey = `home-deadlines-paused:${app}:${accountId}`;
       if (await redis.get(pausedKey).catch(() => null)) return [];
 
-      const skipForAWhile = () =>
-        redis
-          .set(pausedKey, "1", { ex: DEADLINE_PAUSE_SECONDS })
-          .catch(() => null);
+      const skipForAWhile = (seconds = DEADLINE_PAUSE_SECONDS) =>
+        redis.set(pausedKey, "1", { ex: seconds }).catch(() => null);
+
+      // Counts only, no content (R-1): timeouts in a row for this app.
+      const timeoutsKey = `home-deadlines-timeouts:${app}:${accountId}`;
 
       const fetching = source
         .fetch(execute, {
@@ -309,12 +309,30 @@ async function getDeadlines({
           throw error;
         });
       try {
-        return inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
+        const items = inWindow(await withTimeout(fetching, SOURCE_TIMEOUT_MS));
+        await redis.del(timeoutsKey).catch(() => null);
+        return items;
       } catch (error) {
         if (error instanceof TimeoutError) {
-          logger.warn("Connected app timed out", { app });
-          // A slow app is as slow on the next visit.
-          await skipForAWhile();
+          // A slow app is as slow on the next visit, and stays slow longer
+          // each time it times out.
+          const attempts = await redis
+            .incr(timeoutsKey)
+            .then(async (count) => {
+              await redis.expire(timeoutsKey, TIMEOUT_COUNT_SECONDS);
+              return count;
+            })
+            .catch(() => 1);
+          const pauseMinutes =
+            TIMEOUT_PAUSE_MINUTES[
+              Math.min(attempts, TIMEOUT_PAUSE_MINUTES.length) - 1
+            ];
+          logger.warn("Connected app timed out", {
+            app,
+            attempts,
+            pauseMinutes,
+          });
+          await skipForAWhile(pauseMinutes * 60);
         } else if (isAppServerError(error)) {
           logger.trace("Connected app down for deadlines", { app });
         } else {
@@ -324,7 +342,37 @@ async function getDeadlines({
       }
     }),
   );
-  return { connected: connections.length > 0, items: results.flat() };
+  return { items: sortByDue(results.flat()) };
+}
+
+/** The user's connected apps that have due dates; null when unknown. */
+function deadlineConnections({
+  emailAccountId,
+  logger,
+}: {
+  emailAccountId: string;
+  logger: Logger;
+}) {
+  return prisma.mcpConnection
+    .findMany({
+      where: {
+        isActive: true,
+        integration: { name: { in: Object.keys(DEADLINE_SOURCES) } },
+        ...ownedBySameUser(emailAccountId),
+      },
+      select: {
+        id: true,
+        needsReconnectAt: true,
+        emailAccountId: true,
+        emailAccount: { select: { email: true } },
+        integration: { select: { name: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    })
+    .catch((error) => {
+      logger.warn("Failed to load connected apps for Today", { error });
+      return null;
+    });
 }
 
 /**

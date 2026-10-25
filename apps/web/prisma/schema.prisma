@@ -75,6 +75,11 @@ model User {
   completedOnboardingAt   DateTime? // questions about the user. e.g. their role
   onboardingAnswers       Json?
   lastLogin               DateTime?
+  // lastLogin as it was before the user's latest return after a break, and
+  // when that return was: Today's "While you were away" counts what Cue did
+  // in between. Both cleared on dismiss.
+  previousVisitAt         DateTime?
+  visitReturnedAt         DateTime?
   utms                    Json?
   errorMessages           Json? // eg. user set incorrect AI API key
   announcementDismissedAt DateTime?
@@ -245,6 +250,7 @@ model EmailAccount {
   snippets             Snippet[]
   replyMemories        ReplyMemory[]
   suggestedReplyDrafts SuggestedReplyDraft[]
+  composeAssistReplies ComposeAssistReply[]
   chats                Chat[]
   chatMemories         ChatMemory[]
   digests              Digest[]
@@ -276,12 +282,30 @@ model EmailAccount {
   classificationFeedback ClassificationFeedback[]
   mailSplits             MailSplit[]
   webPushDeliveries      WebPushDelivery[]
+  mailBulkJobListings    MailBulkJobListing[]
 
   @@index([userId])
   @@index([lastSummaryEmailAt])
   @@index([lastInboxHealthEmailAt])
   @@index([watchEmailsSubscriptionId])
   @@index([watchEmailsSubscriptionHistory(ops: JsonbPathOps)], type: Gin)
+}
+
+// What a bulk mail job is still listing: the view it acts on and the page it reads
+// next. Kept here rather than in the job's queue payload or Redis state, because the
+// view can hold the user's search text and an Outlook page link repeats it. Removed
+// once the listing ends.
+model MailBulkJobListing {
+  jobId     String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  scope     Json
+  pageToken String?
+
+  emailAccountId String
+  emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@index([emailAccountId, createdAt])
 }
 
 // A saved filter shown as a tab above the mail list. `values` holds one or more label
@@ -1007,6 +1031,7 @@ model ScheduledEmail {
   @@index([reminderStatus, remindAt])
   @@index([reminderStatus, reminderStartedAt])
   @@index([emailAccountId, threadId])
+  @@index([emailAccountId, status, sentAt])
 }
 
 enum ScheduledEmailStatus {
@@ -1433,12 +1458,15 @@ model DraftSendLog {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
 
-  // Exactly one is set (DB check constraint): the draft came from a rule or
-  // from a suggested reply the user saved.
+  // Exactly one is set (DB check constraint): the draft came from a rule,
+  // from a suggested reply the user saved, or from Cue's suggestions in the
+  // composer.
   executedActionId      String?              @unique
   executedAction        ExecutedAction?      @relation(fields: [executedActionId], references: [id], onDelete: Cascade)
   suggestedReplyDraftId String?              @unique
   suggestedReplyDraft   SuggestedReplyDraft? @relation(fields: [suggestedReplyDraftId], references: [id], onDelete: Cascade)
+  composeAssistReplyId  String?              @unique
+  composeAssistReply    ComposeAssistReply?  @relation(fields: [composeAssistReplyId], references: [id], onDelete: Cascade)
 
   sentMessageId           String
   similarityScore         Float // Similarity score (0.0 to 1.0) between original draft and sent message
@@ -1448,6 +1476,9 @@ model DraftSendLog {
   sentText                String?
   replyMemorySentText     String?
   replyMemoryAttemptCount Int                 @default(0)
+  // When a sync took this log to learn from; a newer claim waits until
+  // this one is done or stale.
+  replyMemoryClaimedAt    DateTime?
   replyMemoryProcessedAt  DateTime?
   replyMemorySources      ReplyMemorySource[]
 
@@ -1477,6 +1508,24 @@ model SuggestedReplyDraft {
 
   @@unique([emailAccountId, draftId])
   @@index([emailAccountId, threadId])
+}
+
+// Cue's suggestions in a reply's composer and what the user did with each, so
+// the sent reply teaches reply memories what they kept, changed or turned down.
+model ComposeAssistReply {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  threadId  String
+  messageId String // The message the reply answers
+  outcomes  Json // composeAssistOutcome[] (utils/actions/compose-assist.validation.ts), oldest first
+
+  emailAccountId String
+  emailAccount   EmailAccount  @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  draftSendLog   DraftSendLog?
+
+  @@index([emailAccountId, threadId, updatedAt])
 }
 
 model Chat {
@@ -2214,6 +2263,8 @@ model WebPushSubscription {
   lastSuccessAt DateTime?
   // Consecutive failed sends that weren't the push service saying it's gone.
   failureCount  Int         @default(0)
+  // A pause set on this browser: nothing is pushed to it before this time.
+  quietUntil    DateTime?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

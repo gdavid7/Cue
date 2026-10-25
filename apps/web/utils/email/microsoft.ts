@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
 import {
@@ -1676,8 +1677,9 @@ export class OutlookProvider implements EmailProvider {
   async getThreadsWithParticipant(options: {
     participantEmail: string;
     maxThreads?: number;
+    excludeThreadId?: string;
   }): Promise<EmailThread[]> {
-    const { participantEmail, maxThreads = 5 } = options;
+    const { participantEmail, maxThreads = 5, excludeThreadId } = options;
     const maxSearchResults = Math.min(20, Math.max(10, maxThreads * 4));
 
     // IMPORTANT:
@@ -1701,7 +1703,9 @@ export class OutlookProvider implements EmailProvider {
     const relevant = filterMessagesForParticipant(messages, participantLower);
 
     // Extract unique conversationIds (thread IDs) from parsed messages
-    const conversationIds = getUniqueThreadIds(relevant, maxThreads);
+    const conversationIds = getUniqueThreadIds(relevant, maxThreads).filter(
+      (id) => id !== excludeThreadId,
+    );
 
     this.logger.info("Outlook participant search completed", {
       rawMessageCount: messages.length,
@@ -2608,6 +2612,27 @@ export class OutlookProvider implements EmailProvider {
     });
   }
 
+  async moveMessagesToFolder(
+    messageIds: string[],
+    folderId: string,
+  ): Promise<void> {
+    // A move to a missing folder fails with the same 404 as a missing
+    // message, which the move skips, so the folder is checked once up front.
+    try {
+      await this.client
+        .getClient()
+        .api(`/me/mailFolders/${folderId}`)
+        .select("id")
+        .get();
+    } catch (error) {
+      if (extractErrorInfo(error).status === 404) {
+        throw new ProviderChangeRejectedError("folder_not_found");
+      }
+      throw error;
+    }
+    await this.moveMessageSnapshots(messageIds, folderId);
+  }
+
   async archiveMessage(messageId: string): Promise<void> {
     try {
       await this.client.getClient().api(`/me/messages/${messageId}/move`).post({
@@ -2685,7 +2710,7 @@ export class OutlookProvider implements EmailProvider {
 
   private async moveMessageSnapshots(
     messageIds: string[],
-    destinationId: "archive" | "deleteditems" | "inbox",
+    destinationId: string,
   ) {
     await mapWithConcurrency([...new Set(messageIds)], 4, async (messageId) => {
       try {
@@ -2833,6 +2858,47 @@ export class OutlookProvider implements EmailProvider {
       });
       return [];
     }
+  }
+
+  async listUnreadInboxThreadIds({
+    after,
+    maxResults,
+  }: {
+    after: Date;
+    maxResults: number;
+  }): Promise<{ threadIds: string[]; full: boolean }> {
+    const response: {
+      value?: { conversationId?: string | null }[];
+      "@odata.nextLink"?: string;
+    } = await withMicrosoftGraphRetry(
+      () =>
+        this.client
+          .getClient()
+          .api("/me/mailFolders/inbox/messages")
+          .select("conversationId")
+          // Graph wants the ordered property first in the filter.
+          .filter(
+            `receivedDateTime ge ${after.toISOString()} and isRead eq false`,
+          )
+          .orderby("receivedDateTime desc")
+          .top(maxResults)
+          .get(),
+      this.logger,
+    );
+    const messages = response.value ?? [];
+    return {
+      // Messages, not conversations, are listed, so a page holding fewer
+      // conversations than it asked for can still be full.
+      threadIds: [
+        ...new Set(
+          messages.flatMap((message) =>
+            message.conversationId ? [message.conversationId] : [],
+          ),
+        ),
+      ],
+      full:
+        Boolean(response["@odata.nextLink"]) || messages.length >= maxResults,
+    };
   }
 
   async getInboxStats(): Promise<{ total: number; unread: number }> {

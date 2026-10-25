@@ -121,16 +121,19 @@ test("Today across a Gmail and an Outlook account names each one's mail, drafts 
   }
 
   // With a Gmail and an Outlook calendar connected, a meeting says whose
-  // calendar it's on.
-  const nextUp = page.getByRole("region", { name: "Next up" });
-  await expect(nextUp.getByText(`Calendar · ${gmail.email}`)).toBeVisible({
-    timeout: 90_000,
-  });
+  // calendar it's on: on the Your day strip when it's today, in Next up
+  // when the seeded time falls tomorrow.
+  const meetings = page
+    .getByRole("main")
+    .getByRole("region", { name: /^(Your day|Next up)$/ });
   await expect(
-    nextUp
+    meetings.getByText(gmail.email, { exact: false }).first(),
+  ).toBeVisible({ timeout: 90_000 });
+  await expect(
+    meetings
       .getByRole("listitem")
       .filter({ hasText: "Outlook design review" })
-      .getByText(`Calendar · ${outlook.email}`),
+      .getByText(outlook.email, { exact: false }),
   ).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "today-mixed-desktop");
 

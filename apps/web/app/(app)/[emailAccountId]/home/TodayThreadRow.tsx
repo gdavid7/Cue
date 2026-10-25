@@ -57,6 +57,7 @@ export function TodayThreadRow({
   layout,
   isFocused,
   waiting,
+  note,
   correction,
   handlers,
 }: {
@@ -71,6 +72,8 @@ export function TodayThreadRow({
   isFocused: boolean;
   /** Show how long the user has been waiting in place of the date. */
   waiting?: boolean;
+  /** A line under the row saying why it is here, as an inbox insight does. */
+  note?: string;
   correction?: TodayRowCorrection;
   handlers: TodayRowHandlers;
 }) {
@@ -85,6 +88,7 @@ export function TodayThreadRow({
             <AccountMarker
               account={thread.account}
               colorClassName={accountColorClassName}
+              inInbox
             />
           ) : null
         }
@@ -220,6 +224,8 @@ export function TodayThreadRow({
         insight={
           thread.cueDrafted ? (
             <InsightText line={{ tone: "ready", parts: [CUE_DRAFTED_REPLY] }} />
+          ) : note ? (
+            <InsightText line={{ tone: "info", parts: [note] }} />
           ) : null
         }
         isDraft={false}

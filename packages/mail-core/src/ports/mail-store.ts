@@ -34,9 +34,19 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  FileSender,
+  FilesPage,
+  FilesQuery,
+  NeverReadSender,
+  NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
+  WaitingOnYouConversation,
+  WaitingOnYouQuery,
+  SenderHistory,
+  SenderHistoryQuery,
   QuerySnapshot,
+  SemanticMatch,
 } from "../queries";
 import type {
   BodyObservation,
@@ -44,6 +54,11 @@ import type {
   ProviderChange,
   SyncPage,
 } from "../sync";
+import type { MailWaitingSummary } from "../engine";
+import type {
+  ImportantPerson,
+  SetImportantPersonInput,
+} from "../important-people";
 import type { MessageAttachmentDescriptor, MessageMetadata } from "../messages";
 
 export type ConversationView = {
@@ -199,6 +214,38 @@ export type MailStoreInspection = {
   }>;
 };
 
+/** What a message is embedded from, for semantic search. */
+export type EmbeddingSource = {
+  key: MessageKey;
+  receivedAtMs: number;
+  subject: string;
+  from: string;
+  /** The start of the body, or the preview when no body is stored. */
+  body: string;
+  fromBody: boolean;
+};
+
+export type MessageEmbedding = Pick<
+  EmbeddingSource,
+  "key" | "receivedAtMs" | "fromBody"
+> & {
+  /** A unit vector as signed bytes, each component times 127. */
+  vector: Int8Array;
+};
+
+/**
+ * The mail semantic search covers: messages received since `sinceMs`, and
+ * no more than the newest `maxMessages` of them.
+ */
+export type EmbeddingCap = {
+  model: string;
+  sinceMs: number;
+  maxMessages: number;
+};
+
+/** Where a pass over the embedding backlog has reached, newest first. */
+export type EmbeddingBacklogCursor = { receivedAtMs: number; key: MessageKey };
+
 export type MailStoreInspectionInput = {
   accountIds?: string[];
   limit?: number;
@@ -303,13 +350,18 @@ export interface MailStore {
   }): Promise<ClaimedWork | null>;
   close(): Promise<void>;
   completeJob(input: { jobId: string; attemptId: string }): Promise<void>;
+  countMessageEmbeddings(input: {
+    accountId: string;
+    model: string;
+  }): Promise<number>;
   deferBootstrapScan(input: {
     session: AccountSession;
     scopeId: string;
     bootstrapId: string;
     page: string;
     nextAttemptAtMs: number;
-    errorCode: string;
+    /** Null when the scan is only paced, not failing. */
+    errorCode: string | null;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
@@ -393,10 +445,22 @@ export interface MailStore {
       conversationIds: string[];
     }>;
   }>;
+  /** See `MailClient.getWaitingSummary`; one entry per account asked for. */
+  getWaitingSummary(
+    accountIds: string[],
+    nowMs: number,
+  ): Promise<MailWaitingSummary[]>;
   indexContactBacklog(): Promise<{ remaining: boolean }>;
   /** Indexes one short batch of stored bodies missing from local search. */
   indexSearchBacklog(): Promise<{ remaining: boolean }>;
   inspect(input?: MailStoreInspectionInput): Promise<MailStoreInspection>;
+  /**
+   * Drops vectors outside the cap or of mail gone, and resolves how many
+   * with where the cap starts, for a pass's backlog reads.
+   */
+  pruneMessageEmbeddings(
+    input: EmbeddingCap,
+  ): Promise<{ dropped: number; sinceMs: number }>;
   purgeAccount(accountId: string): Promise<LocalRevision>;
   readAccountSyncStates(): Promise<AccountSyncState[]>;
   readBootstrapScan(input: {
@@ -421,10 +485,24 @@ export interface MailStore {
   ): Promise<"complete" | "preparing" | "incomplete">;
   readDraft(key: DraftKey): Promise<DraftReadResult>;
   /**
+   * The next messages received since `sinceMs` without a current vector,
+   * newest first, older than `before` when set.
+   */
+  readEmbeddingBacklog(input: {
+    model: string;
+    sinceMs: number;
+    limit: number;
+    before: EmbeddingBacklogCursor | null;
+  }): Promise<EmbeddingSource[]>;
+  readFileSenders(accountIds: string[]): Promise<FileSender[]>;
+  readFiles(query: FilesQuery): Promise<FilesPage>;
+  readFilesNotOnDevice(accountIds: string[]): Promise<number>;
+  /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
    * only the server can still stop.
    */
   readHeldSend(key: OperationKey): Promise<PreparedOperation | null>;
+  readImportantPeople(accountIds: string[]): Promise<ImportantPerson[]>;
   readMailboxCounts(query: MailboxCountsQuery): Promise<{
     revision: LocalRevision;
     view: MailboxCountsView;
@@ -441,6 +519,9 @@ export interface MailStore {
     view: MailboxView;
   }>;
   readMessageSearch(query: MessageSearchQuery): Promise<MessageSearchPage>;
+  readNeverReadSenders(
+    query: NeverReadSendersQuery,
+  ): Promise<NeverReadSender[]>;
   readOperation(key: OperationKey): Promise<{
     revision: LocalRevision;
     operation: OperationState | null;
@@ -452,6 +533,17 @@ export interface MailStore {
    * local changes on one clock shared by every engine on this database.
    */
   readRevision(): Promise<LocalRevision>;
+  readSemanticMatches(input: {
+    accountId: string;
+    model: string;
+    vector: Int8Array;
+    limit: number;
+    minSimilarity: number;
+  }): Promise<SemanticMatch[]>;
+  readSenderHistory(query: SenderHistoryQuery): Promise<SenderHistory>;
+  readWaitingOnYou(
+    query: WaitingOnYouQuery,
+  ): Promise<WaitingOnYouConversation[]>;
   /** Resolves `true` when the stored connection state changed. */
   recordConnection(input: {
     accountId: string;
@@ -504,6 +596,12 @@ export interface MailStore {
     scopeId: string;
     seenMessageIds: string[];
   }): Promise<LocalRevision>;
+  /** Rejects an input without a valid address. */
+  writeImportantPerson(input: SetImportantPersonInput): Promise<void>;
+  writeMessageEmbeddings(input: {
+    model: string;
+    embeddings: MessageEmbedding[];
+  }): Promise<void>;
 }
 
 export type { QuerySnapshot };

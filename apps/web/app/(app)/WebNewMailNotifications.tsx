@@ -4,12 +4,12 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { supportsImportantPeople } from "@inboxzero/mail-core/important-people";
 import type { Coverage, MailboxView } from "@inboxzero/mail-core/queries";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { BRAND_ICON_URL } from "@/utils/branding";
-import { getInboxZeroDesktopApp } from "@/utils/desktop-app";
 import { buildMailPath } from "@/utils/mail-url";
 import type { CueMembershipResponse } from "@/app/api/user/mail-splits/cue-membership/route";
 import {
@@ -20,12 +20,14 @@ import {
 import {
   chooseWebNotificationMode,
   getWebNotificationPermission,
+  isDesktopShell,
   recordWebNotificationOffer,
   shouldOfferWebNotifications,
 } from "@/utils/web-notifications/permission";
 import {
   hasBeenAskedToEnable,
   readEffectiveMode,
+  readQuietUntilMs,
   readStoredMode,
   subscribeToPreference,
 } from "@/utils/web-notifications/preference";
@@ -39,6 +41,7 @@ import {
   isWebPushResyncDue,
   syncWebPushSubscription,
 } from "@/utils/web-push/subscription";
+import { syncWithRetry } from "@/utils/web-push/sync-with-retry";
 
 const MAX_WATCHED_ACCOUNTS = 50;
 const WATCHED_UNREAD_PAGE_SIZE = 25;
@@ -102,6 +105,10 @@ export function WebNewMailNotifications() {
     );
   };
 
+  // Read for each batch of new mail, so a star set a moment ago counts.
+  const clientRef = useRef(client);
+  clientRef.current = client;
+
   const active = !isDesktopApp && permission === "granted" && mode !== "off";
   const notifierRef =
     useRef<ReturnType<typeof createNewMailNotifier>>(undefined);
@@ -128,6 +135,8 @@ export function WebNewMailNotifications() {
         getWebNotificationPermission() === "granted"
           ? readEffectiveMode()
           : "off",
+      // Read from storage each time: the pause may be set in another tab.
+      isQuiet: () => readQuietUntilMs() !== null,
       isLeader: () => leader,
       isForeground: focus.isAnyTabFocused,
       notify: (conversations) =>
@@ -144,6 +153,11 @@ export function WebNewMailNotifications() {
             ),
         }),
       loadBulkMessageIds,
+      loadImportantPeople: async (accountIds) => {
+        const current = clientRef.current;
+        if (!supportsImportantPeople(current)) return null;
+        return current.queryImportantPeople(accountIds);
+      },
       triageSettleMs: TRIAGE_SETTLE_MS,
     });
     notifierRef.current = notifier;
@@ -187,10 +201,18 @@ export function WebNewMailNotifications() {
   }, [active, client, connectedAccountIds]);
 
   // Keeps the server's copy of this browser's push subscription fresh, so mail
-  // still notifies after the browser rotates it or the server dropped it.
+  // still notifies after the browser rotates it or the server dropped it. A
+  // pause leaves it alone: the server holds pushes back until the pause ends.
   useEffect(() => {
     if (!active || !isWebPushAvailable() || !isWebPushResyncDue()) return;
-    syncWebPushSubscription(mode).catch(() => undefined);
+    return syncWithRetry({
+      sync: () => syncWebPushSubscription(mode),
+      // The scoped logger reads server-only env, so the browser warns directly.
+      onFailure: (attempt) =>
+        console.warn(
+          `[web-push] Subscription sync failed (attempt ${attempt + 1})`,
+        ),
+    });
   }, [active, mode]);
 
   // The one-time offer needs to know a first sync finished, and nothing else.
@@ -225,12 +247,6 @@ export function WebNewMailNotifications() {
   }, [mightOffer, client, connectedAccountIds]);
 
   return null;
-}
-
-function isDesktopShell() {
-  return (
-    Boolean(getInboxZeroDesktopApp()) || /Electron/i.test(navigator.userAgent)
-  );
 }
 
 function offerNotifications() {

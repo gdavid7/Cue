@@ -15,8 +15,10 @@ import {
 } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
 import type { LabelsResponse } from "@/app/api/labels/route";
 import type { EmailLabels } from "@/providers/email-label-types";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
-import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
+import {
+  engineProvider,
+  registerEngineAccounts,
+} from "@/utils/mail-engine/engine-accounts";
 import { searchQueryForAccounts } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { threadsQueryToPredicate } from "@/utils/mail-engine/threads-query";
@@ -55,6 +57,16 @@ export function useCombinedMailThreads({
   );
   const accountsById = useMemo(
     () => Object.fromEntries(accounts.map((account) => [account.id, account])),
+    [accounts],
+  );
+  const providers = useMemo(
+    () =>
+      new Map(
+        accounts.map((account) => [
+          account.id,
+          engineProvider(account.provider),
+        ]),
+      ),
     [accounts],
   );
   const labelsByAccount = useLabelsByAccount(enabled ? accountIds : []);
@@ -117,6 +129,7 @@ export function useCombinedMailThreads({
     emailAccountId,
     accountIds: accountIds.length ? accountIds : [emailAccountId],
     accounts: accountsById,
+    providers,
     query,
     predicate: searchQuery ? searchPredicate : predicate,
     providerSearch,
@@ -161,7 +174,7 @@ function startFirstSync(client: MailClient, accounts: AllInboxesAccount[]) {
     client,
     accounts.map((account) => ({
       accountId: account.id,
-      provider: isMicrosoftProvider(account.provider) ? "microsoft" : "google",
+      provider: engineProvider(account.provider),
     })),
   )
     .then(() => client.requestSync(accounts.map((account) => account.id)))
@@ -263,19 +276,24 @@ export function labelNamesToAccountScopedPredicate({
  * one.
  */
 function withoutAccountsHiddenDrafts(hidden: HiddenDrafts[]): MailPredicate {
+  // One budget across accounts, as the ids all bind in a single query.
+  let remaining = MAX_MESSAGE_PREDICATE_IDS;
+  const messagePredicates: MailPredicate[] = [];
+  for (const { emailAccountId, messageIds } of hidden) {
+    // slice(-0) would keep every id.
+    if (remaining === 0) break;
+    const ids = messageIds.slice(-remaining);
+    if (ids.length === 0) continue;
+    remaining -= ids.length;
+    messagePredicates.push({ kind: "message", accountId: emailAccountId, ids });
+  }
   return {
     kind: "all",
     predicates: [
       threadsQueryToPredicate({ type: "draft" }),
       {
         kind: "not",
-        predicate: anyPredicate(
-          hidden.map(({ emailAccountId, messageIds }) => ({
-            kind: "message",
-            accountId: emailAccountId,
-            ids: messageIds.slice(-MAX_MESSAGE_PREDICATE_IDS),
-          })),
-        ),
+        predicate: anyPredicate(messagePredicates),
       },
     ],
   };

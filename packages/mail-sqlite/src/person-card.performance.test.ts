@@ -133,9 +133,9 @@ it("renders a person card in under 100 ms on a 50k-message mailbox", async () =>
           /^(SCAN|SEARCH) (?!\(subquery)/.test(detail),
         ),
       ).toEqual([
-        expect.stringMatching(/^SEARCH t USING .*INDEX/),
+        expect.stringMatching(/^SEARCH t USING .*INDEX .*\btoken=\?/),
         expect.stringMatching(
-          /^SEARCH i USING INDEX contact_interaction_group/,
+          /^SEARCH i USING INDEX contact_interaction_group \(.*\bemail=\? AND name=\?/,
         ),
         expect.stringMatching(/^SEARCH m USING .*INDEX/),
       ]);

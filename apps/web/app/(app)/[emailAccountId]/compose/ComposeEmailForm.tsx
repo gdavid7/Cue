@@ -16,8 +16,10 @@ import {
   type EmailEditorState,
 } from "@inboxzero/email-editor/web";
 import {
+  CalendarClockIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  FileSearchIcon,
   ImageIcon,
   Loader2Icon,
   PaperclipIcon,
@@ -59,7 +61,7 @@ import {
 } from "@/hooks/useHiddenDraftMessageIds";
 import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { VoiceInput } from "@/components/voice/VoiceInput";
-import { toastError, toastSuccess } from "@/components/Toast";
+import { toastDismiss, toastError, toastSuccess } from "@/components/Toast";
 import {
   holdSessionExpiredRedirect,
   SESSION_EXPIRED_MESSAGE,
@@ -75,6 +77,7 @@ import {
 import { env } from "@/env";
 import { getAccountScopedKey } from "@/utils/swr";
 import { useEmailAccountFull } from "@/hooks/useEmailAccountFull";
+import { usePreSendCheck } from "@/hooks/usePreSendCheck";
 import { useLocalReplyDraft } from "@/hooks/useLocalReplyDraft";
 import {
   DraftAutosaveHaltedError,
@@ -153,6 +156,7 @@ import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
 import { resolveRemoteImages } from "./resolve-remote-images";
 import { useComposeAssist } from "./useComposeAssist";
 import { useComposeSnippets } from "./useComposeSnippets";
+import { useShareFreeTimes } from "./useShareFreeTimes";
 import {
   getReminderAfterSendTimeChange,
   parseDeliveryTimes,
@@ -163,6 +167,14 @@ import {
   waitForReaderEmailSettlement,
 } from "./queued-reply";
 import { beginUndoSend, UNDO_SEND_DELAY_MS } from "./undo-send";
+import { PreSendConfirmation } from "./PreSendConfirmation";
+import { selectPlaceholderIn } from "./select-placeholder";
+import {
+  getComposeBodyText,
+  getPreSendWarnings,
+  type PreSendWarning,
+  type PreSendWarningFix,
+} from "./pre-send-warnings";
 import { getReplyToEmailPayload } from "./reply-to-email-payload";
 import {
   enqueueDraftOperation,
@@ -175,6 +187,8 @@ import {
   resolveDraftId,
   uploadDraftAttachment,
 } from "./upload-draft-attachment";
+import { AttachFromMailDialog } from "./AttachFromMailDialog";
+import { attachFromMailSenders } from "./attach-from-mail";
 import { useComposeDraftAttachments } from "./useComposeDraftAttachments";
 import {
   type ComposeAttachment,
@@ -211,6 +225,12 @@ export type ReplyingToEmail = {
     "id" | "filename" | "mimeType" | "size"
   >[];
   references?: string;
+  /** Everyone on the message being replied to, to tell who a reply adds. */
+  participants?: string;
+  /** Addresses the user wrote from in the thread, which can be send-as aliases. */
+  sentFrom?: string;
+  /** Recipients a rule the user set up chose for this reply. */
+  ruleRecipients?: string;
   subject: string;
   to: string;
   cc?: string;
@@ -603,9 +623,20 @@ function ComposeEmailFormContent({
   const inlineReplySummaryButtonRef = useRef<HTMLButtonElement>(null);
   const collapseInlineReplyFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [attachFromMailOpen, setAttachFromMailOpen] = useState(false);
+  // The Files view's local listing; a window without the mail engine has none.
+  const canAttachFromMail = Boolean(useOptionalMailClient()?.queryFiles);
   const inlineImageInputRef = useRef<HTMLInputElement>(null);
   const sendAndMarkDoneButtonRef = useRef<HTMLButtonElement>(null);
   const deliveryOptionsRef = useRef<DeliveryOptionsHandle>(null);
+  const [preSendCheckEnabled] = usePreSendCheck();
+  const [preSend, setPreSend] = useState<{
+    warnings: PreSendWarning[];
+    markDone: boolean;
+    returnFocus: Element | null;
+  }>();
+  // The warnings on screen, so sending again with the same ones confirms them.
+  const shownPreSendWarnings = useRef<string | undefined>(undefined);
   const shortcutOwnerId = useId();
   const {
     register,
@@ -614,6 +645,7 @@ function ComposeEmailFormContent({
     formState: { errors, isSubmitting },
     watch,
     setValue,
+    setFocus,
   } = useForm<ComposeFormValues>({
     defaultValues: movedDraft?.values ??
       withRecipient(storedDraft?.content?.values, initialTo) ?? {
@@ -644,6 +676,11 @@ function ComposeEmailFormContent({
     editorRef,
     emailAccountId: selectedEmailAccountId,
     threadId: replyingToEmail?.threadId,
+    // A forward answers no one, so it teaches no reply memories.
+    replyToMessageId:
+      draftMode === "forward"
+        ? undefined
+        : (draftKeyMessageId ?? replyingToEmail?.messageId),
     getEnvelope: () => ({
       to: getValues("to") || undefined,
       subject: getValues("subject") || undefined,
@@ -651,6 +688,10 @@ function ComposeEmailFormContent({
     formRef,
   });
   const { isOpen: assistIsOpen, focus: focusAssist } = assist;
+  const freeTimes = useShareFreeTimes({
+    editorRef,
+    emailAccountId: selectedEmailAccountId,
+  });
   const {
     onSlashKeyDown,
     onSlashTrigger,
@@ -658,6 +699,7 @@ function ComposeEmailFormContent({
   } = useComposeSnippets({
     editorRef,
     onAskCue: assist.openPrompt,
+    onShareFreeTimes: freeTimes.shareFreeTimes,
     to: watch("to"),
   });
 
@@ -720,6 +762,7 @@ function ComposeEmailFormContent({
     () =>
       holdSessionExpiredRedirect({
         beforeRedirect: flushDraft,
+        dismiss: () => toastDismiss(SESSION_EXPIRED_TOAST_ID),
         prompt: (signIn) => {
           toastError({
             id: SESSION_EXPIRED_TOAST_ID,
@@ -1165,6 +1208,43 @@ function ComposeEmailFormContent({
     captureDraft();
   };
 
+  const attachmentsCountedTowardLimits = () => [
+    ...forwardedAttachments.map((attachment) => ({
+      ...attachment,
+      disposition: "attachment" as const,
+    })),
+    ...attachmentsRef.current.filter((item) => item.status !== "failed"),
+  ];
+
+  // Mail's files are checked before they download, the same way they're
+  // checked again once they arrive.
+  const refuseFileFromMail = ({
+    filename,
+    mimeType,
+    size,
+  }: {
+    filename: string;
+    mimeType: string;
+    size: number;
+  }) => {
+    const fit = fitComposeAttachments({
+      existing: attachmentsCountedTowardLimits(),
+      candidates: [
+        {
+          id: "attach-from-mail",
+          filename,
+          mimeType,
+          size,
+          disposition: "attachment" as const,
+        },
+      ],
+      maxTotalBytes: attachmentLimitBytes,
+    });
+    return fit.error
+      ? describeUnattachedFiles(fit.rejected, fit.error)
+      : undefined;
+  };
+
   const addFiles = async ({
     inline = [],
     attachments: attached = [],
@@ -1193,13 +1273,7 @@ function ComposeEmailFormContent({
     });
     if (!created.length) return;
     const fit = fitComposeAttachments({
-      existing: [
-        ...forwardedAttachments.map((attachment) => ({
-          ...attachment,
-          disposition: "attachment" as const,
-        })),
-        ...attachmentsRef.current.filter((item) => item.status !== "failed"),
-      ],
+      existing: attachmentsCountedTowardLimits(),
       candidates: created.map(({ attachment }) => attachment),
       maxTotalBytes: attachmentLimitBytes,
     });
@@ -1346,6 +1420,55 @@ function ComposeEmailFormContent({
         toastError({ description: "Enter a valid recipient email address." });
         return;
       }
+
+      if (preSendCheckEnabled) {
+        const editableHtml =
+          editorRef.current?.getValue().editableHtml ??
+          initialDraft.editableHtml;
+        const warnings = getPreSendWarnings(
+          {
+            ...recipients,
+            subject: data.subject ?? "",
+            bodyText: getComposeBodyText(editableHtml),
+            placeholderText: getComposeBodyText(editableHtml, {
+              forPlaceholders: true,
+            }),
+            attachmentCount:
+              attachmentsRef.current.length +
+              (replyingToEmail?.forwardedAttachments?.length ?? 0) +
+              ruleFiles.length +
+              (replyingToEmail?.draftHasAttachments ? 1 : 0),
+          },
+          {
+            kind: getPreSendKind(draftMode, replyingToEmail),
+            // Not the reply's own recipients, which may already add someone.
+            // A reopened draft only knows who it was going to.
+            repliedToAddresses: (replyingToEmail?.participants
+              ? [replyingToEmail.participants]
+              : [replyingToEmail?.to, replyingToEmail?.cc, replyingToEmail?.bcc]
+            ).flatMap((list) => (list ? [list] : [])),
+            chosenAddresses: replyingToEmail?.ruleRecipients
+              ? [replyingToEmail.ruleRecipients]
+              : [],
+            ownEmails: [
+              ...ownEmails,
+              ...extractEmailAddresses(replyingToEmail?.sentFrom ?? ""),
+            ],
+          },
+        );
+        const shown = warnings.map((warning) => warning.message).join("\n");
+        if (warnings.length && shown !== shownPreSendWarnings.current) {
+          shownPreSendWarnings.current = shown;
+          setPreSend({
+            warnings,
+            markDone: markDoneAfterSend,
+            returnFocus: document.activeElement,
+          });
+          return;
+        }
+      }
+      shownPreSendWarnings.current = undefined;
+      setPreSend(undefined);
 
       // Files go to the mailbox draft as they are attached, so a send waits
       // for them and never carries their bytes itself.
@@ -1539,11 +1662,12 @@ function ComposeEmailFormContent({
             attachments: attachmentsRef.current.flatMap(toAttachmentReference),
             online,
             threadId: readerThreadId,
-            onQueued: async () => {
+            onQueued: async (operationId) => {
               deliveryAccepted = true;
               showDraftAgain = hideSendingDraftMessages(
                 selectedEmailAccountId,
                 draftMessageIds,
+                operationId,
               );
               if (replyingToEmail?.threadId?.trim()) {
                 await mutate([
@@ -1677,6 +1801,9 @@ function ComposeEmailFormContent({
     },
     [
       assistIsOpen,
+      preSendCheckEnabled,
+      draftMode,
+      ownEmails,
       ruleFiles,
       focusAssist,
       stopProviderAutosave,
@@ -1786,6 +1913,34 @@ function ComposeEmailFormContent({
     setEditReply(false);
     requestAnimationFrame(() => inlineReplySummaryButtonRef.current?.focus());
   };
+  const dismissPreSend = useCallback(() => {
+    const returnFocus = preSend?.returnFocus;
+    shownPreSendWarnings.current = undefined;
+    setPreSend(undefined);
+    if (returnFocus instanceof HTMLElement && returnFocus.isConnected)
+      requestAnimationFrame(() => returnFocus.focus());
+    else requestAnimationFrame(() => editorRef.current?.focus());
+  }, [preSend]);
+  const confirmPreSend = useCallback(() => {
+    formRef.current?.requestSubmit(
+      (preSend?.markDone && sendAndMarkDoneButtonRef.current) || undefined,
+    );
+  }, [preSend]);
+  const fixPreSend = (fix: PreSendWarningFix, selectText?: string) => {
+    shownPreSendWarnings.current = undefined;
+    setPreSend(undefined);
+    if (fix === "attach") attachmentInputRef.current?.click();
+    else if (fix === "subject") setFocus("subject");
+    else if (fix === "body") {
+      editorRef.current?.focus();
+      const editable = formRef.current?.querySelector<HTMLElement>(
+        "[contenteditable='true']",
+      );
+      if (editable && selectText) selectPlaceholderIn(editable, selectText);
+    } else if (showInlineReplySummary) openInlineReplyFields();
+    else formRef.current?.querySelector<HTMLElement>("#to")?.focus();
+  };
+
   const handleSendAtChange = (value: string) => {
     const nextRemindAt = getReminderAfterSendTimeChange(value, remindAt);
     setSubmissionError("");
@@ -2233,10 +2388,9 @@ function ComposeEmailFormContent({
                 type="text"
                 name="subject"
                 registerProps={{
-                  ...register("subject", { required: true }),
+                  ...register("subject"),
                   "aria-label": "Subject",
                 }}
-                error={errors.subject}
                 placeholder="Subject"
                 // Borderless like the rest of the header, with a hairline in
                 // the focus colour so keyboard focus stays visible.
@@ -2339,6 +2493,15 @@ function ComposeEmailFormContent({
         </div>
       )}
 
+      {preSend && (
+        <PreSendConfirmation
+          className={cn(isComposeWindow && "mx-4 shrink-0")}
+          onDismiss={dismissPreSend}
+          onFix={fixPreSend}
+          onSend={confirmPreSend}
+          warnings={preSend.warnings}
+        />
+      )}
       <div
         className={cn(
           "flex flex-wrap items-center justify-between gap-2",
@@ -2347,7 +2510,9 @@ function ComposeEmailFormContent({
         )}
       >
         <div className="flex flex-wrap items-center gap-1">
+          {/* The send check above takes the tooltip's place. */}
           <Tooltip
+            hide={Boolean(preSend)}
             shortcuts={onMarkDone ? ["send", "sendAndMarkDone"] : ["send"]}
           >
             <Button disabled={isSubmitting} type="submit">
@@ -2393,6 +2558,26 @@ function ComposeEmailFormContent({
             </span>
           </Button>
           {snippetToolbar}
+          <Tooltip content="Share my free times">
+            <Button
+              aria-busy={freeTimes.isLoading || undefined}
+              aria-label="Share my free times"
+              className="hover:bg-transparent"
+              disabled={isSubmitting}
+              onClick={freeTimes.shareFreeTimes}
+              // Keeps the caret in the message, where the times go.
+              onPointerDown={(event) => event.preventDefault()}
+              size="icon"
+              type="button"
+              variant="ghostMuted"
+            >
+              {freeTimes.isLoading ? (
+                <Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+              ) : (
+                <CalendarClockIcon className="size-4" />
+              )}
+            </Button>
+          </Tooltip>
           <VoiceInput
             onInsert={(text) => {
               editorRef.current?.insertText(
@@ -2426,6 +2611,41 @@ function ComposeEmailFormContent({
               <PaperclipIcon className="size-4" />
             </Button>
           </Tooltip>
+          {canAttachFromMail && (
+            <>
+              <Tooltip content="Attach from mail">
+                <Button
+                  aria-label="Attach from mail"
+                  className="hover:bg-transparent"
+                  disabled={isSubmitting}
+                  onClick={() => setAttachFromMailOpen(true)}
+                  size="icon"
+                  type="button"
+                  variant="ghostMuted"
+                >
+                  <FileSearchIcon className="size-4" />
+                </Button>
+              </Tooltip>
+              <AttachFromMailDialog
+                checkFits={refuseFileFromMail}
+                emailAccountId={selectedEmailAccountId}
+                maxBytes={attachmentLimitBytes - attachmentTotalBytes}
+                onAttach={(file) => {
+                  addFiles({ attachments: [file] }).catch(() =>
+                    toastError({
+                      description: "One of the files could not be read.",
+                    }),
+                  );
+                }}
+                onOpenChange={setAttachFromMailOpen}
+                open={attachFromMailOpen}
+                senders={attachFromMailSenders({
+                  fields: [watch("to"), watch("cc"), watch("bcc")],
+                  ownAddresses: ownEmails,
+                })}
+              />
+            </>
+          )}
           <input
             accept={EMAIL_INLINE_IMAGE_MIME_TYPES.join(",")}
             className="hidden"
@@ -2627,6 +2847,17 @@ function getQueuedEmailDescription(
     return "Email queued. Reconnect this account to send it.";
   }
   return "Email queued and will keep sending in the background.";
+}
+
+function getPreSendKind(
+  draftMode: ReplyDraftMode | undefined,
+  replyingToEmail: ReplyingToEmail | undefined,
+) {
+  if (draftMode === "forward" || replyingToEmail?.forwardedMessageId)
+    return "forward";
+  if (replyingToEmail?.threadId || replyingToEmail?.headerMessageId)
+    return "reply";
+  return "new";
 }
 
 function isShortcutForForm(

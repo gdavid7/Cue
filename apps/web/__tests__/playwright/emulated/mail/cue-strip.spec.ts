@@ -1,6 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 import { getEmailAccountId } from "../account-test-helpers";
 import { isMicrosoftPlaywright } from "../mail-provider";
+import {
+  createSecondEmailAccount,
+  deleteSecondEmailAccount,
+} from "./account-test-helpers";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
@@ -317,6 +321,94 @@ test("the strip reads well in light and dark, on desktop and phones", async ({
   }
 });
 
+// PF-3: a pointer resting on a row starts the reader's summary, so it is on
+// its way before the click, and opening the row asks for nothing again.
+test("a pointer resting on a row starts its summary before the click", async ({
+  page,
+}, testInfo) => {
+  const briefRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/user/thread-brief"))
+      briefRequests.push(request.url());
+  });
+  const { conversations } = await openMail(page);
+  const row = conversationWithSubject(page, conversations, PERSON_SUBJECT);
+
+  await row.hover();
+  await expect.poll(() => briefRequests.length, { timeout: 10_000 }).toBe(1);
+  await row.click();
+  await expect(page.getByRole("heading", { name: PERSON_SUBJECT })).toBeVisible(
+    { timeout: 60_000 },
+  );
+  const strip = page.getByRole("region", { name: "Cue summary" });
+  await expect(strip.getByText(SUMMARY)).toBeVisible({ timeout: 60_000 });
+  expect(briefRequests).toHaveLength(1);
+  await capturePlaywrightCheckpoint(page, testInfo, "cue-strip-prefetched");
+});
+
+// PF-3: in All inboxes the same email can sit in two accounts; the hover asks
+// with the row's own account, the one the reader then shows it in, so the
+// open takes the prefetch over instead of asking again.
+test("All inboxes prefetches a row's summary with the row's own account", async ({
+  page,
+}, testInfo) => {
+  const { emailAccountId } = await openMail(page);
+  const second = await createSecondEmailAccount(emailAccountId);
+  // The same email in two accounts is one row (FT-1f-f1), so the second
+  // account, which reads a mailbox of its own, gets one of its own from Maya.
+  if (!second.accessToken)
+    throw new Error("The second account has no mailbox of its own");
+  const mailbox = { email: second.email, token: second.accessToken };
+  const own = await ensureMessage(page, {
+    from: "Maya Chen <maya@talent.example>",
+    subject: PERSON_SUBJECT,
+    body: PERSON_BODY,
+    labelIds: ["INBOX", "UNREAD", await ensureLabel(page, "FYI", mailbox)],
+    mailbox,
+  });
+  try {
+    const briefAccounts: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/user/thread-brief"))
+        briefAccounts.push(request.headers()["x-email-account-id"] ?? "");
+    });
+    await page.goto(`/${emailAccountId}/mail?accountScope=all`);
+    const conversations = page.getByRole("listbox", { name: "Conversations" });
+    const rows = conversations
+      .getByRole("option")
+      .filter({ hasText: PERSON_SUBJECT });
+    await expect(rows).toHaveCount(2, { timeout: 60_000 });
+
+    await rows.nth(1).hover();
+    await expect.poll(() => briefAccounts.length, { timeout: 10_000 }).toBe(1);
+    await rows.nth(1).click();
+    await expect(
+      page.getByRole("heading", { name: PERSON_SUBJECT }),
+    ).toBeVisible({ timeout: 60_000 });
+    const strip = page.getByRole("region", { name: "Cue summary" });
+    await expect(strip.getByText(SUMMARY)).toBeVisible({ timeout: 60_000 });
+
+    // The account the reader opened the row in, by its position in All inboxes.
+    const opened =
+      new URL(page.url()).searchParams.get("account") === "1"
+        ? second.id
+        : emailAccountId;
+    expect(briefAccounts).toEqual([opened]);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "cue-strip-prefetched-all-inboxes",
+    );
+  } finally {
+    // Later specs' second accounts read this mailbox too.
+    await page.request.delete(
+      `${gmailBaseUrl()}/gmail/v1/users/me/messages/${own.messageId}`,
+      { headers: await gmailHeaders(mailbox.token) },
+    );
+    await deleteSecondEmailAccount(second.accountId);
+  }
+});
+
 async function openThread(
   page: Page,
   emailAccountId: string,
@@ -433,9 +525,9 @@ async function countBriefModelCalls() {
   ).length;
 }
 
-async function ensureLabel(page: Page, name: string) {
+async function ensureLabel(page: Page, name: string, mailbox?: Mailbox) {
   const base = `${gmailBaseUrl()}/gmail/v1/users/me/labels`;
-  const headers = await gmailHeaders();
+  const headers = await gmailHeaders(mailbox?.token);
   const list = await page.request.get(base, { headers });
   expect(list.ok(), await list.text()).toBe(true);
   const { labels } = (await list.json()) as {
@@ -452,9 +544,16 @@ async function ensureLabel(page: Page, name: string) {
 // A retry runs beforeEach again against the same mailbox, so each is made once.
 async function ensureMessage(
   page: Page,
-  input: { from: string; subject: string; body: string; labelIds: string[] },
+  input: {
+    from: string;
+    subject: string;
+    body: string;
+    labelIds: string[];
+    /** Another account's own mailbox, not the primary's. */
+    mailbox?: Mailbox;
+  },
 ) {
-  const headers = await gmailHeaders();
+  const headers = await gmailHeaders(input.mailbox?.token);
   const search = await page.request.get(
     `${gmailBaseUrl()}/gmail/v1/users/me/messages`,
     // Every inbox message, not a search: the emulator's search can't be
@@ -480,12 +579,12 @@ async function ensureMessage(
       return { threadId: candidate.threadId, messageId: candidate.id };
   }
 
-  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  const email = input.mailbox?.email ?? process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   const inserted = await page.request.post(
     `${gmailBaseUrl()}/gmail/v1/users/me/messages`,
     {
-      headers: await gmailHeaders(),
+      headers,
       data: {
         from: input.from,
         to: email,
@@ -501,12 +600,14 @@ async function ensureMessage(
   return { threadId: message.threadId, messageId: message.id };
 }
 
-async function gmailHeaders() {
+async function gmailHeaders(token?: string) {
   return {
-    Authorization: `Bearer ${await readProviderAccessToken()}`,
+    Authorization: `Bearer ${token ?? (await readProviderAccessToken())}`,
     "content-type": "application/json",
   };
 }
+
+type Mailbox = { email: string; token: string };
 
 function gmailBaseUrl() {
   const baseUrl = process.env.GOOGLE_BASE_URL;

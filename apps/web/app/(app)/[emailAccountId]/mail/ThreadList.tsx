@@ -2,10 +2,20 @@
 
 import { addDays } from "date-fns/addDays";
 import { startOfDay } from "date-fns/startOfDay";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type DragEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { markRumRowsShown } from "@/utils/analytics/rum-actions";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
-import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import {
+  isFromImportantPerson,
+  ThreadRow,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import type {
   ListThread,
@@ -16,11 +26,13 @@ import {
   getListThreadKey,
 } from "@/app/(app)/[emailAccountId]/mail/types";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
+import { useReaderRowPrefetch } from "@/app/(app)/[emailAccountId]/mail/use-reader-row-prefetch";
 import { LoadingMiniSpinner } from "@/components/Loading";
 import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useImportantPeople } from "@/hooks/useImportantPeople";
+import { useIsCoarsePointer, useIsMobile } from "@/hooks/use-mobile";
 import { useHydrated } from "@/hooks/useHydrated";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSentMessageOpensForThreads } from "@/hooks/useSentMessageOpens";
@@ -41,6 +53,8 @@ export type ThreadListProps = {
   labelsByAccount?: Record<string, EmailLabels>;
   /** Each All inboxes account's position, which picks its row marker color. */
   accountColorIndexById?: Record<string, number>;
+  /** The rows are the inbox's, so each account marker names an inbox. */
+  inInbox?: boolean;
   selectionEnabled?: boolean;
   /** The row `J`/`K` sits on. */
   focusedIndex: number;
@@ -62,6 +76,16 @@ export type ThreadListProps = {
    * email costs the server a provider read and a model call.
    */
   insightsPaused?: boolean;
+  /**
+   * Where opening a row shows it in the reader: a row the mouse rests on
+   * starts Cue's brief of it (see reader-prefetch).
+   */
+  prefetchReaderOnHover?: boolean;
+  /** The row the reader shows, which asks for itself. */
+  openThreadKey?: string | null;
+  /** Dragging rows onto the sidebar, with a mouse or trackpad only. */
+  onRowDragStart?: (index: number, event: DragEvent<HTMLElement>) => void;
+  onRowDragEnd?: () => void;
 };
 
 export const ThreadList = memo(function ThreadList({
@@ -73,6 +97,7 @@ export const ThreadList = memo(function ThreadList({
   userLabels,
   labelsByAccount,
   accountColorIndexById,
+  inInbox,
   selectionEnabled = true,
   focusedIndex,
   isSelected,
@@ -87,9 +112,32 @@ export const ThreadList = memo(function ThreadList({
   showSentOpenStatus = false,
   rowActions,
   insightsPaused = false,
+  prefetchReaderOnHover = false,
+  openThreadKey = null,
+  onRowDragStart,
+  onRowDragEnd,
 }: ThreadListProps) {
   const { emailAccountId } = useAccount();
+  const { onRowHover, onRowHoverEnd } = useReaderRowPrefetch({
+    emailAccountId,
+    openThreadKey,
+    listKey,
+  });
+  const rowAccountIds = useMemo(
+    () => [
+      ...new Set([
+        emailAccountId,
+        ...threads.flatMap((thread) =>
+          "account" in thread ? [thread.account.id] : [],
+        ),
+      ]),
+    ],
+    [emailAccountId, threads],
+  );
+  const { isImportant } = useImportantPeople(rowAccountIds);
   const isMobile = useIsMobile();
+  // A held finger selects the row, so touch never drags.
+  const canDrag = !useIsCoarsePointer() && Boolean(onRowDragStart);
   const dayStart = useDayStart();
   const hasRows = threads.length > 0;
   // The list only renders empty once it has loaded; until then the screen
@@ -112,7 +160,7 @@ export const ThreadList = memo(function ThreadList({
     useSentMessageOpensForThreads(sentThreadIds);
   const insightItems = useMemo(
     () =>
-      threads.flatMap((thread) => {
+      threads.flatMap((thread, index) => {
         const messageId =
           thread.latestMessageId ??
           thread.messages.findLast(
@@ -128,13 +176,14 @@ export const ThreadList = memo(function ThreadList({
                 ),
                 threadId: thread.id,
                 messageId,
+                index,
               },
             ]
           : [];
       }),
     [threads, emailAccountId],
   );
-  const { data: insights } = useInboxInsights(insightItems, {
+  const { data: insights, setVisibleRows } = useInboxInsights(insightItems, {
     enabled: !insightsPaused,
   });
   const groupHeaderClassName = cn(
@@ -175,6 +224,7 @@ export const ThreadList = memo(function ThreadList({
       }
       onLoadMore={onLoadMore}
       onOpen={onOpenThread}
+      onVisibleRowsChange={setVisibleRows}
       onSelectRangeTo={onSelectRangeTo}
       onToggleSelect={onToggleSelect}
       renderItem={(row) => (
@@ -187,6 +237,10 @@ export const ThreadList = memo(function ThreadList({
           isSelected={row.isSelected}
           key={row.rowKey}
           layout={layout}
+          onHoverIntent={prefetchReaderOnHover ? onRowHover : undefined}
+          onHoverIntentEnd={prefetchReaderOnHover ? onRowHoverEnd : undefined}
+          onDragEnd={canDrag ? onRowDragEnd : undefined}
+          onDragStart={canDrag ? onRowDragStart : undefined}
           onOpen={row.onOpen}
           onSelectRangeTo={row.onSelectRangeTo}
           onToggleSelect={row.onToggleSelect}
@@ -206,6 +260,12 @@ export const ThreadList = memo(function ThreadList({
                 )
               : undefined
           }
+          fromImportantPerson={isFromImportantPerson(
+            row.item,
+            "account" in row.item ? row.item.account.id : emailAccountId,
+            isImportant,
+          )}
+          inInbox={inInbox}
           thread={row.item}
           userEmail={userEmail}
           userLabels={

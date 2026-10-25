@@ -1,9 +1,15 @@
 import {
+  DraftEmailStatus,
   ReplyMemoryKind,
   ReplyMemoryScopeType,
 } from "@/generated/prisma/enums";
 import type { Prisma, ReplyMemory } from "@/generated/prisma/client";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
+import {
+  type ComposeAssistOutcome,
+  getAcceptedSuggestionsText,
+  parseComposeAssistOutcomes,
+} from "@/utils/actions/compose-assist.validation";
 import {
   extractDomainFromEmail,
   extractEmailAddress,
@@ -35,6 +41,15 @@ const PROMPTABLE_REPLY_MEMORY_KINDS = [
 const MIN_PREFERENCE_EVIDENCE_FOR_LEARNED_STYLE = 10;
 const PREFERENCE_EVIDENCE_PER_LEARNED_STYLE_REFRESH = 5;
 const MAX_PREFERENCE_EVIDENCE_FOR_LEARNED_STYLE = 25;
+// The same bound the sent text has.
+const MAX_STARTING_DRAFT_TEXT = 4000;
+// Well under the 0.7 that counts a draft as sent as written: Cue's rewrites
+// move the sent reply away from the draft it started from, but a reply this
+// far from it was written over it.
+const STARTING_DRAFT_MIN_SIMILARITY = 0.3;
+// Longer than any one attempt can run (the webhook's maxDuration is 300s),
+// so a live attempt is never taken over.
+const REPLY_MEMORY_CLAIM_LEASE_MS = 10 * 60 * 1000;
 
 export async function saveDraftSendLogReplyMemory({
   draftSendLogId,
@@ -49,6 +64,7 @@ export async function saveDraftSendLogReplyMemory({
       replyMemorySentText: sentText,
       replyMemoryAttemptCount: 0,
       replyMemoryProcessedAt: null,
+      replyMemoryClaimedAt: null,
     },
   });
 }
@@ -62,20 +78,28 @@ export async function syncReplyMemoriesFromDraftSendLogs({
   provider: EmailProvider;
   logger: Logger;
 }) {
-  const retentionCutoff = new Date(
-    Date.now() - REPLY_MEMORY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-  );
+  const retentionCutoff = getReplyMemoryRetentionCutoff();
 
-  await prisma.draftSendLog.updateMany({
-    where: {
-      createdAt: { lte: retentionCutoff },
-      replyMemorySentText: { not: null },
-      OR: draftSendLogAccountFilter(emailAccountId),
-    },
-    data: {
-      replyMemorySentText: null,
-    },
-  });
+  await Promise.all([
+    prisma.draftSendLog.updateMany({
+      where: {
+        createdAt: { lte: retentionCutoff },
+        replyMemorySentText: { not: null },
+        OR: draftSendLogAccountFilter(emailAccountId),
+      },
+      data: {
+        replyMemorySentText: null,
+      },
+    }),
+    // Cue's suggestions in a reply that was never sent teach nothing.
+    prisma.composeAssistReply.deleteMany({
+      where: {
+        emailAccountId,
+        updatedAt: { lte: retentionCutoff },
+        draftSendLog: null,
+      },
+    }),
+  ]);
 
   const emailAccount = await getEmailAccountWithAi({ emailAccountId });
   if (!emailAccount) return;
@@ -88,7 +112,10 @@ export async function syncReplyMemoriesFromDraftSendLogs({
       },
       replyMemoryProcessedAt: null,
       replyMemorySentText: { not: null },
-      OR: draftSendLogAccountFilter(emailAccountId),
+      AND: [
+        { OR: draftSendLogAccountFilter(emailAccountId) },
+        { OR: unclaimedReplyMemoryFilter(new Date()) },
+      ],
     },
     include: draftSendLogReplyMemoryInclude,
     orderBy: [{ replyMemoryAttemptCount: "asc" }, { createdAt: "asc" }],
@@ -108,15 +135,6 @@ export async function syncReplyMemoriesFromDraftSendLogs({
         error,
         draftSendLogId: draftSendLog.id,
       });
-
-      try {
-        await recordDraftSendLogReplyMemoryFailure(draftSendLog);
-      } catch (recordError) {
-        logger.error("Failed to record reply memory draft send log failure", {
-          error: recordError,
-          draftSendLogId: draftSendLog.id,
-        });
-      }
     }
   }
 
@@ -128,6 +146,12 @@ export async function syncReplyMemoriesFromDraftSendLogs({
       emailAccountId,
     });
   }
+}
+
+export function getReplyMemoryRetentionCutoff() {
+  return new Date(
+    Date.now() - REPLY_MEMORY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  );
 }
 
 export async function getReplyMemoriesForPrompt({
@@ -297,12 +321,64 @@ async function processReplyMemoryDraftSendLog({
   provider: EmailProvider;
   logger: Logger;
 }) {
+  // Overlapping syncs (two sends close together) each pick up the same log;
+  // only the one holding its lease learns from it. The lease spends an
+  // attempt rather than marking the log done, so work cut off midway (a
+  // timeout, a deploy) is retried once the lease goes stale.
+  const now = new Date();
+  const claim = await prisma.draftSendLog.updateMany({
+    where: {
+      id: draftSendLog.id,
+      replyMemoryProcessedAt: null,
+      replyMemoryAttemptCount: { lt: MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS },
+      OR: unclaimedReplyMemoryFilter(now),
+    },
+    data: {
+      replyMemoryClaimedAt: now,
+      replyMemoryAttemptCount: { increment: 1 },
+    },
+  });
+  if (claim.count !== 1) return;
+
+  const recordFailure = () =>
+    recordDraftSendLogReplyMemoryFailure({
+      draftSendLogId: draftSendLog.id,
+      claimedAt: now,
+    });
+  try {
+    await learnFromDraftSendLog({
+      draftSendLog,
+      emailAccount,
+      provider,
+      logger,
+      recordFailure,
+    });
+  } catch (error) {
+    await recordFailure();
+    throw error;
+  }
+}
+
+async function learnFromDraftSendLog({
+  draftSendLog,
+  emailAccount,
+  provider,
+  logger,
+  recordFailure,
+}: {
+  draftSendLog: DraftSendLogReplyMemoryPayload;
+  emailAccount: NonNullable<Awaited<ReturnType<typeof getEmailAccountWithAi>>>;
+  provider: EmailProvider;
+  logger: Logger;
+  recordFailure: () => Promise<void>;
+}) {
   const draft = getDraftSendLogDraft(draftSendLog);
   if (!draft) {
     await markDraftSendLogReplyMemoryProcessed(draftSendLog.id);
     return;
   }
-  const { sourceMessageId, emailAccountId, draftText } = draft;
+  const { sourceMessageId, emailAccountId, draftText, composeAssistOutcomes } =
+    draft;
   const sentText = stripForwardedContent(
     draftSendLog.replyMemorySentText ?? "",
   );
@@ -332,7 +408,7 @@ async function processReplyMemoryDraftSendLog({
         sourceMessageId,
       },
     );
-    await recordDraftSendLogReplyMemoryFailure(draftSendLog);
+    await recordFailure();
     return;
   }
 
@@ -344,7 +420,7 @@ async function processReplyMemoryDraftSendLog({
         sentMessageId: draftSendLog.sentMessageId,
       },
     );
-    await recordDraftSendLogReplyMemoryFailure(draftSendLog);
+    await recordFailure();
     return;
   }
 
@@ -386,6 +462,7 @@ async function processReplyMemoryDraftSendLog({
     existingPromptableMemories,
     existingPreferenceMemories,
     writingContext,
+    startingDraftText,
   ] = await Promise.all([
     prisma.replyMemory.findMany({
       where: {
@@ -415,6 +492,13 @@ async function processReplyMemoryDraftSendLog({
       where: { id: emailAccountId },
       select: { learnedWritingStyle: true, writingStyle: true },
     }),
+    composeAssistOutcomes
+      ? getStartingDraftText({
+          emailAccountId,
+          sentMessageId: draftSendLog.sentMessageId,
+          draftSendLogId: draftSendLog.id,
+        })
+      : null,
   ]);
 
   const existingMemories = [
@@ -431,6 +515,8 @@ async function processReplyMemoryDraftSendLog({
         }).content
       : "",
     draftText,
+    composeAssistOutcomes,
+    startingDraftText,
     sentText,
     senderEmail: normalizedSenderEmail,
     existingMemories,
@@ -771,32 +857,144 @@ async function markDraftSendLogReplyMemoryProcessed(
     where: { id },
     data: {
       replyMemoryProcessedAt: new Date(),
+      replyMemoryClaimedAt: null,
       ...(options?.keepSentText ? {} : { replyMemorySentText: null }),
     },
   });
 }
 
-async function recordDraftSendLogReplyMemoryFailure(
-  draftSendLog: Pick<
-    DraftSendLogReplyMemoryPayload,
-    "id" | "replyMemoryAttemptCount"
-  >,
-) {
-  const nextAttemptCount = draftSendLog.replyMemoryAttemptCount + 1;
-
-  await prisma.draftSendLog.update({
-    where: { id: draftSendLog.id },
-    data:
-      nextAttemptCount >= MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS
-        ? {
-            replyMemoryAttemptCount: { increment: 1 },
-            replyMemoryProcessedAt: new Date(),
-            replyMemorySentText: null,
-          }
-        : {
-            replyMemoryAttemptCount: { increment: 1 },
-          },
+// The attempt was counted when it was claimed. A failed one releases its
+// lease for a later sync, or, once the attempts have run out, closes the log.
+// Both read the stored count and only touch a lease this sync still holds,
+// so a sync that took over a stale lease is left alone.
+async function recordDraftSendLogReplyMemoryFailure({
+  draftSendLogId,
+  claimedAt,
+}: {
+  draftSendLogId: string;
+  claimedAt: Date;
+}) {
+  const exhausted = await prisma.draftSendLog.updateMany({
+    where: {
+      id: draftSendLogId,
+      replyMemoryClaimedAt: claimedAt,
+      replyMemoryAttemptCount: { gte: MAX_REPLY_MEMORY_SOURCE_FETCH_ATTEMPTS },
+    },
+    data: {
+      replyMemoryProcessedAt: new Date(),
+      replyMemorySentText: null,
+      replyMemoryClaimedAt: null,
+    },
   });
+  if (exhausted.count) return;
+  await prisma.draftSendLog.updateMany({
+    where: { id: draftSendLogId, replyMemoryClaimedAt: claimedAt },
+    data: { replyMemoryClaimedAt: null },
+  });
+}
+
+/** Logs no sync is working on: never claimed, or claimed and abandoned. */
+function unclaimedReplyMemoryFilter(
+  now: Date,
+): Prisma.DraftSendLogWhereInput[] {
+  return [
+    { replyMemoryClaimedAt: null },
+    {
+      replyMemoryClaimedAt: {
+        lt: new Date(now.getTime() - REPLY_MEMORY_CLAIM_LEASE_MS),
+      },
+    },
+  ];
+}
+
+/**
+ * The rule draft or saved suggested reply a reply written with Cue started
+ * from, logged against the same send, when the user used one.
+ */
+async function getStartingDraftText({
+  emailAccountId,
+  sentMessageId,
+  draftSendLogId,
+}: {
+  emailAccountId: string;
+  sentMessageId: string;
+  draftSendLogId: string;
+}) {
+  const candidates = await prisma.draftSendLog.findMany({
+    where: {
+      sentMessageId,
+      id: { not: draftSendLogId },
+      OR: [
+        { executedAction: { executedRule: { emailAccountId } } },
+        { suggestedReplyDraft: { emailAccountId } },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      similarityScore: true,
+      similarityMetadata: true,
+      executedAction: { select: { content: true, draftStatus: true } },
+      suggestedReplyDraft: { select: { content: true } },
+    },
+  });
+  const startingDraft = candidates.find((candidate) =>
+    candidate.executedAction
+      ? isUsedStartingDraft({
+          source: "rule-draft",
+          draftStatus: candidate.executedAction.draftStatus,
+          similarityScore: candidate.similarityScore,
+        })
+      : isUsedStartingDraft({
+          source: "suggested-reply",
+          draftExists: getLoggedDraftExists(candidate.similarityMetadata),
+          similarityScore: candidate.similarityScore,
+        }),
+  );
+  const text =
+    startingDraft?.executedAction?.content ??
+    startingDraft?.suggestedReplyDraft?.content;
+  return text ? text.slice(0, MAX_STARTING_DRAFT_TEXT) : null;
+}
+
+/**
+ * Whether a rule draft or saved suggested reply was where a reply written
+ * with Cue began: a rule draft counted as sent, or a saved suggested reply
+ * whose mailbox draft went with the send, that the sent reply still
+ * resembles. A suggestion left waiting, or a draft the user wrote over, was
+ * not. Send tracking and learning both decide with this, so they agree.
+ */
+export function isUsedStartingDraft(
+  draft:
+    | {
+        source: "rule-draft";
+        draftStatus: DraftEmailStatus | null;
+        similarityScore: number;
+      }
+    | {
+        source: "suggested-reply";
+        draftExists: boolean | null;
+        similarityScore: number;
+      },
+) {
+  if (draft.similarityScore < STARTING_DRAFT_MIN_SIMILARITY) return false;
+  return draft.source === "rule-draft"
+    ? draft.draftStatus === DraftEmailStatus.LIKELY_SENT
+    : draft.draftExists === false;
+}
+
+// Whether the mailbox draft was still there at send, as the log recorded it.
+function getLoggedDraftExists(similarityMetadata: Prisma.JsonValue) {
+  const lifecycle =
+    similarityMetadata &&
+    typeof similarityMetadata === "object" &&
+    !Array.isArray(similarityMetadata)
+      ? similarityMetadata.lifecycle
+      : null;
+  if (!lifecycle || typeof lifecycle !== "object" || Array.isArray(lifecycle))
+    return null;
+  return typeof lifecycle.draftExists === "boolean"
+    ? lifecycle.draftExists
+    : null;
 }
 
 const draftSendLogReplyMemoryInclude = {
@@ -816,6 +1014,14 @@ const draftSendLogReplyMemoryInclude = {
     select: {
       id: true,
       content: true,
+      messageId: true,
+      emailAccountId: true,
+    },
+  },
+  composeAssistReply: {
+    select: {
+      id: true,
+      outcomes: true,
       messageId: true,
       emailAccountId: true,
     },
@@ -843,6 +1049,11 @@ const preferenceWritingEvidenceInclude = {
       suggestedReplyDraft: {
         select: {
           content: true,
+        },
+      },
+      composeAssistReply: {
+        select: {
+          outcomes: true,
         },
       },
     },
@@ -911,11 +1122,15 @@ function formatPreferenceMemoryEvidence(
 ) {
   return preferenceEvidence
     .map((evidence, index) => {
+      const { executedAction, suggestedReplyDraft, composeAssistReply } =
+        evidence.draftSendLog;
       const draftText =
-        (
-          evidence.draftSendLog.executedAction ??
-          evidence.draftSendLog.suggestedReplyDraft
-        )?.content ?? "";
+        (executedAction ?? suggestedReplyDraft)?.content ??
+        (composeAssistReply
+          ? getAcceptedSuggestionsText(
+              parseComposeAssistOutcomes(composeAssistReply.outcomes),
+            )
+          : "");
       const sentText = evidence.draftSendLog.replyMemorySentText ?? "";
 
       return `${index + 1}. ${evidence.replyMemory.content}
@@ -933,18 +1148,26 @@ function truncatePreferenceEvidenceText(value: string) {
     : normalized;
 }
 
-// A send log compares against either a rule's draft or a saved suggested reply.
+// A send log compares against a rule's draft, a saved suggested reply, or
+// Cue's suggestions in the composer.
 function draftSendLogAccountFilter(
   emailAccountId: string,
 ): Prisma.DraftSendLogWhereInput[] {
   return [
     { executedAction: { executedRule: { emailAccountId } } },
     { suggestedReplyDraft: { emailAccountId } },
+    { composeAssistReply: { emailAccountId } },
   ];
 }
 
-function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload) {
-  const { executedAction, suggestedReplyDraft } = draftSendLog;
+function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload): {
+  sourceMessageId: string;
+  emailAccountId: string;
+  draftText: string;
+  composeAssistOutcomes?: ComposeAssistOutcome[];
+} | null {
+  const { executedAction, suggestedReplyDraft, composeAssistReply } =
+    draftSendLog;
   if (executedAction) {
     return {
       sourceMessageId: executedAction.executedRule.messageId,
@@ -957,6 +1180,16 @@ function getDraftSendLogDraft(draftSendLog: DraftSendLogReplyMemoryPayload) {
       sourceMessageId: suggestedReplyDraft.messageId,
       emailAccountId: suggestedReplyDraft.emailAccountId,
       draftText: suggestedReplyDraft.content,
+    };
+  }
+  if (composeAssistReply) {
+    const outcomes = parseComposeAssistOutcomes(composeAssistReply.outcomes);
+    if (!outcomes.length) return null;
+    return {
+      sourceMessageId: composeAssistReply.messageId,
+      emailAccountId: composeAssistReply.emailAccountId,
+      draftText: getAcceptedSuggestionsText(outcomes),
+      composeAssistOutcomes: outcomes,
     };
   }
   return null;

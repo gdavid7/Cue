@@ -10,12 +10,20 @@ import {
   ConnectionExpiredError,
 } from "@/utils/mcp/providers/types";
 import { redis } from "@/utils/redis";
+import { mergeNextUp } from "@/utils/home/merge-home";
+import { getDeadlines } from "@/utils/home/next-up";
 import { getHomeData, priorityOf } from "./get-home";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/redis", () => ({
-  redis: { get: vi.fn(async () => null), set: vi.fn(async () => "OK") },
+  redis: {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => "OK"),
+    incr: vi.fn(async () => 1),
+    expire: vi.fn(async () => 1),
+    del: vi.fn(async () => 1),
+  },
 }));
 const mocks = vi.hoisted(() => ({
   fetchEvents: vi.fn(),
@@ -303,7 +311,7 @@ describe("getHomeData", () => {
 
       expect(home.needsYou.map((t) => t.threadId)).toEqual(["sarah"]);
       expect(home.alsoInInbox).toEqual([]);
-      expect(home.pending).toEqual(["alsoInInbox"]);
+      expect(home.pending).toEqual(["alsoInInbox", "reading"]);
     } finally {
       vi.useRealTimers();
     }
@@ -349,7 +357,7 @@ describe("getHomeData", () => {
 
     expect(home.alsoInInbox).toEqual([]);
     expect(home.pending).toEqual([]);
-    expect(home.failed).toEqual(["alsoInInbox"]);
+    expect(home.failed).toEqual(["alsoInInbox", "reading"]);
   });
 
   it("holds back the rest of the inbox until the labels load, so filed mail isn't shown there", async () => {
@@ -368,7 +376,8 @@ describe("getHomeData", () => {
       const home = await run(provider);
 
       expect(home.alsoInInbox).toEqual([]);
-      expect(home.pending).toEqual(["alsoInInbox"]);
+      expect(home.reading).toEqual([]);
+      expect(home.pending).toEqual(["alsoInInbox", "reading"]);
     }
   });
 
@@ -480,9 +489,404 @@ describe("getHomeData", () => {
 
     const home = await run(provider);
 
-    // Read from the inbox listing's own labels: no list per filing label.
-    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
+    // Read from the inbox listing's own labels: no list per filing label,
+    // only the newsletters Today bundles under Reading.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(2);
     expect(home.alsoInInbox).toEqual([]);
+  });
+
+  it("bundles unread newsletters still in the inbox under Reading, which the rest of the inbox leaves out", async () => {
+    const unread = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const read = thread("read", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Read already",
+      labels: ["INBOX", "Label_Newsletter"],
+    });
+    const archived = thread("archived", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Archived",
+      labels: ["UNREAD", "Label_Newsletter"],
+    });
+    const old = thread("old", {
+      from: "Old News <old@news.example>",
+      subject: "Weeks ago",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    old.messages[0].internalDate = String(NOW.getTime() - 10 * 86_400_000);
+    const dentist = thread("dentist", {
+      from: "Dentist <d@smile.com>",
+      subject: "Your appointment",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider({
+      INBOX: [unread, read, dentist],
+      Newsletter: [unread, read, archived, old],
+    });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.reading[0]).toMatchObject({
+      fromName: "Field Notes",
+      tag: "Newsletter",
+      unread: true,
+      inInbox: true,
+    });
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+    expect(home.stats.readingCapped).toBe(false);
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: {
+          labelIds: ["Label_Newsletter", "INBOX"],
+          isUnread: true,
+          after: new Date(NOW.getTime() - 7 * 86_400_000),
+        },
+      }),
+    );
+  });
+
+  it("leaves what Reading shows out of the rest of the inbox, even when the inbox listing doesn't name its label", async () => {
+    const filed = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    // Outlook names a message's categories only once it knows them.
+    const unnamed = {
+      ...filed,
+      messages: filed.messages.map((m) => ({
+        ...m,
+        labelIds: ["INBOX", "UNREAD"],
+      })),
+    };
+    const provider = mockProvider({ INBOX: [unnamed], Newsletter: [filed] });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
+  });
+
+  it("shows a newsletter that needs a reply only under Needs reply", async () => {
+    const newsletter = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "Reply to win",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const provider = mockProvider({
+      NEEDS_REPLY: [newsletter],
+      Newsletter: [newsletter],
+    });
+
+    const home = await run(provider);
+
+    expect(home.needsYou.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.reading).toEqual([]);
+  });
+
+  it("says when Reading holds more newsletters than it lists", async () => {
+    const newsletters = Array.from({ length: 10 }, (_, i) =>
+      thread(`weekly-${i}`, {
+        from: `Letter ${i} <l${i}@news.example>`,
+        subject: `Issue ${i}`,
+        labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+      }),
+    );
+
+    const home = await run(mockProvider({ Newsletter: newsletters }));
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
+  });
+
+  it("bundles what Cue sorted as newsletters on an account without the Newsletter label", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const read = thread("read", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Read already",
+      labels: ["INBOX"],
+    });
+    const archived = thread("archived", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Archived",
+      labels: ["UNREAD"],
+    });
+    const dentist = thread("dentist", {
+      from: "Dentist <d@smile.com>",
+      subject: "Your appointment",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly, read, dentist], CUE: [archived] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly", "read", "archived"]);
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    // A read one is filed as the label's are: in neither lane.
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["dentist"]);
+    expect(home.newsletterThreadIds).toEqual(["weekly", "read", "archived"]);
+  });
+
+  it("shows a newsletter both the label and Cue's sorting name once", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const digest = thread("digest", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Daily",
+      labels: ["INBOX", "UNREAD"],
+    });
+    digest.messages[0].internalDate = String(NOW.getTime() + 60_000);
+    const provider = mockProvider({
+      INBOX: [weekly, digest],
+      Newsletter: [weekly],
+    });
+    sortedAsNewsletters(["weekly", "digest"]);
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["digest", "weekly"]);
+    expect(home.alsoInInbox).toEqual([]);
+    // The label's listing already holds it, so it isn't read again.
+    expect(vi.mocked(provider.getThread)).not.toHaveBeenCalledWith(
+      "weekly",
+      expect.anything(),
+    );
+  });
+
+  it("reads only so many of Cue's newsletters, and still fills Reading's cap", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `n-${i}`);
+    const unread = ids.map((id) =>
+      thread(id, {
+        from: `Letter <${id}@news.example>`,
+        subject: id,
+        labels: ["INBOX", "UNREAD"],
+      }),
+    );
+    const provider = mockProvider(
+      { CUE: unread },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(ids);
+
+    const home = await run(provider);
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
+    // One id-only listing finds the unread ones; only Reading's are read.
+    expect(provider.listUnreadInboxThreadIds).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(provider.getThread)).toHaveBeenCalledTimes(10);
+    expect(home.newsletterThreadIds).toEqual(ids.slice(0, 10));
+  });
+
+  it("leaves an unread newsletter Reading didn't get to in the rest of the inbox", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `n-${i}`);
+    const unread = ids.map((id) =>
+      thread(id, {
+        from: `Letter <${id}@news.example>`,
+        subject: id,
+        labels: ["INBOX", "UNREAD"],
+      }),
+    );
+    const provider = mockProvider(
+      { INBOX: unread.slice(-3) },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    // Cue decided on them newest first.
+    sortedAsNewsletters(ids);
+    // Every one is unread in the inbox, though the inbox lists only three.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: ids,
+      full: false,
+    });
+    vi.mocked(provider.getThread).mockImplementation(
+      async (threadId: string) => {
+        const found = unread.find((t) => t.id === threadId);
+        if (!found) throw new Error("Not found");
+        return found;
+      },
+    );
+
+    const home = await run(provider);
+
+    expect(home.reading).toHaveLength(10);
+    expect(home.stats.readingCapped).toBe(true);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["n-10", "n-11"]);
+  });
+
+  it("drops only a newsletter Gmail deferred, keeping the rest of Reading", async () => {
+    const labelled = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD", "Label_Newsletter"],
+    });
+    const digest = thread("digest", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Daily",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const deferred = thread("deferred", {
+      from: "Stratechery <ben@strat.example>",
+      subject: "Later",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider({
+      INBOX: [labelled, digest, deferred],
+      Newsletter: [labelled],
+    });
+    sortedAsNewsletters(["deferred", "digest"]);
+    const getThread = vi.mocked(provider.getThread).getMockImplementation()!;
+    vi.mocked(provider.getThread).mockImplementation(async (threadId) => {
+      if (threadId === "deferred")
+        throw new GmailCallDeferredError(5000, "interactive");
+      return getThread(threadId);
+    });
+
+    const home = await run(provider);
+
+    expect(home.pending).not.toContain("reading");
+    expect(home.reading.map((t) => t.threadId).sort()).toEqual([
+      "digest",
+      "weekly",
+    ]);
+    // Unchecked, so it isn't hidden from the rest of the inbox either.
+    expect(home.newsletterThreadIds).toEqual(["digest"]);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["deferred"]);
+  });
+
+  it("hides nothing it didn't see when the unread listing was full, though it named fewer conversations", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const older = thread("older", {
+      from: "Morning Brew <crew@brew.example>",
+      subject: "Unread, past the listing",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly, older] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly", "older"]);
+    // A full page of messages, many of one conversation (as Outlook lists
+    // them), naming only one.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: ["weekly"],
+      full: true,
+    });
+
+    const home = await run(provider);
+
+    expect(home.reading.map((t) => t.threadId)).toEqual(["weekly"]);
+    expect(home.stats.readingCapped).toBe(true);
+    expect(home.newsletterThreadIds).toEqual(["weekly"]);
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["older"]);
+  });
+
+  it("comes back pending when Gmail defers the unread listing", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    provider.listUnreadInboxThreadIds.mockRejectedValue(
+      new GmailCallDeferredError(5000, "interactive"),
+    );
+
+    const home = await run(provider);
+
+    expect(home.pending).toContain("reading");
+    // Nothing was checked, so nothing leaves the rest of the inbox.
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["weekly"]);
+  });
+
+  it("leaves an unread newsletter with an older unread message in the rest of the inbox", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "Read lately, unread before",
+      labels: ["INBOX"],
+    });
+    weekly.messages.unshift({
+      ...weekly.messages[0],
+      id: "weekly-old",
+      labelIds: ["INBOX", "UNREAD"],
+      internalDate: String(NOW.getTime() - 30 * 86_400_000),
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    // Nothing unread since the window opened, so the listing leaves it out.
+    provider.listUnreadInboxThreadIds.mockResolvedValue({
+      threadIds: [],
+      full: false,
+    });
+
+    const home = await run(provider);
+
+    expect(home.alsoInInbox.map((t) => t.threadId)).toEqual(["weekly"]);
+  });
+
+  it("starts no reads once Today's time is up", async () => {
+    const weekly = thread("weekly", {
+      from: "Field Notes <hello@fieldnotes.example>",
+      subject: "This week",
+      labels: ["INBOX", "UNREAD"],
+    });
+    const provider = mockProvider(
+      { INBOX: [weekly] },
+      { labels: LABELS.filter((label) => label.name !== "Newsletter") },
+    );
+    sortedAsNewsletters(["weekly"]);
+    const realNow = Date.now;
+    provider.listUnreadInboxThreadIds.mockImplementation(async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => realNow() + 60_000);
+      return { threadIds: ["weekly"], full: false };
+    });
+
+    try {
+      await run(provider);
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+
+    expect(provider.getThread).not.toHaveBeenCalled();
+  });
+
+  it("names the labels Cue files under, so the browser's own inbox can leave filed mail out too", async () => {
+    const home = await run(mockProvider({}));
+
+    expect(home.handledLabelIds).toEqual(["Label_Newsletter", "Label_Receipt"]);
+  });
+
+  it("names no filing labels when the labels didn't load", async () => {
+    const provider = mockProvider({});
+    provider.getLabels.mockRejectedValue(new Error("Bad request"));
+
+    const home = await run(provider);
+
+    expect(home.handledLabelIds).toEqual([]);
   });
 
   it("counts the emails Cue checked and filed since the user's midnight, from its own records", async () => {
@@ -526,8 +930,8 @@ describe("getHomeData", () => {
         }),
       }),
     );
-    // Counted from Cue's records: no extra mailbox reads.
-    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(1);
+    // Counted from Cue's records: no reads past the inbox and its newsletters.
+    expect(provider.getThreadsWithQuery).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -569,7 +973,9 @@ describe("getHomeData: what's next", () => {
 
     expect(home.calendar).toEqual({
       connected: true,
+      clearThroughTomorrow: false,
       next: {
+        id: "review",
         title: "Design review",
         at: "2026-10-13T21:00:00.000Z",
         url: "https://calendar.example.com/review",
@@ -585,7 +991,7 @@ describe("getHomeData: what's next", () => {
       events: [
         {
           ...event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z"),
-          attendees: [{ email: USER }, { email: other, declined: true }],
+          attendees: [{ email: other, declined: true }],
         },
         event("review", "Design review", "2026-10-13T21:00:00Z"),
       ],
@@ -603,6 +1009,31 @@ describe("getHomeData: what's next", () => {
 
     expect(home.calendar.next?.title).toBe("Design review");
     expect(home.nextUp.map((item) => item.title)).toEqual(["Design review"]);
+  });
+
+  it("keeps a meeting declined at one of the user's addresses but accepted at another", async () => {
+    const other = "me@work.example.com";
+    mocks.fetchEvents.mockResolvedValue({
+      complete: true,
+      events: [
+        {
+          ...event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z"),
+          attendees: [{ email: USER }, { email: other, declined: true }],
+        },
+      ],
+    });
+
+    const home = await getHomeData({
+      emailAccountId: "account-1",
+      userEmail: USER,
+      ownAddresses: [USER, other],
+      emailProvider: mockProvider({}),
+      logger: createTestLogger(),
+      timeZone: TIME_ZONE,
+      now: NOW,
+    });
+
+    expect(home.calendar.next?.title).toBe("Vendor pitch");
   });
 
   it("skips a meeting declined from another of the person's calendars", async () => {
@@ -673,7 +1104,71 @@ describe("getHomeData: what's next", () => {
 
     const home = await run(mockProvider({}));
 
-    expect(home.calendar).toEqual({ connected: true, next: null });
+    expect(home.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: true,
+      next: null,
+    });
+  });
+
+  it.each([
+    {
+      label: "every calendar read in full, with only all-day items",
+      result: {
+        complete: true,
+        events: [
+          event("holiday", "Holiday", "2026-10-14T00:00:00Z", { allDay: true }),
+        ],
+      },
+      clear: true,
+    },
+    {
+      label: "only a declined invite",
+      result: {
+        complete: true,
+        events: [
+          event("pitch", "Vendor pitch", "2026-10-13T17:00:00Z", {
+            declined: true,
+          }),
+        ],
+      },
+      clear: true,
+    },
+    {
+      label: "a meeting in progress",
+      result: {
+        complete: true,
+        events: [event("now", "Standup", "2026-10-13T15:45:00Z")],
+      },
+      clear: false,
+    },
+    {
+      label: "a calendar that failed or was cut short",
+      result: { complete: false, events: [] },
+      clear: false,
+    },
+  ])("calls the calendar clear through tomorrow only when it is: $label", async ({
+    result,
+    clear,
+  }) => {
+    mocks.fetchEvents.mockResolvedValue(result);
+
+    const home = await run(mockProvider({}));
+
+    expect(home.calendar.clearThroughTomorrow).toBe(clear);
+  });
+
+  it("never calls a calendar that couldn't be read clear", async () => {
+    mocks.fetchEvents.mockRejectedValue(new Error("Calendar down"));
+
+    const home = await run(mockProvider({}));
+
+    // Still connected, so Today doesn't ask to connect it either.
+    expect(home.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: false,
+      next: null,
+    });
   });
 
   it.each([
@@ -697,7 +1192,11 @@ describe("getHomeData: what's next", () => {
 
     const home = await run(mockProvider({}));
 
-    expect(home.calendar).toEqual({ connected, next: null });
+    expect(home.calendar).toEqual({
+      connected,
+      clearThroughTomorrow: false,
+      next: null,
+    });
   });
 
   it("merges the next meetings with work due from connected apps, soonest first", async () => {
@@ -718,9 +1217,13 @@ describe("getHomeData: what's next", () => {
     );
 
     const home = await run(mockProvider({}));
+    const { items } = await deadlines();
+    const nextUp = mergeNextUp([home.nextUp, items]);
 
+    // Today itself names the meetings only; the browser merges the rest.
+    expect(home.nextUp.every((item) => item.kind === "event")).toBe(true);
     expect(
-      home.nextUp.map(({ kind, title, source }) => [kind, title, source]),
+      nextUp.map(({ kind, title, source }) => [kind, title, source]),
     ).toEqual([
       ["deadline", "Problem set 4", "Canvas"],
       ["event", "Design review", "Calendar"],
@@ -732,17 +1235,47 @@ describe("getHomeData: what's next", () => {
     expect(JSON.stringify(vi.mocked(redis.set).mock.calls)).not.toContain(
       "Problem set",
     );
-    expect(home.nextUp[0]).toMatchObject({
+    expect(nextUp[0]).toMatchObject({
       at: "2026-10-13T20:00:00.000Z",
       detail: "Linear Algebra",
       url: "https://school.instructure.com/assignments/4",
     });
-    expect(home.nextUp[3]).toMatchObject({
+    expect(nextUp[3]).toMatchObject({
       allDay: true,
       url: "https://acme.atlassian.net/browse/OPS-12",
     });
     // Connected apps, so nothing to suggest.
     expect(home.suggestion).toBeNull();
+  });
+
+  it("answers without waiting on a connected app that takes 2.5 s", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      prisma.mcpConnection.findMany.mockResolvedValue([
+        connection("canvas"),
+      ] as never);
+      mocks.executeTool.mockImplementation(
+        ({ tool }: { tool: string }) =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve(TOOL_RESULTS[tool]), 2500),
+          ),
+      );
+
+      const start = Date.now();
+      let done = false;
+      const pending = run(mockProvider({})).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      while (!done) await vi.advanceTimersByTimeAsync(50);
+      await pending;
+      const waited = Date.now() - start;
+
+      // 2500 ms before deadlines moved to their own request.
+      expect(waited).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves out an app that doesn't answer in time, and shows the rest", async () => {
@@ -758,11 +1291,11 @@ describe("getHomeData: what's next", () => {
           : Promise.resolve(TOOL_RESULTS[tool]),
       );
 
-      const pending = run(mockProvider({}));
+      const pending = deadlines();
       await vi.advanceTimersByTimeAsync(10_000);
-      const home = await pending;
+      const { items } = await pending;
 
-      expect(home.nextUp.map((item) => item.source)).toEqual(["Canvas"]);
+      expect(items.map((item) => item.source)).toEqual(["Canvas"]);
     } finally {
       vi.useRealTimers();
     }
@@ -785,16 +1318,16 @@ describe("getHomeData: what's next", () => {
         return Promise.resolve(TOOL_RESULTS[tool]);
       });
 
-      const pending = run(mockProvider({}));
+      const pending = deadlines();
       await vi.advanceTimersByTimeAsync(10_000);
-      const home = await pending;
+      const { items } = await pending;
 
-      expect(home.nextUp).toEqual([]);
+      expect(items).toEqual([]);
       const lines = warn.mock.calls.map((args) => args.join(" "));
       expect(
         lines.filter((line) => line.includes("Connected app timed out")),
       ).toEqual([
-        `[test]: Connected app timed out ${JSON.stringify({ app: "asana" }, null, 2)}`,
+        `[test]: Connected app timed out ${JSON.stringify({ app: "asana", attempts: 1, pauseMinutes: 5 }, null, 2)}`,
       ]);
       const failed = lines.filter((line) =>
         line.includes("Connected app deadlines failed"),
@@ -825,7 +1358,7 @@ describe("getHomeData: what's next", () => {
 
     try {
       for (const _visit of [1, 2]) {
-        const pending = run(mockProvider({}));
+        const pending = deadlines();
         await vi.advanceTimersByTimeAsync(10_000);
         await pending;
       }
@@ -858,8 +1391,8 @@ describe("getHomeData: what's next", () => {
     );
 
     try {
-      await run(mockProvider({}));
-      await run(mockProvider({}));
+      await deadlines();
+      await deadlines();
     } finally {
       vi.mocked(redis.get).mockImplementation(async () => null);
       vi.mocked(redis.set).mockImplementation(async () => "OK");
@@ -880,9 +1413,10 @@ describe("getHomeData: what's next", () => {
     ] as never);
 
     const home = await run(mockProvider({}));
+    const { items } = await deadlines();
 
     expect(mocks.executeTool).not.toHaveBeenCalled();
-    expect(home.nextUp).toEqual([]);
+    expect(items).toEqual([]);
     expect(home.suggestion).toBeNull();
   });
 
@@ -894,7 +1428,7 @@ describe("getHomeData: what's next", () => {
       new ConnectionExpiredError("canvas", "Invalid access token."),
     );
 
-    await run(mockProvider({}));
+    await deadlines();
 
     expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
       where: {
@@ -968,6 +1502,22 @@ const TOOL_RESULTS: Record<string, unknown> = {
   },
 };
 
+/** Cue's latest decisions, newest first, as its Newsletter rule's runs. */
+function sortedAsNewsletters(threadIds: string[]) {
+  prisma.executedRule.findMany.mockImplementation((async ({
+    where,
+  }: {
+    where?: { rule?: unknown };
+  }) =>
+    where?.rule
+      ? threadIds.map((threadId) => ({
+          threadId,
+          messageId: `${threadId}-m`,
+          rule: { systemType: "NEWSLETTER" },
+        }))
+      : []) as never);
+}
+
 function connection(app: string) {
   return {
     id: `connection-${app}`,
@@ -1025,6 +1575,15 @@ describe("priorityOf", () => {
   });
 });
 
+function deadlines(now = NOW) {
+  return getDeadlines({
+    emailAccountId: "account-1",
+    timeZone: TIME_ZONE,
+    logger: createTestLogger(),
+    now,
+  });
+}
+
 function run(emailProvider: EmailProvider, now = NOW) {
   return getHomeData({
     emailAccountId: "account-1",
@@ -1075,8 +1634,11 @@ function thread(
  * Returns the threads for whichever label a query asks for. NEEDS_REPLY and
  * AWAITING are Cue's open reply trackers rather than labels.
  */
-function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
-  const nameById = new Map(LABELS.map((l) => [l.id, l.name]));
+function mockProvider(
+  threadsByLabel: Record<string, EmailThread[]>,
+  { labels = LABELS }: { labels?: typeof LABELS } = {},
+) {
+  const nameById = new Map(labels.map((l) => [l.id, l.name]));
   const threadsById = new Map(
     Object.values(threadsByLabel)
       .flat()
@@ -1096,7 +1658,19 @@ function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
       if (!found) throw new Error("Not found");
       return found;
     }),
-    getLabels: vi.fn(async () => LABELS),
+    getLabels: vi.fn(async () => labels),
+    // Unread inbox conversations, by id, as the provider lists them.
+    listUnreadInboxThreadIds: vi.fn(async () => ({
+      threadIds: [...threadsById.values()]
+        .filter((t) =>
+          t.messages.some(
+            (m) =>
+              m.labelIds?.includes("INBOX") && m.labelIds?.includes("UNREAD"),
+          ),
+        )
+        .map((t) => t.id),
+      full: false,
+    })),
     getThreadsWithQuery: vi.fn(
       async ({ query }: { query: { labelIds?: string[] } }) => {
         const labelId = query.labelIds?.find((id) => id !== "INBOX") ?? "INBOX";
@@ -1105,6 +1679,7 @@ function mockProvider(threadsByLabel: Record<string, EmailThread[]>) {
     ),
   } as unknown as EmailProvider & {
     getLabels: ReturnType<typeof vi.fn>;
+    listUnreadInboxThreadIds: ReturnType<typeof vi.fn>;
     getThreadsWithQuery: ReturnType<typeof vi.fn>;
   };
 }

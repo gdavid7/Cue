@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { setLastEmailAccountAction } from "@/utils/actions/email-account-cookie";
+import { rememberLastEmailAccount } from "@/utils/last-email-account";
 import { ProfileImage } from "@/components/ProfileImage";
 import { getAccountSwitchUrl } from "@/utils/account-switch-url";
 import { getMailAccountUrl } from "@/app/(app)/[emailAccountId]/mail/mail-account-url";
@@ -61,7 +61,7 @@ export function AccountSwitcherMenuItems({
   const handleSelect = useCallback(
     async (emailAccountId: string) => {
       try {
-        await setLastEmailAccountAction({ emailAccountId });
+        await rememberLastEmailAccount(emailAccountId);
       } catch {
         // Ignore cookie update failures and continue navigation.
       }

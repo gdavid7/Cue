@@ -11,9 +11,13 @@ import {
 // automation and interactive operations. They are not total application quotas.
 // Cue's Gmail project allows 15,000 units per user per minute, and the
 // account envelope claims two thirds of that. The costs below are Cue's own
-// conservative units, a full read priced like a whole message: a 50-message
-// sync page of them costs 3,005, so one page must fit in a single reservation
-// and the backfill half of the account envelope.
+// conservative units, a full read priced like a whole message. Gmail scan
+// pages are sized to the quota burst their priority can spend without waiting
+// (nine whole messages for backfill; nineteen for the primary scan and for a
+// first sync's first inbox backfill pages, which read at sync), so they
+// cost well under 3,100 and each fits a single reservation. maximumCost stays
+// 3,100 because search and foreground debits are not page-sized: a 50-message
+// read costs 3,005 and must still be accepted and charged in full.
 // https://learn.microsoft.com/en-us/graph/throttling-limits#outlook-service-limits
 const policies = {
   google: { account: 10_000, app: 360_000, maximumCost: 3100 },
@@ -31,6 +35,11 @@ type Input = {
   provider: keyof typeof policies;
   priority: "backfill" | "current";
   cost: number;
+  /**
+   * The cost of the request the caller will make next, such as a scan's next
+   * page. Admission then reports how long the budget would hold that one.
+   */
+  nextCost?: number;
   /**
    * How much of `cost` a failure shows never reached the provider; that much
    * is returned to the budget. Anything that may have reached it stays spent.
@@ -102,7 +111,21 @@ for i = 5, 6 do
   redis.call('ZADD', KEYS[i], now + 120000, ARGV[6])
   redis.call('PEXPIRE', KEYS[i], 180000)
 end
-return 0
+local nextCost = tonumber(ARGV[7])
+if not nextCost then return 0 end
+-- The same refill math as the refusal above, so a caller that waits this long
+-- is not turned away unless other work spends the budget meanwhile.
+local nextWait = math.max(0, cooldown - now)
+for i = 1, 4 do
+  if buckets[i] then
+    local tokens = buckets[i] - cost
+    if tokens < nextCost then
+      local capacity = tonumber(ARGV[i + 1])
+      nextWait = math.max(nextWait, math.ceil((nextCost - tokens) * 60000 / (capacity * recovery)))
+    end
+  end
+end
+return {0, '', nextWait}
 `;
 // Admission caps a bucket at its capacity as it refills, so a refund only adds
 // the tokens back.
@@ -205,7 +228,13 @@ export async function debitLocalMailSyncBudget({
  */
 export async function withLocalMailSyncBudget<T>(
   input: Input,
-  operation: (signal: AbortSignal) => Promise<T>,
+  operation: (
+    signal: AbortSignal,
+    admission: {
+      /** With `nextCost`: how long from admission the next request must wait. */
+      nextAdmitAfterMs: number | null;
+    },
+  ) => Promise<T>,
 ): Promise<T> {
   const policy = policies[input.provider];
   if (
@@ -229,6 +258,7 @@ export async function withLocalMailSyncBudget<T>(
   ];
   const owner = randomUUID();
   const background = input.priority === "backfill";
+  let nextAdmitAfterMs: number | null = null;
   try {
     if (!isEmailProviderRateLimitRedisConfigured())
       throw new LocalMailSyncPausedError(undefined, "redis_not_configured");
@@ -238,24 +268,26 @@ export async function withLocalMailSyncBudget<T>(
         cooldown.retryAt.getTime() - Date.now(),
         "provider_rate_limit_mode",
       );
-    const admission = await redis.eval<string[], number | [number, string]>(
-      admitScript,
-      keys,
-      [
-        String(input.cost),
-        String(policy.account),
-        String(policy.app),
-        String(background ? policy.account / 2 : 0),
-        String(background ? policy.app / 2 : 0),
-        owner,
-      ],
-    );
-    const [wait, gate] = Array.isArray(admission)
+    const admission = await redis.eval<
+      string[],
+      number | [number, string] | [number, string, number]
+    >(admitScript, keys, [
+      String(input.cost),
+      String(policy.account),
+      String(policy.app),
+      String(background ? policy.account / 2 : 0),
+      String(background ? policy.app / 2 : 0),
+      owner,
+      ...(input.nextCost === undefined ? [] : [String(input.nextCost)]),
+    ]);
+    const [wait, gate, nextWait] = Array.isArray(admission)
       ? admission
       : [admission, "unspecified"];
     if (typeof wait !== "number" || !Number.isFinite(wait) || wait < 0)
       throw new LocalMailSyncPausedError(undefined, "invalid_store_reply");
     if (wait > 0) throw new LocalMailSyncPausedError(wait, String(gate));
+    if (typeof nextWait === "number" && nextWait > 0)
+      nextAdmitAfterMs = nextWait;
   } catch (error) {
     if (error instanceof LocalMailSyncPausedError) throw error;
     throw new LocalMailSyncPausedError(undefined, "store_error");
@@ -281,7 +313,7 @@ export async function withLocalMailSyncBudget<T>(
       .catch(pause);
   }, 20_000);
   try {
-    const result = await operation(controller.signal);
+    const result = await operation(controller.signal, { nextAdmitAfterMs });
     if (pauseError) throw pauseError;
     return result;
   } catch (error) {

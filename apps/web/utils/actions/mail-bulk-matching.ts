@@ -8,6 +8,7 @@ import {
 import { actionClient } from "@/utils/actions/safe-action";
 import { createEmailProvider } from "@/utils/email/provider";
 import { SafeError } from "@/utils/error";
+import { mailBulkJobListings } from "@/utils/mail-bulk/job-listing";
 import { enqueueMailBulkJob } from "@/utils/mail-bulk/run-matching-job";
 import {
   ACTIVE_MAIL_BULK_JOB_STATUSES,
@@ -58,7 +59,19 @@ export const startMatchingBulkActionAction = actionClient
         capped: false,
         updatedAt: Date.now(),
       });
-      await enqueueMailBulkJob({ jobId, emailAccountId, scope, deferrals: 0 });
+      await mailBulkJobListings.create({ jobId, emailAccountId, scope });
+      try {
+        await enqueueMailBulkJob({ jobId, emailAccountId, deferrals: 0 });
+      } catch (error) {
+        // Nothing will ever list this view, so it isn't kept.
+        await mailBulkJobListings.remove(jobId, emailAccountId);
+        await mailBulkJobStore.transition(
+          jobId,
+          ACTIVE_MAIL_BULK_JOB_STATUSES,
+          "failed",
+        );
+        throw error;
+      }
       logger.info("Started bulk action on matching mail", { action, jobId });
       return { jobId };
     },

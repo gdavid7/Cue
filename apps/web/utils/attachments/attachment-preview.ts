@@ -1,4 +1,4 @@
-import { readOfficePackage } from "@/utils/attachments/office-package";
+import { readOfficePackageInWorker } from "@/utils/attachments/office-package-client";
 
 const rasterTypes = new Set([
   "image/png",
@@ -81,8 +81,9 @@ export async function getAttachmentPreviewTarget(
   const header = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
   if (!matches(header, ZIP_SIGNATURE)) return;
   if (blob.size > OFFICE_PREVIEW_MAX_BYTES) return { kind: "tooLarge" };
-  const read = await readOfficePackage(
-    new Uint8Array(await blob.arrayBuffer()),
+  // Unpacked off the page; the fresh buffer moves to the worker uncopied.
+  const read = await readOfficePackageInWorker(
+    await blob.arrayBuffer(),
     signal,
   );
   if ("refused" in read)

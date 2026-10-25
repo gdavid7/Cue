@@ -3,7 +3,11 @@ import {
   COMPOSE_ASSIST_LIMITS,
   type composeAssistBody,
 } from "@/app/api/ai/compose-assist/validation";
-import { getTodayForLLM, getWritingStylePrompt } from "@/utils/ai/helpers";
+import {
+  escapePromptTags,
+  getTodayForLLM,
+  getWritingStylePrompt,
+} from "@/utils/ai/helpers";
 import { getReplyMemoriesForPrompt } from "@/utils/ai/reply/reply-memory";
 import { extractEmailAddress, isSameEmailAddress } from "@/utils/email";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
@@ -112,7 +116,7 @@ ${context.learnedWritingStyle}
 Reply memories: facts and preferences the user taught by editing earlier replies. Use one only when it fits this email.
 
 <reply_memories>
-${context.memories.map((memory, i) => `${i + 1}. ${escapeTags(memory)}`).join("\n")}
+${context.memories.map((memory, i) => `${i + 1}. ${escapePromptTags(memory)}`).join("\n")}
 </reply_memories>
 `
     : "";
@@ -199,15 +203,15 @@ function buildTask({
     getTodayForLLM(now),
     request.to || request.subject
       ? `<email>
-${request.to ? `<to>${escapeTags(request.to)}</to>\n` : ""}${request.subject ? `<subject>${escapeTags(request.subject)}</subject>\n` : ""}</email>`
+${request.to ? `<to>${escapePromptTags(request.to)}</to>\n` : ""}${request.subject ? `<subject>${escapePromptTags(request.subject)}</subject>\n` : ""}</email>`
       : "",
     context.thread.length
       ? `<thread>
 ${context.thread
   .map(
     (message) =>
-      `<message from="${escapeTags(message.from)}" date="${message.date}">
-${escapeTags(message.text)}
+      `<message from="${escapePromptTags(message.from)}" date="${message.date}">
+${escapePromptTags(message.text)}
 </message>`,
   )
   .join("\n")}
@@ -218,39 +222,39 @@ ${escapeTags(message.text)}
   const followUps = request.refinements.length
     ? `
 Then apply these follow-up requests, the later ones winning where they disagree:
-${request.refinements.map((text) => `<request>${escapeTags(text)}</request>`).join("\n")}`
+${request.refinements.map((text) => `<request>${escapePromptTags(text)}</request>`).join("\n")}`
     : "";
 
   let task: string;
   if (request.mode === "rewrite") {
     const instruction =
       request.action === "translate"
-        ? `translate it into ${escapeTags(request.language ?? "English")}.`
+        ? `translate it into ${escapePromptTags(request.language ?? "English")}.`
         : request.action === "custom"
-          ? `do what the user asks:\n<request>${escapeTags(request.instruction ?? "")}</request>`
+          ? `do what the user asks:\n<request>${escapePromptTags(request.instruction ?? "")}</request>`
           : REWRITE_INSTRUCTIONS[request.action ?? "improve"];
     task = `<draft>
-${escapeTags(before)}<selection>${escapeTags(request.text)}</selection>${escapeTags(after)}
+${escapePromptTags(before)}<selection>${escapePromptTags(request.text)}</selection>${escapePromptTags(after)}
 </draft>
 
 Rewrite the text inside <selection>: ${instruction}${followUps}
 Return only the new text for the selection, written to fit where it sits in the draft. Keep its meaning and anything the request doesn't ask you to change.`;
   } else if (request.mode === "expand-notes") {
     task = `<draft>
-${escapeTags(request.text)}
+${escapePromptTags(request.text)}
 </draft>
 
 The draft is the user's notes. Turn them into the email they would send: cover every note, in order, as natural sentences, and add nothing the notes don't say.${followUps}
 Return the whole email body.`;
   } else {
     const draft = `<draft>
-${escapeTags(before)}<cursor/>${escapeTags(after)}
+${escapePromptTags(before)}<cursor/>${escapePromptTags(after)}
 </draft>`;
     task =
       request.mode === "write"
         ? `${draft}
 
-<request>${escapeTags(request.instruction ?? "")}</request>
+<request>${escapePromptTags(request.instruction ?? "")}</request>
 
 Write what the user asks for, to go at <cursor/>.${followUps}
 Return only the new text, without repeating the draft around it.`
@@ -285,12 +289,6 @@ async function loadThread({
     logger.warn("Could not load the thread for compose assist", { error });
     return [];
   }
-}
-
-// Keeps quoted text from closing or opening the prompt's tags. Ampersands stay
-// as typed, so the model doesn't copy entities into the draft.
-function escapeTags(text: string) {
-  return text.replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
 }
 
 function messageBody(message: ParsedMessage) {

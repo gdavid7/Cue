@@ -71,7 +71,16 @@ export function NextUpList({
           </>
         );
         return (
-          <li key={item.id}>
+          <li
+            // Deadlines arrive after Today: they fade in where they belong
+            // rather than appear at once, and simply appear with reduced motion.
+            className={
+              item.kind === "deadline"
+                ? "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200"
+                : undefined
+            }
+            key={item.id}
+          >
             {item.url ? (
               <a
                 className={cn(

@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 // The journeys robot against production (or CUE_QA_BASE_URL) as the QA
 // account. The same spec runs on the local emulated stack with
 // `playwright.emulated.config.mjs` next to this file.
-const baseURL = process.env.CUE_QA_BASE_URL || "https://cue-inbox.vercel.app";
+const baseURL = process.env.CUE_QA_BASE_URL || "https://cuemail.tech";
 
 export default defineConfig({
   testDir: ".",

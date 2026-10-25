@@ -21,7 +21,10 @@ import {
 import type { Logger } from "@/utils/logger";
 import { assertHasAiAccess } from "@/utils/premium/limits";
 import { assertWithinUserRateLimit } from "@/utils/rate-limit";
-import { isGmailCallDeferredError } from "@/utils/gmail/quota";
+import {
+  type GmailCallDeferredError,
+  getGmailCallDeferredError,
+} from "@/utils/gmail/quota";
 import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import { canWriteRequestedReplies } from "@/utils/rule/draft-replies-enabled";
 import { getReadySuggestionMessageIds } from "@/utils/reply-tracker/ready-suggestions";
@@ -34,9 +37,13 @@ import { getEmailAccountWithAi } from "@/utils/user/get";
 const MAX_NEW_PER_REQUEST = 25;
 const EXTRACT_CONCURRENCY = 4;
 const MEETING_WINDOW_DAYS = 14;
-// Only a request with uncached emails is charged, and it can make up to
-// MAX_NEW_PER_REQUEST model calls, so this sits below the per-call limits.
-const NEW_INSIGHT_REQUESTS_PER_WINDOW = 30;
+// Charged per new email, as each is one model call: the rows go ten at a
+// time (PF-9v), so a limit on requests ran out in an ordinary scroll. The
+// ceiling on model calls is the one 30 requests of 25 had.
+const NEW_INSIGHTS_PER_WINDOW = 750;
+// The open conversation has a limit of its own, so the rows' traffic never
+// refuses the note someone is waiting on (D-086). One email a request.
+const OPEN_THREAD_INSIGHTS_PER_WINDOW = 120;
 const RATE_LIMIT_WINDOW_SECONDS = 5 * 60;
 const SKIP_LABELS = ["SPAM", "TRASH", "DRAFT"];
 // Kept by the browser with each insight for a month; a mailing's full
@@ -78,6 +85,7 @@ export async function getInboxInsights({
   items,
   known = [],
   withEvents = false,
+  openThread = false,
   emailProvider,
   logger,
   now = new Date(),
@@ -90,6 +98,8 @@ export async function getInboxInsights({
   known?: string[];
   /** The browser holds people to match against meetings. */
   withEvents?: boolean;
+  /** The one conversation on screen, rather than the rows. */
+  openThread?: boolean;
   emailProvider: EmailProvider;
   logger: Logger;
   now?: Date;
@@ -99,24 +109,29 @@ export async function getInboxInsights({
   draftRepliesEnabled: boolean;
   /** Of the items' messages, those with a reply Cue wrote waiting in Cue. */
   draftedMessageIds: string[];
+  /**
+   * New messages left for a later request because the account's Gmail
+   * budget ran out partway, and when to ask again. Not tries that failed.
+   */
+  deferred: { messageIds: string[]; retryAfterMs: number } | null;
 }> {
-  const knownIds = new Set(known);
-  const missing = items
-    .filter((item) => !knownIds.has(item.messageId))
-    .slice(0, MAX_NEW_PER_REQUEST);
+  const missing = selectNewInsightItems(items, known);
 
   // A page the browser already holds costs no model call and is not charged.
   if (missing.length) {
     await assertWithinUserRateLimit({
-      scope: "inbox-insights",
+      scope: openThread ? "inbox-insights-open" : "inbox-insights",
       userId,
-      limit: NEW_INSIGHT_REQUESTS_PER_WINDOW,
+      limit: openThread
+        ? OPEN_THREAD_INSIGHTS_PER_WINDOW
+        : NEW_INSIGHTS_PER_WINDOW,
       windowSeconds: RATE_LIMIT_WINDOW_SECONDS,
+      cost: missing.length,
       logger,
     });
   }
 
-  const fresh = missing.length
+  const { fresh, deferred } = missing.length
     ? await extractMissing({
         emailAccountId,
         userEmail,
@@ -125,7 +140,7 @@ export async function getInboxInsights({
         logger,
         now,
       })
-    : new Map<string, InboxInsightExtraction>();
+    : { fresh: new Map<string, InboxInsightExtraction>(), deferred: null };
 
   const needsEvents =
     withEvents || [...fresh.values()].some((entry) => entry.people.length);
@@ -154,7 +169,19 @@ export async function getInboxInsights({
     // drafting is on.
     draftRepliesEnabled: canWriteRequestedReplies(settings.draftReplies),
     draftedMessageIds: [...drafted],
+    deferred,
   };
+}
+
+/** The items this request reads and sends to the model: not yet held, capped. */
+export function selectNewInsightItems<T extends { messageId: string }>(
+  items: T[],
+  known: string[],
+) {
+  const knownIds = new Set(known);
+  return items
+    .filter((item) => !knownIds.has(item.messageId))
+    .slice(0, MAX_NEW_PER_REQUEST);
 }
 
 async function extractMissing({
@@ -183,11 +210,19 @@ async function extractMissing({
     : false;
   const aiAccount = hasAi ? emailAccount : null;
 
-  let deferred: unknown = null;
+  // Set from inside the workers, which control flow can't see.
+  let deferral = null as GmailCallDeferredError | null;
+  const deferredIds: string[] = [];
   const results = await mapWithConcurrency(
     items,
     EXTRACT_CONCURRENCY,
     async ({ messageId }) => {
+      // Once one read is deferred the rest would be too: they are left for
+      // the next request rather than each asking the gate again.
+      if (deferral) {
+        deferredIds.push(messageId);
+        return null;
+      }
       try {
         const message = await emailProvider.getMessage(messageId);
         const needsLook =
@@ -209,8 +244,10 @@ async function extractMissing({
         };
         return [messageId, entry] as const;
       } catch (error) {
-        if (isGmailCallDeferredError(error)) {
-          deferred ??= error;
+        const deferredError = getGmailCallDeferredError(error);
+        if (deferredError) {
+          deferral ??= deferredError;
+          deferredIds.push(messageId);
           return null;
         }
         logger.warn("Failed to build inbox insight", { error });
@@ -220,9 +257,14 @@ async function extractMissing({
   );
   // Insights wait for spare Gmail quota. With nothing built, failing the
   // request lets the client retry; what was built goes back so the browser
-  // keeps it, and the rest is asked for when the rows next change.
-  if (deferred && !results.some(Boolean)) throw deferred;
-  return new Map(results.filter((r) => r !== null));
+  // keeps it, and the deferred rest is named so it is asked for again.
+  if (deferral && !results.some(Boolean)) throw deferral;
+  return {
+    fresh: new Map(results.filter((r) => r !== null)),
+    deferred: deferral
+      ? { messageIds: deferredIds, retryAfterMs: deferral.retryAfterMs }
+      : null,
+  };
 }
 
 async function upcomingEvents({

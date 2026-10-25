@@ -19,6 +19,7 @@ import type {
 import type { OperationState } from "./operations";
 import {
   MAX_CHANGES_BATCH_READS,
+  MAX_ENUMERATION_RETRY_AFTER_MS,
   type MailboxSource,
   type SyncReadResult,
 } from "./ports/mailbox-source";
@@ -35,6 +36,11 @@ import type { AssistantStateSource } from "./ports/assistant-source";
 import type { ScopeDescriptor } from "./ports/mailbox-source";
 import type { HostRuntime } from "./ports/runtime";
 import { webCryptoSha256 } from "./canonical";
+import type { MailEngineCapabilities } from "./capabilities";
+import type {
+  ImportantPerson,
+  SetImportantPersonInput,
+} from "./important-people";
 import {
   extractProviderSearches,
   resolveSearchPredicates,
@@ -49,9 +55,20 @@ import type {
   MailboxView,
   MessageSearchPage,
   MessageSearchQuery,
+  FileSender,
+  FilesPage,
+  FilesQuery,
+  NeverReadSender,
+  NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
+  SenderHistory,
+  SenderHistoryQuery,
   QueryHandle,
+  SemanticMatch,
+  SemanticSearchQuery,
+  WaitingOnYouConversation,
+  WaitingOnYouQuery,
 } from "./queries";
 import {
   createQueryRegistry,
@@ -82,7 +99,21 @@ const LOW_PRIORITY_CATCH_UP_INTERVAL_MS = 10 * 60_000;
 // A sync request (a provider push, the tab coming back) refreshes them only
 // when they have not run recently, so a burst of pushes stays cheap.
 const LOW_PRIORITY_REQUESTED_MIN_INTERVAL_MS = 2 * 60_000;
+// A paused background backfill waits at least this long, doubling while the
+// budget stays shut, up to the maximum. See `backfillPauseMs`.
+const BACKFILL_PAUSE_MIN_MS = 30_000;
+const BACKFILL_PAUSE_MAX_MS = 5 * 60_000;
 const MAX_MAILBOX_WINDOW_PAGES = 40;
+// A throttled scan page waits the source's hint. Throttling in a row means
+// the hint keeps missing (another lane, tab or device spends the same
+// budget), so each further refusal waits about twice as long, jittered so
+// scans refused together spread out, and never less than the hint. A landed
+// page, a new scan, a sync someone asks for or a removed account starts over.
+const ENUMERATION_BACKOFF_MIN_MS = 1000;
+// For scans outside the backfill lane, such as the primary scan filling the
+// inbox someone is waiting for. The backfill lane backs off account-wide
+// instead (see `backfillPauseMs`).
+const FOREGROUND_ENUMERATION_BACKOFF_MAX_MS = 15_000;
 const COMMAND_REQUEST_RETRY_MIN_MS = 1000;
 const COMMAND_REQUEST_RETRY_MAX_MS = 30_000;
 const SEARCH_PAGE_SIZE = 50;
@@ -92,6 +123,10 @@ const MAX_SEARCH_PAGES_PER_DEMAND = 2;
 // Closed searches kept for a view that reopens them.
 const MAX_RELEASED_SEARCHES = 16;
 const SEARCH_REFRESH_AFTER_MS = 60_000;
+// A search no view wants is stopped after this long, which leaves time for a
+// view that swaps its query (as a search box does when its labels load) to
+// pick the same search back up.
+export const SEARCH_CANCEL_GRACE_MS = 500;
 // Each conversation fill is an interactive provider read; anything past this
 // waits its turn instead of crowding out sync and commands.
 const MAX_CONVERSATION_FETCHES = 2;
@@ -123,6 +158,31 @@ export type MailDiagnostics = {
   }>;
 };
 
+/**
+ * How many local changes an account still has on their way to its provider,
+ * grouped by status and what they do. Built for polling: it reads only
+ * changes still on their way and never their content.
+ */
+export type MailWaitingSummary = {
+  accountId: string;
+  connection: "ready" | "offline" | "blocked_auth";
+  /** When the oldest change in `groups` became due; null when there's none. */
+  oldestWaitingAtMs: number | null;
+  groups: Array<{
+    status: OperationState["status"];
+    kind: string;
+    changeKind: string | null;
+    /** The change's on/off value (read, starred, spam, present), if any. */
+    on: boolean | null;
+    /** Whether a membership change is to a label or a category. */
+    membership: "label" | "category" | null;
+    /** Held on purpose until the device is back online. */
+    heldOffline: boolean;
+    count: number;
+    oldestWaitingAtMs: number;
+  }>;
+};
+
 export type ConversationCompletion = { status: "complete" | "unavailable" };
 
 export type MailboxWindowHandle = QueryHandle<MailboxView> & {
@@ -134,6 +194,12 @@ export type MailboxWindowOptions = {
 };
 
 export type MailClient = {
+  /**
+   * The query shapes and optional methods the engine behind this client
+   * reported when it connected. Read it with `mailClientSupports`, which
+   * treats a client without it as an engine that predates reporting.
+   */
+  readonly capabilities?: MailEngineCapabilities;
   queryContactSuggestions?(
     query: ContactSuggestionQuery,
   ): Promise<ContactSuggestion[]>;
@@ -147,6 +213,51 @@ export type MailClient = {
    * Hosts that can't answer off the UI thread leave it out.
    */
   queryPersonCard?(query: PersonCardQuery): Promise<PersonCard>;
+  /**
+   * The senders Today's "Mail you never read" lists, read once from the
+   * local store. Hosts that can't answer off the UI thread leave it out.
+   */
+  queryNeverReadSenders?(
+    query: NeverReadSendersQuery,
+  ): Promise<NeverReadSender[]>;
+  /**
+   * What the reader's "New address, familiar name" line needs about a
+   * sender, read once from the local store. Hosts that can't answer off the
+   * UI thread leave it out.
+   */
+  querySenderHistory?(query: SenderHistoryQuery): Promise<SenderHistory>;
+  /**
+   * A page of the Files view's attachments, read once from the local store.
+   * Hosts that can't answer off the UI thread leave it out.
+   */
+  queryFiles?(query: FilesQuery): Promise<FilesPage>;
+  /** The Files view's senders, read once from the local store. */
+  queryFileSenders?(accountIds: string[]): Promise<FileSender[]>;
+  /**
+   * How many listed messages with attachments have no stored body yet, so
+   * the Files view can't show their files.
+   */
+  queryFilesNotOnDevice?(accountIds: string[]): Promise<number>;
+  /**
+   * What Today's Waiting on you lists, read once from the local store.
+   * Hosts that can't answer off the UI thread leave it out.
+   */
+  queryWaitingOnYou?(
+    query: WaitingOnYouQuery,
+  ): Promise<WaitingOnYouConversation[]>;
+  /** The people the user starred as Important in these accounts. */
+  queryImportantPeople?(accountIds: string[]): Promise<ImportantPerson[]>;
+  /**
+   * Stars or unstars someone as Important in each of the given accounts, on
+   * this device only. Hosts that don't keep stars leave it out.
+   */
+  setImportantPerson?(input: SetImportantPersonInput): Promise<void>;
+  /**
+   * Finds mail by meaning, from vectors this device made of recent mail.
+   * Resolves no matches while the account has none. Only hosts that run
+   * the embedding model offer it.
+   */
+  searchSemantic?(query: SemanticSearchQuery): Promise<SemanticMatch[]>;
   observeMailbox(query: ConversationQuery): QueryHandle<MailboxView>;
   observeMailboxCounts(
     query: MailboxCountsQuery,
@@ -197,6 +308,13 @@ export type MailClient = {
    */
   releaseConversationMessages(key: ConversationKey): Promise<void>;
   getDiagnostics(accountId: string): Promise<MailDiagnostics>;
+  /**
+   * Each account's changes still on their way to the provider, cheap enough
+   * to poll. Changes held on purpose, such as a send in its undo window, and
+   * partly applied ones are left out. Engines older than the web app leave
+   * it out.
+   */
+  getWaitingSummary?(accountIds: string[]): Promise<MailWaitingSummary[]>;
   /**
    * Drops mailbox drafts the provider confirmed deleted, as after a discard,
    * so they stay gone across reloads before sync reports it. Desktop engines
@@ -265,6 +383,10 @@ export function createMailEngine(input: {
   // Keyed by operation, so one command stuck on a failing request does not
   // slow the retry of every other command.
   const commandRequestFailures = new Map<string, number>();
+  // Keyed by account, generation and scope: throttled refusals in a row
+  // since the scan last landed a page. Only bootstrap scans read it;
+  // commands and reads never wait on it.
+  const enumerationRefusals = new Map<string, number>();
   const idleCatchUpGates = new Map<string, IdleCatchUpGate>();
   const syncLanes = new Map<string, SyncLane>();
   const syncLaneRetries = new Map<
@@ -322,6 +444,30 @@ export function createMailEngine(input: {
     },
     queryPersonCard(query) {
       return store.readPersonCard(query);
+    },
+    queryNeverReadSenders(query) {
+      return store.readNeverReadSenders(query);
+    },
+    querySenderHistory(query) {
+      return store.readSenderHistory(query);
+    },
+    queryFiles(query) {
+      return store.readFiles(query);
+    },
+    queryFileSenders(accountIds) {
+      return store.readFileSenders(accountIds);
+    },
+    queryFilesNotOnDevice(accountIds) {
+      return store.readFilesNotOnDevice(accountIds);
+    },
+    queryWaitingOnYou(query) {
+      return store.readWaitingOnYou(query);
+    },
+    queryImportantPeople(accountIds) {
+      return store.readImportantPeople(accountIds);
+    },
+    setImportantPerson(input) {
+      return store.writeImportantPerson(input);
     },
     observeMailbox(query) {
       const searches = watchProviderSearches(query, query.pageSize);
@@ -449,6 +595,7 @@ export function createMailEngine(input: {
       for (const accountId of accountIds) {
         const gate = idleCatchUpGates.get(accountId);
         if (gate) requestCatchUp(gate);
+        forgetEnumerationRefusals(accountId);
       }
       await store.releaseDeferredOperations({
         accountIds,
@@ -512,6 +659,9 @@ export function createMailEngine(input: {
     },
     getDiagnostics(accountId) {
       return store.getDiagnostics(accountId);
+    },
+    getWaitingSummary(accountIds) {
+      return store.getWaitingSummary(accountIds, runtime.nowMs());
     },
     async forgetDeletedDrafts(input) {
       if (input.messageIds.length === 0) return;
@@ -697,29 +847,53 @@ export function createMailEngine(input: {
           const search =
             providerSearches.get(searchKey) ?? releasedSearches.get(searchKey);
           if (!search?.requestedPages.has(work.page)) {
-            await store.completeJob({
-              jobId: work.jobId,
-              attemptId: work.attemptId,
-            });
+            await completeDroppedSearchJob(work, searchKey);
             continue;
           }
+          // Its own abort, so a search nobody wants any more stops without
+          // stopping the rest of the engine's work.
+          const abort = new AbortController();
+          const stopWithEngine = () => abort.abort();
+          search.abort = abort;
           let searched: Awaited<ReturnType<MailboxSource["search"]>>;
           const requestedAt = await store.readRevision();
           try {
-            searched = await source.search({
-              session: work.session,
-              requestId: work.jobId,
-              signal: signal ?? new AbortController().signal,
-              // The view's latest form of the search, whose local part may
-              // have changed since the page was asked for.
-              predicate: search.predicate,
-              page: work.page,
-              pageSize: SEARCH_PAGE_SIZE,
-            });
+            if (signal?.aborted) abort.abort();
+            signal?.addEventListener("abort", stopWithEngine, { once: true });
+            if (work.page === null && search.startedAtMs === null) {
+              search.startedAtMs = runtime.nowMs();
+              await refreshViews();
+            }
+            searched = await untilAborted(
+              source.search({
+                session: work.session,
+                requestId: work.jobId,
+                signal: abort.signal,
+                // The view's latest form of the search, whose local part may
+                // have changed since the page was asked for.
+                predicate: search.predicate,
+                page: work.page,
+                pageSize: SEARCH_PAGE_SIZE,
+              }),
+              abort.signal,
+            );
           } catch (error) {
+            if (!signal?.aborted && abort.signal.aborted) {
+              await completeDroppedSearchJob(work, searchKey);
+              continue;
+            }
             search.state = "unavailable";
             await refreshViews();
             throw error;
+          } finally {
+            signal?.removeEventListener("abort", stopWithEngine);
+            if (search.abort === abort) search.abort = null;
+          }
+          // Cancelled as it answered: nobody will see what it found, so none
+          // of it is fetched.
+          if (abort.signal.aborted && !signal?.aborted) {
+            await completeDroppedSearchJob(work, searchKey);
+            continue;
           }
           if (searched.status === "unsupported") {
             search.state = "unsupported";
@@ -759,6 +933,7 @@ export function createMailEngine(input: {
                 purpose: "body",
               });
             }
+            if (work.page !== null) search.requestedPages.delete(work.page);
             search.matched += matches.length;
             search.state = "answered";
             search.answered = true;
@@ -1135,6 +1310,13 @@ export function createMailEngine(input: {
     for (const { accountId, search } of searches) {
       const state = viewState(search?.state ?? "searching");
       const current = byAccount.get(accountId);
+      const startedAtMs =
+        isUnfinished(search?.state) && search?.startedAtMs != null
+          ? Math.min(
+              search.startedAtMs,
+              current?.startedAtMs ?? Number.POSITIVE_INFINITY,
+            )
+          : current?.startedAtMs;
       byAccount.set(accountId, {
         accountId,
         state:
@@ -1144,9 +1326,20 @@ export function createMailEngine(input: {
             ? current.state
             : state,
         answered: Boolean(current?.answered || search?.answered),
+        ...(startedAtMs === undefined ? {} : { startedAtMs }),
       });
     }
-    return { ...view, providerSearch: [...byAccount.values()] };
+    return {
+      ...view,
+      providerSearch: [...byAccount.values()].map(
+        ({ startedAtMs, ...account }) =>
+          isUnfinished(account.state) &&
+          !account.answered &&
+          startedAtMs !== undefined
+            ? { ...account, startedAtMs }
+            : account,
+      ),
+    };
   }
 
   function typedSearchesOf(query: ConversationQuery) {
@@ -1204,12 +1397,16 @@ export function createMailEngine(input: {
         }
         if (search) {
           search.predicate = predicate;
+          clearCancelTimer(search);
           // Searching again, as committing the same query does, asks the
-          // provider again once its first answer has aged.
+          // provider again once its first answer has aged, or when a refresh
+          // was cancelled before it answered.
           if (
-            search.firstPageAtMs !== null &&
-            runtime.nowMs() - search.firstPageAtMs > SEARCH_REFRESH_AFTER_MS
+            search.refreshCancelled ||
+            (search.firstPageAtMs !== null &&
+              runtime.nowMs() - search.firstPageAtMs > SEARCH_REFRESH_AFTER_MS)
           ) {
+            search.refreshCancelled = false;
             search.firstPageAtMs = null;
             search.requestedPages.add(null);
             store
@@ -1228,6 +1425,10 @@ export function createMailEngine(input: {
             state: "searching",
             answered: false,
             firstPageAtMs: null,
+            refreshCancelled: false,
+            startedAtMs: null,
+            abort: null,
+            cancelTimer: null,
             pagesSinceDemand: 1,
             wantedRows: new Map(),
           };
@@ -1263,6 +1464,13 @@ export function createMailEngine(input: {
               if (releasedSearches.size <= MAX_RELEASED_SEARCHES) break;
               releasedSearches.delete(key);
             }
+            // One timer per search: a view that comes back clears it, and a
+            // later release starts the grace over.
+            clearCancelTimer(search);
+            search.cancelTimer = setTimeout(() => {
+              search.cancelTimer = null;
+              if (search.wantedRows.size === 0) cancelProviderSearch(search);
+            }, SEARCH_CANCEL_GRACE_MS);
           }
         }
       },
@@ -1271,6 +1479,50 @@ export function createMailEngine(input: {
 
   // The next provider page is fetched only while an open view still has
   // fewer rows than it shows, never to walk the whole result set.
+  // Drops the pages still queued and stops the one being read, so a search
+  // nobody waits on spends no more of the provider's quota. One that never
+  // answered is forgotten, and asked afresh if a view wants it again.
+  function cancelProviderSearch(search: ProviderSearch) {
+    // Pages answered leave the set, so what is left was never read; the
+    // search resumes from there if it comes back.
+    for (const page of search.requestedPages)
+      if (page !== null) search.nextPage ??= page;
+    search.requestedPages.clear();
+    search.abort?.abort();
+    if (!search.answered) {
+      if (releasedSearches.get(search.key) === search)
+        releasedSearches.delete(search.key);
+      return;
+    }
+    // A refresh cut short is asked again when the search comes back.
+    if (search.firstPageAtMs === null) search.refreshCancelled = true;
+  }
+
+  function clearCancelTimer(search: ProviderSearch) {
+    if (search.cancelTimer === null) return;
+    clearTimeout(search.cancelTimer);
+    search.cancelTimer = null;
+  }
+
+  // The store ignores a search job already queued, so a view that asked for
+  // this page again while the dropped job was still in the store asked for
+  // nothing; it is asked for again once that job is gone.
+  async function completeDroppedSearchJob(
+    work: Extract<ClaimedWork, { kind: "search" }>,
+    searchKey: string,
+  ) {
+    await store.completeJob({ jobId: work.jobId, attemptId: work.attemptId });
+    const search = providerSearches.get(searchKey);
+    if (!search?.requestedPages.has(work.page)) return;
+    await store
+      .enqueueSearch({
+        accountId: work.accountId,
+        predicate: search.predicate,
+        page: work.page,
+      })
+      .catch(() => undefined);
+  }
+
   function requestNextSearchPage(search: ProviderSearch) {
     const page = search.nextPage;
     if (!page || search.pagesSinceDemand >= MAX_SEARCH_PAGES_PER_DEMAND) return;
@@ -1340,8 +1592,25 @@ export function createMailEngine(input: {
     requestId: string;
     scopeId?: string;
     scope?: ScopeDescriptor;
+    /** Set for a background backfill, whose pauses back off account-wide. */
+    backfillPause?: BackfillPause;
   }) {
     const scopeId = input.scopeId ?? "primary";
+    // Only a throttled backfill backs off: an unavailable one (the network,
+    // the adapter) retries when it says, like the rest of sync.
+    const pausedFor = (paused: { retryAfterMs: number; reason: string }) => {
+      const pause = input.backfillPause;
+      if (!pause || paused.reason !== "throttled") return paused.retryAfterMs;
+      const delayMs = backfillPauseMs(
+        paused.retryAfterMs,
+        pause.repeats,
+        runtime,
+      );
+      pause.repeats += 1;
+      pause.delayMs = delayMs;
+      pause.untilMs = runtime.nowMs() + delayMs;
+      return delayMs;
+    };
     let scan = await store.readBootstrapScan({
       session: input.session,
       scopeId,
@@ -1360,6 +1629,7 @@ export function createMailEngine(input: {
         windowedBackfill: true,
       });
       if (bootstrap.status !== "ok") {
+        if (bootstrap.status === "paused") pausedFor(bootstrap);
         await noteConnection(input.session.accountId, bootstrap);
         return;
       }
@@ -1373,6 +1643,7 @@ export function createMailEngine(input: {
         nowMs: runtime.nowMs(),
       });
       if (started.status === "stale") return;
+      enumerationRefusals.delete(enumerationRefusalKey(input.session, scopeId));
       await noteConnection(input.session.accountId, "ok");
       scan = {
         accountId: input.session.accountId,
@@ -1390,6 +1661,7 @@ export function createMailEngine(input: {
       return;
     }
     let processedPages = 0;
+    let landedLastPage = false;
     while (scan.page) {
       if (processedPages > 0) await yieldToHost();
       if (input.signal?.aborted) return;
@@ -1404,11 +1676,17 @@ export function createMailEngine(input: {
         page: scan.page,
         pageSize: 50,
       });
+      const refusalKey = enumerationRefusalKey(input.session, scan.scopeId);
       if (
         enumerated.status === "paused" ||
         enumerated.status === "blocked_auth"
       ) {
         const paused = enumerated.status === "paused";
+        // Only throttling says the budget is spent; an unavailable server
+        // or a dropped request keeps its own hint and does not grow the wait.
+        const throttled = paused && enumerated.reason === "throttled";
+        const refusals = (enumerationRefusals.get(refusalKey) ?? 0) + 1;
+        if (throttled) enumerationRefusals.set(refusalKey, refusals);
         await store.deferBootstrapScan({
           session: input.session,
           scopeId: scan.scopeId,
@@ -1416,7 +1694,15 @@ export function createMailEngine(input: {
           page: scan.page,
           nextAttemptAtMs:
             runtime.nowMs() +
-            (paused ? enumerated.retryAfterMs : idleCatchUpIntervalMs),
+            (paused
+              ? input.backfillPause
+                ? pausedFor(enumerated)
+                : enumerationRetryDelayMs({
+                    hintMs: enumerated.retryAfterMs,
+                    refusals: throttled ? refusals : 1,
+                    random: runtime.random,
+                  })
+              : idleCatchUpIntervalMs),
           errorCode: paused ? enumerated.reason : "blocked_auth",
         });
       }
@@ -1424,6 +1710,7 @@ export function createMailEngine(input: {
         await noteConnection(input.session.accountId, enumerated);
         break;
       }
+      enumerationRefusals.delete(refusalKey);
       const catchUpFrom: SyncStreamPosition | null =
         enumerated.value.catchUpFrom ?? scan.catchUpFrom;
       const repeatedCursor = enumerated.value.nextPage === scan.page;
@@ -1447,6 +1734,8 @@ export function createMailEngine(input: {
           }),
       });
       if (applied.status === "stale") break;
+      landedLastPage = enumerated.value.nextPage === null;
+      if (input.backfillPause) input.backfillPause.repeats = 0;
       processedPages += 1;
       // A first sync shows each page as it lands rather than after the whole
       // slice, so a new mailbox fills in from its first page of mail.
@@ -1463,6 +1752,24 @@ export function createMailEngine(input: {
         await noteConnection(input.session.accountId, "paused");
         break;
       }
+      // The source says its budget would refuse the next page before then,
+      // so the scan waits instead of spending a refused request. Only this
+      // scan waits, primary or backfill; commands and reads run apart.
+      const page = enumerated.value;
+      if (page.nextPage !== null && page.retryAfterMs) {
+        await store.deferBootstrapScan({
+          session: input.session,
+          scopeId: page.scopeId,
+          bootstrapId: scan.bootstrapId,
+          page: page.nextPage,
+          // Sources other than the HTTP one skip its schema's bound.
+          nextAttemptAtMs:
+            runtime.nowMs() +
+            Math.min(page.retryAfterMs, MAX_ENUMERATION_RETRY_AFTER_MS),
+          errorCode: null,
+        });
+        break;
+      }
       scan = {
         ...scan,
         scopeId: enumerated.value.scopeId,
@@ -1473,6 +1780,7 @@ export function createMailEngine(input: {
       };
     }
     await refreshViews();
+    return landedLastPage;
   }
 
   // Each account syncs in its own lane, so a slow account or a slow request
@@ -1495,6 +1803,13 @@ export function createMailEngine(input: {
     stream: AccountSyncState["streams"][number];
   }) {
     const { session, idleGate, stream } = input;
+    // One pause holds all of the account's background scopes (Gmail's older
+    // mail, Outlook's custom folders): they draw on the same budget, so a
+    // sibling asking meanwhile is only paused too. A pause further off than
+    // it was set for means the clock moved back, and is ignored.
+    const pause = idleGate.backfillPause;
+    const pausedForMs = pause.untilMs - runtime.nowMs();
+    if (pausedForMs > 0 && pausedForMs <= pause.delayMs) return;
     startLane(backfillLaneKey(session.accountId), async (signal) => {
       await ingestBootstrap({
         session,
@@ -1504,6 +1819,7 @@ export function createMailEngine(input: {
         requestId: runtime.randomId(),
         scopeId: stream.streamId,
         scope: idleGate.activeBootstrapScopes.get(stream.streamId),
+        backfillPause: idleGate.backfillPause,
       });
       if (signal.aborted) return;
       await rememberBootstrapContinuation(idleGate, session, stream.streamId);
@@ -1566,6 +1882,14 @@ export function createMailEngine(input: {
       syncLanes.get(key)?.abort.abort();
       syncLanes.delete(key);
       syncLaneRetries.delete(key);
+    }
+    forgetEnumerationRefusals(laneKey);
+  }
+
+  function forgetEnumerationRefusals(accountId: string) {
+    const prefix = `${accountId}\u0000`;
+    for (const key of enumerationRefusals.keys()) {
+      if (key.startsWith(prefix)) enumerationRefusals.delete(key);
     }
   }
 
@@ -1705,7 +2029,7 @@ export function createMailEngine(input: {
           startBackfill({ session, idleGate, stream });
           continue;
         }
-        await ingestBootstrap({
+        const finished = await ingestBootstrap({
           session,
           from: stream,
           deadlineMs: runtime.nowMs() + SYNC_LANE_BOOTSTRAP_SLICE_MS,
@@ -1715,6 +2039,13 @@ export function createMailEngine(input: {
           scope: idleGate.activeBootstrapScopes.get(stream.streamId),
         });
         await rememberBootstrapContinuation(idleGate, session, stream.streamId);
+        if (finished) {
+          await resumeHeldBackfill(
+            idleGate,
+            session,
+            streams.map((candidate) => candidate.streamId),
+          );
+        }
         continue;
       }
       if (!catchUpDue) continue;
@@ -1869,6 +2200,7 @@ export function createMailEngine(input: {
     if (existing?.generation === generation) return existing;
     const created: IdleCatchUpGate = {
       activeBootstrapScopes: new Map(),
+      backfillPause: { untilMs: 0, delayMs: 0, repeats: 0 },
       generation,
       lowPriorityStreams: new Set(),
       nextAssistantCatchUpAtMs: 0,
@@ -1910,6 +2242,46 @@ export function createMailEngine(input: {
       idleGate.requestCount > checked.requestCount &&
       runtime.nowMs() - checked.atMs >= minIntervalMs
     );
+  }
+
+  // The server holds background scans while a scan the user waits on runs,
+  // so a backfill paused meanwhile was waiting for that scan, not for budget:
+  // once the last such scan of the account ends, it asks again at once and
+  // backs off afresh. A server that refuses for its budget (PF-12a-3 would
+  // tell the two apart) costs one more ask per finished scan.
+  async function resumeHeldBackfill(
+    idleGate: IdleCatchUpGate,
+    session: { accountId: string; generation: string },
+    scopeIds: string[],
+  ) {
+    const nowMs = runtime.nowMs();
+    if (idleGate.backfillPause.untilMs <= nowMs) return;
+    for (const scopeId of scopeIds) {
+      if (idleGate.lowPriorityStreams.has(scopeId)) continue;
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (scan?.page) return;
+    }
+    idleGate.backfillPause.untilMs = 0;
+    idleGate.backfillPause.repeats = 0;
+    for (const scopeId of idleGate.lowPriorityStreams) {
+      const scan = await store.readBootstrapScan({ session, scopeId });
+      if (
+        !scan?.page ||
+        scan.errorCode !== "throttled" ||
+        scan.nextAttemptAtMs === null ||
+        scan.nextAttemptAtMs <= nowMs
+      ) {
+        continue;
+      }
+      await store.deferBootstrapScan({
+        session,
+        scopeId,
+        bootstrapId: scan.bootstrapId,
+        page: scan.page,
+        nextAttemptAtMs: nowMs,
+        errorCode: null,
+      });
+    }
   }
 
   async function rememberBootstrapContinuation(
@@ -2121,6 +2493,14 @@ type ProviderSearch = {
   answered: boolean;
   /** When the provider last answered the first page, for a fresh search. */
   firstPageAtMs: number | null;
+  /** A refresh of the first page was cancelled, so it is asked again. */
+  refreshCancelled: boolean;
+  /** When the provider began reading the first page; null while queued. */
+  startedAtMs: number | null;
+  /** Stops the page being read, while one is. */
+  abort: AbortController | null;
+  /** Cancels the search once no view has wanted it for a grace period. */
+  cancelTimer: ReturnType<typeof setTimeout> | null;
   pagesSinceDemand: number;
   wantedRows: Map<symbol, number>;
 };
@@ -2134,6 +2514,11 @@ const VIEW_STATE_ORDER = [
   "unsupported",
   "complete",
 ] as const;
+
+// Still on its way: a time box applies from when the provider began it.
+function isUnfinished(state: string | undefined) {
+  return state === "searching" || state === "busy";
+}
 
 function viewState(
   state: ProviderSearch["state"],
@@ -2196,6 +2581,7 @@ function conversationFetchKey(key: ConversationKey) {
 
 type IdleCatchUpGate = {
   activeBootstrapScopes: Map<string, ScopeDescriptor>;
+  backfillPause: BackfillPause;
   generation: string;
   lowPriorityStreams: Set<string>;
   nextAssistantCatchUpAtMs: number;
@@ -2208,8 +2594,34 @@ type IdleCatchUpGate = {
 
 type CheckStamp = { atMs: number; requestCount: number };
 
+type BackfillPause = { untilMs: number; delayMs: number; repeats: number };
+
 function backfillLaneKey(accountId: string) {
   return `${accountId}\u0000backfill`;
+}
+
+// A paused backfill's retry time is when the server can afford one more page,
+// so asking then buys that page and the next pause: during a long backfill,
+// every other request was a pause. Waiting until the budget refills a run of
+// pages spends the same budget in a fraction of the requests. Pauses with no
+// page in between back off further, and jitter keeps engines that share an
+// account's budget (another device) from asking in step. A server retry time
+// past the low-priority interval is held to it, so a bad answer can't park
+// the backfill for longer than its scope would otherwise wait.
+function backfillPauseMs(
+  retryAfterMs: number,
+  repeats: number,
+  runtime: Pick<HostRuntime, "random">,
+) {
+  const backoffMs = BACKFILL_PAUSE_MIN_MS * 2 ** Math.min(repeats, 8);
+  const jitteredMs = Math.min(
+    BACKFILL_PAUSE_MAX_MS,
+    backoffMs * (1 + runtime.random() / 2),
+  );
+  return Math.max(
+    Math.min(retryAfterMs, LOW_PRIORITY_CATCH_UP_INTERVAL_MS),
+    jitteredMs,
+  );
 }
 
 function idleGateDue(nextAtMs: number, nowMs: number, intervalMs: number) {
@@ -2227,6 +2639,7 @@ export function createHostRuntime(
   return {
     nowMs: overrides?.nowMs ?? (() => Date.now()),
     randomId: overrides?.randomId ?? defaultRandomId,
+    random: overrides?.random ?? Math.random,
     sha256: overrides?.sha256 ?? webCryptoSha256,
     storagePressure: overrides?.storagePressure ?? (() => false),
   };
@@ -2249,4 +2662,28 @@ function defaultRandomId(): string {
  */
 function yieldToHost() {
   return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function enumerationRefusalKey(
+  session: { accountId: string; generation: string },
+  scopeId: string,
+) {
+  return `${session.accountId}\u0000${session.generation}\u0000${scopeId}`;
+}
+
+// A first refusal waits exactly the hint. After that, equal jitter: at least
+// half of the doubled wait, so a run of refusals still grows, and never under
+// the source's own hint.
+function enumerationRetryDelayMs(input: {
+  hintMs: number;
+  refusals: number;
+  random: () => number;
+}) {
+  if (input.refusals <= 1) return input.hintMs;
+  const doubled = Math.min(
+    FOREGROUND_ENUMERATION_BACKOFF_MAX_MS,
+    ENUMERATION_BACKOFF_MIN_MS * 2 ** Math.min(30, input.refusals - 1),
+  );
+  const jittered = doubled / 2 + input.random() * (doubled / 2);
+  return Math.max(input.hintMs, Math.ceil(jittered));
 }

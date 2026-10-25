@@ -184,4 +184,84 @@ describe("WebNewMailNotifications", () => {
 
     expect(mocks.syncWebPush).not.toHaveBeenCalled();
   });
+
+  it("shows nothing for mail that arrives while paused, then notifies again once the pause ends", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const shown: string[] = [];
+    vi.stubGlobal(
+      "Notification",
+      Object.assign(
+        vi.fn(function (title: string) {
+          shown.push(title);
+          return { close: () => undefined, onclick: null };
+        }),
+        { permission: "granted", requestPermission: vi.fn() },
+      ),
+    );
+    window.localStorage.setItem("cue:web-notifications:mode", "all");
+    window.localStorage.setItem(
+      "cue:web-notifications:quiet-until",
+      String(Date.now() + 60_000),
+    );
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    Object.defineProperty(navigator, "locks", {
+      value: undefined,
+      configurable: true,
+    });
+    const listeners = new Set<() => void>();
+    const coverage = [
+      { accountId: "acc-1", lastCompletedSyncAtMs: 1 },
+      { accountId: "acc-2", lastCompletedSyncAtMs: 1 },
+    ];
+    let conversations = [inboxConversation("m0", Date.now() - 1000)];
+    mocks.observeMailbox.mockImplementation(() => ({
+      getSnapshot: () => ({
+        status: "ready",
+        data: { conversations, coverage },
+      }),
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      close: () => undefined,
+    }));
+    const arrive = (id: string) =>
+      act(async () => {
+        conversations = [inboxConversation(id, Date.now()), ...conversations];
+        for (const listener of listeners) listener();
+      });
+
+    render(<WebNewMailNotifications />);
+
+    await arrive("during-pause");
+    expect(shown).toEqual([]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    await arrive("after-pause");
+    expect(shown).toEqual(["Dana"]);
+    vi.useRealTimers();
+  });
+
+  it("keeps push on through a pause, since the server holds back pushes until it ends", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    stubPermission("granted");
+    window.localStorage.setItem("cue:web-notifications:mode", "all");
+    window.localStorage.setItem(
+      "cue:web-notifications:quiet-until",
+      String(Date.now() + 1000),
+    );
+
+    render(<WebNewMailNotifications />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(mocks.syncWebPush).toHaveBeenCalledTimes(1);
+    expect(mocks.syncWebPush).toHaveBeenCalledWith("all");
+    expect(mocks.syncWebPush).not.toHaveBeenCalledWith("off");
+    vi.useRealTimers();
+  });
 });

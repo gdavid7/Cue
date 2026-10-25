@@ -1,18 +1,45 @@
 import type { MailHttpRequestFn } from "@inboxzero/mail-core/protocol/backend-adapter";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { SERVER_BUILD_HEADER } from "@/utils/server-build";
 import { isSessionExpiredErrorBody } from "@/utils/session-expired";
+import {
+  fetchWithSessionRetry,
+  isAnsweredWhileStopped,
+  sessionStopReason,
+} from "@/utils/session-refresh";
+import { isSigningOut } from "@/utils/signing-out";
+import {
+  isReconnectRequired,
+  isReconnectRequiredBody,
+  noteReconnectRequired,
+  reconnectRequiredBody,
+} from "@/utils/reconnect-required";
 
 /**
  * onSessionExpired runs where the request ran, which may be a worker with no
- * page to redirect, so the engine's host decides how to reach the page.
+ * page to redirect, so the engine's host decides how to reach the page. It
+ * runs once requests stop, with why; not for the 401s answered here while
+ * stopped, nor when a refresh could not tell whether the session is gone.
+ * onServerBuild hears the deployment that answered each response that names
+ * one, so the page can tell when its code is older than the server's.
  */
 export function createMailHttpRequest(
   accountId: string,
-  onSessionExpired: () => void,
+  onSessionExpired: (reason: "signed-out" | "rejected") => void,
+  onServerBuild?: (buildId: string) => void,
 ): MailHttpRequestFn {
   return async ({ method, path, body, signal, accept }) => {
+    // Answered as the server would, which the engine reads as a lost grant
+    // and shows its reconnect prompt, without asking again.
+    if (isReconnectRequired(accountId, path)) {
+      return { status: 401, json: reconnectRequiredBody() };
+    }
     const encoded = encodeRequestBody(body);
-    const response = await fetch(path, {
+    const response = await fetchWithSessionRetry(path, {
       method,
       signal,
       credentials: "include",
@@ -20,10 +47,13 @@ export function createMailHttpRequest(
         accept:
           accept === "bytes" ? "application/octet-stream" : "application/json",
         [EMAIL_ACCOUNT_HEADER]: accountId,
+        [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
         ...encoded.headers,
       },
       body: encoded.body,
     });
+    const serverBuild = response.headers.get(SERVER_BUILD_HEADER);
+    if (serverBuild) onServerBuild?.(serverBuild);
     if (accept === "bytes" && response.ok) {
       const sizeHeader = response.headers.get("content-length");
       return {
@@ -35,9 +65,19 @@ export function createMailHttpRequest(
       };
     }
     const json = await response.json().catch(() => null);
-    if (response.status === 401 && isSessionExpiredErrorBody(json)) {
-      onSessionExpired();
+    if (
+      response.status === 401 &&
+      !isSigningOut() &&
+      isSessionExpiredErrorBody(json)
+    ) {
+      const reason = isAnsweredWhileStopped(response)
+        ? undefined
+        : sessionStopReason();
+      if (reason) onSessionExpired(reason);
       return { status: response.status, json, sessionExpired: true };
+    }
+    if (response.status === 401 && isReconnectRequiredBody(json)) {
+      noteReconnectRequired(accountId, path);
     }
     return { status: response.status, json };
   };

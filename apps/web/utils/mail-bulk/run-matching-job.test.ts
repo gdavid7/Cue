@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { gmail_v1 } from "@googleapis/gmail";
 import type { EmailProvider } from "@/utils/email/types";
-import type { MatchingFilter } from "@/utils/actions/mail-bulk-matching.validation";
+import type {
+  MatchingFilter,
+  MatchingScope,
+} from "@/utils/actions/mail-bulk-matching.validation";
 import {
   GmailCallDeferredError,
   currentGmailQuotaContext,
 } from "@/utils/gmail/quota";
+import { listGmailMatchingMessages } from "@/utils/gmail/matching";
 import { createScopedLogger } from "@/utils/logger";
 import {
   ACTIVE_MAIL_BULK_JOB_STATUSES,
@@ -13,6 +18,7 @@ import {
   type MailBulkTarget,
   type mailBulkJobStore,
 } from "@/utils/redis/mail-bulk-job";
+import type { mailBulkJobListings } from "@/utils/mail-bulk/job-listing";
 import {
   MAIL_BULK_JOB_PATH,
   runMailBulkJobStep,
@@ -21,6 +27,7 @@ import { publishToQstash, publishToQstashAt } from "@/utils/upstash";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/redis", () => ({ redis: {} }));
+vi.mock("@/utils/prisma");
 vi.mock("@/utils/upstash", () => ({
   publishToQstash: vi.fn().mockResolvedValue(undefined),
   publishToQstashAt: vi.fn().mockResolvedValue(true),
@@ -51,13 +58,13 @@ describe("runMailBulkJobStep", () => {
       body: {
         jobId: JOB_ID,
         emailAccountId: ACCOUNT_ID,
-        scope: {},
         deferrals: 0,
       },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings: createListings(),
     });
 
     expect(result).toBe("done");
@@ -85,6 +92,93 @@ describe("runMailBulkJobStep", () => {
       expect.objectContaining({ only: { unread: true } }),
     );
     expect(provider.markMessagesReadState).toHaveBeenCalledWith(["m1"], true);
+  });
+
+  it("the Reading lane's job archives and marks read whole conversations, labels split across messages", async () => {
+    // Only the digest's first message carries the label; its reply doesn't.
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX", "UNREAD"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = {
+      labelIds: ["INBOX", "Label_42"],
+      wholeConversations: true,
+    };
+
+    for (const action of ["archive", "mark_read"] as const) {
+      const store = createStore();
+      await store.create(JOB_ID, newJob({ action }));
+      const provider = gmailProvider(gmail);
+
+      await runStep({ store, provider, listings: createListings({ scope }) });
+
+      if (action === "archive")
+        expect(provider.archiveMessages).toHaveBeenCalledWith(["m1", "m2"]);
+      else
+        expect(provider.markMessagesReadState).toHaveBeenCalledWith(
+          ["m1", "m2"],
+          true,
+        );
+      await expect(store.get(JOB_ID)).resolves.toMatchObject({
+        status: "done",
+        total: 2,
+        conversations: 1,
+      });
+    }
+  });
+
+  it("lists a conversation split across two pages once", async () => {
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }], [{ id: "m3", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX"] },
+          { id: "m3", labelIds: ["INBOX", "Label_42"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = {
+      labelIds: ["INBOX", "Label_42"],
+      wholeConversations: true,
+    };
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = gmailProvider(gmail);
+
+    await runStep({ store, provider, listings: createListings({ scope }) });
+
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m1", "m2", "m3"]);
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "done",
+      total: 3,
+      conversations: 1,
+    });
+  });
+
+  it("keeps any other label view's job per message", async () => {
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = { labelIds: ["INBOX", "Label_42"] };
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = gmailProvider(gmail);
+
+    await runStep({ store, provider, listings: createListings({ scope }) });
+
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m1"]);
   });
 
   it("trashes and reports spam once per conversation", async () => {
@@ -124,19 +218,20 @@ describe("runMailBulkJobStep", () => {
     const provider = createProvider({
       pages: [[message("m1", "t1")], [message("m2", "t2")]],
     });
+    const listings = createListings();
     let clock = 0;
 
     const result = await runMailBulkJobStep({
       body: {
         jobId: JOB_ID,
         emailAccountId: ACCOUNT_ID,
-        scope: {},
         deferrals: 0,
       },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings,
       budgetMs: 10,
       now: () => {
         clock += 11;
@@ -147,9 +242,12 @@ describe("runMailBulkJobStep", () => {
     expect(result).toBe("continued");
     expect(publishToQstash).toHaveBeenCalledWith(
       MAIL_BULK_JOB_PATH,
-      expect.objectContaining({ jobId: JOB_ID, pageToken: "page-1" }),
+      expect.objectContaining({ jobId: JOB_ID }),
       expect.objectContaining({ key: `mail-bulk-${ACCOUNT_ID}` }),
     );
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toMatchObject({
+      pageToken: "page-1",
+    });
     expect(provider.archiveMessages).not.toHaveBeenCalled();
   });
 
@@ -163,16 +261,20 @@ describe("runMailBulkJobStep", () => {
         nextPageToken: "page-1",
       })
       .mockRejectedValueOnce(new GmailCallDeferredError(5000, "background"));
+    const listings = createListings();
 
-    const result = await runStep({ store, provider });
+    const result = await runStep({ store, provider, listings });
 
     expect(result).toBe("deferred");
     expect(publishToQstashAt).toHaveBeenCalledWith(
       expect.objectContaining({
         path: MAIL_BULK_JOB_PATH,
-        body: expect.objectContaining({ pageToken: "page-1", deferrals: 1 }),
+        body: expect.objectContaining({ jobId: JOB_ID, deferrals: 1 }),
       }),
     );
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toMatchObject({
+      pageToken: "page-1",
+    });
     await expect(store.get(JOB_ID)).resolves.toMatchObject({
       status: "listing",
       total: 1,
@@ -222,13 +324,13 @@ describe("runMailBulkJobStep", () => {
       body: {
         jobId: JOB_ID,
         emailAccountId: ACCOUNT_ID,
-        scope: {},
         deferrals: 0,
       },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings: createListings(),
       maxTargets: 2,
     });
 
@@ -519,15 +621,208 @@ describe("runMailBulkJobStep", () => {
     const provider = createProvider({ pages: [[message("m1", "t1")]] });
 
     const result = await runMailBulkJobStep({
-      body: { jobId: JOB_ID, emailAccountId: "other", scope: {}, deferrals: 0 },
+      body: { jobId: JOB_ID, emailAccountId: "other", deferrals: 0 },
       provider,
       ownerEmail: "owner@example.com",
       logger,
       store,
+      listings: createListings(),
     });
 
     expect(result).toBe("missing");
     expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "has expired from Redis", status: undefined },
+    { name: "was stopped before this delivery", status: "cancelled" as const },
+    { name: "was failed as stale", status: "failed" as const },
+    { name: "is waiting to stop", status: "stopping" as const },
+  ])("drops the job's listing when the job $name", async ({ status }) => {
+    const store = createStore();
+    if (status) await store.create(JOB_ID, newJob({ status }));
+    const listings = createListings({ scope: { q: "from:alice@example.com" } });
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+
+    await runStep({ store, provider, listings });
+
+    expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toBeNull();
+  });
+
+  it("logs a failure without the request it failed on", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = createProvider({ pages: [] });
+    const graphError = Object.assign(
+      new Error(
+        'Request to /me/messages?$search="from:alice@example.com" failed',
+      ),
+      {
+        code: "BadRequest",
+        statusCode: 400,
+        url: 'https://graph.microsoft.com/v1.0/me/messages?$search="from:alice@example.com"',
+      },
+    );
+    vi.mocked(provider.listMatchingMessages).mockRejectedValue(graphError);
+    const errorLog = vi.spyOn(logger, "error");
+
+    await expect(runStep({ store, provider })).resolves.toBe("failed");
+
+    expect(errorLog).toHaveBeenCalledWith(
+      "Bulk mail action failed",
+      expect.objectContaining({ errorCode: "BadRequest", statusCode: 400 }),
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("@");
+    errorLog.mockRestore();
+  });
+
+  it("queues only the job's ids and counters, never the view or a page link", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings({
+      scope: { q: "from:alice@example.com" },
+    });
+    // An Outlook page link repeats the search it pages through.
+    const pageLink = (index: number) =>
+      `https://graph.microsoft.com/v1.0/me/messages?$search="from:alice@example.com"&$skiptoken=${index}`;
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")], []],
+      pageLink,
+    });
+    vi.mocked(provider.listMatchingMessages)
+      .mockResolvedValueOnce({
+        messages: [message("m1", "t1")],
+        nextPageToken: pageLink(1),
+      })
+      .mockRejectedValueOnce(new GmailCallDeferredError(5000, "background"));
+
+    // A deferral while listing schedules a resume.
+    await expect(runStep({ store, provider, listings })).resolves.toBe(
+      "deferred",
+    );
+    // Running out of time while listing hands the rest on.
+    let clock = 0;
+    await expect(
+      runStep({
+        store,
+        provider,
+        listings,
+        budgetMs: 10,
+        now: () => {
+          clock += 11;
+          return clock;
+        },
+      }),
+    ).resolves.toBe("continued");
+
+    const payloads = [
+      ...vi.mocked(publishToQstash).mock.calls.map(([, body]) => body),
+      ...vi.mocked(publishToQstashAt).mock.calls.map(([{ body }]) => body),
+    ];
+    expect(payloads).toHaveLength(2);
+    for (const payload of payloads) {
+      expect(Object.keys(payload as object).sort()).toEqual([
+        "deferrals",
+        "emailAccountId",
+        "jobId",
+      ]);
+      expect(JSON.stringify(payload)).not.toContain("@");
+    }
+  });
+
+  it("reads the view and the next page back from the job's listing", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings({
+      scope: { q: "from:alice@example.com" },
+      pageToken: "page-1",
+    });
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")]],
+    });
+
+    await expect(runStep({ store, provider, listings })).resolves.toBe("done");
+
+    expect(provider.listMatchingMessages).toHaveBeenCalledTimes(1);
+    expect(provider.listMatchingMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { q: "from:alice@example.com" },
+        pageToken: "page-1",
+      }),
+    );
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m2"]);
+    // The listing is gone once it has ended.
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toBeNull();
+  });
+
+  it("never lists with another account's view", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings();
+    await listings.remove(JOB_ID, ACCOUNT_ID);
+    await listings.create({
+      jobId: JOB_ID,
+      emailAccountId: "other",
+      scope: { q: "secret" },
+    });
+    const provider = createProvider({ pages: [[message("m1", "t1")]] });
+
+    await expect(runStep({ store, provider, listings })).resolves.toBe(
+      "failed",
+    );
+    expect(provider.listMatchingMessages).not.toHaveBeenCalled();
+  });
+
+  // TODO(RD-3o): drop with the legacy payload, one deploy after this ships.
+  it("finishes a delivery queued with the view in its payload without queueing the view again", async () => {
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const listings = createListings();
+    await listings.remove(JOB_ID, ACCOUNT_ID);
+    const provider = createProvider({
+      pages: [[message("m1", "t1")], [message("m2", "t2")], []],
+    });
+    let clock = 0;
+
+    const result = await runMailBulkJobStep({
+      body: {
+        jobId: JOB_ID,
+        emailAccountId: ACCOUNT_ID,
+        scope: { q: "from:alice@example.com" },
+        pageToken: "page-1",
+        deferrals: 0,
+      },
+      provider,
+      ownerEmail: "owner@example.com",
+      logger,
+      store,
+      listings,
+      durable: true,
+      budgetMs: 10,
+      now: () => {
+        clock += 11;
+        return clock;
+      },
+    });
+
+    expect(result).toBe("continued");
+    expect(provider.listMatchingMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { q: "from:alice@example.com" },
+        pageToken: "page-1",
+      }),
+    );
+    const [, payload] = vi.mocked(publishToQstash).mock.calls[0];
+    expect(payload).toEqual({
+      jobId: JOB_ID,
+      emailAccountId: ACCOUNT_ID,
+      deferrals: 0,
+    });
+    await expect(listings.get(JOB_ID, ACCOUNT_ID)).resolves.toEqual({
+      scope: { q: "from:alice@example.com" },
+      pageToken: "page-2",
+    });
   });
 });
 
@@ -543,13 +838,13 @@ function runStep({
     body: {
       jobId: JOB_ID,
       emailAccountId: ACCOUNT_ID,
-      scope: {},
       deferrals: 0,
     },
     provider,
     ownerEmail: "owner@example.com",
     logger,
     store,
+    listings: createListings(),
     durable: true,
     ...options,
   });
@@ -581,16 +876,24 @@ function newJob(overrides: Partial<MailBulkJobState>): MailBulkJobState {
 
 function createProvider({
   pages,
+  pageLink = (index) => `page-${index}`,
 }: {
   pages: { id: string; threadId: string }[][];
+  pageLink?: (index: number) => string;
 }) {
   const listMatchingMessages = vi.fn(
-    async ({ pageToken }: { only: MatchingFilter; pageToken?: string }) => {
-      const index = pageToken ? Number(pageToken.split("-")[1]) : 0;
+    async ({
+      pageToken,
+    }: {
+      scope: MatchingScope;
+      only: MatchingFilter;
+      pageToken?: string;
+    }) => {
+      const index = pageToken ? Number(pageToken.split(/[-=]/).at(-1)) : 0;
       return {
         messages: pages[index] ?? [],
         nextPageToken:
-          index + 1 < pages.length ? `page-${index + 1}` : undefined,
+          index + 1 < pages.length ? pageLink(index + 1) : undefined,
       };
     },
   );
@@ -644,8 +947,89 @@ function createStore(): typeof mailBulkJobStore {
       conversations.set(jobId, seen);
       return seen.size - before;
     },
+    async knownConversations(jobId, threadIds) {
+      const seen = conversations.get(jobId) ?? new Set<string>();
+      return new Set(threadIds.filter((threadId) => seen.has(threadId)));
+    },
     async readTargets(jobId, start, count) {
       return (targets.get(jobId) ?? []).slice(start, start + count);
     },
   };
+}
+
+/** Listings keyed by job and account, as the Postgres table is read. */
+function createListings(
+  initial: { scope: MatchingScope; pageToken?: string } | null = { scope: {} },
+): typeof mailBulkJobListings {
+  const rows = new Map<
+    string,
+    { emailAccountId: string; scope: MatchingScope; pageToken?: string }
+  >();
+  if (initial) rows.set(JOB_ID, { emailAccountId: ACCOUNT_ID, ...initial });
+  const owned = (jobId: string, emailAccountId: string) => {
+    const row = rows.get(jobId);
+    return row?.emailAccountId === emailAccountId ? row : undefined;
+  };
+  return {
+    async create({ jobId, emailAccountId, scope, pageToken }) {
+      rows.set(jobId, { emailAccountId, scope, pageToken });
+    },
+    async get(jobId, emailAccountId) {
+      const row = owned(jobId, emailAccountId);
+      return row ? { scope: row.scope, pageToken: row.pageToken } : null;
+    },
+    async setPageToken(jobId, emailAccountId, pageToken) {
+      const row = owned(jobId, emailAccountId);
+      if (row) row.pageToken = pageToken;
+    },
+    async remove(jobId, emailAccountId) {
+      if (owned(jobId, emailAccountId)) rows.delete(jobId);
+    },
+  };
+}
+
+/** A Gmail client whose listing returns `pages` and threads hold `threads`. */
+function gmailWith({
+  pages,
+  threads,
+}: {
+  pages: { id: string; threadId: string }[][];
+  threads: Record<string, { id: string; labelIds: string[] }[]>;
+}) {
+  return {
+    users: {
+      messages: {
+        list: vi.fn(async ({ pageToken }: { pageToken?: string }) => {
+          const index = pageToken ? Number(pageToken) : 0;
+          return {
+            data: {
+              messages: pages[index] ?? [],
+              nextPageToken:
+                index + 1 < pages.length ? String(index + 1) : undefined,
+            },
+          };
+        }),
+      },
+      threads: {
+        get: vi.fn(async ({ id }: { id: string }) => ({
+          data: {
+            messages: (threads[id] ?? []).map((message) => ({
+              ...message,
+              threadId: id,
+            })),
+          },
+        })),
+      },
+    },
+  } as unknown as gmail_v1.Gmail;
+}
+
+/** A provider that lists through Gmail's own matching listing. */
+function gmailProvider(gmail: gmail_v1.Gmail) {
+  const provider = createProvider({ pages: [] });
+  vi.mocked(provider.listMatchingMessages).mockImplementation(
+    ({ scope, only, pageToken }) =>
+      listGmailMatchingMessages({ gmail, scope, only, pageToken }),
+  );
+  return provider;
 }

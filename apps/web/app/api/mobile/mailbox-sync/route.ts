@@ -53,6 +53,7 @@ export const POST = withEmailProvider(
       throw error;
     }
   },
+  { readOnly: true },
 );
 
 async function getData({

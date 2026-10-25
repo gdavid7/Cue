@@ -14,7 +14,7 @@ import {
 
 // The browser merges, so this file stays free of server imports.
 
-const LANES: HomeLane[] = ["needsYou", "waiting", "alsoInInbox"];
+const LANES: HomeLane[] = ["needsYou", "waiting", "alsoInInbox", "reading"];
 
 export type TodayAccount = { id: string; email: string };
 
@@ -30,11 +30,21 @@ export type TodayAgentTask = AgentTask & { account?: TodayAccount };
 /** What Today shows, for one account or merged across several. */
 export type TodayData = Omit<
   TodayHomeData,
-  "needsYou" | "waiting" | "alsoInInbox" | "agentTasks" | "cue" | "today"
+  | "needsYou"
+  | "waiting"
+  | "alsoInInbox"
+  | "reading"
+  | "agentTasks"
+  | "cue"
+  | "today"
+  // Label and thread ids are each mailbox's own, so they aren't merged.
+  | "handledLabelIds"
+  | "newsletterThreadIds"
 > & {
   needsYou: TodayThread[];
   waiting: TodayThread[];
   alsoInInbox: TodayThread[];
+  reading: TodayThread[];
   agentTasks: TodayAgentTask[];
   /** Across accounts, the mailbox each notice is about. */
   cue: GetHomeResponse["cue"] & {
@@ -96,7 +106,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
   }
   if (!loaded.length) return { data: null, failedAccountIds };
 
-  const tagged = (lane: "needsYou" | "waiting" | "alsoInInbox") =>
+  const tagged = (lane: HomeLane) =>
     loaded.flatMap(({ account, data }) =>
       data[lane].map((thread): TodayThread => ({ ...thread, account })),
     );
@@ -108,7 +118,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
     const rows: TodayThread[] = [];
     let more = false;
     for (const thread of threads) {
-      const key = conversationKey(thread);
+      const key = todayConversationKey(thread);
       const first = shown.get(key);
       // Within one mailbox Today shows what one account's Today shows.
       const sameMailbox =
@@ -141,6 +151,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
   );
   const waiting = lane(tagged("waiting").sort(byDate));
   const alsoInInbox = lane(tagged("alsoInInbox").sort(byDate));
+  const readingLane = lane(tagged("reading").sort(byDate));
 
   const replyTrackingOff = loaded.find(({ data }) => !data.cue.replyTracking);
   const reading = loaded.find(({ data }) => !data.cue.hasReadMail);
@@ -155,6 +166,7 @@ export function mergeHomeData(accounts: AccountHome[]): {
     needsYou: needsYou.rows,
     waiting: waiting.rows,
     alsoInInbox: alsoInInbox.rows,
+    reading: readingLane.rows,
   };
 
   return {
@@ -192,6 +204,14 @@ export function mergeHomeData(accounts: AccountHome[]): {
       },
       calendar: {
         connected: loaded.some(({ data }) => data.calendar.connected),
+        // Every account reads the user's calendars: one that couldn't, or
+        // found a meeting, means the calendar isn't known to be clear.
+        clearThroughTomorrow:
+          loaded.some(({ data }) => data.calendar.connected) &&
+          loaded.every(
+            ({ data }) =>
+              !data.calendar.connected || data.calendar.clearThroughTomorrow,
+          ),
         next: nextEvents[0] ?? null,
       },
       nextUp: mergeNextUp(loaded.map(({ data }) => data.nextUp)),
@@ -207,6 +227,9 @@ export function mergeHomeData(accounts: AccountHome[]): {
           needsYou.more || loaded.some(({ data }) => data.stats.needsYouCapped),
         waitingCapped:
           waiting.more || loaded.some(({ data }) => data.stats.waitingCapped),
+        readingCapped:
+          readingLane.more ||
+          loaded.some(({ data }) => data.stats.readingCapped),
       },
     },
     failedAccountIds,
@@ -256,8 +279,8 @@ export function mergeMeetingNews(lists: MeetingNews[][]): MeetingNews[] {
  * The same conversation in two mailboxes has its own thread id in each, but
  * its newest message carries one Message-ID header everywhere.
  */
-function conversationKey(thread: TodayThread) {
-  const messageId = thread.rfcMessageId?.trim().toLowerCase();
+export function todayConversationKey(thread: TodayThread) {
+  const messageId = thread.rfcMessageId;
   return messageId
     ? `message:${messageId}`
     : `thread:${thread.account?.id ?? ""}:${thread.threadId}`;

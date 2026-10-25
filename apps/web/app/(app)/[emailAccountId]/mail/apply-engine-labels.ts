@@ -67,3 +67,12 @@ export async function applyEngineLabels({
     retireArchive?.();
   }
 }
+
+/** What the label picker and a drop on a label say once it is applied. */
+export function getLabelAppliedMessage(mode: "label" | "move", count: number) {
+  if (mode === "move")
+    return count === 1 ? "Moved" : `Moved ${count} conversations`;
+  return count === 1
+    ? "Label applied"
+    : `Label applied to ${count} conversations`;
+}

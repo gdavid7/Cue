@@ -4,6 +4,7 @@ import {
 } from "@inboxzero/mail-core/engine";
 import { startEngineLoop } from "./engine-loop";
 import { createMailHttpRequest } from "./http";
+import { resetSessionGone } from "@/utils/session-refresh";
 import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
@@ -11,6 +12,7 @@ import {
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerSessionResetRequest,
 } from "./worker-protocol";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
@@ -19,6 +21,11 @@ import { createMailWorkerHost } from "./worker-session";
 import type { BrowserMailEngine } from "./create-browser-engine";
 import { createRoutedBackendAdapter } from "@inboxzero/mail-core/protocol/routed-backend-adapter";
 import { PUSHED_CHANGES_CATCH_UP_INTERVAL_MS } from "@/utils/mail-engine/follow-mailbox-changes";
+import { createWorkerTextEmbedder } from "@/utils/mail-engine/embedding-worker-client";
+import {
+  createSemanticIndex,
+  semanticSearchSupported,
+} from "@/utils/mail-engine/semantic-index";
 
 performance.mark("mail-engine:worker-loaded");
 // Compiling sqlite-wasm takes a while and opens no files, so it starts as
@@ -41,6 +48,8 @@ let preopened:
     }
   | undefined;
 let startReceived = false;
+// Every response names its deployment; the page needs to hear only changes.
+let lastServerBuild: string | undefined;
 
 const host = createMailWorkerHost({
   createEngine: createWorkerEngine,
@@ -50,9 +59,15 @@ const host = createMailWorkerHost({
 });
 
 self.onmessage = (
-  event: MessageEvent<WorkerRequest | WorkerPreopenRequest>,
+  event: MessageEvent<
+    WorkerRequest | WorkerPreopenRequest | WorkerSessionResetRequest
+  >,
 ) => {
   const message = event.data;
+  if (message.type === "session_reset") {
+    resetSessionGone();
+    return;
+  }
   if (message.type === "preopen") {
     if (!startReceived && !preopened) preopenStore(message);
     return;
@@ -86,9 +101,23 @@ async function createWorkerEngine(
   performance.mark("mail-engine:account-ensured");
   const ports = createRoutedBackendAdapter({
     requestFor: (accountId) =>
-      createMailHttpRequest(accountId, () => {
-        self.postMessage({ type: "session_expired" } satisfies WorkerResponse);
-      }),
+      createMailHttpRequest(
+        accountId,
+        (reason) => {
+          self.postMessage({
+            type: "session_expired",
+            reason,
+          } satisfies WorkerResponse);
+        },
+        (buildId) => {
+          if (buildId === lastServerBuild) return;
+          lastServerBuild = buildId;
+          self.postMessage({
+            type: "server_build",
+            buildId,
+          } satisfies WorkerResponse);
+        },
+      ),
   });
   const created = createMailEngine({
     store,
@@ -104,15 +133,40 @@ async function createWorkerEngine(
   }
   performance.mark("mail-engine:sync-requested");
   const loop = startEngineLoop(created);
+  const semantic = startSemanticIndex(store, input);
   const originalClose = created.close.bind(created);
   return {
     ...created,
     ensureAccount,
+    ...(semantic && { searchSemantic: semantic.search }),
     async close() {
+      semantic?.stop();
       // The loop stops first, so its turn neither waits out its deadline nor
       // fails against the closed store and pauses before noticing.
       await loop.stop();
       await originalClose();
+    },
+  };
+}
+
+// Nothing of the model loads here: its worker starts on the index's first
+// batch or the first search. Devices it doesn't suit search as before.
+function startSemanticIndex(store: MailStore, input: BrowserEngineStart) {
+  if (!semanticSearchSupported(navigator, { touchOnly: input.touchOnly }))
+    return null;
+  const embedder = createWorkerTextEmbedder();
+  const index = createSemanticIndex({
+    store,
+    embedder,
+    startDelayMs: input.semanticIndexIntervalMs,
+    recheckMs: input.semanticIndexIntervalMs,
+  });
+  index.start();
+  return {
+    search: index.search,
+    stop() {
+      index.stop();
+      embedder.close();
     },
   };
 }

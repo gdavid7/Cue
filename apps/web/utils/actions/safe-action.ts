@@ -155,10 +155,20 @@ const baseClient = createSafeActionClient({
 // rate-limits itself.
 export const publicActionClient = baseClient;
 
+// Every signed-in action checks the session against the database: actions
+// change things, and a revoked session's cookie cache would otherwise still
+// pass for up to a minute. The check must not write the session cookie: Next.js
+// treats any cookie an action sets as a revalidation, re-renders the open page
+// from the response and, if the user has moved on meanwhile, reloads it.
+const ACTION_SESSION_CHECK = {
+  disableCookieCache: true,
+  disableRefresh: true,
+};
+
 export const actionClient = baseClient
   .bindArgsSchemas<[emailAccountId: z.ZodString]>([z.string()])
   .use(async ({ next, metadata, bindArgsClientInputs, ctx }) => {
-    const session = await auth();
+    const session = await auth(undefined, ACTION_SESSION_CHECK);
 
     if (!session?.user) throw new SafeError(SESSION_EXPIRED_MESSAGE);
     const userEmail = session.user.email;
@@ -224,7 +234,7 @@ export const actionClient = baseClient
 // doesn't bind to a specific email
 export const actionClientUser = baseClient.use(
   async ({ next, metadata, ctx }) => {
-    const session = await auth();
+    const session = await auth(undefined, ACTION_SESSION_CHECK);
 
     if (!session?.user) {
       // expected when the session has expired or the user logged out
@@ -251,7 +261,7 @@ export const actionClientUser = baseClient.use(
 
 export const adminActionClient = baseClient.use(
   async ({ next, metadata, ctx }) => {
-    const session = await auth();
+    const session = await auth(undefined, ACTION_SESSION_CHECK);
     if (!session?.user) throw new SafeError(SESSION_EXPIRED_MESSAGE);
     if (!isAdmin({ email: session.user.email }))
       throw new SafeError("Unauthorized");

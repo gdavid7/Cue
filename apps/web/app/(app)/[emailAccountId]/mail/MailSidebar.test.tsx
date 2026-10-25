@@ -5,6 +5,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TagIcon } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MailSidebar, type MailSidebarProps } from "./MailSidebar";
+import {
+  MAIL_DRAG_TYPE,
+  type MailDrag,
+  MailDragProvider,
+  useSetMailDrag,
+} from "./mail-drag";
 
 (globalThis as { React?: typeof React }).React = React;
 
@@ -61,6 +67,21 @@ function renderSidebar(overrides: Partial<MailSidebarProps> = {}) {
 }
 
 describe("MailSidebar", () => {
+  it("keeps Today in place but not a link while there is no account", () => {
+    renderSidebar({ todayHref: null });
+
+    expect(screen.getByText("Today")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Today/ })).toBeNull();
+  });
+
+  it("links Today once there is an account", () => {
+    renderSidebar({ todayHref: "/a/home" });
+
+    expect(
+      screen.getByRole("link", { name: /Today/ }).getAttribute("href"),
+    ).toBe("/a/home");
+  });
+
   it("switches views of the open mail screen without a server round trip", () => {
     window.history.replaceState(null, "", "/mail/u/0/inbox");
     renderSidebar({
@@ -268,3 +289,99 @@ describe("MailSidebar", () => {
     expect(screen.queryByText("All inboxes")).toBeNull();
   });
 });
+
+describe("dropping on the sidebar", () => {
+  it("runs the drop for this tab's own drag", () => {
+    const onDrop = vi.fn();
+    renderDragging(onDrop);
+    const inbox = screen.getByRole("link", { name: /^Inbox/ });
+
+    const allowed = fireEvent.dragOver(inbox, {
+      dataTransfer: transfer({ [MAIL_DRAG_TYPE]: "drag-1" }),
+    });
+    expect(allowed).toBe(false);
+    fireEvent.drop(inbox, {
+      dataTransfer: transfer({ [MAIL_DRAG_TYPE]: "drag-1" }),
+    });
+
+    expect(onDrop).toHaveBeenCalledWith({ kind: "move_to_inbox" });
+  });
+
+  it.each([
+    ["a file", { Files: "" }],
+    ["text", { "text/plain": "hello" }],
+    ["another tab's mail drag", { [MAIL_DRAG_TYPE]: "drag-from-elsewhere" }],
+  ])("ignores %s dropped while a stale drag is remembered", (_, data) => {
+    const onDrop = vi.fn();
+    renderDragging(onDrop);
+    const inbox = screen.getByRole("link", { name: /^Inbox/ });
+
+    fireEvent.dragEnter(inbox, { dataTransfer: transfer(data) });
+    fireEvent.dragOver(inbox, { dataTransfer: transfer(data) });
+    fireEvent.drop(inbox, { dataTransfer: transfer(data) });
+
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("highlights nothing for a foreign drag", () => {
+    renderDragging(vi.fn());
+    const inbox = screen.getByRole("link", { name: /^Inbox/ });
+
+    const allowed = fireEvent.dragOver(inbox, {
+      dataTransfer: transfer({ Files: "" }),
+    });
+
+    expect(allowed).toBe(true);
+    expect(inbox.getAttribute("data-drop")).toBeNull();
+  });
+
+  it("forgets a drag once the pointer moves again outside a drag", () => {
+    const onDrop = vi.fn();
+    renderDragging(onDrop);
+    const inbox = screen.getByRole("link", { name: /^Inbox/ });
+
+    fireEvent.mouseMove(document.body);
+    fireEvent.drop(inbox, {
+      dataTransfer: transfer({ [MAIL_DRAG_TYPE]: "drag-1" }),
+    });
+
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+});
+
+/** A drag started from the list and never ended, as when its row unmounts. */
+function renderDragging(onDrop: MailDrag["onDrop"]) {
+  render(
+    <MailDragProvider>
+      <StartDrag
+        drag={{
+          nonce: "drag-1",
+          conversations: [
+            {
+              key: "t1",
+              threadId: "t1",
+              accountId: "a1",
+              messages: [{ labelIds: [] }],
+            },
+          ],
+          onDrop,
+        }}
+      />
+      {sidebar({ activeType: "sent" })}
+    </MailDragProvider>,
+  );
+}
+
+function StartDrag({ drag }: { drag: MailDrag }) {
+  const setDrag = useSetMailDrag();
+  React.useEffect(() => setDrag(drag), [drag, setDrag]);
+  return null;
+}
+
+function transfer(data: Record<string, string>) {
+  return {
+    types: Object.keys(data),
+    getData: (type: string) => data[type] ?? "",
+    dropEffect: "none",
+  };
+}

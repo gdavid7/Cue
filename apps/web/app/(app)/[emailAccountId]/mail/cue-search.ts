@@ -1,3 +1,7 @@
+import type {
+  MailPredicate,
+  SemanticMatch,
+} from "@inboxzero/mail-core/queries";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -16,6 +20,8 @@ import {
 export const CUE_SEARCH_BUDGET_MS = 4000;
 /** Fewer matches than this and Cue widens the search, tier by tier. */
 export const WIDEN_BELOW_RESULTS = 2;
+/** Conversations the search by meaning may add: a screen and a half. */
+export const CUE_SEMANTIC_RESULTS = 15;
 /** The Cue found rows shown before "Show all". */
 export const CUE_FOUND_VISIBLE_ROWS = 3;
 
@@ -144,6 +150,77 @@ export function shouldAskProviderLastResort({
     widened.settled &&
     widened.count === 0
   );
+}
+
+/**
+ * Where widening goes next from `widening`, or null to stay: up a step by
+ * `getWideningStep`, or, at the top with nothing found, the same step sent
+ * to the provider too, when `mayAskProvider`.
+ */
+export function getNextWidening(
+  ladder: Omit<Parameters<typeof getWideningStep>[0], "step">,
+  widening: { step: number; onProvider: boolean } | null,
+  { mayAskProvider }: { mayAskProvider: boolean },
+): { step: number; onProvider: boolean } | null {
+  const state = { ...ladder, step: widening?.step ?? null };
+  const step = getWideningStep(state);
+  if (step === null) return null;
+  if (step !== state.step) return { step, onProvider: false };
+  if (
+    !widening?.onProvider &&
+    mayAskProvider &&
+    shouldAskProviderLastResort(state)
+  )
+    return { step, onProvider: true };
+  return null;
+}
+
+/**
+ * A predicate's searches read from the local mail alone, each kept to the
+ * accounts it was written for. A last resort sends only the first of its
+ * tier's searches to the provider and reads the rest this way, so it is one
+ * provider search that answers or times out as one.
+ */
+export function localOnly(predicate: MailPredicate): MailPredicate {
+  switch (predicate.kind) {
+    case "search":
+      return predicate.accountIds
+        ? {
+            kind: "all",
+            predicates: [
+              { kind: "account", ids: predicate.accountIds },
+              predicate.local,
+            ],
+          }
+        : predicate.local;
+    case "all":
+    case "any":
+      return { ...predicate, predicates: predicate.predicates.map(localOnly) };
+    case "not":
+      return { ...predicate, predicate: localOnly(predicate.predicate) };
+    default:
+      return predicate;
+  }
+}
+
+/**
+ * What several searches by meaning found, as one: each conversation once, at
+ * the closest any of them found it, closest first, up to `limit`. The
+ * similarities come from one model, so they compare across searches.
+ */
+export function fuseSemanticMatches(
+  lists: SemanticMatch[][],
+  limit: number,
+): SemanticMatch[] {
+  const closest = new Map<string, SemanticMatch>();
+  for (const match of lists.flat()) {
+    const found = closest.get(match.conversationId);
+    if (!found || match.similarity > found.similarity)
+      closest.set(match.conversationId, match);
+  }
+  return [...closest.values()]
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit);
 }
 
 export type SearchAnswerRequest = { query: string; searches?: string[] };

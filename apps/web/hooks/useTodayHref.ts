@@ -59,10 +59,15 @@ export function useAllAccountsScope() {
   return hasAllInboxes && (pageScope ?? storedScope) === "all";
 }
 
-/** Today for what the user is looking at: one account, or all of them. */
+/**
+ * Today for what the user is looking at: one account, or all of them. Null
+ * until there is an account, as `/home` alone is only a redirect; links keep
+ * their place and wait rather than fetch or open it.
+ */
 export function useTodayHref() {
   const { emailAccountId } = useAccount();
-  return getTodayPath(emailAccountId, useAllAccountsScope());
+  const allAccounts = useAllAccountsScope();
+  return emailAccountId ? getTodayPath(emailAccountId, allAccounts) : null;
 }
 
 function readStoredScope(): AccountScope | null {

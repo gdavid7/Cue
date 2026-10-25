@@ -1,6 +1,11 @@
 import type { MetadataChange } from "./commands";
-import { applyMetadataChange } from "./effective-state";
-import type { MessageMetadata } from "./messages";
+import {
+  applyMetadataChange,
+  leavesOwnMailInPlace,
+  movesBetweenFolders,
+} from "./effective-state";
+import type { Provider } from "./identities";
+import { type MessageMetadata, normalizeInternetMessageId } from "./messages";
 import { MAX_MESSAGE_PREDICATE_IDS, type MailPredicate } from "./queries";
 
 export type EffectiveMessage = MessageMetadata & {
@@ -75,6 +80,18 @@ export function messageMatchesPredicate(
       if (predicate.accountId && predicate.accountId !== message.accountId)
         return false;
       return predicate.ids.includes(message.messageId);
+    case "conversation":
+      if (predicate.accountId && predicate.accountId !== message.accountId)
+        return false;
+      return predicate.ids.includes(message.conversationId);
+    // Alone, a message is its own conversation's latest; the conversation
+    // matchers below decide it by the conversation's key instead.
+    case "internet_message_id":
+      return keyMatches(
+        predicate,
+        message.accountId,
+        normalizeInternetMessageId(message.internetMessageId),
+      );
     case "text":
       return textMatches(
         message,
@@ -105,37 +122,58 @@ export function conversationMatchesPredicate(
   if (predicate.kind === "mailbox") {
     return conversationMatchesMailbox(messages, predicate.mailbox);
   }
-  return messages.some((message) =>
-    messageMatchesPredicate(message, predicate),
-  );
+  const bound = withConversationKey(predicate, messages);
+  return messages.some((message) => messageMatchesPredicate(message, bound));
 }
 
 export function conversationIsUnread(
   messages: EffectiveMessage[],
   predicate: MailPredicate,
 ): boolean {
+  const bound = withConversationKey(predicate, messages);
   return messages.some(
     (message) =>
-      messageMatchesPredicate(message, predicate) && message.read === false,
+      messageMatchesPredicate(message, bound) && message.read === false,
   );
+}
+
+/**
+ * A conversation's key: the normalised Message-ID of its latest message that
+ * isn't a draft or in the trash (sent mail counts), else of its latest. One
+ * message delivered to several accounts has the same key in each, as the
+ * local store's conversation_message_keys has it.
+ */
+export function conversationMessageKey(
+  messages: EffectiveMessage[],
+): string | null {
+  const latest = [...messages].sort(
+    (a, b) =>
+      Number(isKeyed(b)) - Number(isKeyed(a)) ||
+      b.receivedAtMs - a.receivedAtMs ||
+      (b.messageId > a.messageId ? 1 : b.messageId < a.messageId ? -1 : 0),
+  )[0];
+  return normalizeInternetMessageId(latest?.internetMessageId);
 }
 
 /**
  * Whether a conversation matches `predicate` once `change` has been applied
  * to every message in it, as conversation triage does. True or false when the
  * change alone decides it; null when the answer also depends on what the
- * change leaves alone, such as a label or the sender. Lets a view drop or keep
- * a row before the engine has written the change.
+ * change leaves alone, such as a label or the sender, or on which messages
+ * the change reaches, as for Sent on a folder-based `provider`. A null
+ * `provider` is one not known yet, which might be folder-based. Lets a view
+ * drop or keep a row before the engine has written the change.
  */
 export function conversationMatchesAfterChange(
   predicate: MailPredicate,
   change: MetadataChange,
+  provider: Provider | null,
 ): boolean | null {
   switch (predicate.kind) {
     case "all": {
       let unknown = false;
       for (const child of predicate.predicates) {
-        const result = conversationMatchesAfterChange(child, change);
+        const result = conversationMatchesAfterChange(child, change, provider);
         if (result === false) return false;
         if (result === null) unknown = true;
       }
@@ -144,7 +182,7 @@ export function conversationMatchesAfterChange(
     case "any": {
       let unknown = false;
       for (const child of predicate.predicates) {
-        const result = conversationMatchesAfterChange(child, change);
+        const result = conversationMatchesAfterChange(child, change, provider);
         if (result === true) return true;
         if (result === null) unknown = true;
       }
@@ -154,17 +192,23 @@ export function conversationMatchesAfterChange(
       const result = conversationMatchesAfterChange(
         predicate.predicate,
         change,
+        provider,
       );
       return result === null ? null : !result;
     }
     case "search": {
       // The provider's own matches keep a conversation the local part drops
       // unless the change rules out the whole query.
-      const local = conversationMatchesAfterChange(predicate.local, change);
+      const local = conversationMatchesAfterChange(
+        predicate.local,
+        change,
+        provider,
+      );
       if (local === true) return true;
       const possible = conversationMatchesAfterChange(
         predicate.possible,
         change,
+        provider,
       );
       return local === false && possible === false ? false : null;
     }
@@ -173,6 +217,10 @@ export function conversationMatchesAfterChange(
     case "read":
     case "starred":
     case "membership": {
+      const mayLeaveOwnMail = provider
+        ? leavesOwnMailInPlace(change, provider)
+        : movesBetweenFolders(change);
+      if (mayLeaveOwnMail && namesOwnMail(predicate)) return null;
       // The change sets the same value on every message. Applied to a message
       // with every flag set and to one with none, it decides the predicate
       // only where both give the same answer.
@@ -457,4 +505,76 @@ function probeMessage(
     roles: everything ? ["inbox", "sent", "draft", "trash", "spam"] : [],
     snoozedUntilMs: everything ? Number.MAX_SAFE_INTEGER : null,
   };
+}
+
+function namesOwnMail(predicate: MailPredicate) {
+  if (predicate.kind === "role") {
+    return predicate.role === "sent" || predicate.role === "draft";
+  }
+  return (
+    predicate.kind === "mailbox" &&
+    (predicate.mailbox === "sent" || predicate.mailbox === "drafts")
+  );
+}
+
+const ALWAYS: MailPredicate = { kind: "all", predicates: [] };
+const NEVER: MailPredicate = { kind: "any", predicates: [] };
+
+/**
+ * The predicate with each `internet_message_id` decided for this
+ * conversation by its key, which no single message can answer.
+ */
+function withConversationKey(
+  predicate: MailPredicate,
+  messages: EffectiveMessage[],
+): MailPredicate {
+  if (!mentionsMessageKeys(predicate)) return predicate;
+  const key = conversationMessageKey(messages);
+  const accountId = messages[0]?.accountId ?? "";
+  const bind = (node: MailPredicate): MailPredicate => {
+    switch (node.kind) {
+      case "internet_message_id":
+        return keyMatches(node, accountId, key) ? ALWAYS : NEVER;
+      case "all":
+      case "any":
+        return { ...node, predicates: node.predicates.map(bind) };
+      case "not":
+        return { ...node, predicate: bind(node.predicate) };
+      case "search":
+        return { ...node, local: bind(node.local) };
+      default:
+        return node;
+    }
+  };
+  return bind(predicate);
+}
+
+function mentionsMessageKeys(predicate: MailPredicate): boolean {
+  switch (predicate.kind) {
+    case "internet_message_id":
+      return true;
+    case "all":
+    case "any":
+      return predicate.predicates.some(mentionsMessageKeys);
+    case "not":
+      return mentionsMessageKeys(predicate.predicate);
+    case "search":
+      return mentionsMessageKeys(predicate.local);
+    default:
+      return false;
+  }
+}
+
+/** Keys are compared as stored: the ids given are keys already. */
+function keyMatches(
+  predicate: Extract<MailPredicate, { kind: "internet_message_id" }>,
+  accountId: string,
+  key: string | null,
+) {
+  if (predicate.accountId && predicate.accountId !== accountId) return false;
+  return key !== null && predicate.ids.includes(key);
+}
+
+function isKeyed(message: EffectiveMessage) {
+  return !message.roles.includes("draft") && !message.roles.includes("trash");
 }

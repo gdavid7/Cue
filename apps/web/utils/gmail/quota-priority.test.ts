@@ -37,12 +37,14 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "v1/senders/unsubscribe": "interactive",
   "user/mail/matching-count": "interactive",
   "user/signature": "interactive",
+  "user/calendar/free-times": "interactive",
   "user/scheduled-emails/retry": "interactive",
   messages: "interactive",
   "mobile/all-inboxes/archive": "interactive",
   "chat/confirm-email-action": "interactive",
   // Pages a person opened.
   "user/home": "interactive",
+  "user/inbox-catch-up": "interactive",
   labels: "interactive",
   "google/linking/callback": "interactive",
   "clean/onboarding": "interactive",
@@ -56,6 +58,8 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "google/webhook": "sync",
   "mobile/mailbox-sync": "sync",
   "snoozed-threads/execute": "sync",
+  // Summarizing mail a person's own digest rule picked.
+  digest: "sync",
   "scheduled-emails/execute": "sync",
   "auth/link-watch": "sync",
   // Work nobody asked for and can't see yet.

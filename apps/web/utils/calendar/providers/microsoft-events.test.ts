@@ -57,6 +57,11 @@ describe("MicrosoftCalendarEventProvider", () => {
               emailAddress: { address: "busy@example.com", name: "Busy" },
               status: { response: "declined" },
             },
+            {
+              emailAddress: { address: "board@example.com", name: "Board" },
+              status: { response: "none" },
+              type: "resource",
+            },
           ],
         },
       ],
@@ -76,6 +81,12 @@ describe("MicrosoftCalendarEventProvider", () => {
         attendees: [
           { email: "guest@example.com", name: "Guest", declined: false },
           { email: "busy@example.com", name: "Busy", declined: true },
+          {
+            email: "board@example.com",
+            name: "Board",
+            declined: false,
+            resource: true,
+          },
         ],
       }),
     );
@@ -661,7 +672,7 @@ function createProvider({ calendarIds }: { calendarIds?: string[] } = {}) {
     {
       accessToken: "access-token",
       calendarIds,
-      emailAccountId: "email-account-id",
+      connectionId: "connection-id",
       expiresAt: null,
       refreshToken: "refresh-token",
     },

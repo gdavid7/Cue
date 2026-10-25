@@ -1,4 +1,5 @@
 import type { ProviderMailboxSearch } from "@/utils/email/types";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 import { getCompleteGmailThread } from "@/utils/gmail/thread";
 import type { LocalMailSyncRequest } from "@/utils/actions/local-mail-sync.validation";
 import type { LocalMailSyncResponse } from "@/utils/email/local-mail-sync-types";
@@ -1683,8 +1684,9 @@ export class GmailProvider implements EmailProvider {
   async getThreadsWithParticipant(options: {
     participantEmail: string;
     maxThreads?: number;
+    excludeThreadId?: string;
   }): Promise<EmailThread[]> {
-    const { participantEmail, maxThreads = 5 } = options;
+    const { participantEmail, maxThreads = 5, excludeThreadId } = options;
 
     const query = `from:${participantEmail} OR to:${participantEmail}`;
     const { threads: gmailThreads } = await getThreadsWithNextPageToken({
@@ -1696,7 +1698,7 @@ export class GmailProvider implements EmailProvider {
 
     const threadIds = gmailThreads
       .map((t) => t.id)
-      .filter((id): id is string => !!id);
+      .filter((id): id is string => !!id && id !== excludeThreadId);
 
     if (threadIds.length === 0) {
       return [];
@@ -2290,6 +2292,14 @@ export class GmailProvider implements EmailProvider {
     this.logger.warn("Moving thread to folder is not supported for Gmail");
   }
 
+  async moveMessagesToFolder(
+    _messageIds: string[],
+    _folderId: string,
+  ): Promise<void> {
+    // Gmail has labels, not folders, so a move can never succeed.
+    throw new ProviderChangeRejectedError("unsupported");
+  }
+
   async getOrCreateFolderIdByName(_folderName: string): Promise<string> {
     this.logger.warn("Moving to folder is not supported for Gmail");
     return "";
@@ -2303,6 +2313,35 @@ export class GmailProvider implements EmailProvider {
       isDefault: sig.isDefault,
       displayName: sig.displayName,
     }));
+  }
+
+  async listUnreadInboxThreadIds({
+    after,
+    maxResults,
+  }: {
+    after: Date;
+    maxResults: number;
+  }): Promise<{ threadIds: string[]; full: boolean }> {
+    return this.withRateLimitTracking(
+      "list-unread-inbox-thread-ids",
+      async () => {
+        const response = await withGmailRetry(() =>
+          this.client.users.threads.list({
+            userId: "me",
+            labelIds: [GmailLabel.INBOX],
+            q: `is:unread after:${Math.floor(after.getTime() / 1000)}`,
+            maxResults,
+            fields: "threads/id,nextPageToken",
+          }),
+        );
+        return {
+          threadIds: (response.data.threads ?? []).flatMap((thread) =>
+            thread.id ? [thread.id] : [],
+          ),
+          full: Boolean(response.data.nextPageToken),
+        };
+      },
+    );
   }
 
   async getInboxStats(): Promise<{ total: number; unread: number }> {

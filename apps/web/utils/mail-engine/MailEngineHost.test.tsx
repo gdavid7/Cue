@@ -95,7 +95,10 @@ vi.mock("@/utils/mail-engine/create-browser-engine", () => ({
 }));
 
 vi.mock("@/utils/actions/email-account-cookie", () => ({
-  setLastEmailAccountAction: vi.fn(),
+  clearLastEmailAccountAction: vi.fn(),
+}));
+vi.mock("@/utils/last-email-account", () => ({
+  rememberLastEmailAccount: vi.fn(),
 }));
 vi.mock("@/utils/actions/web-push", () => ({
   saveWebPushSubscriptionAction: vi.fn(),

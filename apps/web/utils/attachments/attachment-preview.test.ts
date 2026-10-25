@@ -10,6 +10,17 @@ import {
   isPreviewableImageType,
 } from "./attachment-preview";
 
+// Node has no Worker; the worker runs this same function.
+vi.mock("@/utils/attachments/office-package-client", async () => {
+  const { readOfficePackage } = await import(
+    "@/utils/attachments/office-package"
+  );
+  return {
+    readOfficePackageInWorker: (bytes: ArrayBuffer, signal?: AbortSignal) =>
+      readOfficePackage(new Uint8Array(bytes), signal),
+  };
+});
+
 describe("attachment image previews", () => {
   it.each([
     ["image/png", [137, 80, 78, 71, 13, 10, 26, 10]],

@@ -8,6 +8,7 @@ import { mapWithConcurrency } from "@/utils/async";
 import type { EmailProvider } from "@/utils/email/types";
 import { isInvalidGrantError } from "@/utils/error";
 import { resumeAfterGmailDeferral } from "@/utils/gmail/deferred-resume";
+import { mailBulkJobListings } from "@/utils/mail-bulk/job-listing";
 import {
   getGmailCallDeferredError,
   runWithGmailQuota,
@@ -51,14 +52,21 @@ const SINGLE_DELIVERY_PER_ITEM_TARGETS = 1000;
 // An undo waits for the job it reverses to stop, checking this often.
 const SOURCE_WAIT_MS = 2000;
 
-export const mailBulkJobBody = z.object({
+// Founder rule: a queued delivery carries ids and counters only. The view it
+// lists, which can hold the user's search text, and the page it reads next,
+// which on Outlook repeats that search, stay in the job's Postgres listing.
+const mailBulkJobQueuedBody = z.object({
   jobId: z.string().uuid(),
   emailAccountId: z.string().min(1),
-  /** The view being listed. Only carried while the job is still listing. */
-  scope: matchingScopeSchema.optional(),
-  /** The page the listing reads next. */
-  pageToken: z.string().optional(),
   deferrals: z.number().int().nonnegative(),
+});
+type MailBulkJobQueuedBody = z.infer<typeof mailBulkJobQueuedBody>;
+
+export const mailBulkJobBody = mailBulkJobQueuedBody.extend({
+  // TODO(RD-3o): deliveries queued before the listing moved to Postgres still
+  // carry these; drop them one deploy after it ships.
+  scope: matchingScopeSchema.optional(),
+  pageToken: z.string().optional(),
 });
 export type MailBulkJobBody = z.infer<typeof mailBulkJobBody>;
 
@@ -81,6 +89,7 @@ export async function runMailBulkJobStep({
   ownerEmail,
   logger,
   store = mailBulkJobStore,
+  listings = mailBulkJobListings,
   durable = hasDurableQstash(),
   budgetMs,
   maxTargets,
@@ -92,6 +101,7 @@ export async function runMailBulkJobStep({
   ownerEmail: string;
   logger: Logger;
   store?: typeof mailBulkJobStore;
+  listings?: typeof mailBulkJobListings;
   /** Whether a scheduler can deliver the rest of the job later. */
   durable?: boolean;
   budgetMs?: number;
@@ -99,10 +109,18 @@ export async function runMailBulkJobStep({
   now?: () => number;
   wait?: (ms: number) => Promise<unknown>;
 }): Promise<StepResult> {
+  // A job that is gone or no longer running never lists again, so its view
+  // goes too rather than waiting for the retention sweep.
+  const endListing = () => listings.remove(body.jobId, body.emailAccountId);
   const job = await store.get(body.jobId);
-  if (!job || job.emailAccountId !== body.emailAccountId) return "missing";
-  if (!isActiveMailBulkJob(job.status))
+  if (!job || job.emailAccountId !== body.emailAccountId) {
+    await endListing();
+    return "missing";
+  }
+  if (!isActiveMailBulkJob(job.status)) {
+    await endListing();
     return settleStatus(store, body.jobId, job.status);
+  }
 
   const deadline =
     now() +
@@ -112,24 +130,41 @@ export async function runMailBulkJobStep({
   const targetCap =
     maxTargets ??
     (durable ? MAX_JOB_TARGETS : singleDeliveryTargetCap(job.action, provider));
-  let pageToken = body.pageToken;
+  const queuedBody = (deferrals = 0): MailBulkJobQueuedBody => ({
+    jobId: body.jobId,
+    emailAccountId: body.emailAccountId,
+    deferrals,
+  });
 
   const runPhases = async (): Promise<StepResult> => {
     const current = await store.get(body.jobId);
-    if (!current) return "missing";
+    if (!current) {
+      await endListing();
+      return "missing";
+    }
     if (current.status === "listing") {
-      if (!body.scope) {
+      const listing = await readListing(body, listings);
+      if (!listing) {
         await store.transition(body.jobId, ["listing"], "failed");
         return "failed";
       }
+      let { pageToken } = listing;
       let total = current.total;
       do {
         const page = await provider.listMatchingMessages({
-          scope: body.scope,
+          scope: listing.scope,
           only: filterForAction(job.action),
           pageToken,
         });
+        // A conversation listed whole on an earlier page is already in full.
+        const known = listing.scope.wholeConversations
+          ? await store.knownConversations(
+              body.jobId,
+              uniq(page.messages.map((message) => message.threadId)),
+            )
+          : null;
         const targets = page.messages
+          .filter((message) => !known?.has(message.threadId))
           .slice(0, Math.max(0, targetCap - total))
           .map((message) => ({
             messageId: message.id,
@@ -140,21 +175,27 @@ export async function runMailBulkJobStep({
         await store.increment(body.jobId, "conversations", conversations);
         total += targets.length;
         pageToken = page.nextPageToken;
+        // Saved before the next page is read, so a delivery that resumes
+        // after a deferral or a timeout picks up here.
+        await listings.setPageToken(body.jobId, body.emailAccountId, pageToken);
 
         // A Stop ends the listing at the page it lands on.
         const latest = await store.get(body.jobId);
-        if (latest?.status !== "listing")
+        if (latest?.status !== "listing") {
+          await endListing();
           return settleStatus(store, body.jobId, latest?.status);
+        }
 
         if (pageToken && total >= targetCap) {
           await store.setCapped(body.jobId);
           pageToken = undefined;
         }
         if (pageToken && outOfTime()) {
-          await enqueueMailBulkJob({ ...body, pageToken, deferrals: 0 });
+          await enqueueMailBulkJob(queuedBody());
           return "continued";
         }
       } while (pageToken);
+      await endListing();
       // A Stop during listing leaves the job cancelled rather than applying.
       const moved = await store.transition(body.jobId, ["listing"], "applying");
       if (!moved)
@@ -174,12 +215,7 @@ export async function runMailBulkJobStep({
       logger,
       outOfTime,
       wait,
-      continueLater: () =>
-        enqueueMailBulkJob({
-          jobId: body.jobId,
-          emailAccountId: body.emailAccountId,
-          deferrals: 0,
-        }),
+      continueLater: () => enqueueMailBulkJob(queuedBody()),
     });
   };
 
@@ -198,18 +234,18 @@ export async function runMailBulkJobStep({
       }
       return failOrResume({
         error,
-        body,
-        pageToken,
+        body: queuedBody(body.deferrals),
         job,
         durable,
         store,
+        endListing,
         logger,
       });
     }
   }
 }
 
-export async function enqueueMailBulkJob(body: MailBulkJobBody) {
+export async function enqueueMailBulkJob(body: MailBulkJobQueuedBody) {
   // One job per account at a time, so two of them never share its quota.
   await publishToQstash(MAIL_BULK_JOB_PATH, body, {
     key: `mail-bulk-${body.emailAccountId}`,
@@ -220,18 +256,18 @@ export async function enqueueMailBulkJob(body: MailBulkJobBody) {
 async function failOrResume({
   error,
   body,
-  pageToken,
   job,
   durable,
   store,
+  endListing,
   logger,
 }: {
   error: unknown;
-  body: MailBulkJobBody;
-  pageToken: string | undefined;
+  body: MailBulkJobQueuedBody;
   job: MailBulkJobState;
   durable: boolean;
   store: typeof mailBulkJobStore;
+  endListing: () => Promise<void>;
   logger: Logger;
 }): Promise<StepResult> {
   const deferred = getGmailCallDeferredError(error);
@@ -240,12 +276,7 @@ async function failOrResume({
     const resume = await resumeAfterGmailDeferral({
       error,
       path: MAIL_BULK_JOB_PATH,
-      body: {
-        ...body,
-        ...(latest?.status === "listing"
-          ? { pageToken }
-          : { scope: undefined }),
-      },
+      body,
       deferrals: body.deferrals,
       jobKey: `mail-bulk-${body.jobId}-${latest?.total ?? 0}-${latest?.applied ?? 0}`,
       job: "a bulk mail action",
@@ -257,8 +288,14 @@ async function failOrResume({
       action: job.action,
     });
   } else {
-    logger.error("Bulk mail action failed", { error, action: job.action });
+    // Only the error's kind: a Graph error carries the request it failed on,
+    // which repeats the view's search.
+    logger.error("Bulk mail action failed", {
+      action: job.action,
+      ...describeError(error),
+    });
   }
+  await endListing();
   // A job asked to stop ends as stopped, not failed.
   if (await store.transition(body.jobId, ["stopping"], "cancelled"))
     return "cancelled";
@@ -500,4 +537,38 @@ function shouldStopJob(error: unknown) {
   return (
     Boolean(getGmailCallDeferredError(error)) || isInvalidGrantError(error)
   );
+}
+
+/**
+ * The view a listing job reads and the page it is on, from its Postgres row
+ * for the job's own account.
+ */
+async function readListing(
+  body: MailBulkJobBody,
+  listings: typeof mailBulkJobListings,
+) {
+  const listing = await listings.get(body.jobId, body.emailAccountId);
+  if (listing || !body.scope) return listing;
+  // TODO(RD-3o): a delivery queued before the listing moved to Postgres moves
+  // it there, so the deliveries after it carry ids only.
+  const legacy = { scope: body.scope, pageToken: body.pageToken };
+  await listings.create({
+    jobId: body.jobId,
+    emailAccountId: body.emailAccountId,
+    ...legacy,
+  });
+  return legacy;
+}
+
+function describeError(error: unknown) {
+  if (!(error instanceof Error)) return { errorName: typeof error };
+  const { code, statusCode } = error as {
+    code?: unknown;
+    statusCode?: unknown;
+  };
+  return {
+    errorName: error.name,
+    errorCode: typeof code === "string" ? code : undefined,
+    statusCode: typeof statusCode === "number" ? statusCode : undefined,
+  };
 }

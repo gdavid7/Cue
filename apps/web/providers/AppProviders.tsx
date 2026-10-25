@@ -26,7 +26,7 @@ export function AppProviders(props: {
 }) {
   // The app layout only renders for a signed-in user, so a 401 from here on
   // means that session ended.
-  useEffect(() => armSessionExpiredRedirect(), []);
+  useEffect(() => armSessionExpiredRedirect(props.userId), [props.userId]);
 
   return (
     // JS-driven animations follow the OS "reduce motion" setting, as CSS does.

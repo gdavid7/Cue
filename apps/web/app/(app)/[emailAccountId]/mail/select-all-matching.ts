@@ -5,6 +5,7 @@ import type {
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import {
+  MAIL_FILES_TYPE,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
@@ -37,7 +38,11 @@ export function getMatchingScope(
     if (Array.isArray(value) && !value.length) continue;
     if (!SCOPE_KEYS.has(key)) return null;
   }
-  if (query.type === MAIL_SCHEDULED_TYPE || query.type === MAIL_SNOOZED_TYPE)
+  if (
+    query.type === MAIL_SCHEDULED_TYPE ||
+    query.type === MAIL_SNOOZED_TYPE ||
+    query.type === MAIL_FILES_TYPE
+  )
     return null;
   if (
     isMicrosoftProvider(provider) &&
@@ -53,6 +58,25 @@ export function getMatchingScope(
   if (query.folderId) scope.folderId = query.folderId;
   if (query.isUnread) scope.isUnread = true;
   return scope;
+}
+
+/**
+ * The scope "select all that match" covers in one account's view. A bundled
+ * inbox has none: its list leaves out the conversations its Reading row
+ * stands in for, which no mailbox search leaves out exactly (Gmail matches
+ * per message), so selecting stays per page.
+ */
+export function getAccountMatchingScope({
+  query,
+  provider,
+  bundlesReading,
+}: {
+  query: ThreadsQuery;
+  provider: string | null | undefined;
+  bundlesReading: boolean;
+}): MatchingScope | null {
+  if (bundlesReading) return null;
+  return getMatchingScope(query, provider);
 }
 
 export function getMatchingBannerCopy({

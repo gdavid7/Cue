@@ -5,17 +5,24 @@ import {
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
 } from "@/utils/config";
+import {
+  isReconnectRequired,
+  noteReconnectRequired,
+  reconnectRequiredBody,
+} from "@/utils/reconnect-required";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 import {
   getSWRFetchErrorMessage,
   normalizeSWRFetchErrorData,
 } from "./swr-error";
 import { redirectToSafeUrl } from "@/utils/redirect";
+import { isSigningOut, withSigningOutSignal } from "@/utils/signing-out";
 import {
   isSessionExpiredErrorBody,
   notifySessionExpired,
   SESSION_EXPIRED_MESSAGE,
 } from "@/utils/session-expired";
+import { fetchWithSessionRetry } from "@/utils/session-refresh";
 
 // Accounts already offered a reconnect on this page.
 const reconnectOffered = new Set<string>();
@@ -33,15 +40,38 @@ export const swrFetcher = async (
     viewedEmailAccountId?: string | null;
   },
 ) => {
+  if (isSigningOut()) return leaving();
+
+  // The account was already offered a reconnect; asking again only repeats
+  // the refusal.
+  if (emailAccountId && isReconnectRequired(emailAccountId, url)) {
+    // The first refusal may have come while another account was on screen.
+    promptReconnect(emailAccountId, options?.viewedEmailAccountId);
+    throw reconnectRequiredError();
+  }
+
   const headers = new Headers(init?.headers);
 
   if (emailAccountId) {
     headers.set(EMAIL_ACCOUNT_HEADER, emailAccountId);
   }
 
-  const newInit = { ...init, headers };
+  const newInit = {
+    ...init,
+    headers,
+    signal: withSigningOutSignal(init?.signal),
+  };
 
-  const res = await fetch(url, newInit);
+  let res: Response;
+  try {
+    res = await fetchWithSessionRetry(url, newInit);
+  } catch (error) {
+    if (isSigningOut()) return leaving();
+    throw error;
+  }
+
+  // The session may have ended under a request already on its way.
+  if (!res.ok && isSigningOut()) return leaving();
 
   if (!res.ok) {
     // Try to parse JSON, but handle cases where response isn't JSON (e.g. HMR 404s)
@@ -65,6 +95,7 @@ export const swrFetcher = async (
       errorData.errorCode === MICROSOFT_AUTH_EXPIRED_ERROR_CODE
     ) {
       if (emailAccountId) {
+        noteReconnectRequired(emailAccountId, url);
         const errorMessage =
           errorData.errorCode === MICROSOFT_AUTH_EXPIRED_ERROR_CODE
             ? "Microsoft authorization expired"
@@ -80,15 +111,10 @@ export const swrFetcher = async (
           },
         });
 
-        const redirectUrl = getPermissionsConsentPath(emailAccountId, {
-          expired: true,
-        });
-        if (emailAccountId === options?.viewedEmailAccountId) {
+        if (promptReconnect(emailAccountId, options?.viewedEmailAccountId)) {
           console.log(`${errorMessage}, redirecting to consent page...`);
-          redirectToSafeUrl(redirectUrl);
           return;
         }
-        offerReconnect(emailAccountId, redirectUrl);
       }
     }
 
@@ -128,6 +154,32 @@ export const swrFetcher = async (
 
   return res.json();
 };
+
+function reconnectRequiredError() {
+  const info = reconnectRequiredBody();
+  return Object.assign(new Error(info.error), { info, status: 401 });
+}
+
+/** Never settles: the page is leaving, so there is nothing to report. */
+function leaving(): Promise<never> {
+  return new Promise(() => {});
+}
+
+/** Sends the account on screen to its reconnect page; offers it for any other. */
+function promptReconnect(
+  emailAccountId: string,
+  viewedEmailAccountId: string | null | undefined,
+) {
+  const reconnectUrl = getPermissionsConsentPath(emailAccountId, {
+    expired: true,
+  });
+  if (emailAccountId === viewedEmailAccountId) {
+    redirectToSafeUrl(reconnectUrl);
+    return true;
+  }
+  offerReconnect(emailAccountId, reconnectUrl);
+  return false;
+}
 
 function offerReconnect(emailAccountId: string, reconnectUrl: string) {
   if (reconnectOffered.has(emailAccountId)) return;

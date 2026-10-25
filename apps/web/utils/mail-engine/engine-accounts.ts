@@ -1,10 +1,11 @@
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import type { Provider } from "@inboxzero/mail-core/identities";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 
 type EngineAccount = {
   accountId: string;
-  provider: "google" | "microsoft";
+  provider: Provider;
 };
 
 // Matches how many accounts the new-mail notifier watches.
@@ -25,10 +26,13 @@ export function getConnectedEngineAccounts(
     .slice(0, MAX_REGISTERED_ACCOUNTS)
     .map((emailAccount) => ({
       accountId: emailAccount.id,
-      provider: isMicrosoftProvider(emailAccount.account.provider)
-        ? "microsoft"
-        : "google",
+      provider: engineProvider(emailAccount.account.provider),
     }));
+}
+
+/** An account's provider as the mail engine names it. */
+export function engineProvider(provider: string): Provider {
+  return isMicrosoftProvider(provider) ? "microsoft" : "google";
 }
 
 /**

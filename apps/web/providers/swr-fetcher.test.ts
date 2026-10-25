@@ -45,6 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -63,6 +64,51 @@ describe("swrFetcher with an expired session", () => {
     expect(assign).toHaveBeenCalledWith(
       `/login?next=${encodeURIComponent("/acc-1/mail?view=inbox")}`,
     );
+  });
+
+  it("signs out once and sends nothing more when later revalidations come in", async () => {
+    const { swrFetcher } = await loadPage();
+    const burst = () =>
+      Promise.allSettled(
+        Array.from({ length: 6 }, (_, index) =>
+          swrFetcher(`/api/panel-${index}`, undefined, "acc-1"),
+        ),
+      );
+
+    await burst();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    const later = await burst();
+
+    expect(later.every((result) => result.status === "rejected")).toBe(true);
+    expect(later[0]).toMatchObject({ reason: { status: 401 } });
+    // Six requests and one refresh; the later burst never left the page.
+    expect(fetch).toHaveBeenCalledTimes(7);
+    expect(assign).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the page when a refreshed session lets the request through", async () => {
+    let refreshed = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("/api/auth/get-session")) {
+          refreshed = true;
+          return Response.json({ user: { id: "u1" }, session: {} });
+        }
+        if (refreshed) return Response.json({ panel: "ok" });
+        return Response.json(
+          { error: "Unauthorized", errorCode: "SESSION_EXPIRED" },
+          { status: 401 },
+        );
+      }),
+    );
+    const { swrFetcher } = await loadPage();
+
+    await expect(swrFetcher("/api/panel", undefined, "acc-1")).resolves.toEqual(
+      { panel: "ok" },
+    );
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it("stops SWR from retrying a signed-out request", async () => {
@@ -129,6 +175,44 @@ describe("swrFetcher with an expired session", () => {
     await vi.waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
   });
 
+  it("takes back a held sign-in prompt when the session comes back, and stays when the composer closes", async () => {
+    const { swrFetcher, holdSessionExpiredRedirect, resetSessionGone } =
+      await loadPage();
+    const prompt = vi.fn();
+    const dismiss = vi.fn();
+    const beforeRedirect = vi.fn(async () => undefined);
+    const release = holdSessionExpiredRedirect({
+      prompt,
+      dismiss,
+      beforeRedirect,
+    });
+    await swrFetcher("/api/a", undefined, "acc-1").catch(() => undefined);
+    expect(prompt).toHaveBeenCalledTimes(1);
+
+    resetSessionGone();
+    release();
+    await Promise.resolve();
+
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(beforeRedirect).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("sends a later expiry to log in after the session came back", async () => {
+    stored.set("session-expired-redirected-at", String(Date.now() - 2000));
+    const { swrFetcher, resetSessionGone } = await loadPage();
+    // The loop guard keeps this first one on the page.
+    await swrFetcher("/api/a", undefined, "acc-1").catch(() => undefined);
+    expect(assign).not.toHaveBeenCalled();
+
+    resetSessionGone();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    await swrFetcher("/api/a", undefined, "acc-1").catch(() => undefined);
+
+    expect(assign).toHaveBeenCalledTimes(1);
+  });
+
   it("never sends a public page's signed-out visitor to log in", async () => {
     const { swrFetcher } = await loadPage({ signedIn: false });
 
@@ -192,6 +276,86 @@ describe("swrFetcher when a mailbox's grant has expired", () => {
     expect(assign).toHaveBeenCalledExactlyOnceWith(
       "/acc-2/permissions/consent?reason=expired",
     );
+  });
+
+  it("stops asking an account for a route the server refused, until it is rechecked", async () => {
+    const { swrFetcher } = await loadPage();
+    const ask = (path: string) =>
+      swrFetcher(path, undefined, "acc-2").catch((error) => error);
+    const fetchMock = vi.mocked(fetch);
+
+    await ask("/api/labels?x=1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const refused = await ask("/api/labels?x=2");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(refused).toMatchObject({
+      status: 401,
+      info: { errorCode: "NO_REFRESH_TOKEN" },
+    });
+    expect(toasts.toastError).toHaveBeenCalledOnce();
+
+    await ask("/api/folders");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    await ask("/api/labels");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends the account to its reconnect page when it is viewed after being refused", async () => {
+    const { swrFetcher } = await loadPage();
+
+    await swrFetcher("/api/labels", undefined, "acc-2", {
+      viewedEmailAccountId: "acc-1",
+    }).catch(() => undefined);
+    expect(assign).not.toHaveBeenCalled();
+
+    await swrFetcher("/api/labels", undefined, "acc-2", {
+      viewedEmailAccountId: "acc-2",
+    }).catch(() => undefined);
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-2/permissions/consent?reason=expired",
+    );
+  });
+
+  it("asks again after the tab comes back to the front", async () => {
+    const listeners: Array<() => void> = [];
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: (_: string, listener: () => void) =>
+        listeners.push(listener),
+    });
+    const { swrFetcher } = await loadPage();
+    const ask = () =>
+      swrFetcher("/api/labels", undefined, "acc-2").catch(() => undefined);
+
+    await ask();
+    await ask();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+
+    for (const listener of listeners) listener();
+    await ask();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a refused route", async () => {
+    const { swrFetcher, onSWRErrorRetry } = await loadPage();
+    const error = await swrFetcher("/api/labels", undefined, "acc-2").catch(
+      (error) => error,
+    );
+    const revalidate = vi.fn();
+
+    onSWRErrorRetry(error, "/api/labels", {} as never, revalidate, {
+      retryCount: 1,
+      dedupe: true,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(revalidate).not.toHaveBeenCalled();
   });
 
   it("never leaves the page for an account read without a viewed account", async () => {
@@ -355,6 +519,7 @@ async function loadPage({ signedIn = true } = {}) {
     "@/utils/error"
   );
   const session = await import("@/utils/session-expired");
+  const { resetSessionGone } = await import("@/utils/session-refresh");
   if (signedIn) session.armSessionExpiredRedirect();
   // Only now: the modules above read server env when they see a window.
   vi.stubGlobal("window", {
@@ -372,6 +537,41 @@ async function loadPage({ signedIn = true } = {}) {
     onSWRErrorRetry,
     assertActionSucceeded,
     getActionErrorMessage,
+    resetSessionGone,
     ...session,
   };
 }
+
+describe("swrFetcher while signing out", () => {
+  it("sends nothing once sign-out started", async () => {
+    const { swrFetcher } = await loadPage();
+    const { startSigningOut } = await import("@/utils/signing-out");
+    startSigningOut();
+
+    const settled = vi.fn();
+    swrFetcher("/api/panel", undefined, "acc-1").then(settled, settled);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("does not report or act on a 401 that lands after sign-out started", async () => {
+    const { swrFetcher } = await loadPage();
+    const { startSigningOut } = await import("@/utils/signing-out");
+    vi.mocked(fetch).mockImplementationOnce(async () => {
+      startSigningOut();
+      return Response.json(
+        { error: "Unauthorized", errorCode: "SESSION_EXPIRED" },
+        { status: 401 },
+      );
+    });
+
+    const settled = vi.fn();
+    swrFetcher("/api/panel", undefined, "acc-1").then(settled, settled);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settled).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
+  });
+});

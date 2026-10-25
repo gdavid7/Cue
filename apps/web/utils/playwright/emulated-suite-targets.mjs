@@ -73,6 +73,7 @@ const featureGroups = [
       "mail/compose-and-reply.spec.ts",
       "mail/contact-autocomplete.spec.ts",
       "mail/calendar-invitation.spec.ts",
+      "mail/pre-send-check.spec.ts",
     ],
   },
   {
@@ -83,6 +84,7 @@ const featureGroups = [
       "mail/draft-deletion.spec.ts",
       "mail/attachment-previews.spec.ts",
       "mail/office-attachment-previews.spec.ts",
+      "mail/download-all-attachments.spec.ts",
     ],
   },
   {
@@ -102,6 +104,13 @@ const featureGroups = [
     ],
   },
   {
+    name: "mail-notifications",
+    specs: [
+      "mail/web-notifications.spec.ts",
+      "mail/notifications-off-hint.spec.ts",
+    ],
+  },
+  {
     name: "mail-search",
     specs: [
       "mail/search.spec.ts",
@@ -110,12 +119,17 @@ const featureGroups = [
     ],
   },
   {
+    name: "mail-files",
+    specs: ["mail/files-view.spec.ts"],
+  },
+  {
     name: "mail-reader",
     specs: [
       "mail/reader-visuals.spec.ts",
       "mail/thread-states.spec.ts",
       "mail/reader-transition.spec.ts",
       "mail/person-card.spec.ts",
+      "mail/sender-notice.spec.ts",
     ],
   },
   {
@@ -126,6 +140,7 @@ const featureGroups = [
       "mail/assistant-catch-up.spec.ts",
       "mail/starring.spec.ts",
       "mail/swipe-actions.spec.ts",
+      "mail/drag-to-sidebar.spec.ts",
     ],
   },
   {
@@ -153,13 +168,16 @@ const featureGroups = [
       "mail/today-all-accounts.spec.ts",
       "mail/today-inbox-switch.spec.ts",
       "mail/today-quiet.spec.ts",
+      "mail/catch-up.spec.ts",
       "mail/all-inboxes-context.spec.ts",
+      "mail/never-read.spec.ts",
     ],
   },
   {
     name: "mail-accounts",
     specs: [
       "mail/account-removal-routing.spec.ts",
+      "mail/account-switch-no-reload.spec.ts",
       "mail/compose-from-switch.spec.ts",
       "mail/reply-from-owning-account.spec.ts",
       "mail/team-comments.spec.ts",

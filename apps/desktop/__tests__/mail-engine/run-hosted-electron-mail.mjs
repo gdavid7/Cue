@@ -68,6 +68,10 @@ function runElectron(binary, script, extraEnv) {
           ...extraEnv,
           ELECTRON_ENABLE_LOGGING: "1",
         },
+        // Its own process group, so a timeout can end Electron and its
+        // helpers too; killing xvfb-run alone leaves them running and holding
+        // the output pipes open, and this runner never exits.
+        detached: true,
       },
     );
     let stdout = "";
@@ -81,7 +85,7 @@ function runElectron(binary, script, extraEnv) {
     // Under the spec's 240s test timeout, which would otherwise end the test
     // first and discard Electron's output along with the reason it hung.
     const timer = setTimeout(() => {
-      child.kill();
+      killProcessGroup(child);
       reject(new Error(`electron hosted mail timed out\n${stdout}\n${stderr}`));
     }, 180_000);
     child.on("error", (error) => {
@@ -99,4 +103,12 @@ function runElectron(binary, script, extraEnv) {
       );
     });
   });
+}
+
+function killProcessGroup(child) {
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
 }

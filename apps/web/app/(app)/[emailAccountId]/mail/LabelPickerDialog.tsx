@@ -18,7 +18,10 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { createLabelAction } from "@/utils/actions/mail";
 import { getActionErrorMessage } from "@/utils/error";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { applyEngineLabels } from "@/app/(app)/[emailAccountId]/mail/apply-engine-labels";
+import {
+  applyEngineLabels,
+  getLabelAppliedMessage,
+} from "@/app/(app)/[emailAccountId]/mail/apply-engine-labels";
 
 const GMAIL_CATEGORY_NAMES: Record<string, string> = {
   CATEGORY_PERSONAL: "Personal",
@@ -108,7 +111,7 @@ export function LabelPickerDialog({
         });
       if (succeededThreadIds.length) {
         onApplied(succeededThreadIds, id);
-        toast.success(getSuccessMessage(mode, succeededThreadIds.length));
+        toast.success(getLabelAppliedMessage(mode, succeededThreadIds.length));
       }
       setRemainingThreadIds(failedThreadIds);
       if (failedThreadIds.length) {
@@ -197,14 +200,6 @@ export function LabelPickerDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function getSuccessMessage(mode: "label" | "move", count: number) {
-  if (mode === "move")
-    return count === 1 ? "Moved" : `Moved ${count} conversations`;
-  return count === 1
-    ? "Label applied"
-    : `Label applied to ${count} conversations`;
 }
 
 function getPartialFailureMessage(mode: "label" | "move", count: number) {

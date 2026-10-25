@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
+import {
   EMAIL_ACCOUNT_HEADER,
   createOriginMailRequest,
   emailAccountIdFromMailApiPath,
@@ -21,12 +25,13 @@ describe("desktop mail API request headers", () => {
     ).toBeNull();
   });
 
-  it("sends X-Email-Account-ID when the path names an account", () => {
+  it("sends X-Email-Account-ID and the engine revision on mail API paths", () => {
     expect(
       mailApiHeaders("/api/mail/v1/accounts/acc-1/operations/op-1", true),
     ).toEqual({
       accept: "application/json",
       [EMAIL_ACCOUNT_HEADER]: "acc-1",
+      [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
       "content-type": "application/json",
     });
     expect(mailApiHeaders("/health", false)).toEqual({

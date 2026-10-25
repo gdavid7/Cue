@@ -6,7 +6,10 @@ import {
   migrateMembershipIndex,
 } from "./conversation-index";
 import type { SqlTransaction, SqliteDriver } from "./driver";
-import type { MailboxCountsQuery } from "@inboxzero/mail-core/queries";
+import type {
+  MailboxCountsQuery,
+  MailPredicate,
+} from "@inboxzero/mail-core/queries";
 
 describe("transactional conversation index", () => {
   it("shows the same conversation preview for equivalent inbox filters", async () => {
@@ -332,6 +335,188 @@ describe("transactional conversation index", () => {
     }
   });
 
+  it("pages oldest first, from the role index and the unindexed filter alike", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      await store.ensureAccount({
+        accountId: "a",
+        provider: "google",
+        generation: "g",
+      });
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "c1", 30, 0);
+        await insertMessage(tx, "m2", "c2", 10, 0);
+        await insertMessage(tx, "m3", "c3", 20, 1);
+        await insertMessage(tx, "m4", "c4", 20, 0);
+      });
+      const inbox = { kind: "role" as const, role: "inbox" as const };
+      for (const predicate of [
+        inbox,
+        { kind: "all" as const, predicates: [inbox] },
+      ]) {
+        const query = {
+          accountIds: ["a"],
+          predicate,
+          order: "oldest_first" as const,
+          pageSize: 2,
+          after: null,
+        };
+        const first = await store.readMailboxView(query);
+        expect(
+          first.view.conversations.map((row) => row.key.conversationId),
+        ).toEqual(["c2", "c4"]);
+        expect(first.view.nextPage).not.toBeNull();
+        const second = await store.readMailboxView({
+          ...query,
+          after: first.view.nextPage,
+        });
+        expect(
+          second.view.conversations.map((row) => row.key.conversationId),
+        ).toEqual(["c3", "c1"]);
+        expect(second.view.nextPage).toBeNull();
+      }
+
+      const unread = await store.readMailboxView({
+        accountIds: ["a"],
+        predicate: {
+          kind: "all",
+          predicates: [inbox, { kind: "read", value: false }],
+        },
+        order: "oldest_first",
+        pageSize: 10,
+        after: null,
+      });
+      expect(
+        unread.view.conversations.map((row) => row.key.conversationId),
+      ).toEqual(["c2", "c4", "c1"]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("reads named conversations, of one account, through other conditions", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      for (const accountId of ["a", "b"])
+        await store.ensureAccount({
+          accountId,
+          provider: "google",
+          generation: "g",
+        });
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "c1", 10, 1);
+        await insertMessage(tx, "m2", "c1", 20, 0);
+        await insertMessage(tx, "m3", "c2", 30, 1);
+        await insertMessage(tx, "m4", "c3", 40, 0);
+        await insertMessage(tx, "m5", "c1", 50, 0, { account: "b" });
+      });
+      const view = await store.readMailboxView({
+        accountIds: ["a", "b"],
+        predicate: {
+          kind: "all",
+          predicates: [
+            { kind: "role", role: "inbox" },
+            { kind: "read", value: false },
+            { kind: "conversation", ids: ["c1", "c2"], accountId: "a" },
+          ],
+        },
+        order: "oldest_first",
+        pageSize: 10,
+        after: null,
+      });
+      // c2 has nothing unread, c3 isn't named, and b's c1 is another account's.
+      expect(
+        view.view.conversations.map((row) => [
+          row.key.accountId,
+          row.key.conversationId,
+          row.latestMessageAtMs,
+        ]),
+      ).toEqual([["a", "c1", 20]]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("reads every account's conversations by their key, through its index", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await createSqliteMailStore(driver);
+    try {
+      for (const accountId of ["a", "b"])
+        await store.ensureAccount({
+          accountId,
+          provider: "google",
+          generation: "g",
+        });
+      await driver.write(async (tx) => {
+        await insertMessage(tx, "m1", "c1", 10, 0, {
+          messageKey: "shared@example.com",
+        });
+        // In b the copy was read and a draft started: still b's key.
+        await insertMessage(tx, "m2", "c9", 10, 1, {
+          account: "b",
+          roles: [],
+          messageKey: "shared@example.com",
+        });
+        await insertMessage(tx, "m3", "c9", 30, 1, {
+          account: "b",
+          draft: true,
+        });
+        // A reply moves c2's key on, so it isn't the shared message's.
+        await insertMessage(tx, "m4", "c2", 10, 1, {
+          messageKey: "shared@example.com",
+        });
+        await insertMessage(tx, "m5", "c2", 40, 1, {
+          roles: ["sent"],
+          messageKey: "reply@example.com",
+        });
+        // Normalising "<<a@b>>" once leaves "<a@b>", which is the key.
+        await insertMessage(tx, "m6", "c3", 50, 0, { messageKey: "<a@b>" });
+      });
+      const read = (predicate: MailPredicate) =>
+        store
+          .readMailboxView({
+            accountIds: ["a", "b"],
+            predicate,
+            order: "newest_first",
+            pageSize: 10,
+            after: null,
+          })
+          .then((view) =>
+            view.view.conversations
+              .map((row) => `${row.key.accountId}:${row.key.conversationId}`)
+              .sort(),
+          );
+      const keyed = (ids: string[], accountId?: string): MailPredicate => ({
+        kind: "internet_message_id",
+        ids,
+        ...(accountId ? { accountId } : {}),
+      });
+
+      expect(await read(keyed(["shared@example.com"]))).toEqual([
+        "a:c1",
+        "b:c9",
+      ]);
+      expect(await read(keyed(["shared@example.com"], "b"))).toEqual(["b:c9"]);
+      expect(await read(keyed(["<a@b>"]))).toEqual(["a:c3"]);
+      expect(await read(keyed(["a@b"]))).toEqual([]);
+      expect(await read(keyed([]))).toEqual([]);
+      // Inside another condition it reads the same.
+      expect(
+        await read({
+          kind: "all",
+          predicates: [
+            { kind: "read", value: false },
+            keyed(["shared@example.com"]),
+          ],
+        }),
+      ).toEqual(["a:c1"]);
+    } finally {
+      await store.close();
+    }
+  });
+
   it("does not count archived unread mail as inbox unread", async () => {
     const driver = createNodeSqliteDriver();
     const store = await createSqliteMailStore(driver);
@@ -574,6 +759,8 @@ async function insertMessage(
     draft?: boolean;
     snoozedUntil?: number;
     roles?: string[];
+    /** The normalised Message-ID, as the store writes it. */
+    messageKey?: string;
   } = {},
 ) {
   const roles = options.roles ?? (options.draft ? ["draft"] : ["inbox"]);
@@ -584,9 +771,9 @@ async function insertMessage(
       account_id, message_id, conversation_id, subject, preview, from_address, to_json,
       received_at_ms, read, starred, folder_id, label_ids_json, category_ids_json, roles_json,
       in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms,
-      pending_operation_ids_json
+      pending_operation_ids_json, message_key
     ) VALUES (?, ?, ?, 'Subject', 'Preview', 'sender@example.com', '[]', ?, ?, 0,
-      ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, ?, '[]')`,
+      ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, ?, '[]', ?)`,
     [
       options.account ?? "a",
       id,
@@ -600,6 +787,7 @@ async function insertMessage(
       inInbox,
       inDraft,
       options.snoozedUntil ?? null,
+      options.messageKey ?? null,
     ],
   );
 }

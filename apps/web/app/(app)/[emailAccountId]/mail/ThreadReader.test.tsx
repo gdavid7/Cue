@@ -262,6 +262,27 @@ describe("ThreadReader", () => {
     }
   });
 
+  it("titles the thread from a sent message that kept its draft's id", () => {
+    // Gmail can send a draft under the draft's own id, which stays hidden from
+    // Drafts after the send; the sent message itself is still shown.
+    const showDraftAgain = hideSendingDraftMessages("account-1", ["sent-1"]);
+    try {
+      renderReader({
+        refetch: vi.fn(),
+        messages: [
+          createMessage("message-1", "Quarterly plan", ["INBOX"]),
+          createMessage("sent-1", "Re: Quarterly plan", ["SENT"]),
+        ],
+      });
+
+      expect(
+        screen.getByRole("heading", { name: "Re: Quarterly plan" }),
+      ).toBeTruthy();
+    } finally {
+      showDraftAgain();
+    }
+  });
+
   // Heading navigation goes subject, then each message, then what's inside
   // one, with no level skipped. Beside the list, whose view name is the
   // page's h1, everything sits one level lower.

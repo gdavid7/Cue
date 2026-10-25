@@ -99,8 +99,33 @@ export function useAllAccountsHome(accounts: AllInboxesAccount[] | null) {
     };
   }, [feeds, todayAccounts]);
 
+  const handledLabelIdsByAccount = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(feeds).flatMap(([accountId, feed]) =>
+          feed.data ? [[accountId, feed.data.handledLabelIds]] : [],
+        ),
+      ),
+    [feeds],
+  );
+  const newsletterThreadIdsByAccount = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(feeds).flatMap(([accountId, feed]) =>
+          feed.data ? [[accountId, feed.data.newsletterThreadIds ?? []]] : [],
+        ),
+      ),
+    [feeds],
+  );
+
   return {
     merged,
+    /** Each account's own Today, as far as it has loaded. */
+    feeds,
+    /** Each loaded account's labels for mail Cue files without asking. */
+    handledLabelIdsByAccount,
+    /** Each loaded account's conversations Cue sorted as newsletters lately. */
+    newsletterThreadIdsByAccount,
     loaders: todayAccounts?.map((account) => (
       <HomeAccountFeed
         accountId={account.id}

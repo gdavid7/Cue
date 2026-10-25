@@ -29,6 +29,7 @@ type NavItem = {
   count?: number;
   hideInMail?: boolean;
   active?: boolean;
+  disabled?: boolean;
   beta?: boolean;
   new?: boolean;
   account?: string;
@@ -59,49 +60,56 @@ export function SideNavMenu({
             tooltip={item.name}
             sidebarName="left-sidebar"
           >
-            <Link
-              href={item.href}
-              prefetch={
-                engineStarting && !item.href.endsWith("/home")
-                  ? false
-                  : undefined
-              }
-              onClick={() => {
-                const destinationAppPage = getAppPageFromNavItem({
-                  name: item.name,
-                  href: item.href,
-                });
+            {item.disabled ? (
+              <span aria-disabled="true" className="cursor-default opacity-50">
+                <item.icon />
+                <span>{item.name}</span>
+              </span>
+            ) : (
+              <Link
+                href={item.href}
+                prefetch={
+                  engineStarting && !item.href.endsWith("/home")
+                    ? false
+                    : undefined
+                }
+                onClick={() => {
+                  const destinationAppPage = getAppPageFromNavItem({
+                    name: item.name,
+                    href: item.href,
+                  });
 
-                posthog.capture(PRODUCT_ANALYTICS_EVENTS.navigationClicked, {
-                  ...getAppPageProperties(currentAppPage),
-                  destination_page: destinationAppPage,
-                  destination_page_label: destinationAppPage
-                    ? APP_PAGES[destinationAppPage].label
-                    : undefined,
-                  nav_item: item.name,
-                  nav_href_type: getNavHrefType(item.href),
-                });
-                closeMobileSidebar("left-sidebar");
-              }}
-            >
-              <item.icon />
-              <span>{item.name}</span>
-              {item.account ? (
-                <span className="ml-auto min-w-0 truncate font-normal text-muted-foreground text-xs">
-                  {item.account}
-                </span>
-              ) : null}
-              {item.new && (
-                <Badge variant="green" className="ml-auto text-[10px]">
-                  New!
-                </Badge>
-              )}
-              {item.beta && (
-                <Badge variant="secondary" className="ml-auto text-[10px]">
-                  Beta
-                </Badge>
-              )}
-            </Link>
+                  posthog.capture(PRODUCT_ANALYTICS_EVENTS.navigationClicked, {
+                    ...getAppPageProperties(currentAppPage),
+                    destination_page: destinationAppPage,
+                    destination_page_label: destinationAppPage
+                      ? APP_PAGES[destinationAppPage].label
+                      : undefined,
+                    nav_item: item.name,
+                    nav_href_type: getNavHrefType(item.href),
+                  });
+                  closeMobileSidebar("left-sidebar");
+                }}
+              >
+                <item.icon />
+                <span>{item.name}</span>
+                {item.account ? (
+                  <span className="ml-auto min-w-0 truncate font-normal text-muted-foreground text-xs">
+                    {item.account}
+                  </span>
+                ) : null}
+                {item.new && (
+                  <Badge variant="green" className="ml-auto text-[10px]">
+                    New!
+                  </Badge>
+                )}
+                {item.beta && (
+                  <Badge variant="secondary" className="ml-auto text-[10px]">
+                    Beta
+                  </Badge>
+                )}
+              </Link>
+            )}
           </SidebarMenuButton>
         </SidebarMenuItem>
       ))}

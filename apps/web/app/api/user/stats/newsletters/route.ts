@@ -5,8 +5,10 @@ import {
   getNewsletterSenderDisplayName,
 } from "@/utils/email";
 import type { EmailProvider } from "@/utils/email/types";
+import { runWithGmailWaitBudget } from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 import { withEmailProvider } from "@/utils/middleware";
+import { timeRequestPhase } from "@/utils/request-metrics";
 import {
   getSenderEmailStats,
   senderStatsOrderBySchema,
@@ -19,6 +21,12 @@ import {
   getEmailFilters,
   getNewsletterStatuses,
 } from "@/utils/senders/filters";
+
+// The provider filters only mark which senders are auto-archived, and the
+// list answers without them (`filtersAvailable: false`). The read runs at
+// background priority, which can wait 15 s at the Gmail gate behind a sync,
+// so it gets a short wait instead of holding up a list someone is looking at.
+const FILTERS_GMAIL_WAIT_MS = 3000;
 
 const newsletterStatsQuery = z.object({
   limit: z.coerce.number().int().positive().nullish(),
@@ -56,22 +64,34 @@ async function getEmailMessages(
   const types = getTypeFilters(options.types);
 
   const [senderStats, filtersResult, newsletterStatuses] = await Promise.all([
-    getSenderEmailStats({
-      emailAccountId,
-      fromDate: options.fromDate,
-      toDate: options.toDate,
-      read: types.read,
-      unread: types.unread,
-      archived: types.archived,
-      unarchived: types.unarchived,
-      search: options.search,
-      orderBy: options.orderBy,
-      orderDirection: options.orderDirection,
-      limit: options.limit,
-      cursor: options.cursor,
-    }),
-    getEmailFilters(emailProvider, logger),
-    getNewsletterStatuses({ emailAccountId }),
+    timeRequestPhase("senderStats", () =>
+      getSenderEmailStats({
+        emailAccountId,
+        fromDate: options.fromDate,
+        toDate: options.toDate,
+        read: types.read,
+        unread: types.unread,
+        archived: types.archived,
+        unarchived: types.unarchived,
+        search: options.search,
+        orderBy: options.orderBy,
+        orderDirection: options.orderDirection,
+        limit: options.limit,
+        cursor: options.cursor,
+      }),
+    ),
+    timeRequestPhase("filters", () =>
+      // One sender's lookup backs the reader's skip-inbox toggle, which
+      // stays disabled without the filters, so it waits for them in full.
+      options.search
+        ? getEmailFilters(emailProvider, logger)
+        : runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, () =>
+            getEmailFilters(emailProvider, logger),
+          ),
+    ),
+    timeRequestPhase("statuses", () =>
+      getNewsletterStatuses({ emailAccountId }),
+    ),
   ]);
 
   const { filters: emailFilters, available: filtersAvailable } = filtersResult;

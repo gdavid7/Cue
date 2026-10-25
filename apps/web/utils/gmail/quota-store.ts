@@ -40,7 +40,10 @@ export type GmailQuotaStore = {
    * half of the bucket, and stay in the pace window until the lease ends, so
    * a second never carries more than its cap however late they are spent.
    * The result names that reservation (`reservation`), so a later request
-   * can `release` what was not spent of it. Releases and `notes` are applied
+   * can `release` what was not spent of it. `nextWait`, when the next
+   * request would have to wait, is what it would be told if it asked as
+   * this one returns: the first queued request left out, or else one costing
+   * the same as this. Releases and `notes` are applied
    * before anything else, whether or not anything is admitted.
    */
   take(input: {
@@ -93,6 +96,7 @@ export type GmailQuotaStore = {
     reservation: string | null;
     /** Why a wait was given; absent when admitted. */
     held?: GmailQuotaHold;
+    nextWait?: { waitMs: number; held: GmailQuotaHold };
   }>;
   /**
    * Lowers the budget in `key` to `fraction` of the units admitted within
@@ -252,53 +256,64 @@ local stored = redis.call('HMGET', KEYS[1], 'tokens', 'at')
 local tokens = tonumber(stored[1]) or capacity
 local at = tonumber(stored[2]) or now
 tokens = math.min(capacity, tokens + math.max(0, now - at) * rate)
-local need = floor + math.min(cost, capacity - floor)
-local bucketWait = 0
-if tokens < need then
-  bucketWait = math.ceil((need - tokens) / rate)
-  if bucketWait > wait then
-    wait = bucketWait
-    reason = 'bucket'
-  end
-end
--- The pace is what others yielding frees; nothing frees the rest sooner.
-local unpacedWait = wait
 redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now - paceWindow)
-local recent = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
-local inWindow = 0
-for j = 1, #recent, 2 do
-  inWindow = inWindow + tonumber(string.match(recent[j], ':(%d+)$'))
-end
--- How long until the window has room for this request under cap; -1 never.
-local function windowWait(cap)
-  if cap <= 0 then return -1 end
-  local excess = inWindow + math.min(cost, cap) - cap
-  if excess <= 0 then return 0 end
-  local freed = 0
-  for j = 1, #recent, 2 do
-    freed = freed + tonumber(string.match(recent[j], ':(%d+)$'))
-    if freed >= excess then
-      return tonumber(recent[j + 1]) + paceWindow - now + 1
-    end
+local function windowUnits(entries)
+  local units = 0
+  for j = 1, #entries, 2 do
+    units = units + tonumber(string.match(entries[j], ':(%d+)$'))
   end
-  return paceWindow
+  return units
 end
-local paceWait = windowWait(paceCap)
 local demandEnds = tonumber(redis.call('GET', KEYS[5])) or 0
 local demandTtl = demandEnds - now
-if yieldCap >= 0 and demandTtl > 0 then
-  local afterDemand = math.max(demandTtl, paceWait)
-  local yieldWait = windowWait(yieldCap)
-  if yieldWait < 0 or yieldWait > afterDemand then
-    paceWait = afterDemand
-  else
-    paceWait = yieldWait
+-- The longer of wait and what the bucket and the pace make a request of
+-- units wait, with held tokens in the bucket and entries (inWindow units) in
+-- the pace window; also which gate set it, the wait before the pace, and the
+-- tokens the bucket must hold.
+local function assess(units, held, entries, inWindow, wait, reason)
+  local need = floor + math.min(units, capacity - floor)
+  if held < need then
+    local bucketWait = math.ceil((need - held) / rate)
+    if bucketWait > wait then
+      wait = bucketWait
+      reason = 'bucket'
+    end
   end
-  if paceWait > wait then reason = 'interactive_demand' end
-elseif paceWait > wait then
-  reason = 'pace'
+  -- The pace is what others yielding frees; nothing frees the rest sooner.
+  local unpaced = wait
+  -- How long until the window has room under cap; -1 never.
+  local function windowWait(cap)
+    if cap <= 0 then return -1 end
+    local excess = inWindow + math.min(units, cap) - cap
+    if excess <= 0 then return 0 end
+    local freed = 0
+    for j = 1, #entries, 2 do
+      freed = freed + tonumber(string.match(entries[j], ':(%d+)$'))
+      if freed >= excess then
+        return tonumber(entries[j + 1]) + paceWindow - now + 1
+      end
+    end
+    return paceWindow
+  end
+  local paceWait = windowWait(paceCap)
+  if yieldCap >= 0 and demandTtl > 0 then
+    local afterDemand = math.max(demandTtl, paceWait)
+    local yieldWait = windowWait(yieldCap)
+    if yieldWait < 0 or yieldWait > afterDemand then
+      paceWait = afterDemand
+    else
+      paceWait = yieldWait
+    end
+    if paceWait > wait then reason = 'interactive_demand' end
+  elseif paceWait > wait then
+    reason = 'pace'
+  end
+  return math.max(wait, paceWait), reason, unpaced, need
 end
-wait = math.max(wait, paceWait)
+local recent = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
+local inWindow = windowUnits(recent)
+local unpacedWait, need
+wait, reason, unpacedWait, need = assess(cost, tokens, recent, inWindow, wait, reason)
 -- Marked on arrival, so others yield while this request waits for room,
 -- unless it will give up before anything but the pace lets it in.
 if demandMs > 0 and (waitBudget < 0 or unpacedWait <= waitBudget) then
@@ -352,6 +367,19 @@ if inWindow + used > peak then
   redis.call('HSET', KEYS[2], 'peak:second', inWindow + used)
 end
 redis.call('PEXPIRE', KEYS[2], 300000)
+-- What the next request would now be told (the first queued one left out,
+-- or one like this), so it waits that out instead of asking only to hear it.
+local nextCost = cost
+if admittedQueued < queuedCount then
+  nextCost = tonumber(ARGV[queuedAt + 2 * admittedQueued])
+end
+local left = tokens - used - ahead
+local entries = redis.call('ZRANGE', KEYS[3], 0, -1, 'WITHSCORES')
+local nextInWindow = windowUnits(entries)
+local nextWait, nextReason, _, nextNeed = assess(nextCost, left, entries, nextInWindow, 0, '')
+if nextWait > 0 then
+  return {0, 0, admittedQueued, ahead, reservation, nextWait, nextReason, math.floor(left), nextNeed, nextInWindow}
+end
 return {0, 0, admittedQueued, ahead, reservation}
 `;
 
@@ -482,14 +510,29 @@ export const gmailQuotaStore: GmailQuotaStore = {
       ],
     );
     const waitMs = Number(result?.[0]);
-    if (!Number.isFinite(waitMs) || waitMs <= 0)
+    if (!Number.isFinite(waitMs) || waitMs <= 0) {
+      const nextWaitMs = Number(result?.[5]);
       return {
         waitMs: 0,
         defer: false,
         queued: Number(result?.[2]) || 0,
         ahead: Number(result?.[3]) || 0,
         reservation: result?.[4] ? String(result[4]) : null,
+        ...(Number.isFinite(nextWaitMs) &&
+          nextWaitMs > 0 && {
+            nextWait: {
+              waitMs: nextWaitMs,
+              held: {
+                gate: String(result?.[6] ?? "") as GmailQuotaHold["gate"],
+                blocker: 0,
+                availableUnits: Number(result?.[7]) || 0,
+                neededUnits: Number(result?.[8]) || 0,
+                paceUnits: Number(result?.[9]) || 0,
+              },
+            },
+          }),
       };
+    }
     return {
       waitMs,
       defer: Number(result?.[1]) === 1,

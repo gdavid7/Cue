@@ -53,7 +53,9 @@ describe("Today's cache", () => {
       data: home({
         calendar: {
           connected: true,
+          clearThroughTomorrow: false,
           next: {
+            id: "review",
             title: "Standup",
             at: iso(NOW + HOUR),
             url: undefined,
@@ -74,6 +76,23 @@ describe("Today's cache", () => {
     expect(later?.nextUp.map((item) => item.id)).toEqual(["review"]);
     // The day's counts are still the day's.
     expect(later?.today).toEqual(home().today);
+  });
+
+  it("never says the calendar is clear from a saved copy, even the same day", () => {
+    writeCachedToday({
+      ...account,
+      data: home({
+        calendar: { connected: true, clearThroughTomorrow: true, next: null },
+      }),
+      now: NOW,
+    });
+
+    const later = readCachedToday({ ...account, now: NOW + HOUR });
+    expect(later?.calendar).toEqual({
+      connected: true,
+      clearThroughTomorrow: false,
+      next: null,
+    });
   });
 
   it("keeps an earlier day's conversations, and marks the rest of it unknown", () => {
@@ -200,9 +219,15 @@ describe("Today's cache", () => {
     // A newer version.
     stored({ version: 99, savedAt: NOW, timeZone: ZONE, data: home() });
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    // Older ones: Next up with deadlines, a next meeting without an id, or no
+    // Reading lane. Each of 2's shapes shipped from a different branch.
+    for (const version of [1, 2, 3]) {
+      stored({ version, savedAt: NOW, timeZone: ZONE, data: home() });
+      expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    }
     // The right version, missing what Today reads.
     stored({
-      version: 1,
+      version: 4,
       savedAt: NOW,
       timeZone: ZONE,
       data: { needsYou: "nope" },
@@ -210,7 +235,7 @@ describe("Today's cache", () => {
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
     // A time zone this browser can't read.
     stored({
-      version: 1,
+      version: 4,
       savedAt: NOW,
       timeZone: "Nowhere/Else",
       data: home(),
@@ -303,12 +328,13 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
     needsYou: [thread("needs-1")],
     waiting: [],
     alsoInInbox: [thread("inbox-1")],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 3, filed: 1, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     suggestion: null,
     stats: {
@@ -318,6 +344,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
       waiting: 0,
       needsYouCapped: false,
       waitingCapped: false,
+      readingCapped: false,
     },
     ...overrides,
   } as GetHomeResponse;

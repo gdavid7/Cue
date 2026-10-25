@@ -485,16 +485,28 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     await waitFor(() => expect(result.current.data).toEqual(WORK_ONLY));
     expect(result.current.error).toBeUndefined();
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
     expect(busy.personalRequests()).toBe(2);
     expect(result.current.data).toEqual(WORK_ONLY);
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
     expect(busy.personalRequests()).toBe(3);
     expect(result.current.data).toEqual(BOTH);
   });
 
   it("stops asking for an account that keeps failing after five more tries", async () => {
+    const busy = personalBusy(Number.POSITIVE_INFINITY, { status: 500 });
+    const { result } = renderHook(() => useInboxInsights(items), {
+      wrapper: wrapperFor(busy.fetcher),
+    });
+    await waitFor(() => expect(result.current.data).toEqual(WORK_ONLY));
+
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(busy.personalRequests()).toBe(6);
+    expect(result.current.data).toEqual(WORK_ONLY);
+  });
+
+  it("keeps a deferred account's rows queued past the usual tries, waiting longer each time", async () => {
     const busy = personalBusy(Number.POSITIVE_INFINITY, {
       status: 503,
       retryAfterMs: 1000,
@@ -504,9 +516,31 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     });
     await waitFor(() => expect(result.current.data).toEqual(WORK_ONLY));
 
+    // Not before the rows' 15 s spacing, though Retry-After said 1 s.
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(busy.personalRequests()).toBe(1);
     await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
-    expect(busy.personalRequests()).toBe(6);
-    expect(result.current.data).toEqual(WORK_ONLY);
+    expect(busy.personalRequests()).toBeGreaterThan(6);
+    // Never more often than the spacing: at most 40 in 10 minutes.
+    expect(busy.personalRequests()).toBeLessThanOrEqual(41);
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it("shows no error while every account is deferred, and fills in once the budget is back", async () => {
+    const one = [item({ emailAccountId: "personal", threadId: "t1" })];
+    const busy = personalBusy(8, { status: 503, retryAfterMs: 20_000 });
+    const { result } = renderHook(() => useInboxInsights(one), {
+      wrapper: wrapperFor(busy.fetcher),
+    });
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    expect(busy.personalRequests()).toBe(1);
+    expect(result.current.error).toBeUndefined();
+
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    expect(busy.personalRequests()).toBe(9);
+    expect(result.current.data).toEqual({ "personal:t1": SHOWN });
+    expect(result.current.error).toBeUndefined();
   });
 
   it("asks once per retry however many readers share the rows", async () => {
@@ -518,7 +552,7 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     await waitFor(() => expect(result.current[0].data).toEqual(WORK_ONLY));
     expect(busy.personalRequests()).toBe(1);
 
-    await act(() => vi.advanceTimersByTimeAsync(1500));
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
     expect(busy.personalRequests()).toBe(2);
     expect(result.current[0].data).toEqual(BOTH);
     expect(result.current[1].data).toEqual(BOTH);
@@ -560,6 +594,329 @@ describe("useInboxInsights with one account busy in All inboxes", () => {
     return { fetcher, personalRequests: () => personal };
   }
 });
+
+// PF-9v: the server answers the rows within a Gmail wait budget, with what
+// it built and the emails it left for later.
+describe("useInboxInsights when the server answers part of the rows", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps what was built and asks again, after a bounded wait, for only what was left", async () => {
+    // Builds the first email of each request and leaves the rest.
+    const fetcher = vi.fn(async ([url]: [string, string]) => {
+      const [first, ...rest] = threadIdsIn(url);
+      return {
+        ...fromServer({ [first as string]: extraction(first as string) }),
+        deferred: {
+          messageIds: rest.map((threadId) => `${threadId}-latest`),
+          retryAfterMs: 10 * 60_000,
+        },
+      };
+    });
+    const rows = Array.from({ length: 8 }, (_, index) =>
+      item({ emailAccountId: "work", threadId: `t${index}` }),
+    );
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    // The server's ten minutes is capped like any retry time, so the rest
+    // are asked for on the rows' 15 s spacing.
+    await act(() => vi.advanceTimersByTimeAsync(14_000));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+    // One request per email, the last left seven times: more than an
+    // email's six tries, as being left isn't a try.
+    expect(fetcher).toHaveBeenCalledTimes(8);
+    const asked = fetcher.mock.calls.map(([[url]]) => threadIdsIn(url));
+    for (const [index, threadIds] of asked.entries())
+      expect(threadIds).toEqual(rows.slice(index).map((row) => row.threadId));
+    expect(Object.keys(result.current.data ?? {})).toHaveLength(8);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("stops after an email's tries when the server leaves everything and builds nothing", async () => {
+    const fetcher = vi.fn(async ([url]: [string, string]) => ({
+      ...fromServer({}),
+      deferred: {
+        messageIds: threadIdsIn(url).map((threadId) => `${threadId}-latest`),
+        retryAfterMs: 1000,
+      },
+    }));
+    const { result } = renderHook(
+      () =>
+        useInboxInsights([item({ emailAccountId: "work", threadId: "t1" })]),
+      { wrapper: wrapperFor(fetcher) },
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(30 * 60_000));
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    expect(result.current.isLoading).toBe(false);
+  });
+});
+
+// PF-9v: the rows wait for the open conversation's note, which someone is
+// waiting on, rather than queue ahead of it at the account's Gmail gate.
+describe("useInboxInsights while the open conversation is being asked about", () => {
+  it("holds the account's rows until the open conversation has its answer", async () => {
+    let answerOpen: (() => void) | undefined;
+    const fetcher = vi.fn(async ([url]: [string, string]) => {
+      if (url.includes("open=1")) {
+        await new Promise<void>((resolve) => {
+          answerOpen = resolve;
+        });
+        return fromServer({ t9: extraction("t9") });
+      }
+      return fromServer(
+        Object.fromEntries(
+          threadIdsIn(url).map((threadId) => [threadId, extraction(threadId)]),
+        ),
+      );
+    });
+    const wrapper = wrapperFor(fetcher);
+    renderHook(
+      () =>
+        useInboxInsights([
+          threadInsightItem({
+            emailAccountId: "work",
+            threadId: "t9",
+            messageId: "t9-latest",
+          }),
+        ]),
+      { wrapper },
+    );
+    await waitFor(() => expect(answerOpen).toBeDefined());
+
+    const rows = renderHook(
+      () =>
+        useInboxInsights([
+          item({ emailAccountId: "work", threadId: "t1" }),
+          item({ emailAccountId: "personal", threadId: "t1" }),
+        ]),
+      { wrapper },
+    );
+    // Another account's rows have their own Gmail budget, so they go.
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(fetcher.mock.calls[1]?.[0][1]).toBe("personal");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    act(() => answerOpen?.());
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    expect(fetcher.mock.calls[2]?.[0]).toEqual([
+      expect.stringContaining("items=t1:t1-latest"),
+      "work",
+    ]);
+    await waitFor(() =>
+      expect(rows.result.current.data).toEqual({
+        "work:t1": SHOWN,
+        "personal:t1": SHOWN,
+      }),
+    );
+  });
+});
+
+// PF-4: a page was asked about in thread-id order, which for Gmail's
+// time-ordered ids put the newest rows, the ones on screen, in the last
+// request, a spacing and two requests after the first.
+describe("useInboxInsights and the rows on screen", () => {
+  it("asks about the page in screen order, the rows on top first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(50);
+    renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.slice(0, 10)));
+
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(asked(1)).toEqual(threadIdsOf(rows.slice(10, 20)));
+    vi.useRealTimers();
+  });
+
+  it("asks for the rows on screen and the next screenful on their own, then the rest a few at a time", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(30);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 0, end: 8 }));
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.slice(0, 16)));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    // PF-9v: off screen, ten rows a request.
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(asked(1)).toEqual(threadIdsOf(rows.slice(16, 26)));
+    expect(asked(2)).toEqual(threadIdsOf(rows.slice(26)));
+    vi.useRealTimers();
+  });
+
+  // A few rows on screen don't go alone while the rest wait the rows' spacing.
+  it("fills a request for a few rows on screen with the nearest rows off it, on-screen first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(30);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 4, end: 6 }));
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toHaveLength(10);
+    expect(asked(0).slice(0, 4)).toEqual(threadIdsOf(rows.slice(4, 8)));
+    vi.useRealTimers();
+  });
+
+  it("asks next about the rows the reader scrolled to, then the rest nearest first", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const rows = newestFirst(80);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 0, end: 8 }));
+    act(() => mail.settle());
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.slice(0, 16)));
+
+    act(() => result.current.setVisibleRows({ start: 60, end: 68 }));
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(asked(1)).toEqual(threadIdsOf(rows.slice(60, 76)));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    // The 48 rows off screen go ten a request.
+    expect(fetcher).toHaveBeenCalledTimes(6);
+    // The rows either side of where the reader is, before those far above.
+    expect(asked(2).sort()).toEqual(
+      threadIdsOf([...rows.slice(54, 60), ...rows.slice(76)]).sort(),
+    );
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(fetcher).toHaveBeenCalledTimes(7);
+    expect(Object.keys(result.current.data ?? {})).toHaveLength(80);
+    vi.useRealTimers();
+  });
+
+  it("places rows by their row on screen when a row has nothing to ask about", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    // Thread 3 is a draft only: it is a row on screen but asks about nothing.
+    const rows = newestFirst(31)
+      .map((row, index) => ({ ...row, index }))
+      .filter((row) => row.index !== 3);
+    const { result } = renderHook(() => useInboxInsights(rows), {
+      wrapper: wrapperFor(fetcher),
+    });
+    act(() => result.current.setVisibleRows({ start: 0, end: 8 }));
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(rows.filter((row) => row.index < 16)));
+    vi.useRealTimers();
+  });
+
+  it("forgets the rows on screen when the list is replaced", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mail.settled = false;
+    const { fetcher, asked } = answeringFetcher();
+    const inbox = newestFirst(40);
+    const archive = newestFirst(40).map((row) => ({
+      ...row,
+      key: `archive:${row.threadId}`,
+      threadId: `a${row.threadId}`,
+      messageId: `a${row.messageId}`,
+    }));
+    const { result, rerender } = renderHook(
+      ({ items }) => useInboxInsights(items),
+      { wrapper: wrapperFor(fetcher), initialProps: { items: inbox } },
+    );
+    act(() => result.current.setVisibleRows({ start: 20, end: 24 }));
+    rerender({ items: archive });
+    act(() => mail.settle());
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(asked(0)).toEqual(threadIdsOf(archive.slice(0, 10)));
+    vi.useRealTimers();
+  });
+
+  it("asks nothing more when the same rows are reordered", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { fetcher } = answeringFetcher();
+    const rows = newestFirst(30);
+    const { rerender } = renderHook(({ items }) => useInboxInsights(items), {
+      wrapper: wrapperFor(fetcher),
+      initialProps: { items: rows },
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+
+    rerender({ items: [...rows].reverse() });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    rerender({ items: rows });
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
+  function answeringFetcher() {
+    const fetcher = vi.fn(async ([url]: [string, string]) =>
+      fromServer(
+        Object.fromEntries(
+          threadIdsIn(url).map((threadId) => [threadId, extraction(threadId)]),
+        ),
+      ),
+    );
+    return {
+      fetcher,
+      asked: (call: number) => threadIdsIn(fetcher.mock.calls[call]?.[0][0]),
+    };
+  }
+
+  // Gmail's thread ids grow with time and the list shows the newest first.
+  function newestFirst(count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      item({
+        emailAccountId: "work",
+        threadId: `t${String(count - index).padStart(3, "0")}`,
+      }),
+    );
+  }
+
+  function threadIdsOf(rows: { threadId: string }[]) {
+    return rows.map((row) => row.threadId);
+  }
+});
+
+function threadIdsIn(url: string | undefined) {
+  const items = new URL(url ?? "", "https://cue.test").searchParams.get(
+    "items",
+  );
+  return (items ?? "")
+    .split(",")
+    .map((pair) => decodeURIComponent(pair.split(":")[0]));
+}
 
 function wrapperFor(fetcher: (key: [string, string]) => Promise<unknown>) {
   const cache = new Map();

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { MailPredicate } from "@inboxzero/mail-core/queries";
 import { useEngineMailThreads } from "@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads";
+import { useRoutedAccountProviders } from "@/app/(app)/[emailAccountId]/mail/use-account-providers";
 import { useCueMembership } from "@/hooks/useCueMembership";
 import { useHiddenDraftMessageIds } from "@/hooks/useHiddenDraftMessageIds";
 import { useLabels } from "@/hooks/useLabels";
@@ -61,8 +62,10 @@ export function useMailThreads({
     }
     return;
   }, [query, usesCue, cueMembership, hiddenDraftMessageIds]);
+  const providers = useRoutedAccountProviders(emailAccountId);
   const threads = useEngineMailThreads({
     emailAccountId,
+    providers,
     query,
     predicate,
     search,

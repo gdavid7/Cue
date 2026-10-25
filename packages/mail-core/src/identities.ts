@@ -11,6 +11,17 @@ export const draftIdSchema = z.string().min(1).max(128);
 export const providerSchema = z.enum(["google", "microsoft"]);
 export type Provider = z.infer<typeof providerSchema>;
 
+// Outlook files each message in exactly one folder, so a conversation's own
+// Sent Items and Drafts copies sit apart from the rest of it. Gmail labels
+// messages instead, so leaving the inbox never touches Sent.
+export const PROVIDER_CAPABILITIES: Record<
+  Provider,
+  { folderBasedRoles: boolean }
+> = {
+  google: { folderBasedRoles: false },
+  microsoft: { folderBasedRoles: true },
+};
+
 export const messageKeySchema = z.object({
   accountId: accountIdSchema,
   messageId: messageIdSchema,

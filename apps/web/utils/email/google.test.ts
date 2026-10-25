@@ -75,6 +75,29 @@ vi.mock("@/utils/gmail/oauth", () => ({
   getGoogleGmailApiRootUrl: vi.fn(() => "https://gmail.googleapis.com/"),
 }));
 
+describe("GmailProvider.listUnreadInboxThreadIds", () => {
+  it("lists unread inbox conversations by id, and says when there were more", async () => {
+    const list = vi.fn().mockResolvedValue({
+      data: { threads: [{ id: "t1" }, { id: "t2" }], nextPageToken: "next" },
+    });
+    const provider = new GmailProvider({ users: { threads: { list } } } as any);
+
+    await expect(
+      provider.listUnreadInboxThreadIds({
+        after: new Date("2026-10-01T00:00:00.000Z"),
+        maxResults: 2,
+      }),
+    ).resolves.toEqual({ threadIds: ["t1", "t2"], full: true });
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        labelIds: ["INBOX"],
+        q: `is:unread after:${Date.parse("2026-10-01T00:00:00.000Z") / 1000}`,
+        fields: "threads/id,nextPageToken",
+      }),
+    );
+  });
+});
+
 describe("GmailProvider.countMessages", () => {
   it.each([
     0, 7, 47,
@@ -1043,6 +1066,66 @@ describe("GmailProvider.getThreadsWithQuery", () => {
       { format: "metadata" },
     );
     expect(recordingRedis.everythingWritten()).not.toContain("alice");
+  });
+});
+
+describe("GmailProvider.getThreadsWithParticipant", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const provider = () =>
+    new GmailProvider({
+      context: {
+        _options: { auth: { credentials: { access_token: "access-token" } } },
+      },
+    } as any);
+
+  // The open thread is usually among its own participant's latest threads; it
+  // is a full read (120 units) the reader already has and drops.
+  it("does not read the excluded thread again", async () => {
+    vi.spyOn(
+      gmailThreadModule,
+      "getThreadsWithNextPageToken",
+    ).mockResolvedValue({
+      threads: [{ id: "open" }, { id: "older-1" }, { id: "older-2" }],
+      nextPageToken: undefined,
+    });
+    const getThreadsBatch = vi
+      .spyOn(gmailThreadModule, "getThreadsBatch")
+      .mockImplementation(async (ids) => ids.map((id) => ({ id })));
+
+    const threads = await provider().getThreadsWithParticipant({
+      participantEmail: "alice@example.com",
+      maxThreads: 3,
+      excludeThreadId: "open",
+    });
+
+    expect(getThreadsBatch).toHaveBeenCalledWith(
+      ["older-1", "older-2"],
+      "access-token",
+      expect.anything(),
+    );
+    expect(threads.map((thread) => thread.id)).toEqual(["older-1", "older-2"]);
+  });
+
+  it("reads nothing when the excluded thread is the only one listed", async () => {
+    vi.spyOn(
+      gmailThreadModule,
+      "getThreadsWithNextPageToken",
+    ).mockResolvedValue({
+      threads: [{ id: "open" }],
+      nextPageToken: undefined,
+    });
+    const getThreadsBatch = vi.spyOn(gmailThreadModule, "getThreadsBatch");
+
+    const threads = await provider().getThreadsWithParticipant({
+      participantEmail: "alice@example.com",
+      excludeThreadId: "open",
+    });
+
+    expect(getThreadsBatch).not.toHaveBeenCalled();
+    expect(threads).toEqual([]);
   });
 });
 

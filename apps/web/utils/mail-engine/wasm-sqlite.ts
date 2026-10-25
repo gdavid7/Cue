@@ -65,8 +65,12 @@ export async function createWasmMailStore(input: {
   onDropped?: (drop: DroppedMailWork) => void;
 }): Promise<MailStore> {
   const sqlite = await preloadSqlite();
+  const options: SqliteMailStoreOptions = {
+    debug: logStoreDebug,
+    ...input.options,
+  };
   if (!canPersist(input.persist)) {
-    return createSqliteMailStore(createMemoryDriver(sqlite), input.options);
+    return createSqliteMailStore(createMemoryDriver(sqlite), options);
   }
   const releaseFiles = await holdMailboxFiles();
   performance.mark("mail-engine:files-held");
@@ -115,7 +119,7 @@ export async function createWasmMailStore(input: {
       },
       stash: createMailRecoveryStash(),
       ownedAccountIds: input.ownedAccountIds,
-      options: input.options,
+      options,
       onRebuild: input.onRebuild,
       onDropped: input.onDropped,
     });
@@ -252,4 +256,11 @@ function isHeldFileError(error: unknown) {
     "name" in error &&
     error.name === "NoModificationAllowedError"
   );
+}
+
+// The store runs in the engine worker, which has no app logger; its debug
+// notes carry ids only.
+function logStoreDebug(message: string, fields: Record<string, string>) {
+  // biome-ignore lint/suspicious/noConsole: worker-side debug trace, ids only
+  console.debug("[mail-store]", message, fields);
 }

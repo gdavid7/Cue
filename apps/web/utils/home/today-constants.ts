@@ -6,10 +6,17 @@ import type { NextUpItem } from "@/utils/home/next-up";
 
 /** Each of Today's lanes holds at most this many conversations. */
 export const HOME_LANE_LIMIT = 10;
+/**
+ * One ask of whether Cue has read each mailbox covers at most this many,
+ * more than All inboxes holds for anyone; the rest wait for their answer.
+ */
+export const HOME_CUE_MAX_ACCOUNTS = 20;
 /** Next up shows this many meetings and deadlines. */
 export const NEXT_UP_SHOWN = 4;
 /** Before your meeting shows this many meetings. */
 export const MEETING_NEWS_SHOWN = 3;
+/** Mail Cue filed this recently is its to handle, not the rest of the inbox. */
+export const HANDLED_WINDOW_DAYS = 7;
 // A rough per-email estimate, shown with a "~" so nobody reads it as measured.
 export const MINUTES_PER_REPLY = 3;
 export const PRIORITY_ORDER: Record<Priority, number> = {

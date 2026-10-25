@@ -170,6 +170,9 @@ function AccountMailboxes({
             supportsLabelVisibility={isGoogleProvider(provider)}
             collapsed={false}
             reloadDocument
+            dropAccountId={
+              isGoogleProvider(provider) || isOutlook ? accountId : undefined
+            }
           />
         )}
       </LoadingContent>

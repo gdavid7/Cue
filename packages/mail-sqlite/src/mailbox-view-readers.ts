@@ -8,6 +8,7 @@ import type {
   MailPredicate,
   WellKnownMailbox,
 } from "@inboxzero/mail-core/queries";
+import { withContactNames } from "./contact-name-search";
 import type { SqlTransaction, SqlValue } from "./driver";
 import {
   compilePredicate,
@@ -53,9 +54,15 @@ async function readMailboxPages(
   tx: SqlTransaction,
   query: ConversationQuery,
   pages: number,
-  search: SearchSupport,
+  storeSearch: SearchSupport,
 ): Promise<{ revision: LocalRevision; view: MailboxView }> {
   const revision = await readRevision(tx);
+  const search = await withContactNames(
+    tx,
+    storeSearch,
+    query.predicate,
+    query.accountIds,
+  );
   const { conversations, nextPage } = await readConversationPages(
     tx,
     query,
@@ -162,6 +169,85 @@ function readCounts(
     : readFilteredCounts(tx, scope);
 }
 
+/**
+ * Counts conversation rows ({account_id, conversation_id, latest, unread}).
+ * Across accounts, All inboxes lists a message delivered to several of them
+ * once (showCopiesOnce in apps/web), so copies count once too: conversations
+ * sharing a stored message key pair up by their rank within each account,
+ * newest first, as the list pairs them, and a pair is unread if any copy is.
+ * Within one account each conversation counts, and Drafts are each account's
+ * own. Only conversations whose key is in more than one account
+ * (shared_message_copies) are looked at, so the extra cost grows with the
+ * copies, not the mailbox.
+ */
+async function countConversationRows(
+  tx: SqlTransaction,
+  scope: CountScope,
+  rows: { sql: string; bindings: SqlValue[] },
+): Promise<Counts> {
+  const [row] = await tx.query(
+    `SELECT COUNT(*) AS n, COALESCE(SUM(unread), 0) AS u FROM (${rows.sql})`,
+    rows.bindings,
+  );
+  const counts = { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  if (scope.accountIds.length < 2 || mentionsDrafts(scope.predicate))
+    return counts;
+  // Each key's copies in scope; the hidden ones are all but one per pair.
+  // One copy per account is the rule, so only a key with two conversations in
+  // one account is ranked to pair it as the list does.
+  const [hidden] = await tx.query(
+    `WITH copies AS (
+       SELECT k.message_key, s.account_id, s.conversation_id, s.latest, s.unread
+       FROM shared_message_copies k
+       CROSS JOIN (${rows.sql}) s
+         ON s.account_id = k.account_id AND s.conversation_id = k.conversation_id
+     ),
+     per_key AS (
+       SELECT message_key, COUNT(*) AS n, COUNT(DISTINCT account_id) AS accounts,
+              SUM(unread) AS u, MAX(unread) AS shown
+       FROM copies GROUP BY message_key
+     ),
+     ranked AS (
+       SELECT message_key, unread,
+              ROW_NUMBER() OVER (
+                PARTITION BY message_key, account_id
+                ORDER BY latest DESC, conversation_id
+              ) AS rank
+       FROM copies
+       WHERE message_key IN (SELECT message_key FROM per_key WHERE n > accounts)
+     ),
+     pairs AS (
+       SELECT n, u, shown FROM per_key WHERE n = accounts
+       UNION ALL
+       SELECT COUNT(*), SUM(unread), MAX(unread) FROM ranked
+       GROUP BY message_key, rank
+     )
+     SELECT COALESCE(SUM(n - 1), 0) AS n, COALESCE(SUM(u - shown), 0) AS u
+     FROM pairs`,
+    rows.bindings,
+  );
+  return {
+    matching: counts.matching - Number(hidden?.n ?? 0),
+    unread: counts.unread - Number(hidden?.u ?? 0),
+  };
+}
+
+function mentionsDrafts(predicate: MailPredicate): boolean {
+  switch (predicate.kind) {
+    case "all":
+    case "any":
+      return predicate.predicates.some(mentionsDrafts);
+    case "not":
+      return mentionsDrafts(predicate.predicate);
+    case "role":
+      return predicate.role === "draft";
+    case "mailbox":
+      return predicate.mailbox === "drafts";
+    default:
+      return false;
+  }
+}
+
 function filteredScope(scope: CountScope) {
   const mailbox =
     scope.predicate.kind === "mailbox" ? scope.predicate.mailbox : null;
@@ -193,10 +279,11 @@ async function readFilteredRows(
 ) {
   const { from, where, having, bindings } = filteredScope(query);
   const cursor = query.after ? parseMailboxCursor(query.after) : null;
+  const order = latestOrder(query.order);
   const cursorSql = cursor
-    ? `WHERE latest < ?
-       OR (latest = ? AND account_id > ?)
-       OR (latest = ? AND account_id = ? AND conversation_id > ?)`
+    ? `WHERE latest ${order.past} ?
+       OR (latest = ? AND account_id ${order.tiePast} ?)
+       OR (latest = ? AND account_id = ? AND conversation_id ${order.tiePast} ?)`
     : "";
   return tx.query(
     `WITH grouped AS (
@@ -210,7 +297,7 @@ async function readFilteredRows(
      )
      SELECT * FROM grouped
      ${cursorSql}
-     ORDER BY latest DESC, account_id ASC, conversation_id ASC
+     ORDER BY latest ${order.latest}, account_id ${order.tie}, conversation_id ${order.tie}
      LIMIT ?`,
     [
       ...bindings,
@@ -237,17 +324,15 @@ async function readFilteredCounts(
   // A snoozed conversation counts as unread only through an unread message
   // that is itself snoozed.
   const snoozed = mailbox === "snoozed";
-  const [row] = await tx.query(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(unread), 0) AS u FROM (
-       SELECT MAX(CASE WHEN e.read = 0${snoozed ? " AND IFNULL(e.snoozed_until_ms, 0) > ?" : ""} THEN 1 ELSE 0 END) AS unread
-       FROM ${from}
-       WHERE ${where}
-       GROUP BY e.account_id, e.conversation_id
-       ${having.sql ? `HAVING ${having.sql}` : ""}
-     )`,
-    [...(snoozed ? [Date.now()] : []), ...bindings],
-  );
-  return { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  return countConversationRows(tx, scope, {
+    sql: `SELECT e.account_id, e.conversation_id, MAX(e.received_at_ms) AS latest,
+            MAX(CASE WHEN e.read = 0${snoozed ? " AND IFNULL(e.snoozed_until_ms, 0) > ?" : ""} THEN 1 ELSE 0 END) AS unread
+          FROM ${from}
+          WHERE ${where}
+          GROUP BY e.account_id, e.conversation_id
+          ${having.sql ? `HAVING ${having.sql}` : ""}`,
+    bindings: [...(snoozed ? [Date.now()] : []), ...bindings],
+  });
 }
 
 function mailboxConversationHaving(mailbox: WellKnownMailbox | null): {
@@ -286,6 +371,8 @@ function conversationIndexFor(
   predicate: ConversationQuery["predicate"],
 ): ConversationIndex | null {
   if (predicate.kind === "role") return roleIndex(predicate.role);
+  if (predicate.kind === "internet_message_id")
+    return messageKeyIndex(predicate);
   if (predicate.kind === "mailbox" && predicate.mailbox === "inbox") {
     return roleIndex("inbox");
   }
@@ -307,6 +394,32 @@ function conversationIndexFor(
   return null;
 }
 
+// A key names a handful of conversations, found through
+// conversation_message_keys_by_key rather than by scanning messages.
+function messageKeyIndex(
+  predicate: Extract<MailPredicate, { kind: "internet_message_id" }>,
+): ConversationIndex {
+  const keys = predicate.ids.length
+    ? predicate.ids.map(() => "?").join(",")
+    : "NULL";
+  const account = predicate.accountId ? " AND k.account_id = ?" : "";
+  return {
+    source: `(SELECT e.account_id, e.conversation_id,
+                     MAX(e.received_at_ms) AS latest_at_ms,
+                     MAX(1 - e.read) AS unread, MAX(e.starred) AS starred
+              FROM conversation_message_keys k
+              JOIN effective_messages e
+                ON e.account_id = k.account_id
+               AND e.conversation_id = k.conversation_id
+              WHERE k.message_key IN (${keys})${account}
+              GROUP BY e.account_id, e.conversation_id)`,
+    sourceBindings: [
+      ...predicate.ids,
+      ...(predicate.accountId ? [predicate.accountId] : []),
+    ],
+  };
+}
+
 function roleIndex(role: MessageMetadata["roles"][number]): ConversationIndex {
   return {
     source:
@@ -322,11 +435,12 @@ async function readIndexedRows(
 ) {
   const { where, whereBindings } = indexedScope(query, index);
   const cursor = query.after ? parseMailboxCursor(query.after) : null;
+  const order = latestOrder(query.order);
   const cursorSql = cursor
     ? `AND (
-         c.latest_at_ms < ?
-         OR (c.latest_at_ms = ? AND c.account_id > ?)
-         OR (c.latest_at_ms = ? AND c.account_id = ? AND c.conversation_id > ?)
+         c.latest_at_ms ${order.past} ?
+         OR (c.latest_at_ms = ? AND c.account_id ${order.tiePast} ?)
+         OR (c.latest_at_ms = ? AND c.account_id = ? AND c.conversation_id ${order.tiePast} ?)
        )`
     : "";
   return tx.query(
@@ -334,7 +448,7 @@ async function readIndexedRows(
      FROM ${index.source} c
      WHERE ${where}
        ${cursorSql}
-     ORDER BY c.latest_at_ms DESC, c.account_id ASC, c.conversation_id ASC
+     ORDER BY c.latest_at_ms ${order.latest}, c.account_id ${order.tie}, c.conversation_id ${order.tie}
      LIMIT ?`,
     [
       ...whereBindings,
@@ -359,12 +473,12 @@ async function readIndexedCounts(
   index: ConversationIndex,
 ): Promise<Counts> {
   const { where, whereBindings } = indexedScope(scope, index);
-  const [row] = await tx.query(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(c.unread = 1), 0) AS u
-     FROM ${index.source} c WHERE ${where}`,
-    whereBindings,
-  );
-  return { matching: Number(row?.n ?? 0), unread: Number(row?.u ?? 0) };
+  return countConversationRows(tx, scope, {
+    sql: `SELECT c.account_id, c.conversation_id, c.latest_at_ms AS latest,
+            (c.unread = 1) AS unread
+          FROM ${index.source} c WHERE ${where}`,
+    bindings: whereBindings,
+  });
 }
 
 function indexedScope(
@@ -376,6 +490,14 @@ function indexedScope(
     where: `c.account_id IN (${accountPlaceholders})`,
     whereBindings: [...index.sourceBindings, ...scope.accountIds],
   };
+}
+
+// Oldest first is newest first exactly reversed, ties included, so both walk
+// role_conversation_order without sorting: oldest first reads it backwards.
+function latestOrder(order: ConversationQuery["order"]) {
+  return order === "oldest_first"
+    ? { latest: "ASC", tie: "DESC", past: ">", tiePast: "<" }
+    : { latest: "DESC", tie: "ASC", past: "<", tiePast: ">" };
 }
 
 function parseMailboxCursor(value: string) {
@@ -395,12 +517,14 @@ async function readConversationSummaries(
   const members = await tx.query(
     `SELECT account_id, conversation_id, message_id, subject, preview, from_address, to_json,
             received_at_ms, unread, starred, label_ids_json, roles_json, pending_operation_ids_json,
-            has_attachments
+            has_attachments, message_key
      FROM (
        SELECT e.account_id, e.conversation_id, e.message_id, e.subject, e.preview, e.from_address,
               e.to_json, e.received_at_ms, e.read AS unread, e.starred, e.label_ids_json, e.roles_json,
-              e.pending_operation_ids_json, e.has_attachments
+              e.pending_operation_ids_json, e.has_attachments, k.message_key
        FROM effective_messages e
+       LEFT JOIN conversation_message_keys k
+         ON k.account_id = e.account_id AND k.conversation_id = e.conversation_id
        WHERE ${page
          .map(() => "(e.account_id = ? AND e.conversation_id = ?)")
          .join(" OR ")}
@@ -421,7 +545,11 @@ async function readConversationSummaries(
         const byTime =
           Number(left.received_at_ms) - Number(right.received_at_ms);
         if (byTime !== 0) return byTime;
-        return String(left.message_id).localeCompare(String(right.message_id));
+        // Binary, as SQLite orders message_id in the conversation key rule.
+        const leftId = String(left.message_id);
+        const rightId = String(right.message_id);
+        if (leftId === rightId) return 0;
+        return leftId < rightId ? -1 : 1;
       },
     );
     const message = conversationMembers.at(-1);
@@ -460,6 +588,9 @@ async function readConversationSummaries(
       ) as MessageMetadata["roles"],
       pendingOperationIds: jsonStringArray(message.pending_operation_ids_json),
       latestMessageId: String(subjectMessage.message_id),
+      ...(message.message_key == null
+        ? {}
+        : { latestInternetMessageId: String(message.message_key) }),
       hasAttachments: conversationMembers.some(
         (member) => Number(member.has_attachments) === 1,
       ),

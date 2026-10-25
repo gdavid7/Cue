@@ -1,0 +1,231 @@
+"use client";
+
+import { useMemo } from "react";
+import type {
+  ConversationQuery,
+  ConversationSummary,
+  MailboxView,
+} from "@inboxzero/mail-core/queries";
+import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { useMailboxWindow } from "@inboxzero/mail-react/use-mailbox-window";
+import {
+  extractEmailAddress,
+  extractNameFromEmail,
+  splitRecipientList,
+} from "@/utils/email";
+import { getFirstSyncAccountIds } from "@/utils/mail-engine/coverage";
+import {
+  type TodayAccount,
+  type TodayThread,
+  todayConversationKey,
+} from "@/utils/home/merge-home";
+import { HANDLED_WINDOW_DAYS } from "@/utils/home/today-constants";
+
+// Today shows five, but those the server puts under Needs reply and mail Cue
+// filed are left out, so read the most one page holds: a local read is cheap.
+const PAGE_SIZE = 100;
+const NO_IDS_BY_ACCOUNT: Record<string, string[]> = {};
+
+/**
+ * The inbox as this browser's local mail store holds it, newest first, as
+ * Today's rows: what "Also in your inbox" shows while the server's answer is
+ * on its way. Null while the store can't answer for every account, as when
+ * the engine is starting, an account's first sync hasn't finished or it
+ * can't reach the provider; Today then waits for the server as before.
+ */
+export function useLocalInboxRows({
+  accounts,
+  named,
+  handledLabelIds = NO_IDS_BY_ACCOUNT,
+  newsletterThreadIds = NO_IDS_BY_ACCOUNT,
+  enabled,
+}: {
+  accounts: TodayAccount[];
+  /** Across accounts each row names its account, as the server's do. */
+  named: boolean;
+  /**
+   * By account, the labels of mail Cue files without asking, from a server
+   * answer. Missing before the first one, when filed mail can still show.
+   */
+  handledLabelIds?: Record<string, string[]>;
+  /**
+   * By account, the conversations Cue sorted as newsletters lately, which it
+   * files without labelling the mailbox. From a server answer, as above.
+   */
+  newsletterThreadIds?: Record<string, string[]>;
+  enabled: boolean;
+}): TodayThread[] | null {
+  const client = useOptionalMailClient();
+  const active = enabled && Boolean(client) && accounts.length > 0;
+  const query = useMemo<ConversationQuery>(
+    () => ({
+      accountIds: accounts.map((account) => account.id),
+      predicate: { kind: "mailbox", mailbox: "inbox" },
+      order: "newest_first",
+      pageSize: PAGE_SIZE,
+      after: null,
+    }),
+    [accounts],
+  );
+  const mailbox = useMailboxWindow(query, { client, enabled: active });
+  const view = active && mailbox.status === "ready" ? mailbox.data : null;
+  return useMemo(
+    () =>
+      view
+        ? localInboxRows(view, {
+            accounts,
+            named,
+            handledLabelIds,
+            newsletterThreadIds,
+          })
+        : null,
+    [view, accounts, named, handledLabelIds, newsletterThreadIds],
+  );
+}
+
+/** The view's conversations as Today's rows, or null if it can't answer yet. */
+export function localInboxRows(
+  view: MailboxView,
+  {
+    accounts,
+    named,
+    handledLabelIds = NO_IDS_BY_ACCOUNT,
+    newsletterThreadIds = NO_IDS_BY_ACCOUNT,
+    now = Date.now(),
+  }: {
+    accounts: TodayAccount[];
+    named: boolean;
+    handledLabelIds?: Record<string, string[]>;
+    newsletterThreadIds?: Record<string, string[]>;
+    now?: number;
+  },
+): TodayThread[] | null {
+  if (!isLocalMailReady(view, accounts)) return null;
+  const byId = new Map(accounts.map((account) => [account.id, account]));
+  const handledSince = now - HANDLED_WINDOW_DAYS * 86_400_000;
+  const newsletters = new Map(
+    Object.entries(newsletterThreadIds).map(([accountId, threadIds]) => [
+      accountId,
+      new Set(threadIds),
+    ]),
+  );
+  const rows = view.conversations.flatMap((conversation) => {
+    // Only the accounts asked for, so another mailbox's rows never show.
+    const account = byId.get(conversation.key.accountId);
+    if (!account) return [];
+    // As the server's answer does, mail Cue filed lately is left to Cue.
+    const handled = handledLabelIds[account.id] ?? [];
+    if (
+      conversation.latestMessageAtMs >= handledSince &&
+      conversation.labelIds.some((id) => handled.includes(id))
+    )
+      return [];
+    // And so is what Cue sorted as a newsletter without labelling it.
+    // As there, only once it's read through: unread, it still shows.
+    if (
+      !conversation.unread &&
+      conversation.latestMessageAtMs >= handledSince &&
+      newsletters.get(account.id)?.has(conversation.key.conversationId)
+    )
+      return [];
+    const row = toTodayThread(conversation, account.email);
+    if (!row) return [];
+    return [named ? { ...row, account } : row];
+  });
+  return named ? showCopiesOnce(rows) : rows;
+}
+
+/**
+ * Whether the local store can answer for every account: the engine reaches
+ * the provider and each account's first sync has finished.
+ */
+export function isLocalMailReady(view: MailboxView, accounts: TodayAccount[]) {
+  if (view.connection && view.connection !== "ready") return false;
+  const accountIds = accounts.map((account) => account.id);
+  return getFirstSyncAccountIds(accountIds, view.coverage).length === 0;
+}
+
+/**
+ * A message in two of the user's mailboxes shows once, newest copy first, and
+ * says where else it is, as Today's merge of the server's rows does.
+ */
+function showCopiesOnce(rows: TodayThread[]) {
+  const shown = new Map<string, TodayThread>();
+  return rows.filter((row) => {
+    const key = todayConversationKey(row);
+    const first = shown.get(key);
+    if (!first) {
+      shown.set(key, row);
+      return true;
+    }
+    if (!row.account || first.account?.id === row.account.id) return true;
+    if (!first.alsoIn?.some(({ id }) => id === row.account?.id))
+      first.alsoIn = [...(first.alsoIn ?? []), row.account];
+    return false;
+  });
+}
+
+function toTodayThread(
+  conversation: ConversationSummary,
+  ownEmail: string,
+): TodayThread | null {
+  // A conversation that is only a draft isn't mail in the inbox yet.
+  if (!conversation.latestMessageId) return null;
+  // Who the conversation is with, as the server's rows say: the latest sender
+  // who isn't the user, or the first recipient when the user wrote last.
+  const own = ownEmail.toLowerCase();
+  const other = conversation.senders.findLast(
+    (sender) => extractEmailAddress(sender).toLowerCase() !== own,
+  );
+  const counterpart =
+    other ||
+    splitRecipientList(conversation.to)[0] ||
+    conversation.to ||
+    conversation.from;
+  return localTodayThread({
+    conversationId: conversation.key.conversationId,
+    messageId: conversation.latestMessageId,
+    counterpart,
+    subject: conversation.subject,
+    preview: conversation.preview,
+    atMs: conversation.latestMessageAtMs,
+    unread: conversation.unread,
+    starred: conversation.starred,
+    rfcMessageId: conversation.latestInternetMessageId,
+  });
+}
+
+/** A conversation in local inbox mail as Today's row, named for who it is with. */
+export function localTodayThread(input: {
+  conversationId: string;
+  messageId: string;
+  /** The address the row names, as "Name <address>" or a bare address. */
+  counterpart: string;
+  subject: string;
+  preview: string;
+  atMs: number;
+  unread: boolean;
+  starred: boolean;
+  /** The message's Internet Message-ID, which finds its copy in another mailbox. */
+  rfcMessageId?: string | null;
+}): TodayThread {
+  return {
+    threadId: input.conversationId,
+    fromName:
+      extractNameFromEmail(input.counterpart) ||
+      extractEmailAddress(input.counterpart),
+    fromEmail: extractEmailAddress(input.counterpart),
+    subject: (input.subject || "(no subject)").replace(
+      /^((re|fwd?):\s*)+/i,
+      "",
+    ),
+    preview: input.preview,
+    at: new Date(input.atMs).toISOString(),
+    priority: input.unread ? "medium" : "low",
+    unread: input.unread,
+    messageId: input.messageId,
+    ...(input.rfcMessageId ? { rfcMessageId: input.rfcMessageId } : {}),
+    starred: input.starred,
+    inInbox: true,
+  };
+}

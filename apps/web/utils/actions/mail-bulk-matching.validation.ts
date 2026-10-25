@@ -11,6 +11,12 @@ export const matchingScopeSchema = z.strictObject({
   labelIds: z.array(z.string().trim().min(1).max(256)).max(10).optional(),
   folderId: z.string().trim().min(1).max(256).optional(),
   isUnread: z.boolean().optional(),
+  /**
+   * Set only by the Reading lane's own job: archive and read changes reach
+   * every message of each conversation it lists, as the lane holds
+   * conversations. Every other view stays per message.
+   */
+  wholeConversations: z.boolean().optional(),
 });
 export type MatchingScope = z.infer<typeof matchingScopeSchema>;
 

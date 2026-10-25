@@ -1,8 +1,23 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
-import { createMailHttpRequest } from "./http";
+import { SERVER_BUILD_HEADER } from "@/utils/server-build";
+
+let createMailHttpRequest: typeof import("./http").createMailHttpRequest;
+let startSigningOut: typeof import("@/utils/signing-out").startSigningOut;
 
 describe("createMailHttpRequest", () => {
+  // A session found gone stays gone for the page, so each test starts with a
+  // fresh copy of the modules that hold that state.
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createMailHttpRequest } = await import("./http"));
+    ({ startSigningOut } = await import("@/utils/signing-out"));
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -37,7 +52,68 @@ describe("createMailHttpRequest", () => {
     expect(init.headers).toMatchObject({
       accept: "application/octet-stream",
       [EMAIL_ACCOUNT_HEADER]: "acc-1",
+      // The server paces background sync for engines below its minimum.
+      [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
     });
+  });
+
+  it("reports the deployment that answered, even on an error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "busy" }), {
+            status: 503,
+            headers: {
+              "content-type": "application/json",
+              [SERVER_BUILD_HEADER]: "dpl_new",
+            },
+          }),
+      ),
+    );
+    const onServerBuild = vi.fn();
+    const request = createMailHttpRequest("acc-1", vi.fn(), onServerBuild);
+    await request({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/enumeration",
+      body: {},
+      signal: new AbortController().signal,
+    });
+    expect(onServerBuild).toHaveBeenCalledWith("dpl_new");
+  });
+
+  it("stops asking the server for a route it refused as needing a reconnect", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          error: "Authorization required. Please grant permissions.",
+          errorCode: "NO_REFRESH_TOKEN",
+          isKnownError: true,
+        },
+        { status: 401 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createMailHttpRequest("acc-1", vi.fn());
+    const ask = (route: string) =>
+      request({
+        method: "POST",
+        path: `/api/mail/v1/accounts/acc-1/${route}`,
+        body: {},
+        signal: new AbortController().signal,
+      });
+
+    expect((await ask("changes")).status).toBe(401);
+    const again = await ask("changes");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(again).toMatchObject({
+      status: 401,
+      json: { errorCode: "NO_REFRESH_TOKEN" },
+    });
+    expect(again).not.toHaveProperty("sessionExpired");
+
+    await ask("scopes");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -80,5 +156,82 @@ describe("createMailHttpRequest", () => {
     expect(result.status).toBe(401);
     expect(Boolean(result.sessionExpired)).toBe(sessionExpired);
     expect(onSessionExpired).toHaveBeenCalledTimes(sessionExpired ? 1 : 0);
+  });
+
+  it("reports a stop once, and never for the 401s it then answers itself", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.startsWith("/api/auth/get-session")
+          ? Response.json(null)
+          : Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 }),
+      ),
+    );
+    const onSessionExpired = vi.fn();
+    const request = createMailHttpRequest("acc-1", onSessionExpired);
+    const send = () =>
+      request({
+        method: "POST",
+        path: "/api/mail/v1/accounts/acc-1/changes",
+        body: {},
+        signal: new AbortController().signal,
+      });
+
+    const first = await send();
+    const second = await send();
+
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+    expect(onSessionExpired).toHaveBeenCalledWith("signed-out");
+    expect(first.sessionExpired).toBe(true);
+    expect(second.sessionExpired).toBe(true);
+  });
+
+  it("does not report a stop when the refresh could not reach the server", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("/api/auth/get-session"))
+          throw new TypeError("Failed to fetch");
+        return Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 });
+      }),
+    );
+    const onSessionExpired = vi.fn();
+
+    const result = await createMailHttpRequest(
+      "acc-1",
+      onSessionExpired,
+    )({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/changes",
+      body: {},
+      signal: new AbortController().signal,
+    });
+
+    expect(result.sessionExpired).toBe(true);
+    expect(onSessionExpired).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a 401 during sign-out as an expired session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ errorCode: "SESSION_EXPIRED" }, { status: 401 }),
+      ),
+    );
+    const onSessionExpired = vi.fn();
+    startSigningOut();
+
+    const result = await createMailHttpRequest(
+      "acc-1",
+      onSessionExpired,
+    )({
+      method: "POST",
+      path: "/api/mail/v1/accounts/acc-1/changes",
+      body: {},
+      signal: new AbortController().signal,
+    });
+
+    expect(onSessionExpired).not.toHaveBeenCalled();
+    expect(Boolean(result.sessionExpired)).toBe(false);
   });
 });

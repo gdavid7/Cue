@@ -35,7 +35,8 @@
     "check-imports": "node scripts/check-imports.mjs"
   },
   "dependencies": {
-    "@inboxzero/mail-core": "workspace:*"
+    "@inboxzero/mail-core": "workspace:*",
+    "stemmer": "2.0.1"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

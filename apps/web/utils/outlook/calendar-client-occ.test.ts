@@ -39,12 +39,9 @@ describe("getCalendarClientWithRefresh token save concurrency", () => {
         expires_in: 3600,
       }),
     } as any);
-    prisma.calendarConnection.findFirst.mockResolvedValue({
-      id: "calendar-connection-id",
-    } as any);
   });
 
-  it("saves refreshed Microsoft calendar tokens with optimistic concurrency", async () => {
+  it("saves refreshed and rotated Microsoft calendar tokens with optimistic concurrency", async () => {
     const expectedExpiresAt = 1_700_000_000_000;
     prisma.calendarConnection.updateMany.mockResolvedValue({ count: 1 } as any);
 
@@ -52,7 +49,7 @@ describe("getCalendarClientWithRefresh token save concurrency", () => {
       accessToken: "old-access-token",
       refreshToken: "old-refresh-token",
       expiresAt: expectedExpiresAt,
-      emailAccountId: "email-account-id",
+      connectionId: "calendar-connection-id",
       logger: createTestLogger(),
     });
 
@@ -80,10 +77,48 @@ describe("getCalendarClientWithRefresh token save concurrency", () => {
       accessToken: "old-access-token",
       refreshToken: "old-refresh-token",
       expiresAt: 1_700_000_000_000,
-      emailAccountId: "email-account-id",
+      connectionId: "calendar-connection-id",
       logger: createTestLogger(),
     });
 
     expect(prisma.calendarConnection.update).not.toHaveBeenCalled();
+  });
+  it("writes refreshed tokens to the connection that was refreshed, not another Microsoft connection", async () => {
+    prisma.calendarConnection.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    await getCalendarClientWithRefresh({
+      accessToken: "second-access-token",
+      refreshToken: "second-refresh-token",
+      expiresAt: null,
+      connectionId: "second-connection-id",
+      logger: createTestLogger(),
+    });
+
+    expect(prisma.calendarConnection.findFirst).not.toHaveBeenCalled();
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.calendarConnection.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "second-connection-id" }),
+      }),
+    );
+  });
+
+  it("keeps the stored refresh token when Microsoft does not rotate it", async () => {
+    vi.mocked(requestMicrosoftToken).mockResolvedValue(
+      Response.json({ access_token: "new-access-token", expires_in: 3600 }),
+    );
+    prisma.calendarConnection.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    await getCalendarClientWithRefresh({
+      accessToken: "old-access-token",
+      refreshToken: "old-refresh-token",
+      expiresAt: null,
+      connectionId: "calendar-connection-id",
+      logger: createTestLogger(),
+    });
+
+    const { data } = prisma.calendarConnection.updateMany.mock.calls[0][0];
+    expect(data).toMatchObject({ accessToken: "new-access-token" });
+    expect(data?.refreshToken).toBeUndefined();
   });
 });

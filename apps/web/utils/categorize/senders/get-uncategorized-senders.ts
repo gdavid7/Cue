@@ -14,7 +14,7 @@ export async function getUncategorizedSenders({
   offset?: number;
   limit?: number;
 }) {
-  let uncategorizedSenders: Sender[] = [];
+  let uncategorizedSenders: UncategorizedSender[] = [];
   let currentOffset = offset;
 
   while (uncategorizedSenders.length === 0 && currentOffset < MAX_ITERATIONS) {
@@ -24,7 +24,10 @@ export async function getUncategorizedSenders({
       offset: currentOffset,
     });
 
-    const senderMap = new Map<string, string | null>();
+    const senderMap = new Map<
+      string,
+      { name: string | null; sourceMessageId: string }
+    >();
     for (const sender of result) {
       const extractedEmail = extractEmailAddress(sender.from);
       // Unparseable from headers extract to "" and can never be categorized
@@ -32,8 +35,14 @@ export async function getUncategorizedSenders({
       // Normalize so case variants of the same address dedupe to one entry
       const email = extractedEmail.toLowerCase();
       // Only set the name if we don't already have one (keep first non-null)
-      if (!senderMap.has(email) || (!senderMap.get(email) && sender.fromName)) {
-        senderMap.set(email, sender.fromName);
+      if (
+        !senderMap.has(email) ||
+        (!senderMap.get(email)?.name && sender.fromName)
+      ) {
+        senderMap.set(email, {
+          name: sender.fromName,
+          sourceMessageId: sender.id,
+        });
       }
     }
 
@@ -55,9 +64,10 @@ export async function getUncategorizedSenders({
       existingSenders.map((s) => s.email.toLowerCase()),
     );
 
-    uncategorizedSenders = allSenderEmails
-      .filter((email) => !existingSenderEmails.has(email))
-      .map((email) => ({ email, name: senderMap.get(email) ?? null }));
+    uncategorizedSenders = Array.from(senderMap, ([email, sender]) => ({
+      email,
+      ...sender,
+    })).filter((sender) => !existingSenderEmails.has(sender.email));
 
     // Use result.length (raw query count) not allSenderEmails.length (de-duplicated count)
     // to correctly detect when there are more pages
@@ -74,3 +84,7 @@ export async function getUncategorizedSenders({
   }
   return { uncategorizedSenders };
 }
+
+/** `sourceMessageId` is a stored message the sender was found on, so a queued
+ * job can name the sender without carrying the address. */
+type UncategorizedSender = Sender & { sourceMessageId: string };

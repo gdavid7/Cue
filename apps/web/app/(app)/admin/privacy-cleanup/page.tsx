@@ -10,7 +10,7 @@ import { PrivacyCleanup } from "@/app/(app)/admin/privacy-cleanup/PrivacyCleanup
 export const maxDuration = 300;
 
 export default async function AdminPrivacyCleanupPage() {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
 
   if (!isAdmin({ email: session?.user.email })) {
     return (

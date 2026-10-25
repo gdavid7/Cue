@@ -17,6 +17,8 @@ const UPCOMING_STATUSES: ScheduledEmailStatus[] = [
   "UNCERTAIN",
 ];
 
+const SENT_DRAFTS_HIDDEN_MS = 24 * 60 * 60 * 1000;
+
 type UpcomingScheduledEmail = {
   id: string;
   status: ScheduledEmailStatus;
@@ -120,5 +122,24 @@ async function getUpcomingData(emailAccountId: string) {
     ORDER BY "sendAt" ASC
     LIMIT 200
   `;
-  return { scheduledEmails };
+  // A sent draft stays in the mailbox here until sync reports it gone, so the
+  // client keeps it out of Drafts for a while after. An undo hold is sent by
+  // the device's engine, which drops its drafts itself once it goes out.
+  const sent = await prisma.scheduledEmail.findMany({
+    where: {
+      emailAccountId,
+      heldForUndo: false,
+      status: "SENT",
+      sentAt: { gte: new Date(Date.now() - SENT_DRAFTS_HIDDEN_MS) },
+    },
+    select: { draftMessageIds: true },
+    orderBy: { sentAt: "desc" },
+    take: 200,
+  });
+  return {
+    scheduledEmails,
+    sentDraftMessageIds: [
+      ...new Set(sent.flatMap((row) => row.draftMessageIds)),
+    ],
+  };
 }

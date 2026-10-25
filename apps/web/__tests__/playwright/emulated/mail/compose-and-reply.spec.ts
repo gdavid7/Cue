@@ -10,9 +10,11 @@ import {
   expectSeamlessReplyHandoff,
   clearWorkflowMailboxDrafts,
   expectThreadReaderBody,
+  insertInboxThread,
   openMail,
   openMailboxFromSidebar,
   readLatestMailMutation,
+  requestMailSync,
   threadReaderBodyHasText,
   UNDO_WINDOW_SEND_TIMEOUT_MS,
   waitForComposeOutboxSend,
@@ -445,10 +447,16 @@ test("moves a sent reply from its composer into the thread without a gap", async
   page,
 }, testInfo) => {
   const { emailAccountId } = await openMail(page);
-  await page.goto(`/${emailAccountId}/mail?thread-id=thr_playwright_reply`);
-  const sourceMessage = page.locator(
-    '[data-thread-message-id="msg_playwright_reply"]',
-  );
+  // A thread of its own: the seeded one gains replies from other tests and
+  // earlier attempts, which sync in mid-handoff and shift the rows counted.
+  const { threadId, messageId } = await insertInboxThread(page, {
+    subject: `Reply handoff ${testInfo.retry}-${Date.now()}`,
+    body: "Please reply to this conversation.",
+    from: { name: "Leslie Example", address: "leslie@example.com" },
+  });
+  await requestMailSync(page);
+  await page.goto(`/${emailAccountId}/mail?thread-id=${threadId}`);
+  const sourceMessage = page.locator(`[data-thread-message-id="${messageId}"]`);
   await expect(sourceMessage).toBeVisible({ timeout: 60_000 });
   await sourceMessage
     .getByRole("button", { name: "Reply", exact: true })
@@ -472,7 +480,7 @@ test("moves a sent reply from its composer into the thread without a gap", async
   await expect(sentRow).toBeVisible();
   await expect(sentRow).not.toHaveAttribute(
     "data-thread-message-id",
-    "msg_playwright_reply",
+    messageId,
   );
   await expect(sourceMessage).toHaveAttribute("data-selected", "false");
   await expect(
@@ -499,7 +507,7 @@ test("moves a sent reply from its composer into the thread without a gap", async
         readLatestMailMutation(page, {
           emailAccountId,
           kind: "reply",
-          threadId: "thr_playwright_reply",
+          threadId,
         }),
       { timeout: UNDO_WINDOW_SEND_TIMEOUT_MS },
     )

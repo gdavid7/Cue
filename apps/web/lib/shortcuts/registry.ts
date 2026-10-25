@@ -780,6 +780,11 @@ export const TYPING_SURFACE_ATTRIBUTE = "data-typing-surface";
  * the conversation behind it.
  */
 export const MAIL_SHORTCUTS_OFF_ATTRIBUTE = "data-mail-shortcuts-off";
+/**
+ * The attribute's value for a surface that takes over the keyboard, such as
+ * Catch up's overlay: global shortcuts like `c` and ⌘K stay off there too.
+ */
+export const ALL_SHORTCUTS_OFF = "all";
 
 /** Bindings stay inert while the user is typing, unless they're a ⌘ combo. */
 export function isTypingTarget(target: EventTarget | null): boolean {

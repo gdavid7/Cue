@@ -15,6 +15,13 @@ import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useComposeAssist } from "./useComposeAssist";
 
+const { recordOutcome } = vi.hoisted(() => ({
+  recordOutcome: vi.fn(async () => undefined),
+}));
+vi.mock("@/utils/actions/compose-assist", () => ({
+  recordComposeAssistOutcomeAction: recordOutcome,
+}));
+
 const SELECTION: EmailEditorAssistContext = {
   target: "selection",
   before: "Hi Sam,\n",
@@ -36,6 +43,7 @@ let requests: { body: Record<string, unknown>; signal: AbortSignal }[] = [];
 beforeEach(() => {
   streams = [];
   requests = [];
+  recordOutcome.mockClear();
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -388,6 +396,101 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("tells Cue what the user accepted in a reply, follow-ups included", async () => {
+    renderAssist(SELECTION);
+    openAssist();
+    fireEvent.keyDown(
+      await screen.findByRole("menuitem", { name: /Improve/ }),
+      { key: "i" },
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    await act(async () => {
+      streams[0].push("Send the doc.");
+      streams[0].end();
+    });
+    fireEvent.change(refineInput(), { target: { value: "ask, don't tell" } });
+    fireEvent.keyDown(refineInput(), { key: "Enter" });
+    await waitFor(() => expect(requests).toHaveLength(2));
+    await act(async () => {
+      streams[1].push("Could you send the **doc**?");
+      streams[1].end();
+    });
+    // Refining replaces a suggestion; it is not turning it down.
+    expect(recordOutcome).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(refineInput(), { key: "Enter" });
+
+    expect(recordOutcome).toHaveBeenCalledTimes(1);
+    expect(recordOutcome).toHaveBeenCalledWith("account-1", {
+      threadId: "thread-1",
+      messageId: "message-1",
+      outcome: {
+        outcome: "accepted",
+        request: "Improve",
+        refinements: ["ask, don't tell"],
+        original: "can u send the doc pls",
+        suggestion: "Could you send the doc?",
+      },
+    });
+  });
+
+  it("tells Cue about a suggestion the user discarded, not one it never finished", async () => {
+    renderAssist(CARET);
+    openAssist();
+    const prompt = await screen.findByRole("textbox", {
+      name: "Ask Cue to write",
+    });
+    fireEvent.change(prompt, { target: { value: "say I'm in" } });
+    fireEvent.keyDown(prompt, { key: "Enter" });
+    await waitFor(() => expect(requests).toHaveLength(1));
+    await act(async () => streams[0].push("Count me"));
+    fireEvent.keyDown(refineInput(), { key: "Escape" });
+    expect(recordOutcome).not.toHaveBeenCalled();
+
+    openAssist();
+    const again = await screen.findByRole("textbox", {
+      name: "Ask Cue to write",
+    });
+    fireEvent.change(again, { target: { value: "say I'm in" } });
+    fireEvent.keyDown(again, { key: "Enter" });
+    await waitFor(() => expect(requests).toHaveLength(2));
+    await act(async () => {
+      streams[1].push("Count me in!");
+      streams[1].end();
+    });
+    fireEvent.keyDown(refineInput(), { key: "Escape" });
+
+    expect(recordOutcome).toHaveBeenCalledWith("account-1", {
+      threadId: "thread-1",
+      messageId: "message-1",
+      outcome: {
+        outcome: "discarded",
+        request: "say I'm in",
+        refinements: [],
+        original: "",
+        suggestion: "Count me in!",
+      },
+    });
+  });
+
+  it("keeps what the user does with Cue outside a reply to itself", async () => {
+    const { editor } = renderAssist(SELECTION, { inReply: false });
+    openAssist();
+    fireEvent.keyDown(
+      await screen.findByRole("menuitem", { name: /Shorter/ }),
+      { key: "s" },
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    await act(async () => {
+      streams[0].push("Send the doc?");
+      streams[0].end();
+    });
+    fireEvent.keyDown(refineInput(), { key: "Enter" });
+
+    expect(editor.commitAssist).toHaveBeenCalled();
+    expect(recordOutcome).not.toHaveBeenCalled();
+  });
+
   it("stops streaming when the composer closes", async () => {
     const view = renderAssist(SELECTION);
     openAssist();
@@ -405,7 +508,10 @@ describe("useComposeAssist", { timeout: 20_000 }, () => {
   });
 });
 
-function renderAssist(context: EmailEditorAssistContext) {
+function renderAssist(
+  context: EmailEditorAssistContext,
+  { inReply = true }: { inReply?: boolean } = {},
+) {
   const editor = {
     beginAssist: vi.fn(() => context),
     commitAssist: vi.fn((_html: string) => true),
@@ -421,6 +527,7 @@ function renderAssist(context: EmailEditorAssistContext) {
       editorRef,
       emailAccountId: "account-1",
       threadId: "thread-1",
+      replyToMessageId: inReply ? "message-1" : undefined,
       getEnvelope: () => ({ to: "sam@example.com" }),
       formRef,
     });

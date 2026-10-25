@@ -141,6 +141,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Calendar Integration Tests", () => {
 
       const busyPeriods = await microsoftAvailabilityProvider.fetchBusyPeriods({
         accessToken: calendarConnection.accessToken,
+        connectionId: calendarConnection.id,
         refreshToken: calendarConnection.refreshToken,
         expiresAt: calendarConnection.expiresAt?.getTime() || null,
         emailAccountId: calendarConnection.emailAccountId,

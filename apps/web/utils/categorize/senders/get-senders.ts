@@ -15,6 +15,7 @@ export async function getSenders({
       sent: false,
     },
     select: {
+      id: true,
       from: true,
       fromName: true,
     },

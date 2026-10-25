@@ -10,6 +10,7 @@ import {
   formatReportBlock,
   HEALTH_REPORT_END,
   HEALTH_REPORT_START,
+  isThrottledMailResponse,
   parseAxiomTabular,
   type RobotResults,
   redact,
@@ -671,3 +672,106 @@ function shipCueLoggerCalls() {
   });
   return logger;
 }
+
+describe("isThrottledMailResponse", () => {
+  const url = "https://cue-inbox.vercel.app/api/mail/v1/threads?limit=50";
+  const envelope = { error: { code: "throttled", retryAfterMs: 4000 } };
+
+  it("treats a 503 mail error envelope carrying retryAfterMs as throttled", () => {
+    expect(isThrottledMailResponse({ url, status: 503, body: envelope })).toBe(
+      true,
+    );
+    expect(
+      isThrottledMailResponse({ url, status: 503, body: { retryAfterMs: 10 } }),
+    ).toBe(true);
+  });
+
+  it("keeps a 503 without the envelope as a failure", () => {
+    expect(
+      isThrottledMailResponse({ url, status: 503, body: "upstream down" }),
+    ).toBe(false);
+    expect(isThrottledMailResponse({ url, status: 503, body: null })).toBe(
+      false,
+    );
+    expect(
+      isThrottledMailResponse({
+        url,
+        status: 503,
+        body: { error: { code: "unavailable" } },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps a 503 outside the mail API as a failure", () => {
+    expect(
+      isThrottledMailResponse({
+        url: "https://cue-inbox.vercel.app/api/chat",
+        status: 503,
+        body: envelope,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps other 5xx responses as failures", () => {
+    expect(isThrottledMailResponse({ url, status: 500, body: envelope })).toBe(
+      false,
+    );
+  });
+});
+
+describe("throttled requests in the report", () => {
+  it("counts throttled responses as information, not as failed requests", () => {
+    const report = buildHealthReport({
+      robot: {
+        status: "ok",
+        results: {
+          status: "passed",
+          baseUrl: "https://cue-inbox.vercel.app",
+          startedAt: NOW.toISOString(),
+          steps: [
+            {
+              name: "inbox shows real mail",
+              status: "passed",
+              durationMs: 10,
+              consoleErrors: [],
+              failedRequests: [],
+              throttledRequests: 3,
+            },
+            {
+              name: "open a thread",
+              status: "passed",
+              durationMs: 10,
+              consoleErrors: [],
+              failedRequests: [
+                {
+                  method: "GET",
+                  url: "https://cue-inbox.vercel.app/api/mail/v1/threads",
+                  status: 500,
+                },
+              ],
+              throttledRequests: 1,
+            },
+          ],
+        },
+      },
+      axiom: { status: "not_configured", missing: [] },
+      sentry: { status: "not_configured", missing: [] },
+      now: NOW,
+    });
+
+    expect(report.robot).toMatchObject({
+      throttledRequests: 4,
+      steps: [
+        { failedRequests: [], throttledRequests: 3 },
+        {
+          failedRequests: [
+            "500 GET https://cue-inbox.vercel.app/api/mail/v1/threads",
+          ],
+          throttledRequests: 1,
+        },
+      ],
+    });
+    expect(report.problems).toEqual([]);
+    expect(formatHumanSummary(report)).toContain("4 throttled (not failures)");
+  });
+});

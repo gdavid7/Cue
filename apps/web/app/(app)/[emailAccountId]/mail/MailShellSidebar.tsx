@@ -10,6 +10,7 @@ import {
   useMemo,
 } from "react";
 import { toast } from "sonner";
+import { ChangesWaiting } from "@/app/(app)/[emailAccountId]/mail/ChangesWaiting";
 import { AllInboxesSidebarSections } from "@/app/(app)/[emailAccountId]/mail/AllInboxesSidebarSections";
 import { MailAccountSwitcher } from "@/app/(app)/[emailAccountId]/mail/MailAccountSwitcher";
 import {
@@ -43,7 +44,10 @@ import { Sidebar, useSidebar } from "@/components/ui/sidebar";
 import { useSettingsDialog } from "@/hooks/useSettingsDialog";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useFolders } from "@/hooks/useFolders";
-import { useLabelCounts } from "@/hooks/useLabelCounts";
+import {
+  useAllInboxesLabelCounts,
+  useLabelCounts,
+} from "@/hooks/useLabelCounts";
 import { useLabels } from "@/hooks/useLabels";
 import { useRules } from "@/hooks/useRules";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -61,7 +65,6 @@ import {
 } from "@/utils/email/provider-types";
 import { getActionErrorMessage } from "@/utils/error";
 import { GMAIL_LABEL_COLORS } from "@/utils/gmail/label-colors";
-import type { MailboxLabelCount } from "@/utils/mail-engine/label-count-targets";
 import { OUTLOOK_CATEGORY_COLORS } from "@/utils/outlook/category-colors";
 import { getEmailTerminology } from "@/utils/terminology";
 import { logOut } from "@/utils/user";
@@ -71,7 +74,6 @@ const OUTLOOK_LABEL_COLOR_OPTIONS = OUTLOOK_CATEGORY_COLORS.map((option) => ({
   backgroundColor: option.value,
   textColor: "#000000",
 }));
-const NO_COUNTS = new Map<string, MailboxLabelCount>();
 const NO_LABELS: EmailLabel[] = [];
 const NO_FOLDERS: OutlookFolder[] = [];
 const NO_CATEGORIES: MailCategory[] = [];
@@ -131,8 +133,14 @@ export const MailShellSidebar = memo(function MailShellSidebar({
   });
   const { onOpen: openCompose } = useComposeModal();
   const { data: accountsData } = useAccounts();
-  const hasAllInboxes =
-    getAllInboxesAccounts(accountsData?.emailAccounts ?? []).length > 1;
+  const allInboxesAccounts = useMemo(
+    () => getAllInboxesAccounts(accountsData?.emailAccounts ?? []),
+    [accountsData?.emailAccounts],
+  );
+  const hasAllInboxes = allInboxesAccounts.length > 1;
+  const allInboxesCountsById = useAllInboxesLabelCounts(
+    isAllAccounts ? allInboxesAccounts : undefined,
+  );
   const { appLinks, toolLinks } = useMailAppLinks();
   const { state: openSidebars } = useSidebar();
   const isMailSidebarOpen = openSidebars.includes("left-sidebar");
@@ -256,7 +264,7 @@ export const MailShellSidebar = memo(function MailShellSidebar({
       hrefFor={hrefFor}
       labels={isAllAccounts ? NO_LABELS : sidebarLabels}
       folders={isAllAccounts || !isOutlook ? NO_FOLDERS : folders}
-      countsById={isAllAccounts ? NO_COUNTS : countsById}
+      countsById={isAllAccounts ? allInboxesCountsById : countsById}
       categories={
         isAllAccounts
           ? NO_CATEGORIES
@@ -284,6 +292,9 @@ export const MailShellSidebar = memo(function MailShellSidebar({
           />
         ) : undefined
       }
+      // Dropped mail is labelled as the label picker does, for the
+      // providers it offers labels for.
+      dropAccountId={isGoogle || isOutlook ? emailAccountId : undefined}
       todayHref={todayHref}
       onTodayIntent={todayIntent.begin}
       onTodayIntentEnd={todayIntent.end}
@@ -322,14 +333,17 @@ export const MailShellSidebar = memo(function MailShellSidebar({
             collapsed: !isMailSidebarOpen,
             showSidebarToggle: true,
             footer: (
-              <MailAccountSwitcher
-                isDesktopApp={isDesktopApp}
-                isAllAccounts={isAllAccounts}
-                onSelectAccount={onSelectAccount}
-                onSelectAll={onSelectAllAccounts}
-                variant="sidebar"
-                collapsed={!isMailSidebarOpen}
-              />
+              <>
+                <ChangesWaiting collapsed={!isMailSidebarOpen} />
+                <MailAccountSwitcher
+                  isDesktopApp={isDesktopApp}
+                  isAllAccounts={isAllAccounts}
+                  onSelectAccount={onSelectAccount}
+                  onSelectAll={onSelectAllAccounts}
+                  variant="sidebar"
+                  collapsed={!isMailSidebarOpen}
+                />
+              </>
             ),
           })}
           {isMailSidebarOpen ? (
@@ -377,6 +391,7 @@ function MobileSheetFooter({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="mt-2 flex shrink-0 flex-col gap-px border-border border-t pt-2">
+      <ChangesWaiting />
       <button
         type="button"
         className={rowClassName}

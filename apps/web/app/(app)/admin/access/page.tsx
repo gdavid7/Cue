@@ -15,7 +15,7 @@ import {
 } from "@/utils/access/config";
 
 export default async function AdminAccessPage() {
-  const session = await auth();
+  const session = await auth(undefined, { disableCookieCache: true });
 
   if (!isAdmin({ email: session?.user.email })) {
     return (

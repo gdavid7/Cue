@@ -8,11 +8,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { BracesIcon } from "lucide-react";
+import { BracesIcon, CalendarClockIcon } from "lucide-react";
 import { cn } from "@/utils";
 import {
   filterSnippets,
   initialSnippetSelectionIndex,
+  normalizeSnippetQuery,
   snippetPreview,
   type SnippetMatchItem,
 } from "@/utils/snippets/match-snippets";
@@ -24,6 +25,8 @@ export type SnippetPickerRef = {
 type SnippetPickerProps = {
   // Shows "Ask Cue" as the first row, for writing with Cue instead.
   onSelectAsk?: () => void;
+  // Shows "Share my free times" under it, while the query could name it.
+  onSelectFreeTimes?: () => void;
   onQueryChange?: (query: string) => void;
   onSelectCreate: () => void;
   onSelectSnippet: (snippet: SnippetMatchItem) => void;
@@ -37,51 +40,59 @@ export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
       onQueryChange,
       onSelectAsk,
       onSelectCreate,
+      onSelectFreeTimes,
       onSelectSnippet,
       query,
       snippets,
     },
     ref,
   ) {
-    // Ask Cue sits above the snippet rows without becoming the default, so
-    // Enter still does what it did before.
-    const askRows = onSelectAsk ? 1 : 0;
+    // Ask Cue and free times sit above the snippet rows without becoming the
+    // default, so Enter still does what it did before.
+    const askIndex = onSelectAsk ? 0 : -1;
+    const showFreeTimes = Boolean(onSelectFreeTimes) && matchesFreeTimes(query);
+    const freeTimesIndex = showFreeTimes ? askIndex + 1 : -1;
+    const leadingRows = (onSelectAsk ? 1 : 0) + (showFreeTimes ? 1 : 0);
     const filteredSnippets = useMemo(
       () => filterSnippets(snippets, query),
       [query, snippets],
     );
     const [selectedIndex, setSelectedIndex] = useState(
       () =>
-        askRows +
+        leadingRows +
         initialSnippetSelectionIndex({
           createItem: true,
           query,
           snippets: filteredSnippets,
         }),
     );
-    const itemCount = askRows + filteredSnippets.length + 1;
+    const itemCount = leadingRows + filteredSnippets.length + 1;
 
     useEffect(() => {
       setSelectedIndex(
-        askRows +
+        leadingRows +
           initialSnippetSelectionIndex({
             createItem: true,
             query,
             snippets: filteredSnippets,
           }),
       );
-    }, [askRows, query, filteredSnippets]);
+    }, [leadingRows, query, filteredSnippets]);
 
     const selectItem = (index: number) => {
-      if (askRows && index === 0) {
+      if (index === askIndex) {
         onSelectAsk?.();
         return;
       }
-      if (index === askRows) {
+      if (index === freeTimesIndex) {
+        onSelectFreeTimes?.();
+        return;
+      }
+      if (index === leadingRows) {
         onSelectCreate();
         return;
       }
-      const snippet = filteredSnippets[index - askRows - 1];
+      const snippet = filteredSnippets[index - leadingRows - 1];
       if (snippet) onSelectSnippet(snippet);
     };
 
@@ -133,8 +144,8 @@ export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
         >
           {onSelectAsk ? (
             <PickerRow
-              selected={selectedIndex === 0}
-              onSelect={() => selectItem(0)}
+              selected={selectedIndex === askIndex}
+              onSelect={() => selectItem(askIndex)}
             >
               <span
                 aria-hidden="true"
@@ -152,9 +163,24 @@ export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
               </span>
             </PickerRow>
           ) : null}
+          {showFreeTimes ? (
+            <PickerRow
+              selected={selectedIndex === freeTimesIndex}
+              onSelect={() => selectItem(freeTimesIndex)}
+            >
+              <CalendarClockIcon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">
+                <span className="font-medium">Share my free times</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  from your calendar
+                </span>
+              </span>
+            </PickerRow>
+          ) : null}
           <PickerRow
-            selected={selectedIndex === askRows}
-            onSelect={() => selectItem(askRows)}
+            selected={selectedIndex === leadingRows}
+            onSelect={() => selectItem(leadingRows)}
           >
             <BracesIcon className="size-4 shrink-0 text-muted-foreground" />
             <span className="font-medium">Turn into snippet</span>
@@ -162,8 +188,8 @@ export const SnippetPicker = forwardRef<SnippetPickerRef, SnippetPickerProps>(
           {filteredSnippets.map((snippet, index) => (
             <PickerRow
               key={snippet.id}
-              selected={selectedIndex === askRows + index + 1}
-              onSelect={() => selectItem(askRows + index + 1)}
+              selected={selectedIndex === leadingRows + index + 1}
+              onSelect={() => selectItem(leadingRows + index + 1)}
             >
               <span className="w-24 shrink-0 truncate font-medium">
                 /{snippet.shortcut}
@@ -209,5 +235,14 @@ function PickerRow({
     >
       {children}
     </button>
+  );
+}
+
+const FREE_TIMES_WORDS = ["share", "my", "free", "times", "availability"];
+
+function matchesFreeTimes(query: string) {
+  const normalized = normalizeSnippetQuery(query);
+  return (
+    !normalized || FREE_TIMES_WORDS.some((word) => word.startsWith(normalized))
   );
 }

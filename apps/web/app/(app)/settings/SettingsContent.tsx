@@ -16,6 +16,8 @@ import { McpSection } from "@/app/(app)/[emailAccountId]/settings/McpSection";
 import { EmailOtpSection } from "@/app/(app)/settings/EmailOtpSection";
 import { AppearanceSection } from "@/app/(app)/settings/AppearanceSection";
 import { NotificationsSection } from "@/app/(app)/settings/NotificationsSection";
+import { TodayWeatherSetting } from "@/app/(app)/settings/TodayWeatherSetting";
+import { PreSendCheckSetting } from "@/app/(app)/settings/PreSendCheckSetting";
 import { BillingSection } from "@/app/(app)/[emailAccountId]/settings/BillingSection";
 import { CleanupDraftsSection } from "@/app/(app)/[emailAccountId]/settings/CleanupDraftsSection";
 import { SentMessageOpenTrackingSetting } from "@/app/(app)/[emailAccountId]/settings/SentMessageOpenTrackingSetting";
@@ -31,6 +33,7 @@ import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/rou
 import { CueLabelsSetting } from "@/components/CueLabelsCleanup";
 import { LoadingContent } from "@/components/LoadingContent";
 import { SectionHeader } from "@/components/Typography";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -91,7 +94,11 @@ export function SettingsContent() {
   return (
     <div className="space-y-10">
       <SettingsGroup title="Email accounts" loadsInPlace>
-        <LoadingContent loading={isLoading} error={error}>
+        <LoadingContent
+          loading={isLoading}
+          error={error}
+          loadingComponent={<EmailAccountsSkeleton />}
+        >
           {emailAccounts.length > 0 && (
             <div className="space-y-4">
               {emailAccounts.map((emailAccount) => (
@@ -122,20 +129,14 @@ export function SettingsContent() {
         </LoadingContent>
       </SettingsGroup>
 
-      {!env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS && canManageBilling && (
-        <SettingsGroup title="Billing" loadsInPlace>
-          <ItemCard>
-            <BillingSection />
-          </ItemCard>
-        </SettingsGroup>
-      )}
-
       <SettingsGroup title="Account">
         <ItemCard>
           {env.NEXT_PUBLIC_EXTERNAL_API_ENABLED && <McpSection />}
           <EmailOtpSection hasMultipleAccounts={emailAccounts.length > 1} />
           <ItemSeparator />
           <AppearanceSection />
+          <TodayWeatherSetting />
+          <PreSendCheckSetting />
           <NotificationsSection />
           {activeEmailAccountId && (
             <>
@@ -184,6 +185,34 @@ export function SettingsContent() {
           </ItemCard>
         </SettingsGroup>
       )}
+
+      {/* Billing depends on the user request, which lands after first paint.
+          It sits last so its arrival pushes nothing the user may be using. */}
+      {!env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS && canManageBilling && (
+        <SettingsGroup title="Billing">
+          <ItemCard>
+            <BillingSection />
+          </ItemCard>
+        </SettingsGroup>
+      )}
+    </div>
+  );
+}
+
+function EmailAccountsSkeleton() {
+  return (
+    <div
+      className="space-y-4"
+      aria-hidden
+      data-testid="email-accounts-skeleton"
+    >
+      <ItemCard>
+        <div className="flex h-14 items-center gap-3 px-4">
+          <Skeleton className="size-8 rounded-full" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+      </ItemCard>
+      <Skeleton className="h-9 w-32" />
     </div>
   );
 }

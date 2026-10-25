@@ -135,12 +135,17 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/home/next-up.ts": {
-    writes: 2,
+    writes: 4,
     keys: [
       {
         key: "home-deadlines-paused:{app}:{emailAccountId}",
         holds: '"1" while a connected app is down or slow',
-        ttl: "5 min",
+        ttl: "5 min, or 5, 15 or 60 min after timeouts in a row",
+      },
+      {
+        key: "home-deadlines-timeouts:{app}:{emailAccountId}",
+        holds: "how many times in a row the app timed out (a count)",
+        ttl: "24h",
       },
       {
         key: "asana-task-list:{emailAccountId}",
@@ -263,7 +268,7 @@ export const SERVER_CACHE_WRITES: Record<
       {
         key: "BullMQ queues (self-hosted QUEUE_BACKEND=bullmq only)",
         holds:
-          "job payloads; production queues through QStash. Audit payloads before enabling BullMQ (RD-3 follow-up)",
+          "job payloads from enqueueBackgroundJob: account, run, meeting, invoice and message ids only (audited in RD-3b)",
         ttl: "BullMQ defaults",
       },
     ],

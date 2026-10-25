@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { useSWRConfig } from "swr";
 import { usePathname } from "next/navigation";
 import { Loader2Icon } from "lucide-react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
@@ -63,7 +64,12 @@ import {
   createBroadcastTabBus,
   createTabFollowerClient,
   disposeTabFollowerClient,
+  tabOwnerMessage,
 } from "@/utils/mail-engine/tab-channel";
+import {
+  isImportantPeopleKey,
+  relayImportantPeopleChanges,
+} from "@/utils/mail-engine/important-people-changes";
 import {
   setActiveMailClient,
   subscribeMailEngineLogout,
@@ -215,6 +221,12 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
   // whatever is still watching it, such as an undo toast. The desktop client
   // sends its provider with each sync, so it follows the viewed account.
   const viewedAccount = useRef({ accountId: emailAccountId, mailProvider });
+  // Through a ref: the engine effect mustn't restart when SWR's mutate does.
+  const { mutate } = useSWRConfig();
+  const refreshImportantPeople = useRef(() => {});
+  refreshImportantPeople.current = () => {
+    mutate(isImportantPeopleKey).catch(() => undefined);
+  };
   useEffect(() => {
     viewedAccount.current = { accountId: emailAccountId, mailProvider };
   }, [emailAccountId, mailProvider]);
@@ -317,6 +329,9 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
         ? new BroadcastChannel(MAIL_ENGINE_TAB_CHANNEL)
         : null;
     const bus = channel ? createBroadcastTabBus(channel) : null;
+    const unrelayImportantPeople = bus
+      ? relayImportantPeopleChanges(bus, () => refreshImportantPeople.current())
+      : undefined;
 
     if (bus) {
       unbindHello = bus.subscribe((message) => {
@@ -343,6 +358,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
             accountId: emailAccountId,
             provider: engineProvider,
             bus,
+            capabilities: message.capabilities,
           }),
           "follower",
           "browser",
@@ -393,7 +409,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
             ensureAccount: engine.ensureAccount,
           });
           bus.post({ type: "ready" });
-          bus.post({ type: "owner", accountId: emailAccountId });
+          bus.post(tabOwnerMessage(engine, emailAccountId));
         }
         await publishClient(engine, "owner", "browser");
       };
@@ -445,6 +461,7 @@ function MailEngineRuntimeInner({ children }: { children: ReactNode }) {
       abort.abort();
       unbindOwner?.();
       unbindHello?.();
+      unrelayImportantPeople?.();
       if (published) disposeTabFollowerClient(published);
       setInspect(null);
       setActiveMailClient(null);

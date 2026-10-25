@@ -63,7 +63,9 @@ test("keeps a new message's text, recipients and files when From changes", async
     const signature = editor.locator("[data-smartmail]");
     await expect(signature).toContainText(primarySignature);
     await expect
-      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .poll(() => readDraftFiles(page, subject, [secondAccount]), {
+        timeout: 60_000,
+      })
       .toEqual([[file.name]]);
 
     await from.click();
@@ -94,10 +96,12 @@ test("keeps a new message's text, recipients and files when From changes", async
     await expect(signature).not.toContainText(primarySignature);
     await capturePlaywrightCheckpoint(page, testInfo, "compose-from-switched");
 
-    // Both accounts read one emulated mailbox, so exactly one draft must
-    // remain: the old account's is removed and the new one holds the file.
+    // Across both accounts' mailboxes exactly one draft must remain: the old
+    // account's is removed and the new one holds the file.
     await expect
-      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .poll(() => readDraftFiles(page, subject, [secondAccount]), {
+        timeout: 60_000,
+      })
       .toEqual([[file.name]]);
 
     await dialog.getByRole("button", { name: "Discard draft" }).click();
@@ -203,7 +207,9 @@ test("keeps the old mailbox draft while the new mailbox can't save it", async ({
       .getByRole("textbox", { name: "Email message" })
       .fill("Only the old mailbox has this.");
     await expect
-      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .poll(() => readDraftFiles(page, subject, [secondAccount]), {
+        timeout: 60_000,
+      })
       .toEqual([[]]);
 
     // The new account's draft is created, but every save into it fails.
@@ -234,7 +240,10 @@ test("keeps the old mailbox draft while the new mailbox can't save it", async ({
 
     // The old draft stays next to the new account's, which lacks the text.
     await expect(page.getByText(/^Draft moved to /)).toHaveCount(0);
-    expect(await readDraftFiles(page, subject)).toEqual([[], []]);
+    expect(await readDraftFiles(page, subject, [secondAccount])).toEqual([
+      [],
+      [],
+    ]);
 
     // Once the new mailbox saves it, the move finishes on its own: the old
     // draft goes and only the new account's remains.
@@ -243,7 +252,9 @@ test("keeps the old mailbox draft while the new mailbox can't save it", async ({
       page.getByText(`Draft moved to ${secondAccount.email}`, { exact: true }),
     ).toBeVisible({ timeout: 60_000 });
     await expect
-      .poll(() => readDraftFiles(page, subject), { timeout: 60_000 })
+      .poll(() => readDraftFiles(page, subject, [secondAccount]), {
+        timeout: 60_000,
+      })
       .toEqual([[]]);
   } finally {
     await deleteSecondEmailAccount(secondAccount.accountId);
@@ -486,33 +497,46 @@ async function setSignature(emailAccountId: string, signature: string | null) {
 }
 
 /** The file names on each mailbox draft with this subject. */
-async function readDraftFiles(page: Page, subject: string) {
+/** The drafts with this subject in the primary's mailbox and each account's. */
+async function readDraftFiles(
+  page: Page,
+  subject: string,
+  accounts: { accessToken: string | undefined }[] = [],
+) {
   const baseUrl = process.env.GOOGLE_BASE_URL;
   if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
-  const headers = {
-    Authorization: `Bearer ${await readProviderAccessToken()}`,
-  };
-  const listed = await page.request.get(
-    `${baseUrl}/gmail/v1/users/me/messages?labelIds=DRAFT&maxResults=500`,
-    { headers },
-  );
-  expect(listed.ok(), await listed.text()).toBe(true);
-  const { messages = [] } = (await listed.json()) as {
-    messages?: { id: string }[];
-  };
+  const tokens = [
+    await readProviderAccessToken(),
+    ...accounts.map(({ accessToken }) => {
+      if (!accessToken)
+        throw new Error("The account has no mailbox of its own");
+      return accessToken;
+    }),
+  ];
   const drafts: string[][] = [];
-  for (const { id } of messages) {
-    const response = await page.request.get(
-      `${baseUrl}/gmail/v1/users/me/messages/${id}?format=full`,
+  for (const token of tokens) {
+    const headers = { Authorization: `Bearer ${token}` };
+    const listed = await page.request.get(
+      `${baseUrl}/gmail/v1/users/me/messages?labelIds=DRAFT&maxResults=500`,
       { headers },
     );
-    if (!response.ok()) continue;
-    const message = (await response.json()) as { payload?: GmailPart };
-    const messageSubject = message.payload?.headers?.find(
-      (header) => header.name.toLowerCase() === "subject",
-    )?.value;
-    if (messageSubject === subject)
-      drafts.push(listFileNames(message.payload).sort());
+    expect(listed.ok(), await listed.text()).toBe(true);
+    const { messages = [] } = (await listed.json()) as {
+      messages?: { id: string }[];
+    };
+    for (const { id } of messages) {
+      const response = await page.request.get(
+        `${baseUrl}/gmail/v1/users/me/messages/${id}?format=full`,
+        { headers },
+      );
+      if (!response.ok()) continue;
+      const message = (await response.json()) as { payload?: GmailPart };
+      const messageSubject = message.payload?.headers?.find(
+        (header) => header.name.toLowerCase() === "subject",
+      )?.value;
+      if (messageSubject === subject)
+        drafts.push(listFileNames(message.payload).sort());
+    }
   }
   return drafts;
 }

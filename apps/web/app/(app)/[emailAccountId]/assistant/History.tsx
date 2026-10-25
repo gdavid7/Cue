@@ -14,9 +14,17 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { TablePagination } from "@/components/TablePagination";
 import { Badge } from "@/components/Badge";
 import { RulesSelect } from "@/app/(app)/[emailAccountId]/assistant/RulesSelect";
+import {
+  HistoryActionSelect,
+  HistoryWindowNotice,
+  useHistoryFilters,
+} from "@/app/(app)/[emailAccountId]/assistant/HistoryFilters";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useChat } from "@/providers/ChatProvider";
-import { useExecutedRules } from "@/hooks/useExecutedRules";
+import {
+  type HistoryFilters,
+  useExecutedRules,
+} from "@/hooks/useExecutedRules";
 import { useMessagesBatch } from "@/hooks/useMessagesBatch";
 import type { ParsedMessage } from "@/utils/types";
 import { EmailMessageCell } from "@/components/EmailMessageCell";
@@ -28,8 +36,13 @@ type ExecutedRuleResult = GetExecutedRulesResponse["results"][number];
 export function History() {
   const [page] = useQueryState("page", parseAsInteger.withDefault(1));
   const [ruleId] = useQueryState("ruleId", parseAsString.withDefault("all"));
+  const filters = useHistoryFilters();
 
-  const { data, isLoading, error } = useExecutedRules({ page, ruleId });
+  const { data, isLoading, error } = useExecutedRules({
+    page,
+    ruleId,
+    filters,
+  });
   const results = data?.results ?? [];
   const totalPages = data?.totalPages ?? 1;
   const messageIds = useMemo(
@@ -46,13 +59,18 @@ export function History() {
 
   return (
     <>
-      <RulesSelect />
+      <div className="flex flex-wrap gap-2">
+        <RulesSelect />
+        <HistoryActionSelect />
+      </div>
+      <HistoryWindowNotice />
       <Card className="mt-2">
         <LoadingContent loading={isLoading} error={error}>
           {results.length ? (
             <HistoryTable
-              key={`${page}-${ruleId}`}
+              key={`${page}-${ruleId}-${JSON.stringify(filters)}`}
               ruleId={ruleId}
+              filters={filters}
               data={results}
               totalPages={totalPages}
               messagesById={messagesById}
@@ -61,11 +79,7 @@ export function History() {
           ) : (
             <AlertBasic
               title="No history"
-              description={
-                ruleId === "all"
-                  ? "No emails have been processed yet."
-                  : "No emails have been processed for this rule."
-              }
+              description={emptyHistoryDescription(ruleId, filters)}
             />
           )}
         </LoadingContent>
@@ -77,12 +91,14 @@ export function History() {
 function HistoryTable({
   data,
   ruleId,
+  filters,
   totalPages,
   messagesById,
   messagesLoading,
 }: {
   data: GetExecutedRulesResponse["results"];
   ruleId: string;
+  filters: HistoryFilters;
   totalPages: number;
   messagesById: Record<string, ParsedMessage>;
   messagesLoading: boolean;
@@ -108,6 +124,7 @@ function HistoryTable({
                   key={er.threadId}
                   result={er}
                   ruleId={ruleId}
+                  filters={filters}
                   message={messagesById[er.messageId]}
                   messagesLoading={messagesLoading}
                 />
@@ -125,11 +142,13 @@ function HistoryTable({
 function HistoryThread({
   result,
   ruleId,
+  filters,
   message,
   messagesLoading,
 }: {
   result: ExecutedRuleResult;
   ruleId: string;
+  filters: HistoryFilters;
   message?: ParsedMessage;
   messagesLoading: boolean;
 }) {
@@ -166,6 +185,7 @@ function HistoryThread({
               threadId={result.threadId}
               latestMessageId={result.messageId}
               ruleId={ruleId}
+              filters={filters}
             />
           </TableCell>
         </TableRow>
@@ -178,15 +198,18 @@ function ThreadHistory({
   threadId,
   latestMessageId,
   ruleId,
+  filters,
 }: {
   threadId: string;
   latestMessageId: string;
   ruleId: string;
+  filters: HistoryFilters;
 }) {
   const [page, setPage] = useState(1);
   const { data, isLoading, error } = useExecutedRules({
     page,
     ruleId,
+    filters,
     threadId,
     excludeMessageId: latestMessageId,
   });
@@ -378,6 +401,14 @@ function RuleCell({
       )}
     </div>
   );
+}
+
+function emptyHistoryDescription(ruleId: string, filters: HistoryFilters) {
+  if (filters.since || filters.until)
+    return "Nothing here matches what Cue did while you were away.";
+  if (filters.action) return "Cue hasn't done this to any emails yet.";
+  if (ruleId === "all") return "No emails have been processed yet.";
+  return "No emails have been processed for this rule.";
 }
 
 function mapMessagesById(messages: ParsedMessage[]) {

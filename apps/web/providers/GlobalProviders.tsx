@@ -10,7 +10,8 @@ import {
 } from "@/utils/offline/mail-cache";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { SerwistProvider, useSerwist } from "@serwist/next/react";
-import { toast } from "sonner";
+import { guardRestoredPage } from "@/utils/restored-page";
+import { isSigningOut } from "@/utils/signing-out";
 import { SWRConfig } from "swr";
 import { swrFetcher } from "./swr-fetcher";
 import {
@@ -19,10 +20,9 @@ import {
   shouldCheckForDesktopWebUpdate,
   shouldPromptDesktopWebUpdate,
 } from "@/utils/desktop-app";
-import { BRAND_NAME } from "@/utils/branding";
+import { showUpdateAvailableToast } from "@/utils/update-available-toast";
 import { ThemeProvider } from "@/components/theme-provider";
 
-const DESKTOP_WEB_UPDATE_TOAST_ID = "desktop-web-update";
 const DESKTOP_WEB_UPDATE_PROMPT_GRACE_MS = 3000;
 
 export function GlobalProviders(props: { children: React.ReactNode }) {
@@ -40,14 +40,20 @@ export function GlobalProviders(props: { children: React.ReactNode }) {
       disable={process.env.NODE_ENV !== "production"}
     >
       <ManageServiceWorker />
+      <RestoredPageGuard />
       <SignalDesktopReady />
       <ThemeProvider>
-        <SWRConfig value={{ fetcher: swrFetcher }}>
+        <SWRConfig value={{ fetcher: swrFetcher, isPaused: isSigningOut }}>
           <NuqsAdapter>{props.children}</NuqsAdapter>
         </SWRConfig>
       </ThemeProvider>
     </SerwistProvider>
   );
+}
+
+function RestoredPageGuard() {
+  useEffect(() => guardRestoredPage(), []);
+  return null;
 }
 
 // SerwistProvider's own register drops the promise, so the failures that come
@@ -86,20 +92,6 @@ function ManageServiceWorker() {
       reloadForUpdate();
     };
 
-    // Never reloads by itself: the page may hold a half-written reply, and a
-    // worker can take over at any moment, such as right after reconnecting.
-    const offerReload = (onReload: () => void) => {
-      toast.info("Update available", {
-        action: {
-          label: "Reload",
-          onClick: onReload,
-        },
-        description: `Reload ${BRAND_NAME} to use the latest version.`,
-        duration: Number.POSITIVE_INFINITY,
-        id: DESKTOP_WEB_UPDATE_TOAST_ID,
-      });
-    };
-
     const notifyAboutWaitingUpdate = () => {
       const now = Date.now();
       if (
@@ -116,7 +108,7 @@ function ManageServiceWorker() {
 
       lastPromptedAt = now;
       writeDesktopWebUpdateLastPromptedAt(now);
-      offerReload(activateWaitingWorker);
+      showUpdateAvailableToast(activateWaitingWorker);
     };
 
     const handleWaitingWorker = () => {
@@ -158,7 +150,7 @@ function ManageServiceWorker() {
         isDesktopApp &&
         Date.now() - pageLoadedAt >= DESKTOP_WEB_UPDATE_PROMPT_GRACE_MS
       ) {
-        offerReload(reloadForUpdate);
+        showUpdateAvailableToast(reloadForUpdate);
       }
       hadController = true;
     };

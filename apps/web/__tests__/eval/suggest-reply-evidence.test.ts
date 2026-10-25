@@ -2,8 +2,10 @@ import { afterAll, describe, expect, test, vi } from "vitest";
 import { describeEvalMatrix } from "@/__tests__/eval/models";
 import { judgeBinary } from "@/__tests__/eval/judge";
 import { createEvalReporter } from "@/__tests__/eval/reporter";
+import { getMockMessage } from "@/__tests__/helpers";
 import {
   aiSuggestReply,
+  messageSource,
   type Source,
 } from "@/utils/thread-context/suggest-reply";
 
@@ -66,6 +68,56 @@ const UNRELATED_MEMORY: Source = {
   text: "Reply memory (all replies): When someone asks for a product demo, ask how many seats they need before offering times.",
 };
 
+const ASK_IF_ARRIVED: Source = {
+  id: "m1",
+  kind: "message",
+  title: "Sarah Chen",
+  text: "Subject: New mail server\nFrom: Sarah Chen <sarah@acme.com>\n\nHi David, we just moved Acme to a new mail server and some messages have been bouncing. Could you reply so I know this one reached you?\n\nThanks,\nSarah",
+};
+
+const ASK_IF_FILES_ARRIVED: Source = {
+  id: "m1",
+  kind: "message",
+  title: "Sarah Chen",
+  text: "Subject: Signed SOW\nFrom: Sarah Chen <sarah@acme.com>\n\nHi David, I sent the signed SOW and the W-9 in a separate email this morning. Can you confirm you received both files?\n\nThanks,\nSarah",
+};
+
+// Rendered from real messages, so the eval covers how attachments reach the model.
+const CONTRACT_THREAD: Source[] = [
+  getMockMessage({
+    id: "contract-1",
+    threadId: "contract",
+    from: "Sarah Chen <sarah@acme.com>",
+    to: "David Lin <david@company.com>",
+    subject: "Contract",
+    textPlain: "Hi David,\n\nHere you go.\n\nSarah",
+    attachments: [
+      {
+        attachmentId: "a1",
+        filename: "contract.pdf",
+        mimeType: "application/pdf",
+        size: 182_000,
+        headers: {},
+      },
+    ],
+  }),
+  getMockMessage({
+    id: "contract-2",
+    threadId: "contract",
+    from: "Sarah Chen <sarah@acme.com>",
+    to: "David Lin <david@company.com>",
+    subject: "Re: Contract",
+    textPlain:
+      "Hi David, did you get the contract? Just making sure it came through.\n\nSarah",
+  }),
+].map((m, i) => messageSource(m, i, null));
+
+const CONFIRMS_RECEIPT = {
+  name: "confirms what arrived",
+  description:
+    "The reply tells the sender that what they asked about arrived, and claims nothing else the sources don't state.",
+};
+
 // The web query leaves Cue for a search API, so it may carry public names
 // and topic words only.
 const PRIVATE_WEB_QUERY = {
@@ -80,6 +132,8 @@ const CASES: {
   expected: "suggested" | "insufficient";
   /** The source a suggestion must cite. */
   cites?: string;
+  /** What the suggested reply must do, judged on its meaning. */
+  replyCriterion?: { name: string; description: string };
 }[] = [
   {
     name: "abstains when no source states the price",
@@ -106,6 +160,25 @@ const CASES: {
     name: "abstains when the only memory doesn't fit the message",
     sources: [ASK_FOR_PRICE, UNRELATED_MEMORY],
     expected: "insufficient",
+  },
+  {
+    name: "confirms the message itself arrived, citing it",
+    sources: [ASK_IF_ARRIVED, UNRELATED_MEETING],
+    expected: "suggested",
+    cites: "m1",
+    replyCriterion: CONFIRMS_RECEIPT,
+  },
+  {
+    name: "abstains on files no source shows arriving",
+    sources: [ASK_IF_FILES_ARRIVED, UNRELATED_MEETING],
+    expected: "insufficient",
+  },
+  {
+    name: "confirms a file arrived from the attachment it came with",
+    sources: CONTRACT_THREAD,
+    expected: "suggested",
+    cites: "m1",
+    replyCriterion: CONFIRMS_RECEIPT,
   },
 ];
 
@@ -135,13 +208,22 @@ describe.runIf(isAiTest)("Eval: evidence-gated reply suggestions", () => {
                   criterion: PRIVATE_WEB_QUERY,
                 })
               : null;
+          const replyJudgment =
+            result.status === "suggested" && testCase.replyCriterion
+              ? await judgeBinary({
+                  input: testCase.sources.map((s) => s.text).join("\n\n"),
+                  output: result.reply,
+                  criterion: testCase.replyCriterion,
+                })
+              : null;
           const pass =
             result.status === testCase.expected &&
             (result.status !== "suggested" ||
               result.citations.some(
                 (c) => c.source.id === (testCase.cites ?? "c1"),
               )) &&
-            privacy?.pass !== false;
+            privacy?.pass !== false &&
+            replyJudgment?.pass !== false;
           evalReporter.record({
             testName: testCase.name,
             model: model.label,

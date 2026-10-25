@@ -21,10 +21,12 @@ test("signs out in one click from the mail account menu", async ({ page }) => {
   await openSignedInMail(page);
 
   await accountMenuButton(page).click();
+  const unauthorized = collectUnauthorizedApiResponses(page);
   const clickedAt = Date.now();
   await page.getByRole("menuitem", { name: "Sign out" }).click();
 
   await expectSignedOut(page, clickedAt);
+  expect(unauthorized).toEqual([]);
 });
 
 test("signs out in one click from Settings", async ({ page }) => {
@@ -36,11 +38,88 @@ test("signs out in one click from Settings", async ({ page }) => {
   await expect(
     settings.getByRole("heading", { name: "Settings", exact: true }),
   ).toBeVisible();
+  const unauthorized = collectUnauthorizedApiResponses(page);
   const clickedAt = Date.now();
   await settings.getByRole("button", { name: "Sign out", exact: true }).click();
 
   await expectSignedOut(page, clickedAt);
+  expect(unauthorized).toEqual([]);
 });
+
+test("recovers in place when the server rejects a live session once", async ({
+  page,
+}) => {
+  await openSignedInMail(page);
+
+  // Each settings and account read is rejected the first time it is asked,
+  // as the auth gate does when a session lookup misses for a moment.
+  const rejected = new Set<string>();
+  const recovered = new Set<string>();
+  let refreshes = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/auth/get-session?disableCookieCache"))
+      refreshes++;
+  });
+  page.on("response", (response) => {
+    const path = new URL(response.url()).pathname;
+    if (rejected.has(path) && response.ok()) recovered.add(path);
+  });
+  await page.route(/\/api\/user\//, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() !== "GET" || rejected.has(path))
+      return route.continue();
+    rejected.add(path);
+    return route.fulfill({
+      status: 401,
+      json: {
+        error: "Unauthorized",
+        errorCode: "SESSION_EXPIRED",
+        isKnownError: true,
+      },
+    });
+  });
+
+  await page.reload();
+  await expect(accountMenuButton(page)).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(() => rejected.size, { timeout: 30_000 })
+    .toBeGreaterThan(2);
+  await expect
+    .poll(() => [...rejected].filter((path) => !recovered.has(path)), {
+      timeout: 30_000,
+    })
+    .toEqual([]);
+
+  expect(page.url()).not.toMatch(/\/login(\?|$)/);
+  // One refresh answers a whole burst of rejected reads.
+  expect(refreshes).toBeGreaterThan(0);
+  expect(refreshes).toBeLessThan(rejected.size);
+});
+
+test("still sends the page to log in when the session is gone", async ({
+  page,
+}) => {
+  await openSignedInMail(page);
+
+  await page.context().clearCookies({ name: /session_token/ });
+  // Revalidating on focus is the next read the page makes on its own.
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+  await expect(page).toHaveURL(/\/login(\?|$)/, { timeout: 30_000 });
+});
+
+// Requests the page sends after the session row is deleted answer 401. Once
+// sign-out starts the page must send none, or the burst reads as a session
+// expiring under the user.
+function collectUnauthorizedApiResponses(page: Page) {
+  const unauthorized: string[] = [];
+  page.on("response", (response) => {
+    const { pathname } = new URL(response.url());
+    if (response.status() === 401 && pathname.startsWith("/api/"))
+      unauthorized.push(pathname);
+  });
+  return unauthorized;
+}
 
 async function openSignedInMail(page: Page) {
   await signIn(page);

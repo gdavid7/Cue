@@ -11,7 +11,6 @@ import {
   openMail,
   openThreadIdFromUrl,
   readLatestMailMutation,
-  readProviderAccessToken,
 } from "./mail-test-helpers";
 
 const THREAD_ID = "thr_playwright_reader_html";
@@ -98,6 +97,48 @@ test("opens the sender's card from the keyboard and keeps focus in it", async ({
   await capturePlaywrightCheckpoint(page, testInfo, "person-card-closed");
 });
 
+test("stars a sender as Important, marks their mail, and unstars them", async ({
+  page,
+}, testInfo) => {
+  const { emailAccountId } = await openMail(page);
+  const sender = await openThread(page, emailAccountId);
+
+  await sender.click();
+  const card = page.getByTestId("person-card");
+  const star = card.getByRole("button", { name: "Important", exact: true });
+  await expect(star).toHaveAttribute("aria-pressed", "false");
+  await star.click();
+  await expect(star).toHaveAttribute("aria-pressed", "true");
+  await capturePlaywrightCheckpoint(page, testInfo, "person-card-important");
+  await page.keyboard.press("Escape");
+  await expect(card).toBeHidden();
+
+  // Kept on this device: the list marks their mail after a reload.
+  await page.goto(`/${emailAccountId}/mail`, { waitUntil: "domcontentloaded" });
+  const conversations = page.getByRole("listbox", { name: "Conversations" });
+  const row = conversationWithSubject(
+    page,
+    conversations,
+    "Reader Html Message",
+  );
+  await expect(row.getByTestId("important-person-marker")).toBeVisible({
+    timeout: 60_000,
+  });
+  await capturePlaywrightCheckpoint(page, testInfo, "important-person-row");
+
+  const again = await openThread(page, emailAccountId);
+  await again.click();
+  await expect(star).toHaveAttribute("aria-pressed", "true");
+  await star.click();
+  await expect(star).toHaveAttribute("aria-pressed", "false");
+  await page.keyboard.press("Escape");
+  await page.goto(`/${emailAccountId}/mail`, { waitUntil: "domcontentloaded" });
+  await expect(
+    conversationWithSubject(page, conversations, "Reader Html Message"),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("important-person-marker")).toHaveCount(0);
+});
+
 test("shows the card as a sheet on a phone", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const { emailAccountId } = await openMail(page);
@@ -132,6 +173,7 @@ test("in All inboxes, writes to them from the account the message came to", asyn
       from: "Dana Example <dana@example.com>",
       to: secondAccount.email,
       subject,
+      token: secondAccount.accessToken,
     });
 
     await page.goto(`/${emailAccountId}/mail?accountScope=all`);
@@ -176,15 +218,19 @@ test("in All inboxes, writes to them from the account the message came to", asyn
 
 async function insertMessage(
   page: Page,
-  input: { from: string; to: string; subject: string },
+  {
+    token,
+    ...input
+  }: { from: string; to: string; subject: string; token: string | undefined },
 ) {
   const baseUrl = process.env.GOOGLE_BASE_URL;
   if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  if (!token) throw new Error("The account has no mailbox of its own");
   const inserted = await page.request.post(
     `${baseUrl}/gmail/v1/users/me/messages`,
     {
       headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        Authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
       data: {

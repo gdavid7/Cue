@@ -1,3 +1,4 @@
+import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import { TZDate } from "@date-fns/tz";
 import { DRAFT_WINDOW_DAYS } from "@/utils/reply-tracker/suggestion-window";
 import { startOfDay } from "date-fns";
@@ -32,11 +33,16 @@ import { getReadySuggestionMessageIds } from "@/utils/reply-tracker/ready-sugges
 import { getSuggestedReplySettings } from "@/utils/thread-context/suggest-reply";
 import { getNextUp } from "@/utils/home/next-up";
 import {
+  HANDLED_WINDOW_DAYS,
   HOME_LANE_LIMIT,
   MINUTES_PER_REPLY,
   PRIORITY_ORDER,
 } from "@/utils/home/today-constants";
 import { getRuleLabel } from "@/utils/rule/consts";
+import { findReadingLabelId } from "@/utils/label/reading-label";
+import { mapWithConcurrency } from "@/utils/async";
+import { getCueNewsletterThreadIds } from "@/utils/split-inbox/cue-membership.server";
+import { getThreadTimestamp } from "@/utils/threads/sort";
 import {
   getUserTier,
   hasAiAccess,
@@ -52,12 +58,20 @@ const LIST_LIMIT = HOME_LANE_LIMIT;
 // Well inside the route's 30 seconds, and about as long as a person watches a
 // loading page before giving up on it.
 const HOME_BUDGET_MS = 10_000;
-const HANDLED_WINDOW_DAYS = 7;
 // Older pending drafts were most likely deleted in the mail app, and a rule
 // still "applying" after this long has crashed; neither is work in progress.
 const RUNNING_WINDOW_MINUTES = 30;
 // A day's filing actions; far more than one inbox gets in a day.
 const FILED_ACTIONS_LIMIT = 2000;
+// The newest conversations Cue sorted as newsletters that Today considers.
+// The server and the browser's own inbox leave out the same ones, which this
+// bounds in the answer too.
+const TODAY_NEWSLETTER_LIMIT = 500;
+// Unread inbox conversations one id-only listing (one Gmail threads.list)
+// checks Cue's newsletters against. Fuller than that, some may be missed, and
+// Reading says it holds more.
+const UNREAD_SCAN_LIMIT = 500;
+const READING_THREAD_CONCURRENCY = 5;
 /** Labels Inbox Zero's rules file mail under without asking the user. */
 export const HANDLED_LABELS = [
   "Newsletter",
@@ -91,7 +105,8 @@ export type HomeThread = {
   messageId: string;
   /**
    * That message's Message-ID header, the same in every mailbox it is in, so
-   * Today across accounts can show a conversation once.
+   * Today across accounts can show a conversation once. Normalised once, as
+   * the local store keys conversations, and compared as given after that.
    */
   rfcMessageId?: string;
   starred: boolean;
@@ -122,6 +137,7 @@ export async function getHomeData({
   logger,
   timeZone = "UTC",
   now = new Date(),
+  requested = true,
 }: {
   emailAccountId: string;
   userEmail: string;
@@ -132,24 +148,27 @@ export async function getHomeData({
   /** The user's IANA time zone, which decides where "today" starts. */
   timeZone?: string;
   now?: Date;
+  /**
+   * False for a reload Today started by itself (a change notice or a retry
+   * of a pending lane): it then refreshes at sync's priority, as the rest of
+   * the app keeps itself current, rather than ahead of background work.
+   */
+  requested?: boolean;
 }) {
   // Today waits on Gmail for the rows it shows, behind whatever else the
   // account is doing. A lane that can't be served in time comes back pending,
   // for the client to fetch again, rather than holding up or failing the rest.
   const deadline = Date.now() + HOME_BUDGET_MS;
-  // Someone is looking at the page: its reads go ahead of sync and background
+  // Someone asked for the page: its reads go ahead of sync and background
   // work, which also hold back while it loads, as they do for an assistant
   // turn. Its many small reads would otherwise get only what sync leaves.
-  const releaseDemand = holdGmailInteractiveDemand(
-    emailAccountId,
-    HOME_BUDGET_MS,
-  );
+  const releaseDemand = requested
+    ? holdGmailInteractiveDemand(emailAccountId, HOME_BUDGET_MS)
+    : Promise.resolve(() => undefined);
+  const priority = requested ? "interactive" : "sync";
   const gmail = <T>(lane: HomeLane | "labels", work: () => Promise<T>) =>
     withinBudget(
-      runWithGmailQuota(
-        { priority: "interactive", maxTotalWaitMs: HOME_BUDGET_MS },
-        work,
-      ),
+      runWithGmailQuota({ priority, maxTotalWaitMs: HOME_BUDGET_MS }, work),
       deadline,
     ).catch((error): Pending => {
       if (isGmailCallDeferredError(error)) return PENDING;
@@ -157,8 +176,45 @@ export async function getHomeData({
       return FAILED;
     });
 
+  const since = now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000;
+  const labelsLoad = gmail("labels", () => emailProvider.getLabels());
+  // Cue sorts without labelling the mailbox by default, so its own records
+  // say which conversations are newsletters as well as the label does.
+  const cueNewslettersLoad = getCueNewsletterThreadIds({
+    emailAccountId,
+    since: new Date(since),
+    limit: TODAY_NEWSLETTER_LIMIT,
+  }).catch((error) => {
+    logger.warn("Failed to load Cue's newsletters for home", { error });
+    return [] as string[];
+  });
+  // Unread newsletters still in the inbox, which the rest of the inbox
+  // leaves out as filed mail, so they're bundled in one calm row instead.
+  const readingLoad = Promise.all([labelsLoad, cueNewslettersLoad]).then(
+    ([labels, cueThreadIds]): Promise<LaneResult<ReadingThreads>> => {
+      // As with the rest of the inbox, filed mail can't be told apart
+      // without the labels.
+      if (!labels.ok) return Promise.resolve(PENDING);
+      const readingLabelId = findReadingLabelId(labels.value);
+      if (!readingLabelId && !cueThreadIds.length)
+        return Promise.resolve({ ok: true, value: NO_READING });
+      return gmail("reading", () =>
+        getReadingThreads({
+          emailProvider,
+          readingLabelId,
+          cueThreadIds,
+          after: new Date(since),
+          limit: LIST_LIMIT,
+          deadline,
+          logger,
+        }),
+      );
+    },
+  );
+
   const [
     labelsResult,
+    readingResult,
     needsYouResult,
     waitingResult,
     inboxResult,
@@ -168,7 +224,8 @@ export async function getHomeData({
     nextUp,
     replySettings,
   ] = await Promise.all([
-    gmail("labels", () => emailProvider.getLabels()),
+    labelsLoad,
+    readingLoad,
     // Reply tracking lives in Cue's database, so these lanes don't depend
     // on Cue labelling anything in the mailbox. An archived conversation is
     // off the user's plate even before they reply.
@@ -222,6 +279,7 @@ export async function getHomeData({
     ["needsYou", needsYouResult],
     ["waiting", waitingResult],
     ["alsoInInbox", inbox],
+    ["reading", readingResult],
   ] as const;
   const pending = laneResults
     .filter(([, result]) => !result.ok && result.pending)
@@ -235,16 +293,24 @@ export async function getHomeData({
   const labelNames = new Map(labels.map((l) => [l.id, l.name]));
   const toReplyId = labelId(getRuleLabel(SystemType.TO_REPLY));
   const awaitingId = labelId(getRuleLabel(SystemType.AWAITING_REPLY));
-  const handledIds = new Set(HANDLED_LABELS.map(labelId).filter(isString));
-  const since = now.getTime() - HANDLED_WINDOW_DAYS * 86_400_000;
+  const handledLabelIds = HANDLED_LABELS.map(labelId).filter(isString);
+  const handledIds = new Set(handledLabelIds);
+  const readingId = findReadingLabelId(labels);
   // Each thread shows once on Today. Recently filed mail is Cue's to handle,
   // so it isn't repeated under the rest of the inbox either.
   const shownIds = new Set(needsYou.map((t) => t.id));
-  const isRecentlyFiled = (thread: EmailThread) =>
+  // Cue's newsletters are checked by listing unread mail since `since`; one
+  // missing from that listing is left out only if the inbox's own copy also
+  // shows it read through and recent, so a test on either side that the
+  // other doesn't make never hides unread mail.
+  const isReadAndRecent = (thread: EmailThread) =>
+    thread.messages.every((m) => !m.labelIds?.includes("UNREAD")) &&
+    thread.messages.some((m) => getMessageTimestamp(m) >= since);
+  const isRecentlyFiled = (thread: EmailThread, ids: ReadonlySet<string>) =>
     thread.messages.some(
       (m) =>
         getMessageTimestamp(m) >= since &&
-        m.labelIds?.some((id) => handledIds.has(id)),
+        m.labelIds?.some((id) => ids.has(id)),
     );
 
   const toRow = (thread: EmailThread) =>
@@ -262,8 +328,32 @@ export async function getHomeData({
         PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
         b.at.localeCompare(a.at),
     );
+  // Exactly the newsletters the rest of the inbox leaves out as filed: by
+  // the label, or by Cue's own sorting, each conversation once.
+  const readingIds = new Set(readingId ? [readingId] : []);
+  const readingLoaded = readingResult.ok ? readingResult.value : NO_READING;
+  const cueNewsletters = new Set(readingLoaded.checkedCueThreadIds);
+  const reading = readingLoaded.threads;
+  const readingRows = reading
+    .filter(
+      (t) =>
+        !shownIds.has(t.id) &&
+        (cueNewsletters.has(t.id) || isRecentlyFiled(t, readingIds)),
+    )
+    .map(toRow)
+    .filter(isDefined)
+    .filter((row) => row.unread && row.inInbox);
+  // Outlook's inbox listing names a message's categories only once it knows
+  // them, so what Reading shows is left out by thread too.
+  const readingThreadIds = new Set(readingRows.map((row) => row.threadId));
   const inboxRows = lane(inbox)
-    .filter((t) => !shownIds.has(t.id) && !isRecentlyFiled(t))
+    .filter(
+      (t) =>
+        !shownIds.has(t.id) &&
+        !readingThreadIds.has(t.id) &&
+        !(cueNewsletters.has(t.id) && isReadAndRecent(t)) &&
+        !isRecentlyFiled(t, handledIds),
+    )
     .map(toRow)
     .filter(isDefined);
   // Only mail someone else sent can have a reply waiting; waiting-on
@@ -284,6 +374,18 @@ export async function getHomeData({
     needsYou: needsYouRows.map(withDrafted),
     waiting: waiting.map(toRow).filter(isDefined),
     alsoInInbox: inboxRows.map(withDrafted),
+    /** Unread newsletters in the inbox, which Today bundles in one row. */
+    reading: readingRows,
+    /**
+     * The account's labels for mail Cue files without asking, so the
+     * browser's own inbox can leave recently filed mail out as this does.
+     */
+    handledLabelIds,
+    /**
+     * Conversations Cue sorted as newsletters lately, by id, which the
+     * browser's own inbox leaves out as it does mail under those labels.
+     */
+    newsletterThreadIds: readingLoaded.checkedCueThreadIds,
     /** Lanes Gmail couldn't serve in time; empty here means "not loaded yet". */
     pending,
     /** Lanes that failed to load; empty here means "unknown", not "nothing". */
@@ -301,6 +403,7 @@ export async function getHomeData({
       // Lists are capped, so a full one means "at least this many".
       needsYouCapped: needsYou.length >= LIST_LIMIT,
       waitingCapped: waiting.length >= LIST_LIMIT,
+      readingCapped: reading.length >= LIST_LIMIT || readingLoaded.capped,
     },
   };
 }
@@ -380,7 +483,7 @@ async function getTodayActivity({
  * the To Reply rule is on, and it has read at least some of this mailbox.
  */
 async function getCueStatus(emailAccountId: string) {
-  const [account, firstRun, firstTracker] = await Promise.all([
+  const [account, hasReadMail] = await Promise.all([
     prisma.emailAccount.findUnique({
       where: { id: emailAccountId },
       select: {
@@ -393,6 +496,26 @@ async function getCueStatus(emailAccountId: string) {
         rules: REPLY_TRACKING_RULES,
       },
     }),
+    hasCueReadMail(emailAccountId),
+  ]);
+  const premium = account?.user.premium;
+
+  return {
+    aiAccess:
+      isPremiumRecord(premium) &&
+      hasAiAccess(getUserTier(premium), !!account?.user.aiApiKey),
+    replyTracking: isReplyTrackingOn(account?.rules),
+    hasReadMail,
+  };
+}
+
+/**
+ * Whether Cue has read any of this mailbox: run a rule on a message or
+ * tracked a conversation. Until then Needs reply can only be empty, and Cue
+ * has filed nothing.
+ */
+export async function hasCueReadMail(emailAccountId: string) {
+  const [firstRun, firstTracker] = await Promise.all([
     prisma.executedRule.findFirst({
       where: { emailAccountId },
       select: { id: true },
@@ -402,15 +525,7 @@ async function getCueStatus(emailAccountId: string) {
       select: { id: true },
     }),
   ]);
-  const premium = account?.user.premium;
-
-  return {
-    aiAccess:
-      isPremiumRecord(premium) &&
-      hasAiAccess(getUserTier(premium), !!account?.user.aiApiKey),
-    replyTracking: isReplyTrackingOn(account?.rules),
-    hasReadMail: Boolean(firstRun || firstTracker),
-  };
+  return Boolean(firstRun || firstTracker);
 }
 
 /**
@@ -551,6 +666,7 @@ function toHomeThread(
     );
   const preview = (other ?? latest).snippet || thread.snippet || "";
   const unread = labelIds.has("UNREAD");
+  const rfcMessageId = normalizeInternetMessageId(latest.headers["message-id"]);
 
   return {
     threadId: thread.id,
@@ -572,9 +688,7 @@ function toHomeThread(
     }),
     unread,
     messageId: latest.id,
-    ...(latest.headers["message-id"]
-      ? { rfcMessageId: latest.headers["message-id"] }
-      : {}),
+    ...(rfcMessageId ? { rfcMessageId } : {}),
     starred: labelIds.has("STARRED"),
     inInbox: labelIds.has("INBOX"),
   };
@@ -614,7 +728,111 @@ function humanize(value: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-export type HomeLane = "needsYou" | "waiting" | "alsoInInbox";
+/**
+ * Unread newsletters still in the inbox, newest first: those under the
+ * Newsletter label, and those Cue sorted as newsletters in its own records
+ * (most accounts, as Cue doesn't label the mailbox by default). A
+ * conversation that is both shows once.
+ *
+ * Cue's are found by one id-only listing of unread inbox mail, so only its
+ * unread newsletters are read in full, newest decision first and no more
+ * than Reading lists. `checkedCueThreadIds` are those whose place is now
+ * known (read in full, or listed as not unread): only those may be left out
+ * of the rest of the inbox, so a newsletter that wasn't checked still shows.
+ */
+async function getReadingThreads({
+  emailProvider,
+  readingLabelId,
+  cueThreadIds,
+  after,
+  limit,
+  deadline,
+  logger,
+}: {
+  emailProvider: EmailProvider;
+  logger: Logger;
+  readingLabelId: string | undefined;
+  cueThreadIds: string[];
+  after: Date;
+  limit: number;
+  /** Past it, no more reads start: the answer has gone without them. */
+  deadline: number;
+}): Promise<ReadingThreads> {
+  const labelled = readingLabelId
+    ? (
+        await emailProvider.getThreadsWithQuery({
+          query: { labelIds: [readingLabelId, "INBOX"], isUnread: true, after },
+          maxResults: limit,
+          messageFormat: "metadata",
+        })
+      ).threads
+    : [];
+  if (!cueThreadIds.length || Date.now() >= deadline)
+    return { threads: labelled, checkedCueThreadIds: [], capped: false };
+
+  const unread = await emailProvider
+    .listUnreadInboxThreadIds({ after, maxResults: UNREAD_SCAN_LIMIT })
+    .catch((error) => {
+      // Gmail's budget is busy: the lane comes back pending, to ask again.
+      if (isGmailCallDeferredError(error)) throw error;
+      logger.warn("Failed to list unread inbox mail for Reading", { error });
+      return null;
+    });
+  // Without the listing nothing is known of Cue's, so the labelled stand.
+  if (!unread)
+    return { threads: labelled, checkedCueThreadIds: [], capped: false };
+  const unreadIds = new Set(unread.threadIds);
+  const listingFull = unread.full;
+  const labelledIds = new Set(labelled.map((thread) => thread.id));
+  const hits = cueThreadIds.filter(
+    (threadId) => unreadIds.has(threadId) && !labelledIds.has(threadId),
+  );
+  const toRead = hits.slice(0, Math.max(0, limit - labelled.length));
+  const read = await mapWithConcurrency(
+    toRead,
+    READING_THREAD_CONCURRENCY,
+    async (threadId) => {
+      if (Date.now() >= deadline) return null;
+      // A thread Gmail deferred, or that failed, is left unchecked: it stays
+      // in the rest of the inbox rather than taking the lane with it.
+      return emailProvider
+        .getThread(threadId, { messageFormat: "metadata" })
+        .catch(() => null);
+    },
+  );
+  const found = read.filter(
+    (thread): thread is EmailThread =>
+      !!thread &&
+      thread.messages.some((m) => m.labelIds?.includes("INBOX")) &&
+      thread.messages.some((m) => m.labelIds?.includes("UNREAD")),
+  );
+  const readIds = new Set(
+    read.flatMap((thread) => (thread ? [thread.id] : [])),
+  );
+  return {
+    threads: [...labelled, ...found].sort(
+      (a, b) => getThreadTimestamp(b) - getThreadTimestamp(a),
+    ),
+    checkedCueThreadIds: cueThreadIds.filter(
+      (threadId) =>
+        readIds.has(threadId) || (!listingFull && !unreadIds.has(threadId)),
+    ),
+    capped: hits.length > toRead.length || listingFull,
+  };
+}
+
+type ReadingThreads = {
+  threads: EmailThread[];
+  checkedCueThreadIds: string[];
+  capped: boolean;
+};
+const NO_READING: ReadingThreads = {
+  threads: [],
+  checkedCueThreadIds: [],
+  capped: false,
+};
+
+export type HomeLane = "needsYou" | "waiting" | "alsoInInbox" | "reading";
 type Pending = { ok: false; pending: boolean };
 type LaneResult<T> = { ok: true; value: T } | Pending;
 const PENDING: Pending = { ok: false, pending: true };

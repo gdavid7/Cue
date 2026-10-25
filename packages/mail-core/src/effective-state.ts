@@ -1,4 +1,5 @@
 import type { MetadataChange } from "./commands";
+import { PROVIDER_CAPABILITIES, type Provider } from "./identities";
 import type { MessageMetadata } from "./messages";
 import type { MailboxRole } from "./messages";
 
@@ -38,8 +39,12 @@ export function applyMetadataChange(
       return { ...metadata, read: change.read };
     case "set_starred":
       return { ...metadata, starred: change.starred };
+    // Trash and spam end a snooze, as archive and move to inbox do.
     case "trash":
-      return withRoles(metadata, uniqueRoles(["trash"]));
+      return {
+        ...withRoles(metadata, uniqueRoles(["trash"])),
+        snoozedUntilMs: null,
+      };
     case "restore_from_trash":
       return withRoles(
         metadata,
@@ -47,7 +52,10 @@ export function applyMetadataChange(
       );
     case "set_spam":
       return change.spam
-        ? withRoles(metadata, uniqueRoles(["spam"]))
+        ? {
+            ...withRoles(metadata, uniqueRoles(["spam"])),
+            snoozedUntilMs: null,
+          }
         : withRoles(
             metadata,
             uniqueRoles([...withoutRole(metadata.roles, "spam"), "inbox"]),
@@ -82,6 +90,62 @@ export function applyMetadataChange(
       return exhaustive;
     }
   }
+}
+
+/**
+ * The messages of one conversation that a conversation command changes. On a
+ * folder-based provider, a change that moves mail between folders leaves the
+ * user's own Sent and Drafts copies where they are, as the provider's own
+ * conversation actions do, unless nothing else is left to move. Moving mail
+ * away doesn't count what is already in Trash or Spam, so deleting a
+ * conversation that is only your reply and old deleted mail still deletes the
+ * reply. A message with no stored copy (`roles: null`) can't be told apart
+ * from the user's own mail, so it is left out there. A `wholeConversation`
+ * command, made in Sent or Drafts, reaches every message.
+ */
+export function conversationTargets<T extends { roles: MailboxRole[] | null }>(
+  messages: T[],
+  change: MetadataChange,
+  provider: Provider | null,
+  wholeConversation: boolean,
+): T[] {
+  const direction = folderMove(change);
+  if (
+    wholeConversation ||
+    !provider ||
+    !PROVIDER_CAPABILITIES[provider].folderBasedRoles
+  ) {
+    return messages;
+  }
+  if (!direction) return messages;
+  const known = messages.filter(
+    (message): message is T & { roles: MailboxRole[] } =>
+      message.roles !== null,
+  );
+  const others = known.filter(({ roles }) => !isOwnMail(roles));
+  const moving =
+    direction === "away"
+      ? others.filter(
+          ({ roles }) => !roles.includes("trash") && !roles.includes("spam"),
+        )
+      : others;
+  return moving.length > 0 ? others : known;
+}
+
+/** Whether `change` on a conversation leaves the user's Sent and Drafts copies alone. */
+export function leavesOwnMailInPlace(
+  change: MetadataChange,
+  provider: Provider,
+): boolean {
+  return (
+    PROVIDER_CAPABILITIES[provider].folderBasedRoles &&
+    folderMove(change) !== null
+  );
+}
+
+/** Whether `change` moves mail between folders on a folder-based provider. */
+export function movesBetweenFolders(change: MetadataChange): boolean {
+  return folderMove(change) !== null;
 }
 
 export function deriveEffectiveMessage(
@@ -142,6 +206,8 @@ export function applyMetadataPatch(
       patch.snoozedUntilMs === undefined
         ? current.snoozedUntilMs
         : patch.snoozedUntilMs,
+    // A message's Message-ID never changes, so a patch without it keeps it.
+    internetMessageId: patch.internetMessageId ?? current.internetMessageId,
   };
 }
 
@@ -163,4 +229,33 @@ function uniqueRoles(roles: MailboxRole[]): MailboxRole[] {
 function setMembership(ids: string[], id: string, present: boolean): string[] {
   if (present) return [...new Set([...ids, id])];
   return ids.filter((candidate) => candidate !== id);
+}
+
+// Spam and snooze also move mail, but the server still applies them to the
+// whole Outlook conversation, so the local state follows it until the server
+// acts per message.
+function folderMove(change: MetadataChange): "away" | "back" | null {
+  switch (change.kind) {
+    case "archive":
+    case "trash":
+    case "move":
+      return "away";
+    case "unarchive":
+    case "restore_from_trash":
+      return "back";
+    case "set_spam":
+    case "snooze":
+    case "set_read":
+    case "set_starred":
+    case "set_membership":
+      return null;
+    default: {
+      const exhaustive: never = change;
+      return exhaustive;
+    }
+  }
+}
+
+function isOwnMail(roles: MailboxRole[]) {
+  return roles.includes("sent") || roles.includes("draft");
 }

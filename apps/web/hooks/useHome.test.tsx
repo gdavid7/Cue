@@ -82,6 +82,29 @@ describe("useHome", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps asking for a pending lane when the sidebar's warm-up loaded Today first", async () => {
+    const fetcher = vi.fn(async () => answer(["waiting"]));
+    const wrap = wrapper(fetcher);
+    // The pointer reached Today's link, then the user opened it.
+    const warm = renderHook(() => useWarmHome("account", true), {
+      wrapper: wrap,
+    });
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    const { result } = renderHook(
+      () => {
+        useWarmHome("account", true);
+        return useHome("account");
+      },
+      { wrapper: wrap },
+    );
+    warm.unmount();
+
+    await act(() => vi.advanceTimersByTimeAsync(5000 * 20));
+
+    expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(12);
+    expect(result.current.gaveUp).toBe(true);
+  });
+
   it("reloads when the user comes back to the tab", async () => {
     const fetcher = vi.fn(async () => answer([]));
     renderHook(() => useHome("account"), { wrapper: wrapper(fetcher) });
@@ -372,12 +395,13 @@ function todayData(subject: string) {
     ],
     waiting: [],
     alsoInInbox: [],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
     cue: { aiAccess: true, replyTracking: true, hasReadMail: true },
     today: { checked: 0, filed: 0, filedLabel: null },
-    calendar: { connected: true, next: null },
+    calendar: { connected: true, clearThroughTomorrow: false, next: null },
     nextUp: [],
     stats: { needsYou: 1, estimatedMinutes: 3, needsYouCapped: false },
   } as unknown as GetHomeResponse;

@@ -124,47 +124,64 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         (stored?.tokens ?? input.capacity) +
           Math.max(0, now - (stored?.at ?? now)) * rate,
       );
-      const need =
-        input.floor + Math.min(input.cost, input.capacity - input.floor);
-      if (tokens < need && Math.ceil((need - tokens) / rate) > wait) {
-        wait = Math.ceil((need - tokens) / rate);
-        gate = "bucket";
-      }
-      const unpacedWait = wait;
-
       const { pace } = input;
       const recent = (windows.get(pace.key) ?? []).filter(
         (entry) => entry.at > now - pace.windowMs,
       );
       windows.set(pace.key, recent);
-      const inWindow = recent.reduce((sum, entry) => sum + entry.cost, 0);
-      const windowWait = (cap: number) => {
-        if (cap <= 0) return -1;
-        const excess = inWindow + Math.min(input.cost, cap) - cap;
-        if (excess <= 0) return 0;
-        let freed = 0;
-        for (const entry of recent) {
-          freed += entry.cost;
-          if (freed >= excess) return entry.at + pace.windowMs - now + 1;
-        }
-        return pace.windowMs;
-      };
       const cap =
         pace.slowKey && ttl(pace.slowKey) > 0
           ? Math.floor(pace.cap / 2)
           : pace.cap;
-      let paceWait = windowWait(cap);
       const demandTtl = (demands.get(pace.demand.key)?.endsAt ?? 0) - now;
-      if (pace.demand.yieldCap !== undefined && demandTtl > 0) {
-        const afterDemand = Math.max(demandTtl, paceWait);
-        const yieldWait = windowWait(pace.demand.yieldCap);
-        paceWait =
-          yieldWait < 0 || yieldWait > afterDemand ? afterDemand : yieldWait;
-        if (paceWait > wait) gate = "interactive_demand";
-      } else if (paceWait > wait) {
-        gate = "pace";
-      }
-      wait = Math.max(wait, paceWait);
+      const assess = (
+        units: number,
+        held: number,
+        entries: Array<{ at: number; cost: number }>,
+        blocked: { wait: number; gate: typeof gate },
+      ) => {
+        let { wait, gate: reason } = blocked;
+        const need =
+          input.floor + Math.min(units, input.capacity - input.floor);
+        if (held < need && Math.ceil((need - held) / rate) > wait) {
+          wait = Math.ceil((need - held) / rate);
+          reason = "bucket";
+        }
+        const unpaced = wait;
+        const inWindow = entries.reduce((sum, entry) => sum + entry.cost, 0);
+        const windowWait = (limit: number) => {
+          if (limit <= 0) return -1;
+          const excess = inWindow + Math.min(units, limit) - limit;
+          if (excess <= 0) return 0;
+          let freed = 0;
+          for (const entry of entries) {
+            freed += entry.cost;
+            if (freed >= excess) return entry.at + pace.windowMs - now + 1;
+          }
+          return pace.windowMs;
+        };
+        let paceWait = windowWait(cap);
+        if (pace.demand.yieldCap !== undefined && demandTtl > 0) {
+          const afterDemand = Math.max(demandTtl, paceWait);
+          const yieldWait = windowWait(pace.demand.yieldCap);
+          paceWait =
+            yieldWait < 0 || yieldWait > afterDemand ? afterDemand : yieldWait;
+          if (paceWait > wait) reason = "interactive_demand";
+        } else if (paceWait > wait) {
+          reason = "pace";
+        }
+        return {
+          wait: Math.max(wait, paceWait),
+          gate: reason,
+          unpaced,
+          need,
+          inWindow,
+        };
+      };
+      const assessed = assess(input.cost, tokens, recent, { wait, gate });
+      wait = assessed.wait;
+      gate = assessed.gate;
+      const { unpaced: unpacedWait, need, inWindow } = assessed;
       const episode = demands.get(pace.demand.key);
       const willWait =
         input.waitBudgetMs === undefined || unpacedWait <= input.waitBudgetMs;
@@ -248,7 +265,35 @@ export function createMemoryGmailQuotaStore(): GmailQuotaStore & {
         inWindow + used,
       );
       usage.set(input.usageKey, fields);
-      return { waitMs: 0, defer: false, queued, ahead, reservation };
+      const left = tokens - used - ahead;
+      const next = assess(
+        input.queued?.[queued]?.cost ?? input.cost,
+        left,
+        recent,
+        {
+          wait: 0,
+          gate: "blocker",
+        },
+      );
+      return {
+        waitMs: 0,
+        defer: false,
+        queued,
+        ahead,
+        reservation,
+        ...(next.wait > 0 && {
+          nextWait: {
+            waitMs: next.wait,
+            held: {
+              gate: next.gate,
+              blocker: 0,
+              availableUnits: Math.floor(left),
+              neededUnits: next.need,
+              paceUnits: next.inWindow,
+            },
+          },
+        }),
+      };
     },
     async cutBudget(input) {
       const units = trailingUnits(input.trailingKey, input.trailingWindowMs);

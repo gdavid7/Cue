@@ -4,7 +4,9 @@ import {
   getMatchingResultCopy,
   getMatchingScope,
   needsMatchingConfirm,
+  getAccountMatchingScope,
 } from "@/app/(app)/[emailAccountId]/mail/select-all-matching";
+import { inboxWithoutReadingQuery } from "@/app/(app)/[emailAccountId]/mail/reading-lane";
 
 describe("getMatchingScope", () => {
   it("describes plain views and searches", () => {
@@ -116,5 +118,39 @@ describe("getMatchingResultCopy", () => {
     expect(getMatchingResultCopy("delete_forever", 3)).toBe(
       "Deleted 3 conversations forever",
     );
+  });
+});
+
+describe("getAccountMatchingScope", () => {
+  it("never covers a bundled inbox, whose newsletters the user never saw selected", () => {
+    const query = { type: "inbox" };
+    expect(
+      getAccountMatchingScope({
+        query,
+        provider: "google",
+        bundlesReading: true,
+      }),
+    ).toBeNull();
+    expect(
+      getAccountMatchingScope({
+        query,
+        provider: "google",
+        bundlesReading: false,
+      }),
+    ).toEqual({ type: "inbox" });
+  });
+
+  it("stays per page in an inbox bundled by Cue's sorting alone", () => {
+    const query = inboxWithoutReadingQuery({ labelId: undefined, byCue: true });
+    if (!query) throw new Error("expected a bundled inbox");
+    expect(
+      getAccountMatchingScope({
+        query,
+        provider: "google",
+        bundlesReading: true,
+      }),
+    ).toBeNull();
+    // Nor could the list's own query be listed in full.
+    expect(getMatchingScope(query, "google")).toBeNull();
   });
 });

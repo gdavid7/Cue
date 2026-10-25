@@ -1,6 +1,6 @@
 # Production robot
 
-A synthetic user that walks https://cue-inbox.vercel.app every hour as a
+A synthetic user that walks https://cuemail.tech every hour as a
 dedicated QA Gmail account, plus a digest of the last hour of Axiom logs and
 the last day of Sentry issues. The workflow is
 `.github/workflows/prod-health.yml`; each run prints one JSON block between
@@ -19,9 +19,9 @@ production with an email code it reads from the QA inbox over IMAP.
 | sign in with email code | the code arrives over IMAP and lands on Settings | `codeDeliveryMs`, `signInMs` |
 | gmail connection | the QA mailbox is connected (a disconnected one is reported, not failed) | `providerRateLimited` |
 | inbox shows real mail | a row appears; no "Gmail is limiting" banner, no "Waiting to sync" | `timeToFirstRowMs`, `inboxRows` |
-| thread shows reply actions | the seeded class announcement shows Reply, Reply all, Forward | |
+| thread shows reply actions | the seeded class announcement shows Reply, Reply all, Forward | `rowVisibleMs`, `threadOpenMs`, `replyActionsMs` |
 | reply to self lands in Sent | a probe sent to itself arrives, the reply shows in Sent | `inboundSyncMs`, `replyToSentMs` |
-| suggested reply text is clean | a seeded message from an example.com sender (one model call) gets Cue's suggested reply, which must hold no `&#`, `&amp;`, `&lt;`, `&gt;`, `&quot;`, `<p>` or `<br>`. No suggestion within 60 seconds records the step as `skipped: no suggestion`, not a failure. Never sent; the seeded mail is trashed afterwards | `suggestionShown`, `suggestionChars` |
+| suggested reply text is clean | a seeded message from an example.com sender (one model call) gets Cue's suggested reply, which must hold no `&#`, `&amp;`, `&lt;`, `&gt;`, `&quot;`, `<p>` or `<br>`. No suggestion within 60 seconds records the step as `skipped: no suggestion (<reason>)`, not a failure; the reason says which screen ended the wait (Cue gave up, couldn't confirm a fact, left the reply, or timed out). Never sent; the seeded mail is trashed afterwards | `suggestionShown`, `suggestionChars` |
 | Today shows its sections | a lane heading or status line appears | `todayLoadMs`, `todaySections` |
 | chat answers about seeded mail | "When is milestone 2 due?" gets a non-error answer | `chatAnswerMs`, `chatMentionsDueDay` |
 | Settings / Integrations / Rules | each page renders; Integrations is not "limited rollout" | |
@@ -75,7 +75,7 @@ failure fails the job.
 4. **Add it as a test user** of the Google Cloud OAuth app (APIs & Services →
    OAuth consent screen → Audience → Test users).
 5. **Sign in to Cue once with Google** as that account at
-   https://cue-inbox.vercel.app, finish onboarding and connect Gmail. It
+   https://cuemail.tech, finish onboarding and connect Gmail. It
    should be the account's only (first) mailbox. Turn on the AI assistant and
    reply tracking if they are not on by default, so Today and chat have
    something to show.

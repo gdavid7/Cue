@@ -22,14 +22,34 @@ const state = vi.hoisted(() => ({
   localOnlyWindows: [] as string[],
   enabledPredicates: [] as unknown[],
   provider: "google",
+  client: null as null | { searchSemantic?: () => Promise<unknown> },
+  semantic: undefined as unknown,
+  /** What each search by meaning answers, by the text it reads, where set. */
+  semanticByText: new Map<string, unknown>(),
+  semanticKeys: [] as unknown[],
 }));
 
 vi.mock("swr", () => ({
   default: (key: unknown, fetcher: (key: unknown) => Promise<unknown>) => {
+    if (Array.isArray(key) && key[0] === "cue-semantic") {
+      state.semanticKeys.push(key);
+      const text = key[2] as string;
+      return {
+        data: state.semanticByText.has(text)
+          ? state.semanticByText.get(text)
+          : state.semantic,
+        error: undefined,
+      };
+    }
+    // A null key may be any request switched off, the search by meaning's
+    // included, so only a live one says which fetcher reads the search.
     state.swrKeys.push(key);
-    state.fetcher = fetcher;
+    if (key) state.fetcher = fetcher;
     return { data: key ? state.intent : undefined, error: undefined };
   },
+}));
+vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
+  useOptionalMailClient: () => state.client,
 }));
 vi.mock("@/hooks/useLabels", () => ({
   useLabels: () => ({
@@ -68,7 +88,10 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
   },
 }));
 
-import { useCueSearch } from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
+import {
+  searchByMeaning,
+  useCueSearch,
+} from "@/app/(app)/[emailAccountId]/mail/use-cue-search";
 
 const SENTENCE = "the lease contract Sarah sent last month";
 const SEARCH =
@@ -98,6 +121,10 @@ beforeEach(() => {
   state.provider = "google";
   state.labels = [];
   state.labelsLoading = false;
+  state.client = null;
+  state.semantic = undefined;
+  state.semanticByText = new Map();
+  state.semanticKeys = [];
 });
 
 afterEach(() => {
@@ -121,7 +148,7 @@ describe("useCueSearch", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(SENTENCE);
 
-    await state.fetcher?.(state.swrKeys.at(-1));
+    await state.fetcher?.(state.swrKeys.findLast((key) => key !== null));
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [
       string,
@@ -144,7 +171,7 @@ describe("useCueSearch", () => {
 
     state.labelsLoading = false;
     rerender({ q: SENTENCE });
-    expect(state.swrKeys.at(-1)).not.toBeNull();
+    expect(state.swrKeys.some((key) => key !== null)).toBe(true);
   });
 
   it("shows what the searches found", () => {
@@ -155,6 +182,88 @@ describe("useCueSearch", () => {
     expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(result.current.widening).toBeNull();
     expect(new Set(state.enabledWindows)).toEqual(new Set([SEARCH]));
+  });
+
+  it("adds mail close in meaning, read from the local mail alone, and waits for it", () => {
+    // Words alone: mail found by meaning must meet a search's sender and dates.
+    const words = "lease OR contract";
+    state.intent = { searches: [words], explanation: "", isQuestion: false };
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(words, { settled: true, ids: ["a", "b"] });
+    state.results.set("messages:m-lease", { settled: true, ids: ["lease"] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.threads.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(result.current.foundNothing).toBe(false);
+
+    state.semantic = [
+      { messageId: "m-lease", conversationId: "lease", similarity: 0.8 },
+    ];
+    rerender({ q: SENTENCE });
+    expect(result.current.threads.map((t) => t.id)).toContain("lease");
+    expect(state.localOnlyWindows).toContain("messages:m-lease");
+  });
+
+  it("searches by meaning on the words of Cue's reading too, and ranks by the closest either finds", () => {
+    // A reading can hold the mailbox's words for what was typed in another
+    // language, which the on-device model knows better.
+    const typed = "quand est mon vol pour Lisbonne ?";
+    const search = "(vol OR flight) (Lisbonne OR Lisbon)";
+    state.intent = { searches: [search], explanation: "", isQuestion: true };
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(search, { settled: true, ids: [] });
+    for (const step of getWideningLadder([search], {
+      now: new Date(),
+      provider: "google",
+    }))
+      for (const key of [step.searches.join(" | "), ...step.searches])
+        state.results.set(key, { settled: true, ids: [] });
+    state.results.set("messages:m-flight,m-hotel,m-invoice", {
+      settled: true,
+      ids: ["invoice", "hotel", "flight"],
+    });
+    // Says it found nothing only once the reading's words have answered too.
+    state.semanticByText.set(typed, []);
+    const { result, rerender } = render(typed);
+    expect(state.semanticKeys).toContainEqual([
+      "cue-semantic",
+      "account",
+      "vol flight Lisbonne Lisbon",
+    ]);
+    expect(result.current.foundNothing).toBe(false);
+    state.semanticByText.set("vol flight Lisbonne Lisbon", []);
+    rerender({ q: typed });
+    expect(result.current.foundNothing).toBe(true);
+
+    state.semanticByText.set(typed, [
+      { messageId: "m-invoice", conversationId: "invoice", similarity: 0.37 },
+      { messageId: "m-hotel", conversationId: "hotel", similarity: 0.27 },
+    ]);
+    state.semanticByText.set("vol flight Lisbonne Lisbon", [
+      { messageId: "m-flight", conversationId: "flight", similarity: 0.54 },
+      { messageId: "m-hotel", conversationId: "hotel", similarity: 0.51 },
+    ]);
+    rerender({ q: typed });
+    expect(state.localOnlyWindows).toContain(
+      "messages:m-flight,m-hotel,m-invoice",
+    );
+    expect(result.current.threads.map((t) => t.id)).toEqual([
+      "flight",
+      "hotel",
+      "invoice",
+    ]);
+  });
+
+  it("says it found nothing only once the search by meaning has answered too", () => {
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(SEARCH, { settled: true, ids: [] });
+    for (const key of ladderKeys())
+      state.results.set(key, { settled: true, ids: [] });
+    const { result, rerender } = render(SENTENCE);
+    expect(result.current.foundNothing).toBe(false);
+
+    state.semantic = [];
+    rerender({ q: SENTENCE });
+    expect(result.current.foundNothing).toBe(true);
   });
 
   it("climbs the ladder past tiers that find nothing new, stopping at the first that does", () => {
@@ -209,6 +318,38 @@ describe("useCueSearch", () => {
     rerender({ q: SENTENCE });
     expect(result.current.stage).toBe("done");
     expect(result.current.threads.map((t) => t.id)).toEqual(["old"]);
+  });
+
+  it("sends only the first of a multi-search last tier to the provider", () => {
+    const other =
+      "from:bob has:attachment after:2026/09/01 before:2026/10/01 invoice OR receipt";
+    state.intent = { searches: [SEARCH, other], isQuestion: false };
+    const ladder = getWideningLadder([SEARCH, other], {
+      now: new Date(),
+      provider: "google",
+    });
+    const last = ladder[ladder.length - 1];
+    expect(last.searches.length).toBeGreaterThan(1);
+    state.results.set([SEARCH, other].join(" | "), { settled: true, ids: [] });
+    for (const step of ladder) {
+      state.results.set(step.searches.join(" | "), { settled: true, ids: [] });
+    }
+    state.results.set(last.searches[0], { settled: true, ids: [] });
+    const { result } = render(SENTENCE);
+
+    expect(result.current.widening).toMatchObject({
+      tier: last.tier,
+      onProvider: true,
+    });
+    const lastResort = state.enabledPredicates.at(-1) as {
+      kind: string;
+      predicates: unknown[];
+    };
+    // One provider search; the tier's other searches still read local mail.
+    expect(searchesOf(lastResort)).toEqual([last.searches[0]]);
+    expect(lastResort.kind).toBe("any");
+    expect(lastResort.predicates).toHaveLength(last.searches.length);
+    expect(state.localOnlyWindows).not.toContain(last.searches[0]);
   });
 
   it("says it found nothing once the provider's last-resort search finds nothing too", () => {
@@ -365,6 +506,42 @@ describe("useCueSearch", () => {
   });
 });
 
+describe("searchByMeaning", () => {
+  const query = { accountId: "account", text: SENTENCE, limit: 15 };
+
+  it("gives up at the search's budget, so a model still downloading never holds the search", async () => {
+    const pending = searchByMeaning(() => new Promise(() => undefined), query);
+    await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS);
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it("counts the budget from when the search was committed, for a search by meaning that starts later", async () => {
+    // The reading's words are searched once the reading lands, so the
+    // search still gives up within the budget from commit.
+    const committedAtMs = Date.now() - 3000;
+    let settled = false;
+    const pending = searchByMeaning(
+      () => new Promise(() => undefined),
+      query,
+      committedAtMs,
+    ).then((matches) => {
+      settled = true;
+      return matches;
+    });
+    await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS - 3000 - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it("finds nothing when the engine can't search by meaning", async () => {
+    await expect(
+      searchByMeaning(() => Promise.reject(new Error("no model")), query),
+    ).resolves.toEqual([]);
+    await expect(searchByMeaning(undefined, query)).resolves.toEqual([]);
+  });
+});
+
 /** The window key of each tier of SEARCH's ladder, in order. */
 function ladderKeys() {
   const ladder = getWideningLadder([SEARCH], {
@@ -387,6 +564,8 @@ function searchesOf(predicate: unknown): string[] {
     predicates?: unknown[];
   };
   if (node.kind === "search" && node.query) return [node.query];
+  if (node.kind === "message")
+    return [`messages:${(node as unknown as { ids: string[] }).ids.join(",")}`];
   return (node.predicates ?? []).flatMap(searchesOf);
 }
 

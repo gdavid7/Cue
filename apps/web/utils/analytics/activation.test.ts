@@ -10,11 +10,13 @@ import {
 import prisma from "@/utils/__mocks__/prisma";
 import {
   ACTIVATION_EVENTS,
+  ACTIVATION_SIGNAL_RECORDERS,
   recordFirstSignIn,
   recordActiveDay,
   recordFirstSuggestedReplySent,
   recordNeedsReplyFirstItem,
 } from "@/utils/analytics/activation";
+import { activationSignals } from "@/utils/actions/activation.validation";
 import { redis } from "@/utils/redis";
 
 vi.mock("@/utils/prisma");
@@ -148,6 +150,12 @@ describe("activation events", () => {
       recordNeedsReplyFirstItem("account-4"),
     ).resolves.toBeUndefined();
     expect(loggedEvents()).toEqual([]);
+  });
+
+  it("has a recorder for exactly the events the client may report", () => {
+    expect(Object.keys(ACTIVATION_SIGNAL_RECORDERS).sort()).toEqual(
+      [...activationSignals].sort(),
+    );
   });
 
   function loggedEvents() {

@@ -11,6 +11,7 @@ import {
   createFrameElementFactory,
   DOCX_FRAME_DOCUMENT,
   DOCX_RENDER_OPTIONS,
+  fitDocxToFrame,
   handleFrameLinkAuxClick,
   handleFrameLinkClick,
 } from "@/utils/attachments/docx-frame";
@@ -47,12 +48,17 @@ export default function DocxAttachmentPreview({
       handleFrameLinkAuxClick(event, open);
     doc.addEventListener("click", onClick);
     doc.addEventListener("auxclick", onAuxClick);
+    const frame = frameRef.current;
+    const resizeObserver = new ResizeObserver(() => fitDocxToFrame(doc));
     renderAsync(file, body, styles, {
       ...DOCX_RENDER_OPTIONS,
       h: createFrameElementFactory(doc),
     }).then(
       () => {
-        if (!cancelled) setStatus("ready");
+        if (cancelled) return;
+        // Observing reports the frame's current size, which runs the first fit.
+        if (frame) resizeObserver.observe(frame);
+        setStatus("ready");
       },
       () => {
         if (!cancelled) setStatus("failed");
@@ -60,6 +66,7 @@ export default function DocxAttachmentPreview({
     );
     return () => {
       cancelled = true;
+      resizeObserver.disconnect();
       doc.removeEventListener("click", onClick);
       doc.removeEventListener("auxclick", onAuxClick);
       styles.replaceChildren();

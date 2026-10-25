@@ -20,7 +20,11 @@ import {
   runWithRequestMetrics,
 } from "@/utils/request-metrics";
 import { searchQueryToPredicate } from "@/utils/mail-search/search-query-predicate";
-import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  gmailBurstUnitsFor,
+  gmailRequestCost,
+} from "@/utils/gmail/quota";
 import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
 import { createTestLogger } from "@/__tests__/helpers";
@@ -33,6 +37,7 @@ import { createSqliteMailStore } from "@inboxzero/mail-sqlite/store";
 import { redis } from "@/utils/redis";
 import { forgetEmailProviderRateLimitState } from "@/utils/redis/email-provider-rate-limit";
 import {
+  gmailMailSyncCosts,
   LocalMailSyncPausedError,
   withLocalMailSyncBudget,
 } from "@/utils/email/local-mail-sync-budget";
@@ -44,8 +49,13 @@ vi.mock("@/utils/redis", () => ({
 vi.mock("@/utils/email/local-mail-sync-budget", async (original) => ({
   ...(await original<typeof import("@/utils/email/local-mail-sync-budget")>()),
   withLocalMailSyncBudget: vi.fn(
-    (_input: unknown, operation: (signal: AbortSignal) => Promise<unknown>) =>
-      operation(new AbortController().signal),
+    (
+      _input: unknown,
+      operation: (
+        signal: AbortSignal,
+        admission: { nextAdmitAfterMs: number | null },
+      ) => Promise<unknown>,
+    ) => operation(new AbortController().signal, { nextAdmitAfterMs: null }),
   ),
 }));
 
@@ -763,7 +773,7 @@ describe("createEmailProviderMailboxSource", () => {
       textPlain: "A new event has been scheduled",
       isMeetingInvitation: true,
       inline: [],
-    } as ParsedMessage);
+    } as unknown as ParsedMessage);
     const source = createEmailProviderMailboxSource({
       logger,
       accountId: "acc-1",
@@ -1469,8 +1479,8 @@ describe("createEmailProviderMailboxSource", () => {
     const deferred = new GmailCallDeferredError(5000, "background");
     const getMessagesWithPagination = vi.fn(async () => {
       await admitGmailCall({ emailAccountId: "acc-1", cost: 5 });
-      for (let batch = 0; batch < 3; batch++)
-        await admitGmailCall({ emailAccountId: "acc-1", cost: 200 });
+      for (let batch = 0; batch < 2; batch++)
+        await admitGmailCall({ emailAccountId: "acc-1", cost: 120 });
       throw deferred;
     });
     const source = createEmailProviderMailboxSource({
@@ -1493,10 +1503,40 @@ describe("createEmailProviderMailboxSource", () => {
     expect(result).toMatchObject({ status: "paused", reason: "throttled" });
     const [reservation] =
       vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
-    expect(reservation?.cost).toBe(3005);
-    expect(reservation?.unspentCost?.(deferred)).toBe(3005 - 605);
+    // A backfill page of nine whole messages and its list.
+    expect(reservation?.cost).toBe(545);
+    expect(reservation?.unspentCost?.(deferred)).toBe(545 - 245);
     // Any other failure may have reached Gmail, so nothing is given back.
     expect(reservation?.unspentCost?.(new Error("Gmail failed"))).toBe(0);
+  });
+
+  it("never refunds a negative amount when a page admitted more than it reserved", async () => {
+    const deferred = new GmailCallDeferredError(5000, "background");
+    const getMessagesWithPagination = vi.fn(async () => {
+      for (let batch = 0; batch < 5; batch++)
+        await admitGmailCall({ emailAccountId: "acc-1", cost: 120 });
+      throw deferred;
+    });
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
+    });
+    await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+    const [reservation] =
+      vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
+    // 600 admitted against a 545 reservation.
+    expect(reservation?.unspentCost?.(deferred)).toBe(0);
   });
 
   it("returns the sync budget's wait as a throttled pause", async () => {
@@ -1529,6 +1569,102 @@ describe("createEmailProviderMailboxSource", () => {
     expect(getMessagesWithPagination).not.toHaveBeenCalled();
   });
 
+  it("tells the client how long the sync budget holds its next backfill page", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockImplementationOnce(
+      (_input, operation) =>
+        operation(new AbortController().signal, { nextAdmitAfterMs: 6000 }),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    if (result.status !== "ok" || result.value.nextPage === null)
+      throw new Error("expected a next page");
+    // The page's own time counts against the wait.
+    expect(result.value.retryAfterMs).toBeGreaterThan(5000);
+    expect(result.value.retryAfterMs).toBeLessThanOrEqual(6000);
+    const [reservation] =
+      vi.mocked(withLocalMailSyncBudget).mock.calls[0] ?? [];
+    // The next page is priced like this one: nine messages and the list.
+    expect(reservation?.nextCost).toBe(545);
+  });
+
+  it("caps the wait it gives at a minute", async () => {
+    vi.mocked(withLocalMailSyncBudget).mockImplementationOnce(
+      (_input, operation) =>
+        operation(new AbortController().signal, {
+          nextAdmitAfterMs: 10 * 60_000,
+        }),
+    );
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      value: { retryAfterMs: 60_000 },
+    });
+  });
+
+  it("gives no wait when the sync budget already covers the next page", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => ({
+          messages: [],
+          nextPageToken: "page-3",
+        })),
+      } as unknown as EmailProvider,
+    });
+    const result = await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "history", pageToken: "page-2" }),
+      pageSize: 50,
+    });
+
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.status === "ok" && "retryAfterMs" in result.value).toBe(
+      false,
+    );
+  });
+
   it("puts the sync budget's pause reason on the request's metrics", async () => {
     vi.mocked(withLocalMailSyncBudget).mockRejectedValueOnce(
       new LocalMailSyncPausedError(12_000, "account_budget"),
@@ -1559,6 +1695,229 @@ describe("createEmailProviderMailboxSource", () => {
     });
   });
 
+  it("puts the quota gate's deferral reason on the request's metrics", async () => {
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMessagesWithPagination: vi.fn(async () => {
+          throw new GmailCallDeferredError(7000, "sync", "sync_pause");
+        }),
+      } as unknown as EmailProvider,
+    });
+    const metrics = createRequestMetrics();
+    const result = await runWithRequestMetrics(metrics, () =>
+      source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page: JSON.stringify({ scopeId: "primary", pageToken: "page-2" }),
+        pageSize: 50,
+      }),
+    );
+    expect(result).toEqual({
+      status: "paused",
+      retryAfterMs: 7000,
+      reason: "throttled",
+    });
+    expect(getRequestMetricsFields(metrics)).toMatchObject({
+      pausedSource: "quota_gate",
+      pausedReason: "sync_pause",
+      pausedRetryAfterMs: 7000,
+    });
+  });
+
+  describe("enumeration log fields", () => {
+    async function enumerationFields(page: Record<string, unknown>) {
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        provider: {
+          name: "google",
+          getMessagesWithPagination: vi.fn(async () => ({ messages: [] })),
+        } as unknown as EmailProvider,
+      });
+      const metrics = createRequestMetrics();
+      await runWithRequestMetrics(metrics, () =>
+        source.enumerate({
+          session: { accountId: "acc-1", generation: "g1" },
+          requestId: "r1",
+          signal: new AbortController().signal,
+          bootstrapId: "mailbox",
+          page: JSON.stringify(page),
+          pageSize: 50,
+        }),
+      );
+      return getRequestMetricsFields(metrics);
+    }
+
+    it.each([
+      [
+        "a primary page",
+        { scopeId: "primary", pageToken: "secret-token" },
+        {
+          scope: "primary",
+          phase: "none",
+          gatePriority: "sync",
+          promoted: false,
+        },
+      ],
+      [
+        "a history page with no phase",
+        { scopeId: "history", windowStartMs: 1 },
+        {
+          scope: "history",
+          phase: "none",
+          gatePriority: "background",
+          promoted: false,
+        },
+      ],
+      [
+        "a history inbox page inside the first inbox allowance",
+        { scopeId: "history", windowStartMs: 1, phase: "inbox", synced: 0 },
+        {
+          scope: "history",
+          phase: "inbox",
+          gatePriority: "sync",
+          promoted: true,
+        },
+      ],
+      [
+        "a history inbox page past the first inbox allowance",
+        { scopeId: "history", windowStartMs: 1, phase: "inbox", synced: 5000 },
+        {
+          scope: "history",
+          phase: "inbox",
+          gatePriority: "background",
+          promoted: false,
+        },
+      ],
+      [
+        "a history rest page",
+        { scopeId: "history", windowStartMs: 1, phase: "rest" },
+        {
+          scope: "history",
+          phase: "rest",
+          gatePriority: "background",
+          promoted: false,
+        },
+      ],
+    ])("is on %s", async (_name, page, expected) => {
+      expect(await enumerationFields(page)).toMatchObject(expected);
+    });
+
+    it("carries no query, token or id text", async () => {
+      const fields = await enumerationFields({
+        scopeId: "history",
+        windowStartMs: 1_700_000_000_000,
+        phase: "inbox",
+        phasePageToken: "secret-token",
+        folderId: "folder-secret",
+      });
+      const logged = JSON.stringify(fields);
+      expect(logged).not.toContain("secret");
+      expect(logged).not.toContain("in:inbox");
+      expect(logged).not.toContain("1700000000000");
+    });
+
+    it("is absent on requests that are not enumeration pages", () => {
+      const fields = getRequestMetricsFields(createRequestMetrics());
+      expect(fields.scope).toBeUndefined();
+      expect(fields.gatePriority).toBeUndefined();
+    });
+  });
+
+  describe("an engine older than the server's minimum", () => {
+    async function enumerateAs(
+      oldEngine: "below_minimum" | null,
+      page: Record<string, unknown>,
+    ) {
+      const getMessagesWithPagination = vi.fn(async () => ({
+        messages: [],
+        nextPageToken: "next",
+      }));
+      const source = createEmailProviderMailboxSource({
+        logger,
+        accountId: "acc-1",
+        oldEngine,
+        provider: {
+          name: "google",
+          getMessagesWithPagination,
+        } as unknown as EmailProvider,
+      });
+      const metrics = createRequestMetrics();
+      const result = await runWithRequestMetrics(metrics, () =>
+        source.enumerate({
+          session: { accountId: "acc-1", generation: "g1" },
+          requestId: "r1",
+          signal: new AbortController().signal,
+          bootstrapId: "mailbox",
+          page: JSON.stringify(page),
+          pageSize: 50,
+        }),
+      );
+      return {
+        result,
+        fields: getRequestMetricsFields(metrics),
+        listed: getMessagesWithPagination.mock.calls.length,
+      };
+    }
+
+    it.each([
+      [
+        "a backfill rest page",
+        { scopeId: "history", windowStartMs: 1, phase: "rest" },
+      ],
+      ["an unphased backfill page", { scopeId: "history", pageToken: "p2" }],
+    ])("is refused %s for ten minutes, before any Gmail call", async (_name, page) => {
+      const { result, fields, listed } = await enumerateAs(
+        "below_minimum",
+        page,
+      );
+      expect(result).toEqual({
+        status: "paused",
+        reason: "throttled",
+        retryAfterMs: 10 * 60_000,
+      });
+      expect(listed).toBe(0);
+      expect(fields).toMatchObject({
+        pausedSource: "old_engine",
+        pausedReason: "below_minimum",
+        pausedRetryAfterMs: 10 * 60_000,
+        gatePriority: "background",
+      });
+    });
+
+    it.each([
+      ["the primary scan", { scopeId: "primary", pageToken: "p2" }],
+      [
+        "a first sync's older inbox",
+        { scopeId: "history", windowStartMs: 1, phase: "inbox", synced: 0 },
+      ],
+    ])("still lists %s, which a person is waiting on", async (_name, page) => {
+      const { result, fields, listed } = await enumerateAs(
+        "below_minimum",
+        page,
+      );
+      expect(result).toMatchObject({ status: "ok" });
+      expect(listed).toBe(1);
+      expect(fields.pausedSource).toBeUndefined();
+    });
+
+    it("leaves a current engine's background backfill to the usual budget", async () => {
+      const { result, fields, listed } = await enumerateAs(null, {
+        scopeId: "history",
+        windowStartMs: 1,
+        phase: "rest",
+      });
+      expect(result).toMatchObject({ status: "ok" });
+      expect(listed).toBe(1);
+      expect(fields.pausedSource).toBeUndefined();
+    });
+  });
+
   it("logs a mailbox's local-budget pause at most once a minute", () => {
     expect(shouldLogLocalBudgetPause("rate-a", 1000)).toBe(true);
     expect(shouldLogLocalBudgetPause("rate-a", 30_000)).toBe(false);
@@ -1566,7 +1925,7 @@ describe("createEmailProviderMailboxSource", () => {
     expect(shouldLogLocalBudgetPause("rate-a", 61_000)).toBe(true);
   });
 
-  it("reads a scan's first screen whole on its own, then 50 at a time", async () => {
+  it("reads a scan's first screen whole on its own, then pages its quota admits without waiting", async () => {
     const getMessagesWithPagination = vi.fn(async () => ({
       messages: [],
       nextPageToken: "next",
@@ -1588,6 +1947,14 @@ describe("createEmailProviderMailboxSource", () => {
         page: JSON.stringify(token),
         pageSize: 50,
       });
+    const lastMaxResults = () =>
+      (
+        getMessagesWithPagination.mock.lastCall as unknown as [
+          { maxResults: number },
+        ]
+      )[0].maxResults;
+    const pageUnits = (messages: number) =>
+      gmailMailSyncCosts.list + messages * gmailMailSyncCosts.message;
 
     // Whole messages, so the page leaves no hydration to hold the engine's
     // commands, and only a screen of them, so the inbox fills sooner.
@@ -1597,12 +1964,61 @@ describe("createEmailProviderMailboxSource", () => {
       pageToken: undefined,
       includeDrafts: true,
     });
-    await enumerate({ scopeId: "primary", initial: true, pageToken: "next" });
-    expect(getMessagesWithPagination).toHaveBeenLastCalledWith({
-      maxResults: 50,
-      pageToken: "next",
-      includeDrafts: true,
+
+    // A larger page would hold its request in the gate while the bucket
+    // refills, as 50-message pages did for about 12 seconds each.
+    for (const [token, priority, expected] of [
+      [{ scopeId: "primary", initial: true, pageToken: "next" }, "sync", 19],
+      [{ scopeId: "history", initial: true }, "background", 9],
+      [
+        { scopeId: "history", initial: true, pageToken: "next" },
+        "background",
+        9,
+      ],
+    ] as const) {
+      await enumerate(token);
+      const size = lastMaxResults();
+      expect(size).toBe(expected);
+      expect(pageUnits(size)).toBeLessThanOrEqual(gmailBurstUnitsFor(priority));
+      expect(pageUnits(size + 1)).toBeGreaterThan(gmailBurstUnitsFor(priority));
+    }
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageToken: "next", includeDrafts: true }),
+    );
+  });
+
+  it("prices local sync units like the quota gate prices the same Gmail calls", () => {
+    const base = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+    expect(gmailMailSyncCosts.list).toBe(gmailRequestCost("GET", base));
+    expect(gmailMailSyncCosts.message).toBe(
+      gmailRequestCost("GET", `${base}/m1`),
+    );
+  });
+
+  it("keeps Outlook scan pages at its own page size", async () => {
+    const getMessagesWithPagination = vi.fn(async () => ({
+      messages: [],
+      nextPageToken: "next",
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "microsoft",
+        getMessagesWithPagination,
+      } as unknown as EmailProvider,
     });
+    await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({ scopeId: "primary", pageToken: "next" }),
+      pageSize: 50,
+    });
+    expect(getMessagesWithPagination).toHaveBeenLastCalledWith(
+      expect.objectContaining({ maxResults: 20 }),
+    );
   });
 
   it("asks Gmail for a first sync's first page as sync, leaving a person's share free", async () => {
@@ -1638,6 +2054,262 @@ describe("createEmailProviderMailboxSource", () => {
     expect(priorities).toEqual(["sync", "sync", "sync", "background"]);
   });
 
+  it("lists a first sync's older inbox before the rest of its backfill window", async () => {
+    const listed: Array<{ query?: string; before?: Date; pageToken?: string }> =
+      [];
+    // Two inbox pages, then one page of the window's other mail.
+    const pages: Record<string, string | undefined> = {
+      "in:inbox|": "inbox-2",
+      "in:inbox|inbox-2": undefined,
+      rest: undefined,
+    };
+    const mintedFor = new Map<string, string | undefined>();
+    const tokens: string[] = [];
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesWithPagination(options: {
+          query?: string;
+          before?: Date;
+          pageToken?: string;
+        }) {
+          listed.push(options);
+          // Like Gmail's, a cursor only continues the query that minted it.
+          if (
+            options.pageToken &&
+            mintedFor.get(options.pageToken) !== options.query
+          )
+            throw Object.assign(new Error("Invalid pageToken"), {
+              status: 400,
+            });
+          const key = options.query?.startsWith("in:inbox")
+            ? `in:inbox|${options.pageToken ?? ""}`
+            : "rest";
+          const nextPageToken = pages[key];
+          if (nextPageToken) mintedFor.set(nextPageToken, options.query);
+          return { messages: [], nextPageToken };
+        },
+        getMailboxSyncPage: vi.fn(async () => ({
+          cursor: null,
+          upsertedMessages: [],
+          deletedMessageIds: [],
+          hasMore: false,
+        })),
+      } as unknown as EmailProvider,
+    });
+    const context = {
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+    };
+    const begun = await source.beginBootstrap({
+      ...context,
+      scope: { id: "history", kind: "account", folderId: null },
+      afterMs: null,
+      initial: true,
+      windowedBackfill: true,
+    });
+    if (begun.status !== "ok") throw new Error("expected ok");
+    let page: string | null = begun.value.enumerationToken;
+    let windowStartMs: number | undefined;
+    for (let i = 0; page && i < 5; i++) {
+      tokens.push(page);
+      const result = await source.enumerate({
+        ...context,
+        bootstrapId: begun.value.bootstrapId,
+        page,
+        pageSize: 50,
+      });
+      if (result.status !== "ok") throw new Error("expected ok");
+      if (result.value.nextPage === null)
+        windowStartMs = result.value.windowStartMs;
+      page = result.value.nextPage;
+    }
+
+    expect(page).toBeNull();
+    // Gmail lists newest first, so the inbox arrives newest first too; the
+    // second query is the window's other mail, which the first never read.
+    expect(listed.map((options) => options.query)).toEqual([
+      "in:inbox",
+      "in:inbox",
+      expect.stringMatching(/^\{is:starred in:drafts after:\d+\} -in:inbox$/),
+    ]);
+    expect(listed.map((options) => options.pageToken)).toEqual([
+      undefined,
+      "inbox-2",
+      undefined,
+    ]);
+    // Both cover only mail the recent scan leaves to the backfill.
+    for (const options of listed)
+      expect(options.before?.getTime()).toBeLessThan(Date.now());
+    // The scan still reports the window it covered.
+    expect(windowStartMs).toBeGreaterThan(0);
+
+    // A server rolled back to before phases reads only `pageToken`, so on
+    // every token this scan wrote it starts its one combined query from the
+    // window start: more reads, but nothing an inbox cursor would skip.
+    for (const token of tokens) {
+      expect(readAsBeforePhases(token)).toEqual({
+        query: expect.stringMatching(/^\{in:inbox is:starred in:drafts /),
+        pageToken: undefined,
+      });
+    }
+    // And this code never carries a cursor across phases, even one left in
+    // `pageToken`.
+    listed.length = 0;
+    const stray = await source.enumerate({
+      ...context,
+      bootstrapId: begun.value.bootstrapId,
+      page: JSON.stringify({
+        ...JSON.parse(tokens.at(-1) ?? "{}"),
+        pageToken: "inbox-2",
+      }),
+      pageSize: 50,
+    });
+    expect(stray.status).toBe("ok");
+    expect(listed.map((options) => options.pageToken)).toEqual([undefined]);
+  });
+
+  it("reads a first sync's first inbox backfill pages at sync behind the primary scan, and the rest at background", async () => {
+    const seen: Array<{ priority: string; afterInitialSync?: boolean }> = [];
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesWithPagination(options: { maxResults: number }) {
+          const { priority, afterInitialSync } = currentGmailQuotaContext();
+          seen.push({ priority, afterInitialSync });
+          return {
+            messages: Array.from({ length: options.maxResults }, (_, i) =>
+              gmailMessage(`m${seen.length}-${i}`, Date.now() - i),
+            ),
+            nextPageToken: "next",
+          };
+        },
+      } as unknown as EmailProvider,
+    });
+    const enumerate = async (page: string) => {
+      const result = await source.enumerate({
+        session: { accountId: "acc-1", generation: "g1" },
+        requestId: "r1",
+        signal: new AbortController().signal,
+        bootstrapId: "mailbox",
+        page,
+        pageSize: 50,
+      });
+      if (result.status !== "ok" || !result.value.nextPage)
+        throw new Error("expected another page");
+      return result.value.nextPage;
+    };
+    let page = JSON.stringify({
+      scopeId: "history",
+      windowStartMs: Date.now() - 30 * 24 * 60 * 60 * 1000,
+      phase: "inbox",
+    });
+    let listedAtSync = 0;
+    const budgets: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      page = await enumerate(page);
+      const last = seen.at(-1);
+      budgets.push(
+        (
+          vi.mocked(withLocalMailSyncBudget).mock.lastCall?.[0] as {
+            priority: string;
+          }
+        ).priority,
+      );
+      if (last?.priority === "sync") listedAtSync = JSON.parse(page).synced;
+    }
+
+    // The first couple of hundred inbox messages come in sync's larger pages,
+    // and only once the primary scan is done; then the long tail is paced
+    // as background, as the whole backfill was before.
+    const sync = seen.filter((entry) => entry.priority === "sync");
+    expect(sync.length).toBeGreaterThan(5);
+    expect(sync.every((entry) => entry.afterInitialSync === true)).toBe(true);
+    expect(seen.slice(0, sync.length)).toEqual(sync);
+    expect(seen.slice(sync.length).map((entry) => entry.priority)).toEqual(
+      new Array(seen.length - sync.length).fill("background"),
+    );
+    expect(listedAtSync).toBeGreaterThanOrEqual(200);
+    expect(listedAtSync).toBeLessThan(200 + 19);
+    // It draws on the backfill's own share of the account's sync envelope
+    // throughout, so it moves work earlier without spending more per minute.
+    expect(new Set(budgets)).toEqual(new Set(["backfill"]));
+  });
+
+  it("starts the primary stream's catch-up over all time, so old mail moved into the inbox mid-backfill still arrives", async () => {
+    const getMailboxSyncPage = vi.fn(async (options: { after: Date }) => ({
+      cursor: encodeMailboxSyncCursor({
+        version: 1,
+        provider: "google",
+        phase: "delta",
+        historyId: "42",
+        after: options.after.toISOString(),
+      }),
+      upsertedMessages: [],
+      deletedMessageIds: [],
+      hasMore: false,
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        getMailboxSyncPage,
+      } as unknown as EmailProvider,
+    });
+    const begun = await source.beginBootstrap({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      scope: { id: "primary", kind: "account", folderId: null },
+      afterMs: null,
+      initial: true,
+    });
+    if (begun.status !== "ok") throw new Error("expected ok");
+    const checkpoint = begun.value.catchUpFrom.checkpoint;
+    if (!checkpoint) throw new Error("expected a checkpoint");
+    // The delta read drops any message older than its cursor's `after`.
+    expect(decodeMailboxSyncCursor(checkpoint, "google")).toMatchObject({
+      after: new Date(0).toISOString(),
+    });
+  });
+
+  it("keeps a backfill begun before inbox-first paging on its one combined query", async () => {
+    const listed: Array<{ query?: string }> = [];
+    const priorities: string[] = [];
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "acc-1",
+      provider: {
+        name: "google",
+        async getMessagesWithPagination(options: { query?: string }) {
+          listed.push(options);
+          priorities.push(currentGmailQuotaContext().priority);
+          return { messages: [], nextPageToken: "next" };
+        },
+      } as unknown as EmailProvider,
+    });
+    await source.enumerate({
+      session: { accountId: "acc-1", generation: "g1" },
+      requestId: "r1",
+      signal: new AbortController().signal,
+      bootstrapId: "mailbox",
+      page: JSON.stringify({
+        scopeId: "history",
+        windowStartMs: Date.now() - 30 * 24 * 60 * 60 * 1000,
+        pageToken: "next",
+      }),
+      pageSize: 50,
+    });
+    expect(listed[0]?.query).toMatch(/^\{in:inbox is:starred in:drafts /);
+    expect(priorities).toEqual(["background"]);
+  });
+
   it("keeps a first backfill whole for a client that can't record a window", async () => {
     const listed: Array<{ query?: string; after?: Date }> = [];
     const source = createEmailProviderMailboxSource({
@@ -1671,14 +2343,19 @@ describe("createEmailProviderMailboxSource", () => {
         ...(windowedBackfill && { windowedBackfill }),
       });
       if (begun.status !== "ok") throw new Error("expected ok");
-      return source.enumerate({
-        session: { accountId: "acc-1", generation: "g1" },
-        requestId: "r1",
-        signal: new AbortController().signal,
-        bootstrapId: begun.value.bootstrapId,
-        page: begun.value.enumerationToken,
-        pageSize: 50,
-      });
+      let page = begun.value.enumerationToken;
+      for (;;) {
+        const result = await source.enumerate({
+          session: { accountId: "acc-1", generation: "g1" },
+          requestId: "r1",
+          signal: new AbortController().signal,
+          bootstrapId: begun.value.bootstrapId,
+          page,
+          pageSize: 50,
+        });
+        if (result.status !== "ok" || !result.value.nextPage) return result;
+        page = result.value.nextPage;
+      }
     };
 
     // An older client drops the window from the result, so it would record a
@@ -1691,7 +2368,7 @@ describe("createEmailProviderMailboxSource", () => {
     );
 
     const windowed = await backfill(true);
-    expect(listed[1]?.query).toMatch(/^\{in:inbox /);
+    expect(listed[1]?.query).toBe("in:inbox");
     expect(
       windowed.status === "ok" && windowed.value.nextPage === null
         ? windowed.value.windowStartMs
@@ -1994,7 +2671,11 @@ describe("createEmailProviderMailboxSource", () => {
       provider: {
         name: "google",
         localMailSyncStrategy: "history",
-        async getAttachmentStream(messageId, attachmentId, signal) {
+        async getAttachmentStream(
+          messageId: string,
+          attachmentId: string,
+          signal?: AbortSignal,
+        ) {
           expect(messageId).toBe("m1");
           expect(attachmentId).toBe("att-1");
           expect(signal).toBeDefined();
@@ -2262,18 +2943,24 @@ describe("Gmail history expiry", () => {
       }) {
         listed.push(options);
         const keptOrAfter = options.query?.match(
-          /^\{in:inbox is:starred in:drafts after:(\d+)\}$/,
+          /^\{(in:inbox )?is:starred in:drafts after:(\d+)\}( -in:inbox)?$/,
         );
+        const has = (message: ParsedMessage, label: string) =>
+          message.labelIds?.includes(label) ?? false;
         return {
           messages: [...mailbox.values()].filter((message) => {
             const at = Number(message.internalDate);
             if (options.before && at >= options.before.getTime()) return false;
             if (options.after && at < options.after.getTime()) return false;
+            if (options.query === "in:inbox") return has(message, "INBOX");
             if (keptOrAfter) {
+              const [, inbox, after, notInbox] = keptOrAfter;
+              if (notInbox && has(message, "INBOX")) return false;
               return (
-                ["INBOX", "STARRED", "DRAFT"].some((label) =>
-                  message.labelIds?.includes(label),
-                ) || at >= Number(keptOrAfter[1]) * 1000
+                (inbox !== undefined && has(message, "INBOX")) ||
+                has(message, "STARRED") ||
+                has(message, "DRAFT") ||
+                at >= Number(after) * 1000
               );
             }
             return !options.query;
@@ -2699,6 +3386,44 @@ describe("structured mailbox search", () => {
       }),
     ).resolves.toMatchObject({ status: "ok", value: { matches: [] } });
     expect(getMessage).not.toHaveBeenCalled();
+  });
+
+  it("searches past a left-out conversation, filtering it from the results", async () => {
+    const searchMessages = vi.fn(async () => ({
+      messages: [searchMessage("left-out"), searchMessage("kept")],
+    }));
+    const source = createEmailProviderMailboxSource({
+      logger,
+      accountId: "a",
+      provider: {
+        name: "microsoft",
+        getMessage: vi.fn(),
+        searchMessages,
+      } as unknown as EmailProvider,
+    });
+    await expect(
+      source.search({
+        session: { accountId: "a", generation: "1" },
+        requestId: "search",
+        signal: new AbortController().signal,
+        page: null,
+        pageSize: 20,
+        predicate: {
+          kind: "all",
+          predicates: [
+            { kind: "text", field: "any", value: "invoice", match: "term" },
+            {
+              kind: "not",
+              predicate: { kind: "conversation", ids: ["left-out"] },
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      value: { matches: [{ messageId: "kept" }] },
+    });
+    expect(searchMessages).toHaveBeenCalled();
   });
 
   it("loads a missing body projection before rejecting an any-field match and keeps pagination", async () => {
@@ -3184,3 +3909,19 @@ describe("typed search", () => {
     }
   });
 });
+
+// How `enumerate` read a backfill token before inbox-first phases (2d841e2):
+// one combined query over the window, resumed by `pageToken`.
+function readAsBeforePhases(page: string) {
+  const token = JSON.parse(page) as {
+    windowStartMs?: number;
+    pageToken?: string;
+  };
+  return {
+    query:
+      token.windowStartMs == null
+        ? undefined
+        : `{in:inbox is:starred in:drafts after:${Math.floor(token.windowStartMs / 1000) - 1}}`,
+    pageToken: token.pageToken,
+  };
+}

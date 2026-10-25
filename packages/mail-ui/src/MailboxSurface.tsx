@@ -51,6 +51,11 @@ export type MailboxThreadListProps<T> = {
   isLoadingMore: boolean;
   onLoadMore: () => void;
   listKey: string;
+  /**
+   * The rows on screen, `start` inclusive to `end` exclusive, as the list
+   * scrolls, resizes or changes; for work that should reach them first.
+   */
+  onVisibleRowsChange?: (rows: { start: number; end: number }) => void;
   className?: string;
   scrollClassName?: string;
   listClassName?: string;
@@ -83,6 +88,7 @@ export function MailboxThreadList<T>({
   isLoadingMore,
   onLoadMore,
   listKey,
+  onVisibleRowsChange,
   className = "flex min-h-0 flex-1 flex-col overflow-hidden",
   scrollClassName = "min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
   listClassName,
@@ -105,6 +111,9 @@ export function MailboxThreadList<T>({
   const prefetchListKey = useRef(listKey);
   const onLoadMoreRef = useRef(onLoadMore);
   onLoadMoreRef.current = onLoadMore;
+  const onVisibleRowsChangeRef = useRef(onVisibleRowsChange);
+  onVisibleRowsChangeRef.current = onVisibleRowsChange;
+  const reportsVisibleRows = Boolean(onVisibleRowsChange);
 
   // Only the render that first fills a list, on mount, once its first page
   // arrives or on a switch to another list, is cut to a screen of rows. A
@@ -213,6 +222,42 @@ export function MailboxThreadList<T>({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [scrollRoot, showLoadMore, items.length, allRendered]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measured again as rows render or the list changes
+  useEffect(() => {
+    if (!scrollRoot || !reportsVisibleRows) return;
+    let frame = 0;
+    let reported = "";
+    const measure = () => {
+      frame = 0;
+      const rows = scrollRoot.querySelectorAll<HTMLElement>(
+        '[role="listbox"] [role="option"]',
+      );
+      const { top, bottom } = scrollRoot.getBoundingClientRect();
+      const visible = findVisibleRows(rows.length, top, bottom, (index) =>
+        rows[index].getBoundingClientRect(),
+      );
+      const key = `${visible.start}:${visible.end}`;
+      if (key === reported) return;
+      reported = key;
+      onVisibleRowsChangeRef.current?.(visible);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    measure();
+    scrollRoot.addEventListener("scroll", schedule, { passive: true });
+    const resizes =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(schedule);
+    resizes?.observe(scrollRoot);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      scrollRoot.removeEventListener("scroll", schedule);
+      resizes?.disconnect();
+    };
+  }, [scrollRoot, reportsVisibleRows, renderedCount, listKey]);
 
   return (
     <div className={className} style={style}>
@@ -366,6 +411,28 @@ export function scrollElementIntoContainer(
   } else if (bottomOverflow > 0) {
     container.scrollTop += bottomOverflow;
   }
+}
+
+/** Rows are in screen order, so the first and last on screen are searched for. */
+export function findVisibleRows(
+  count: number,
+  top: number,
+  bottom: number,
+  rectAt: (index: number) => { top: number; bottom: number },
+) {
+  const firstWhere = (isPast: (index: number) => boolean) => {
+    let low = 0;
+    let high = count;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (isPast(middle)) high = middle;
+      else low = middle + 1;
+    }
+    return low;
+  };
+  const start = firstWhere((index) => rectAt(index).bottom > top);
+  const end = firstWhere((index) => rectAt(index).top >= bottom);
+  return { start, end: Math.max(start, end) };
 }
 
 function groupItemsByLabel<T>(

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSWRConfig } from "swr";
 import { AlertCircleIcon, ClockIcon, LoaderCircleIcon } from "lucide-react";
 import type { UpcomingScheduledEmailsResponse } from "@/app/api/user/scheduled-emails/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
@@ -16,6 +17,7 @@ import { getActionErrorMessage } from "@/utils/error";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useMailHref } from "@/hooks/useMailHref";
 import {
+  refreshUpcomingScheduledEmails,
   useAllAccountsUpcomingScheduledEmails,
   useUpcomingScheduledEmails,
 } from "@/hooks/useHiddenDraftMessageIds";
@@ -38,6 +40,7 @@ export function ScheduledEmailList({
   const mailHref = useMailHref();
   const [actionError, setActionError] = useState("");
   const [busy, setBusy] = useState(false);
+  const { mutate: mutateCache } = useSWRConfig();
   const one = useUpcomingScheduledEmails(accounts ? null : emailAccountId);
   const all = useAllAccountsUpcomingScheduledEmails(accounts);
   const { isLoading, error, mutate } = accounts ? all : one;
@@ -52,14 +55,19 @@ export function ScheduledEmailList({
       throw new Error(getActionErrorMessage(result));
   };
 
-  const act = async (action: () => Promise<unknown>) => {
+  const act = async (action: () => Promise<unknown>, row: ScheduledRow) => {
     setBusy(true);
     setActionError("");
     try {
       await action();
       // The action already succeeded; a refresh that fails is stale data, not a
       // failed cancel, and SWR retries on its own.
-      await mutate().catch(() => {});
+      await Promise.all([
+        mutate().catch(() => {}),
+        // The cached reads elsewhere, such as All inboxes' Drafts, hide drafts
+        // by these sends.
+        refreshUpcomingScheduledEmails(mutateCache, row.accountId),
+      ]);
     } catch (failure) {
       setActionError(
         failure instanceof Error ? failure.message : "Something went wrong",
@@ -136,8 +144,13 @@ export function ScheduledEmailList({
                       <InlineActionButton
                         disabled={busy}
                         onClick={() =>
-                          act(() =>
-                            runScheduledAction(cancelScheduledEmailAction, row),
+                          act(
+                            () =>
+                              runScheduledAction(
+                                cancelScheduledEmailAction,
+                                row,
+                              ),
+                            row,
                           )
                         }
                       >
@@ -161,8 +174,13 @@ export function ScheduledEmailList({
                       <InlineActionButton
                         disabled={busy}
                         onClick={() =>
-                          act(() =>
-                            runScheduledAction(retryScheduledEmailAction, row),
+                          act(
+                            () =>
+                              runScheduledAction(
+                                retryScheduledEmailAction,
+                                row,
+                              ),
+                            row,
                           )
                         }
                       >

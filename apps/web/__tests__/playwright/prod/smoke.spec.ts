@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { cueDemoChat } from "@/__tests__/fixtures/inboxes/cue-demo-inbox";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { OUTLOOK_STEP_PREFIX } from "@/scripts/qa/health-report";
@@ -14,7 +14,8 @@ import {
   trashMessagesWithSubject,
   waitForMessageFrom,
 } from "@/scripts/qa/qa-mailbox";
-import { findEscapedMarkup } from "@/scripts/qa/suggestion-text";
+import { appUrl } from "@/utils/playwright/app-origin";
+import { findEscapedMarkup } from "@/utils/email/escaped-markup";
 import {
   findMailAccount,
   replyToGmailQa,
@@ -39,7 +40,7 @@ const credentials = readQaMailboxCredentials();
 const outlookMailbox = credentials
   ? readQaOutlookMailbox(credentials.email)
   : null;
-const baseUrl = process.env.CUE_QA_BASE_URL || "https://cue-inbox.vercel.app";
+const baseUrl = process.env.CUE_QA_BASE_URL || "https://cuemail.tech";
 const run = new RobotRun(
   baseUrl,
   process.env.CUE_QA_RESULTS_FILE || ".tmp/qa-robot/results.json",
@@ -102,7 +103,9 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   }
 
   await step("gmail connection", async (metrics) => {
-    const response = await page.request.get("/api/user/email-accounts");
+    const response = await page.request.get(
+      appUrl(page, "/api/user/email-accounts"),
+    );
     expect(response.ok(), "email accounts load").toBe(true);
     const { emailAccounts }: GetEmailAccountsResponse = await response.json();
     const index = emailAccounts.findIndex(
@@ -124,7 +127,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
     "inbox shows real mail",
     async (metrics) => {
       const started = Date.now();
-      await page.goto(`/mail/u/${qaAccount().index}/inbox`, {
+      await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`), {
         waitUntil: "commit",
       });
       const conversations = page.getByRole("listbox", {
@@ -155,8 +158,9 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
 
   await step(
     "thread shows reply actions",
-    async () => {
-      await page.goto(`/mail/u/${qaAccount().index}/inbox`);
+    async (metrics) => {
+      const started = Date.now();
+      await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`));
       // A seeded announcement sent to a class list, so Reply all applies.
       const row = page
         .getByRole("listbox", { name: "Conversations" })
@@ -167,17 +171,24 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         row,
         "the seeded multi-recipient thread is in the inbox (run the seed workflow if not)",
       ).toBeVisible({ timeout: 60_000 });
+      // Split the step so a slow run says whether the seeded row was still
+      // syncing in (row), the body was loading (open) or the buttons were late.
+      metrics.rowVisibleMs = Date.now() - started;
+      const clicked = Date.now();
       await row.click();
       const message = page.locator("[data-thread-message-id]").last();
       await expect(message, "the thread opens").toBeVisible({
         timeout: 60_000,
       });
+      metrics.threadOpenMs = Date.now() - clicked;
+      const opened = Date.now();
       for (const name of ["Reply", "Reply all", "Forward"]) {
         await expect(
           message.getByRole("button", { name, exact: true }),
           `${name} is visible`,
         ).toBeVisible();
       }
+      metrics.replyActionsMs = Date.now() - opened;
     },
     "gmail",
   );
@@ -192,7 +203,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         text: "Automated Cue QA probe. Safe to ignore.",
       });
       const sentAt = Date.now();
-      await page.goto(`/mail/u/${qaAccount().index}/inbox`);
+      await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`));
       const conversations = page.getByRole("listbox", {
         name: "Conversations",
       });
@@ -236,7 +247,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
           // An opened thread replaces the list, so reloading it would never
           // bring the row back; go back to the Sent list instead.
           if (!(await sentRow.isVisible())) {
-            await page.goto(`/mail/u/${qaAccount().index}/sent`);
+            await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/sent`));
           }
           await sentRow.click({ timeout: 10_000 });
           await expect
@@ -323,7 +334,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
 
     await outlookStep("inbox shows mail", async (metrics) => {
       const started = Date.now();
-      await page.goto(`/mail/u/${outlookAccount().index}/inbox`, {
+      await page.goto(appUrl(page, `/mail/u/${outlookAccount().index}/inbox`), {
         waitUntil: "commit",
       });
       const conversations = page.getByRole("listbox", {
@@ -351,7 +362,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         });
         const sentAt = Date.now();
         const inboxPath = `/mail/u/${outlookAccount().index}/inbox`;
-        await page.goto(inboxPath);
+        await page.goto(appUrl(page, inboxPath));
         const probe = page
           .getByRole("listbox", { name: "Conversations" })
           .getByRole("option")
@@ -412,14 +423,14 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   }
 
   await step("Settings opens", async () => {
-    await page.goto("/settings");
+    await page.goto(appUrl(page, "/settings"));
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
   });
 
   await step("Integrations is available", async () => {
-    await page.goto(`/${qaAccount().id}/integrations`);
+    await page.goto(appUrl(page, `/${qaAccount().id}/integrations`));
     await expect(
       page.getByRole("heading", { name: "Integrations", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
@@ -430,7 +441,7 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   });
 
   await step("Rules opens", async () => {
-    await page.goto(`/${qaAccount().id}/automation`);
+    await page.goto(appUrl(page, `/${qaAccount().id}/automation`));
     await expect(
       page.getByRole("heading", { name: "Rules", exact: true }),
     ).toBeVisible({ timeout: 60_000 });
@@ -438,12 +449,12 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
   });
 
   await step("old mail URL redirects", async () => {
-    await page.goto(`/${qaAccount().id}/mail`);
+    await page.goto(appUrl(page, `/${qaAccount().id}/mail`));
     await expect(page).toHaveURL(/\/mail\/u\/\d+\/inbox/, { timeout: 60_000 });
   });
 
   await step("sign out in one click", async (metrics) => {
-    await page.goto("/settings");
+    await page.goto(appUrl(page, "/settings"));
     const signOut = page.getByRole("button", { name: "Sign out", exact: true });
     await expect(signOut).toBeVisible({ timeout: 60_000 });
     const started = Date.now();
@@ -471,16 +482,23 @@ async function checkSuggestionText(
   // Delivered mail's subject words, for the cleanup search.
   const subjectWords = ["suggestion", "probe", tag];
   metrics.suggestionShown = false;
+  // Sub-timings say whether a slow step was the IMAP append, the probe
+  // syncing into the inbox, Cue writing the reply, or the cleanup.
+  const started = Date.now();
   try {
     await appendInboxMessages(credentials, [
       {
         subject,
         from: { name: "Jonas Weber", address: "jonas.weber@example.com" },
-        text: "Hi,\n\nCan you confirm Q3's numbers & send them over? A quick yes or no on timing is fine.\n\nThanks,\nJonas",
+        // Answerable from its own text, so Cue confirms every fact and the
+        // step sees a reply shown. The "&" is for the escaped-HTML check.
+        text: "Hi,\n\nThanks for sending the notes & slides — could you reply to confirm you got them?\n\nThanks,\nJonas",
         messageId: `<cue-qa-suggestion-${tag}@cue-qa.invalid>`,
       },
     ]);
-    await page.goto(`/mail/u/${accountIndex}/inbox`);
+    metrics.appendMs = Date.now() - started;
+    const appended = Date.now();
+    await page.goto(appUrl(page, `/mail/u/${accountIndex}/inbox`));
     const probe = page
       .getByRole("listbox", { name: "Conversations" })
       .getByRole("option")
@@ -492,35 +510,43 @@ async function checkSuggestionText(
     }, "the suggestion probe reaches the inbox").toPass({
       timeout: PROBE_ARRIVAL_TIMEOUT_MS,
     });
+    metrics.probeArrivalMs = Date.now() - appended;
     await probe.click();
+    const clicked = Date.now();
 
     const reader = page.getByTestId("thread-reader");
     const shown = reader.getByText("Suggested by Cue");
     const draftButton = reader.getByRole("button", { name: "Draft a reply" });
-    const gaveUp = reader.getByRole("button", { name: "Try again" });
-    const left = reader.getByText(/Cue left this reply|Cue couldn't confirm/);
+    // Fixed labels only, never the line's text: the report is public.
+    const exits = {
+      "Cue gave up waiting (Try again)": reader.getByRole("button", {
+        name: "Try again",
+      }),
+      "Cue couldn't confirm a fact": reader.getByText(/Cue couldn't confirm/),
+      "Cue left this reply": reader.getByText(/Cue left this reply/),
+    };
     // Whichever way the account is set up, Cue writes the reply on its own or
     // after "Draft a reply"; it is asked at most once so the run costs one call.
     const deadline = Date.now() + SUGGESTION_TIMEOUT_MS;
     let asked = false;
+    let exitReason = "timed out";
     while (Date.now() < deadline && !(await shown.isVisible())) {
-      if (
-        (await gaveUp.isVisible()) ||
-        (await left
-          .first()
-          .isVisible()
-          .catch(() => false))
-      ) {
+      const seen = await firstVisible(exits);
+      if (seen) {
+        exitReason = seen;
         break;
       }
       if (!asked && (await draftButton.isVisible())) {
         asked = true;
+        metrics.draftButtonAfterMs = Date.now() - clicked;
         await draftButton.click();
       }
       await page.waitForTimeout(1000);
     }
+    metrics.suggestionWaitMs = Date.now() - clicked;
+    metrics.draftButtonClicked = asked;
     if (!(await shown.isVisible())) {
-      throw new StepSkippedError("skipped: no suggestion");
+      throw new StepSkippedError(`skipped: no suggestion (${exitReason})`);
     }
 
     const editor = reader.locator("[data-email-editor-content]").last();
@@ -541,10 +567,26 @@ async function checkSuggestionText(
       `the suggested reply shows escaped HTML (${leaks.join(", ")})`,
     ).toEqual([]);
   } finally {
+    const cleanup = Date.now();
     await trashMessagesWithSubject(credentials, subjectWords).catch(
       () => undefined,
     );
+    metrics.cleanupMs = Date.now() - cleanup;
   }
+}
+
+/** The label of the first locator on screen, if any. */
+async function firstVisible(locators: Record<string, Locator>) {
+  for (const [label, locator] of Object.entries(locators)) {
+    if (
+      await locator
+        .first()
+        .isVisible()
+        .catch(() => false)
+    )
+      return label;
+  }
+  return null;
 }
 
 async function checkToday(
@@ -553,7 +595,7 @@ async function checkToday(
   metrics: Record<string, number | boolean>,
 ) {
   const started = Date.now();
-  await page.goto(`/${accountId}/home`);
+  await page.goto(appUrl(page, `/${accountId}/home`));
   const lane = page.getByRole("heading", {
     level: 2,
     name: /Needs reply|Waiting on|Next up|All clear|Also in your inbox|Drafts ready for you|Cue is working on/,
@@ -575,7 +617,7 @@ async function askChat(
   question: string,
   metrics: Record<string, number | boolean>,
 ) {
-  await page.goto(`/${accountId}/assistant`);
+  await page.goto(appUrl(page, `/${accountId}/assistant`));
   const input = page.getByTestId("chat-input");
   await expect(input).toBeVisible({ timeout: 60_000 });
   const answers = page.locator(".is-assistant");

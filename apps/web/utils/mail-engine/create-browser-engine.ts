@@ -1,3 +1,4 @@
+import { parseMailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import type { MailEngine, WorkAdmission } from "@inboxzero/mail-core/engine";
 import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
 import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
@@ -10,12 +11,16 @@ import {
   browserMailEngineCapabilities,
   pageConnectivityOnline,
   readPageMaxPendingOperations,
+  readPageSemanticIndexIntervalMs,
+  readPageTouchOnly,
   requestSyncUnlessOffline,
   type BrowserEngineStart,
   type WorkerObserveKind,
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerSessionResetRequest,
+  type WorkerStarted,
 } from "@/utils/mail-engine/worker-protocol";
 import { MAIL_ENGINE_OWNER_LOCK } from "@/utils/mail-engine/tab-channel";
 import {
@@ -23,7 +28,12 @@ import {
   isLocalMailboxWipePending,
 } from "@/utils/mail-engine/wipe-local-mailbox";
 import { createClientLogger } from "@/utils/logger-client";
-import { notifySessionExpired } from "@/utils/session-expired";
+import {
+  onSessionGoneReset,
+  workerFoundSessionGone,
+} from "@/utils/session-refresh";
+import { env } from "@/env";
+import { noteServerBuild } from "@/utils/build-update";
 
 export { browserMailEngineCapabilities };
 
@@ -108,6 +118,14 @@ export async function createBrowserMailEngine(
     ...input,
     maxPendingOperations:
       input.maxPendingOperations ?? readPageMaxPendingOperations(),
+    // A test setting, which production builds honour only for browser QA.
+    semanticIndexIntervalMs:
+      input.semanticIndexIntervalMs ??
+      (process.env.NODE_ENV !== "production" ||
+      env.NEXT_PUBLIC_MAIL_ENGINE_TEST_INSPECT
+        ? readPageSemanticIndexIntervalMs()
+        : undefined),
+    touchOnly: input.touchOnly ?? readPageTouchOnly(),
   };
   const startedAt = Date.now();
   for (let attempt = 0; ; attempt++) {
@@ -229,6 +247,19 @@ async function createWorkerOwnedEngine(
     }
   >();
   let closing: Promise<void> | undefined;
+  // The worker keeps its own copy of the session-gone stop; only the page
+  // sees the tab come back and can tell it the session is back.
+  const postSessionReset = () => {
+    worker.postMessage({
+      type: "session_reset",
+    } satisfies WorkerSessionResetRequest);
+  };
+  const forwardReset = onSessionGoneReset(postSessionReset);
+  const engineClosed = new AbortController();
+  const stopForwardingSessionReset = () => {
+    forwardReset();
+    engineClosed.abort();
+  };
 
   worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
@@ -240,8 +271,16 @@ async function createWorkerOwnedEngine(
       logDroppedWork(message.drop);
       return;
     }
+    if (message.type === "server_build") {
+      noteServerBuild(message.buildId);
+      return;
+    }
     if (message.type === "session_expired") {
-      notifySessionExpired();
+      workerFoundSessionGone(message.reason, engineClosed.signal).then(
+        (answer) => {
+          if (answer === "send-again") postSessionReset();
+        },
+      );
       return;
     }
     if (message.type === "snapshots") {
@@ -271,13 +310,15 @@ async function createWorkerOwnedEngine(
     pending.clear();
   });
 
+  let started: unknown;
   try {
-    await request(worker, pending, {
+    started = await request(worker, pending, {
       id: crypto.randomUUID(),
       type: "start",
       input,
     });
   } catch (error) {
+    stopForwardingSessionReset();
     // The worker may already hold the mailbox's OPFS handles, which the
     // in-tab fallback needs.
     worker.terminate();
@@ -327,12 +368,32 @@ async function createWorkerOwnedEngine(
   }
 
   return {
+    capabilities: parseMailEngineCapabilities(
+      (started as WorkerStarted | undefined)?.capabilities,
+    ),
     queryContactSuggestions: (query) =>
       callWorker(worker, pending, "queryContactSuggestions", [query]),
     searchMessages: (query) =>
       callWorker(worker, pending, "searchMessages", [query]),
     queryPersonCard: (query) =>
       callWorker(worker, pending, "queryPersonCard", [query]),
+    queryNeverReadSenders: (query) =>
+      callWorker(worker, pending, "queryNeverReadSenders", [query]),
+    querySenderHistory: (query) =>
+      callWorker(worker, pending, "querySenderHistory", [query]),
+    queryFiles: (query) => callWorker(worker, pending, "queryFiles", [query]),
+    queryFileSenders: (accountIds) =>
+      callWorker(worker, pending, "queryFileSenders", [accountIds]),
+    queryFilesNotOnDevice: (accountIds) =>
+      callWorker(worker, pending, "queryFilesNotOnDevice", [accountIds]),
+    queryWaitingOnYou: (query) =>
+      callWorker(worker, pending, "queryWaitingOnYou", [query]),
+    queryImportantPeople: (accountIds) =>
+      callWorker(worker, pending, "queryImportantPeople", [accountIds]),
+    setImportantPerson: (input) =>
+      callWorker<void>(worker, pending, "setImportantPerson", [input]),
+    searchSemantic: (query) =>
+      callWorker(worker, pending, "searchSemantic", [query]),
     observeMailbox: (query) => observe("mailbox", [query]),
     observeMailboxCounts: (query) => observe("mailboxCounts", [query]),
     observeMailboxWindow: (query) => {
@@ -373,6 +434,8 @@ async function createWorkerOwnedEngine(
       callWorker<void>(worker, pending, "releaseConversationMessages", [key]),
     getDiagnostics: (accountId) =>
       callWorker(worker, pending, "getDiagnostics", [accountId]),
+    getWaitingSummary: (accountIds) =>
+      callWorker(worker, pending, "getWaitingSummary", [accountIds]),
     forgetDeletedDrafts: (input) =>
       callWorker<void>(worker, pending, "forgetDeletedDrafts", [input]),
     ingestMessages: (input) =>
@@ -395,6 +458,7 @@ async function createWorkerOwnedEngine(
             type: "close",
           });
         } finally {
+          stopForwardingSessionReset();
           // SAHPool keeps OPFS handles until the worker is gone, even if the
           // graceful close RPC fails.
           worker.terminate();

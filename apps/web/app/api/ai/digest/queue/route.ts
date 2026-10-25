@@ -11,6 +11,6 @@ export const POST = createForwardingQueueHandler({
   visibilityTimeoutSeconds: 55,
   getLoggerContext: (payload) => ({
     emailAccountId: payload.emailAccountId,
-    messageId: payload.message.id,
+    messageId: payload.messageId,
   }),
 });

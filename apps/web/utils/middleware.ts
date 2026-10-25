@@ -6,6 +6,8 @@ import {
   captureException,
   checkCommonErrors,
   getEmailProviderRateLimitMessage,
+  isReconnectRequiredError,
+  NO_REFRESH_TOKEN_MESSAGE,
   SafeError,
 } from "@/utils/error";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
@@ -33,11 +35,13 @@ import {
   toRateLimitProvider,
 } from "@/utils/email/rate-limit-mode-error";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import { mailHttpErrorResponse } from "@inboxzero/mail-core/protocol/mail-http";
 import {
   EMAIL_ACCOUNT_HEADER,
   EMAIL_ACCOUNT_ID_REQUIRED_ERROR,
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
+  RECONNECT_REQUIRED_MESSAGE,
   SESSION_EXPIRED_ERROR_CODE,
 } from "@/utils/config";
 import { isAdmin } from "@/utils/admin";
@@ -53,6 +57,7 @@ import { startRequestTimer } from "@/utils/request-timing";
 import {
   createRequestMetrics,
   getRequestMetricsFields,
+  noteRequestPause,
   runWithRequestMetrics,
   timeRequestDependency,
 } from "@/utils/request-metrics";
@@ -101,6 +106,14 @@ export interface MiddlewareOptions {
    * quota waits then give up in time to answer before the platform kills it.
    */
   maxDuration?: number;
+  /**
+   * A POST that only reads, such as mail sync. Like a GET it trusts the
+   * session cookie cache (up to a minute stale after revocation) instead of
+   * checking the session in the database. Side effects such a route may have
+   * must be bookkeeping the caller cannot steer, like the debounced Gmail
+   * catch-up nudge mail/v1 changes schedules.
+   */
+  readOnly?: boolean;
   requestTiming?: {
     runningWarnAfterMs?: number;
     slowWarnAfterMs?: number;
@@ -208,22 +221,26 @@ function withMiddleware<T extends NextRequest>(
             );
 
             if (error instanceof SafeError) {
-              if (error.message === "No refresh token") {
-                getLogger(requestForError).warn("Returning 401", {
-                  reason: "no_refresh_token",
-                });
+              if (error.message === NO_REFRESH_TOKEN_MESSAGE) {
+                // Calendar clients throw a plain SafeError for the same state
+                // and keep logging it as a warning.
+                const log = getLogger(requestForError);
+                (isReconnectRequiredError(error) ? log.info : log.warn).call(
+                  log,
+                  "Returning 401",
+                  { reason: "no_refresh_token" },
+                );
                 if (publicApiRequest) {
                   return publicApiErrorResponse({
                     status: 401,
                     code: "UNAUTHORIZED",
-                    message:
-                      "Authorization required. Please grant permissions.",
+                    message: RECONNECT_REQUIRED_MESSAGE,
                   });
                 }
 
                 return NextResponse.json(
                   {
-                    error: "Authorization required. Please grant permissions.",
+                    error: RECONNECT_REQUIRED_MESSAGE,
                     errorCode: NO_REFRESH_TOKEN_ERROR_CODE,
                     isKnownError: true,
                   },
@@ -282,19 +299,33 @@ function withMiddleware<T extends NextRequest>(
                   retryAfterMs: deferred.retryAfterMs,
                 },
               );
+              noteRequestPause({
+                source: "quota_gate",
+                reason: deferred.reason,
+                retryAfterMs: deferred.retryAfterMs,
+              });
+              const headers = {
+                "Retry-After": String(Math.ceil(deferred.retryAfterMs / 1000)),
+              };
+              // The mail engine reads only the mail envelope's wait; any other
+              // body leaves it guessing.
+              if (scope?.startsWith("mail/v1/")) {
+                return NextResponse.json(
+                  mailHttpErrorResponse({
+                    requestId,
+                    code: "throttled",
+                    retryable: true,
+                    retryAfterMs: deferred.retryAfterMs,
+                  }),
+                  { status: 503, headers },
+                );
+              }
               return NextResponse.json(
                 {
                   error: "Gmail is busy for this account. Try again shortly.",
                   isKnownError: true,
                 },
-                {
-                  status: 503,
-                  headers: {
-                    "Retry-After": String(
-                      Math.ceil(deferred.retryAfterMs / 1000),
-                    ),
-                  },
-                },
+                { status: 503, headers },
               );
             }
 
@@ -420,19 +451,24 @@ function withMiddleware<T extends NextRequest>(
   };
 }
 
-function authMiddleware(req: NextRequest) {
-  return authenticate(req, getAuthLogContext(req));
+function authMiddleware(req: NextRequest, options?: MiddlewareOptions) {
+  return authenticate(req, getAuthLogContext(req), {
+    disableCookieCache: mayChangeState(req, options),
+  });
 }
 
 async function authenticate(
   req: NextRequest,
   authLogContext: AuthLogContext,
+  { disableCookieCache }: { disableCookieCache: boolean },
 ): Promise<RequestWithAuth | Response> {
   const baseLogger = getLogger(req);
 
   let session: Awaited<ReturnType<typeof auth>>;
   try {
-    session = await timeRequestDependency("auth", () => auth(req.headers));
+    session = await timeRequestDependency("auth", () =>
+      auth(req.headers, { disableCookieCache }),
+    );
   } catch (error) {
     baseLogger.warn("Auth middleware failed", {
       ...authLogContext,
@@ -454,6 +490,8 @@ async function authenticate(
       }),
     });
 
+    // The handler has not run, so the client may refresh the session and
+    // replay even a write that gets this code (utils/session-refresh.ts).
     return NextResponse.json(
       {
         error: "Unauthorized",
@@ -511,6 +549,13 @@ function getAuthLogContext(req: NextRequest) {
   };
 }
 
+// A revoked session's cookie cache still passes until it expires, so a request
+// that can change something checks the session in the database instead.
+function mayChangeState(req: NextRequest, options?: MiddlewareOptions) {
+  if (options?.readOnly) return false;
+  return !["GET", "HEAD", "OPTIONS"].includes(req.method);
+}
+
 // False only when the request offers nothing a session could come from, so
 // its 401 is certain before the session lookup answers.
 function mayCarrySession({ cookieNames, hasAuthorization }: AuthLogContext) {
@@ -553,7 +598,9 @@ async function resolveEmailAccount(
       ? startEmailAccountOwnershipCheck(emailAccountId)
       : null;
 
-  const authReq = await authenticate(req, authLogContext);
+  const authReq = await authenticate(req, authLogContext, {
+    disableCookieCache: mayChangeState(req, options),
+  });
   if (authReq instanceof Response) return authReq;
 
   const userId = authReq.auth.userId;
@@ -696,8 +743,12 @@ async function resolveEmailAccount(
 
 async function emailProviderMiddleware(
   req: NextRequest,
+  options?: MiddlewareOptions,
 ): Promise<RequestWithEmailProvider | Response> {
-  const resolved = await resolveEmailAccount(req);
+  // allowOrgAdmins never applied to provider access; only readOnly does.
+  const resolved = await resolveEmailAccount(req, {
+    readOnly: options?.readOnly,
+  });
   if (resolved instanceof Response) return resolved;
 
   const emailAccountReq = resolved.request;
@@ -731,6 +782,10 @@ async function emailProviderMiddleware(
 
     return providerReq;
   } catch (error) {
+    // The account is already marked as needing a reconnect; withMiddleware
+    // answers it with the typed 401, and createEmailProvider has logged it.
+    if (isReconnectRequiredError(error)) throw error;
+
     emailAccountReq.logger.error("Failed to create email provider", {
       error,
       emailAccountId,
@@ -758,7 +813,9 @@ async function emailProviderMiddleware(
 async function adminMiddleware(
   req: NextRequest,
 ): Promise<RequestWithAuth | Response> {
-  const authReq = await authMiddleware(req);
+  const authReq = await authenticate(req, getAuthLogContext(req), {
+    disableCookieCache: true,
+  });
   if (authReq instanceof Response) return authReq;
 
   const user = await prisma.user.findUnique({
@@ -814,13 +871,13 @@ export function withError(
 export function withAuth(
   scope: string,
   handler: NextHandler<RequestWithAuth>,
-  options?: Pick<MiddlewareOptions, "maxDuration">,
+  options?: Pick<MiddlewareOptions, "maxDuration" | "readOnly">,
 ): NextHandler;
 export function withAuth(handler: NextHandler<RequestWithAuth>): NextHandler;
 export function withAuth(
   scopeOrHandler: string | NextHandler<RequestWithAuth>,
   handler?: NextHandler<RequestWithAuth>,
-  options?: Pick<MiddlewareOptions, "maxDuration">,
+  options?: Pick<MiddlewareOptions, "maxDuration" | "readOnly">,
 ): NextHandler {
   if (typeof scopeOrHandler === "string") {
     return withMiddleware(handler!, authMiddleware, options, scopeOrHandler);

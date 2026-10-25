@@ -1,0 +1,139 @@
+/** @vitest-environment jsdom */
+
+import { describe, expect, it } from "vitest";
+import { linkifyMailHtml, linkifyPlainText } from "./linkify";
+
+describe("linkifyPlainText", () => {
+  it("finds web and email links while preserving the surrounding text", () => {
+    const text =
+      "Visit service.new/account or https://staging.example.com/verify?token=value.\nEmail support@example.com.";
+
+    const result = linkifyPlainText(text);
+
+    expect(result).toEqual([
+      { type: "text", text: "Visit " },
+      {
+        type: "link",
+        text: "service.new/account",
+        href: "http://service.new/account",
+      },
+      { type: "text", text: " or " },
+      {
+        type: "link",
+        text: "https://staging.example.com/verify?token=value",
+        href: "https://staging.example.com/verify?token=value",
+      },
+      { type: "text", text: ".\nEmail " },
+      {
+        type: "link",
+        text: "support@example.com",
+        href: "mailto:support@example.com",
+      },
+      { type: "text", text: "." },
+    ]);
+  });
+
+  it("leaves unsupported protocols as plain text", () => {
+    const text = "Files: ftp://example.com/file";
+
+    expect(linkifyPlainText(text)).toEqual([{ type: "text", text }]);
+  });
+
+  it("links a very long tracking URL in full", () => {
+    const text = `Track it: ${LONG_TRACKING_URL}\nThanks`;
+
+    expect(linkifyPlainText(text)).toEqual([
+      { type: "text", text: "Track it: " },
+      { type: "link", text: LONG_TRACKING_URL, href: LONG_TRACKING_URL },
+      { type: "text", text: "\nThanks" },
+    ]);
+  });
+
+  it("links a URL the sender wrapped across lines inside angle brackets", () => {
+    const wrapped = `${LONG_TRACKING_URL.slice(0, 76)}\n${LONG_TRACKING_URL.slice(76, 152)}\r\n  ${LONG_TRACKING_URL.slice(152)}`;
+    const text = `Reset your password:\n<${wrapped}>\nThanks`;
+
+    expect(linkifyPlainText(text)).toEqual([
+      { type: "text", text: "Reset your password:\n<" },
+      { type: "link", text: wrapped, href: LONG_TRACKING_URL },
+      { type: "text", text: ">\nThanks" },
+    ]);
+  });
+
+  it("does not join words across a space inside angle brackets", () => {
+    const text = "<https://example.com/a and\nmore>";
+
+    expect(linkifyPlainText(text)).toEqual([
+      { type: "text", text: "<" },
+      {
+        type: "link",
+        text: "https://example.com/a",
+        href: "https://example.com/a",
+      },
+      { type: "text", text: " and\nmore>" },
+    ]);
+  });
+  it("stops linking past ~100KB so a huge body stays fast", () => {
+    const filler = "word ".repeat(30_000);
+    const text = `https://first.example.com ${filler}https://last.example.com`;
+
+    const links = linkifyPlainText(text).filter(
+      (segment) => segment.type === "link",
+    );
+
+    expect(links).toEqual([
+      {
+        type: "link",
+        text: "https://first.example.com",
+        href: "https://first.example.com/",
+      },
+    ]);
+    expect(
+      linkifyPlainText(text)
+        .map((segment) => segment.text)
+        .join(""),
+    ).toBe(text);
+  });
+
+  it("keeps two bracketed URLs on separate lines as separate links", () => {
+    const text = "<https://first.example.com\nhttps://second.example.com>";
+
+    expect(linkHrefs(linkifyPlainText(text))).toEqual([
+      "https://first.example.com/",
+      "https://second.example.com/",
+    ]);
+  });
+
+  it("does not stop the link budget inside a wrapped URL", () => {
+    const text = "Reset: <https://a.example.com/very\nlong/path> done";
+    const segments = linkifyPlainText(text, 36);
+
+    expect(linkHrefs(segments)).toEqual([]);
+    expect(segments.map((segment) => segment.text).join("")).toBe(text);
+  });
+});
+
+describe("linkifyMailHtml", () => {
+  it("leaves text in SVG and MathML alone", () => {
+    const document = new DOMParser().parseFromString(
+      "<p>https://html.example.com</p><svg><text>https://svg.example.com</text></svg><math><mi>https://math.example.com</mi></math>",
+      "text/html",
+    );
+
+    linkifyMailHtml(document.documentElement);
+
+    expect(
+      Array.from(document.querySelectorAll("a"), (anchor) =>
+        anchor.getAttribute("href"),
+      ),
+    ).toEqual(["https://html.example.com/"]);
+  });
+});
+
+const LONG_TRACKING_URL = `https://click.mail.example.com/ls/click?upn=${"u001.aB3-_x%2F9".repeat(18)}&utm_source=newsletter`;
+
+function linkHrefs(segments: ReturnType<typeof linkifyPlainText>) {
+  return segments.flatMap((segment) =>
+    segment.type === "link" ? [segment.href] : [],
+  );
+}

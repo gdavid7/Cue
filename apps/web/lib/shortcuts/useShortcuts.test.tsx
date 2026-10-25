@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Suspense, startTransition } from "react";
 import {
+  ALL_SHORTCUTS_OFF,
   MAIL_SHORTCUTS_OFF_ATTRIBUTE,
   SEQUENCE_TIMEOUT_MS,
   SHORTCUTS,
@@ -261,6 +262,28 @@ describe("useShortcuts", () => {
 
     press({ key: "e", code: "KeyE" });
     expect(archive).toHaveBeenCalledOnce();
+  });
+
+  it("runs no shortcut at all from a surface that turns every one off", () => {
+    const archive = vi.fn();
+    const compose = vi.fn();
+    const commandPalette = vi.fn();
+    renderShortcuts({ archive, compose, commandPalette });
+    const overlay = appendElement("div", {
+      [MAIL_SHORTCUTS_OFF_ATTRIBUTE]: ALL_SHORTCUTS_OFF,
+    });
+    const inside = appendElement("button");
+    overlay.append(inside);
+
+    press({ key: "e", code: "KeyE" }, inside);
+    press({ key: "c", code: "KeyC" }, inside);
+    press({ key: "k", code: "KeyK", ctrlKey: true }, inside);
+    expect(archive).not.toHaveBeenCalled();
+    expect(compose).not.toHaveBeenCalled();
+    expect(commandPalette).not.toHaveBeenCalled();
+
+    press({ key: "c", code: "KeyC" });
+    expect(compose).toHaveBeenCalledOnce();
   });
 
   it("leaves Enter to a focused control that activates on it", () => {

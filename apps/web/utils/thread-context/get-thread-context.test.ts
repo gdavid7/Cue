@@ -77,6 +77,21 @@ describe("getThreadContext", () => {
     }
   });
 
+  // The open thread is already read and is dropped from its own context, so
+  // the participant search does not read it again (120 Gmail units each).
+  it("asks each participant's threads without the open thread", async () => {
+    const provider = renewalProvider();
+
+    await run(provider, "renewal");
+
+    expect(provider.getThreadsWithParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        participantEmail: "nora@northwind.com",
+        excludeThreadId: "renewal",
+      }),
+    );
+  });
+
   it("reads only the thread when the reader already has its context", async () => {
     const provider = renewalProvider();
     const known = [

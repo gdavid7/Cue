@@ -25,6 +25,7 @@ export function useMailAppLinks() {
       appLinks: manageItems
         .filter(
           (item) =>
+            !item.disabled &&
             !isMailPath(item.href) &&
             !item.href.endsWith("/mail") &&
             !item.href.split("?")[0].endsWith("/home"),
