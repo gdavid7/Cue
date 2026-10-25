@@ -46,6 +46,22 @@ test("never paints an empty reader when moving between loaded HTML threads", asy
     };
     requestAnimationFrame(sample);
   });
+  // The iframe is tall before its body is painted, so the frames until the
+  // first painted one belong to opening the thread, not to moving between
+  // loaded threads.
+  await page.waitForFunction(
+    () =>
+      (
+        window as unknown as { readerPaintSamples: boolean[] }
+      ).readerPaintSamples.includes(true),
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.evaluate(() => {
+    (
+      window as unknown as { readerPaintSamples: boolean[] }
+    ).readerPaintSamples.length = 0;
+  });
   const initialUrl = page.url();
   await page.getByRole("button", { name: /^More actions/ }).click();
   await expect(page.getByRole("menu")).toBeVisible();
