@@ -373,6 +373,79 @@ describe("HomeDashboard row actions", () => {
   });
 });
 
+describe("HomeDashboard Nudge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = {
+      ...homeData([thread("first", "Quarterly numbers")]),
+      waiting: [thread("sent", "Contract draft")],
+    };
+  });
+
+  afterEach(cleanup);
+
+  it("is on Waiting on rows only, in place of Reply", () => {
+    renderToday();
+
+    expect(
+      within(rowFor("sent")).getAllByRole("button", { name: NUDGE }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(rowFor("sent")).queryAllByRole("button", {
+        name: "Reply to conversation",
+      }),
+    ).toHaveLength(0);
+    expect(
+      within(rowFor("first")).queryAllByRole("button", { name: NUDGE }),
+    ).toHaveLength(0);
+  });
+
+  it("opens a reply on the conversation, returning to Today", () => {
+    renderToday();
+
+    fireEvent.click(
+      within(rowFor("sent")).getAllByRole("button", { name: NUDGE })[0],
+    );
+
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/inbox/sent?from=today&reply=1",
+    );
+  });
+
+  it("nudges the focused Waiting on row with Shift+N, and no other row", () => {
+    renderToday();
+
+    act(() => optionFor("first").focus());
+    fireEvent.keyDown(optionFor("first"), SHIFT_N);
+    expect(mocks.push).not.toHaveBeenCalled();
+
+    act(() => optionFor("sent").focus());
+    fireEvent.keyDown(optionFor("sent"), SHIFT_N);
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/inbox/sent?from=today&reply=1",
+    );
+  });
+
+  it("leaves Shift+N to the text while typing", () => {
+    render(
+      <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
+        <input aria-label="Notes" />
+        <HomeDashboard />
+      </ShortcutsProvider>,
+    );
+    act(() => optionFor("sent").focus());
+    const notes = screen.getByRole("textbox", { name: "Notes" });
+    act(() => notes.focus());
+
+    fireEvent.keyDown(notes, SHIFT_N);
+
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+});
+
 describe("HomeDashboard notices", () => {
   afterEach(cleanup);
 
@@ -1514,6 +1587,24 @@ describe("HomeDashboard across accounts", () => {
     );
   });
 
+  it("nudges a Waiting on row in its own account", () => {
+    mocks.homes["account-b"] = {
+      ...homeData([]),
+      waiting: [thread("b-sent", "Contract draft")],
+    };
+    renderToday();
+
+    fireEvent.click(
+      within(rowFor("account-b:b-sent")).getAllByRole("button", {
+        name: NUDGE,
+      })[0],
+    );
+
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/all-inboxes/inbox/b-sent?account=1&from=today&reply=1",
+    );
+  });
+
   it("names an account whose lane failed, and never says all is clear", () => {
     mocks.homes = {
       account: homeData([]),
@@ -2053,6 +2144,9 @@ function savedYesterday() {
   expect(copy?.earlierDay).toBe(true);
   return copy;
 }
+
+const NUDGE = "Nudge: follow up on conversation";
+const SHIFT_N = { key: "N", code: "KeyN", shiftKey: true };
 
 type TodayCatchUpProps = Parameters<typeof CatchUpEntry>[0];
 

@@ -612,6 +612,58 @@ test("replies to a conversation from Today in the reader", async ({ page }) => {
   await expect(page).toHaveURL(/\/home(\?|$)/);
 });
 
+test("nudges a conversation you're waiting on, addressed to the people you last wrote to", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  const sent = await seedSentConversation(page, `Nudge me ${Date.now()}`);
+  try {
+    await seedAwaiting(emailAccountId, sent.threadId);
+    await openToday(page);
+    const row = page
+      .getByRole("listbox", { name: "Waiting on" })
+      .locator(`[data-today-thread="${sent.threadId}"]`);
+    await row.getByRole("option").hover();
+    const nudge = row.getByRole("button", {
+      name: "Nudge: follow up on conversation",
+    });
+    await expect(nudge).toBeVisible();
+    await expect(
+      row.getByRole("button", { name: "Reply to conversation" }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-nudge-row");
+    await nudge.click();
+
+    await expect(page).toHaveURL(/[?&]from=today/);
+    const editor = page.locator(
+      '[data-testid="thread-reader"] [data-email-editor-content]',
+    );
+    await expect(editor).toBeFocused({ timeout: 60_000 });
+    await expect(editor).toHaveText(/^\s*$/);
+    await expect(page).not.toHaveURL(/[?&]reply=1/);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-nudge-composer");
+
+    // To the people on the user's own last message, not back to the user.
+    const reader = page.locator('[data-testid="thread-reader"]');
+    await reader.getByRole("button", { name: /^Reply to / }).click();
+    for (const chip of [
+      /^Remove .*kai@example\.com/,
+      /^Remove .*lin@example\.com/,
+    ])
+      await expect(reader.getByRole("button", { name: chip })).toBeVisible();
+
+    // Shift+N on the focused row does the same.
+    await page.getByRole("button", { name: "Back to inbox" }).click();
+    await expect(page).toHaveURL(/\/home(\?|$)/);
+    await row.getByRole("option").focus();
+    await page.keyboard.press("Shift+N");
+    await expect(page).toHaveURL(/[?&]from=today/);
+    await expect(editor).toBeFocused({ timeout: 60_000 });
+  } finally {
+    await sent.remove();
+  }
+});
+
 test("a reply sent from Outlook clears the conversation from Needs reply", async ({
   page,
 }, testInfo) => {
@@ -967,6 +1019,93 @@ async function openToday(page: Page) {
 
 function todayRow(page: Page, threadId: string) {
   return page.locator(`[data-today-thread="${threadId}"]`);
+}
+
+const KAI_ADDRESS = "kai@example.com";
+const LIN_ADDRESS = "lin@example.com";
+
+/** A tracker saying the user is waiting on the conversation's other side. */
+async function seedAwaiting(emailAccountId: string, threadId: string) {
+  await withClient((client) =>
+    client.query(
+      `INSERT INTO "ThreadTracker" ("id", "updatedAt", "sentAt", "threadId", "messageId", "type", "emailAccountId")
+       VALUES ($1, now(), now(), $2, $1, 'AWAITING', $3)
+       ON CONFLICT ("emailAccountId", "threadId", "messageId") DO UPDATE SET "resolved" = false`,
+      [`${TRACKER_PREFIX}awaiting-${threadId}`, threadId, emailAccountId],
+    ),
+  );
+}
+
+/**
+ * A conversation that is only the user's own message to Kai, copying Lin,
+ * and what takes it out again.
+ */
+async function seedSentConversation(page: Page, subject: string) {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    const draft = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Any thoughts on the draft?" },
+        toRecipients: [
+          { emailAddress: { address: KAI_ADDRESS, name: "Kai Example" } },
+        ],
+        ccRecipients: [
+          { emailAddress: { address: LIN_ADDRESS, name: "Lin Example" } },
+        ],
+      },
+    });
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const moved = await page.request.post(`${base}/messages/${draftId}/move`, {
+      headers,
+      data: { destinationId: "sentitems" },
+    });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return {
+      threadId: message.conversationId,
+      remove: async () => {
+        await page.request.post(
+          `${base}/messages/${message.id}/permanentDelete`,
+          { headers },
+        );
+      },
+    };
+  }
+
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const inserted = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      from: email,
+      to: `Kai Example <${KAI_ADDRESS}>`,
+      cc: `Lin Example <${LIN_ADDRESS}>`,
+      subject,
+      body_text: "Any thoughts on the draft?",
+      labelIds: ["SENT"],
+      internalDate: String(Date.now() - 3_600_000),
+    },
+  });
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string; threadId: string };
+  return {
+    threadId: message.threadId,
+    remove: async () => {
+      await page.request.delete(`${base}/messages/${message.id}`, { headers });
+    },
+  };
 }
 
 async function seedNeedsReply(emailAccountId: string, threadIds: string[]) {

@@ -419,6 +419,15 @@ const SHORTCUT_DEFINITIONS = [
     label: "Reply",
   },
   {
+    // Today's Waiting on rows only. `n` alone is the next message, and Cue
+    // binds no other Shift+N.
+    id: "nudge",
+    keys: ["shift+n"],
+    scope: "mail",
+    group: "Triage",
+    label: "Nudge someone you're waiting on",
+  },
+  {
     id: "replyAll",
     keys: ["a"],
     scope: "mail",
