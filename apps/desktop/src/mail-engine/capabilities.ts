@@ -14,4 +14,6 @@ export const DESKTOP_MAIL_ENGINE_CAPABILITIES: MailEngineCapabilities = [
   "method:observeMailboxWindow",
   "method:forgetDeletedDrafts",
   "method:getWaitingSummary",
+  "method:queryImportantPeople",
+  "method:setImportantPerson",
 ];

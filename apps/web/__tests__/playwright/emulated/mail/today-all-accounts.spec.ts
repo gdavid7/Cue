@@ -336,6 +336,16 @@ test("mail another account may list in Needs reply waits for it, then shows once
     await expect(
       page.getByRole("main").getByRole("status").first(),
     ).toBeVisible({ timeout: 60_000 });
+    // The primary's other rows are the positive sign that Today has rendered
+    // what it can; absence checks before that pass because nothing is there.
+    await expect(
+      page
+        .getByRole("listbox", { name: "Also in your inbox", exact: true })
+        .locator(
+          `[data-today-thread]:not([data-today-thread$=":${seeded.threadId}"]) [role="option"]`,
+        )
+        .first(),
+    ).toBeVisible({ timeout: 60_000 });
     await expect(waitingOnYou).toHaveCount(0);
     // At most once: the primary's copy may show with the rest of its inbox.
     expect(await copies.count()).toBeLessThanOrEqual(1);

@@ -86,11 +86,16 @@ export function useEngineMailThreads({
     client.requestSync(resolvedAccountIds).catch(() => undefined);
   }, [client, enabled, resolvedAccountIds]);
 
-  const { failedAccountIds } = useFailedAccountIds(
+  const failedRead = useFailedAccountIds(
     enabled ? client : null,
     resolvedAccountIds,
     mailbox.data?.connection,
   );
+  // Until the check answers for this connection, every account looks
+  // reachable, rather than the ones an earlier answer named.
+  const failedAccountIds = failedRead.settled
+    ? failedRead.failedAccountIds
+    : NO_ACCOUNT_IDS;
 
   const coverage = mailbox.data?.coverage;
   // Every pushed snapshot carries fresh coverage; keyed so consumers only see
@@ -315,9 +320,11 @@ export function useFailedAccountIds(
 ) {
   const [read, setRead] = useState<{
     failedAccountIds: string[];
-    accountIds: string[];
+    accountsKey: string;
     connection: MailboxView["connection"];
   } | null>(null);
+  // By content: callers may pass a fresh array each render.
+  const accountsKey = accountIds.join("\n");
   const reads = Boolean(client && connection && connection !== "ready");
   useEffect(() => {
     if (!client || !connection || connection === "ready") {
@@ -325,19 +332,19 @@ export function useFailedAccountIds(
       return;
     }
     let cancelled = false;
-    readFailedAccountIds(client, accountIds).then((failed) => {
+    readFailedAccountIds(client, accountsKey.split("\n")).then((failed) => {
       if (!cancelled)
-        setRead({ failedAccountIds: failed, accountIds, connection });
+        setRead({ failedAccountIds: failed, accountsKey, connection });
     });
     return () => {
       cancelled = true;
     };
-  }, [client, connection, accountIds]);
+  }, [client, connection, accountsKey]);
   return {
     failedAccountIds: (reads && read?.failedAccountIds) || NO_ACCOUNT_IDS,
     settled:
       !reads ||
-      (read?.connection === connection && read?.accountIds === accountIds),
+      (read?.connection === connection && read?.accountsKey === accountsKey),
   };
 }
 

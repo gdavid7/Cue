@@ -142,6 +142,12 @@
     "utils/mail-api/assistant-state.ts",
     "app/api/mail/v1/accounts/[accountId]/assistant-state/route.ts"
   ],
+  "hosted-electron-archive-new-mail.spec.ts": [
+    "utils/mail-engine/MailEngineHost.tsx",
+    "utils/mail-engine/desktop-ipc.ts",
+    "utils/mail-engine/runtime-mode.ts",
+    "utils/mail-engine/MailEngineConnectionBanner.tsx"
+  ],
   "attachment-previews.spec.ts": [
     "components/email-list/EmailAttachments.tsx",
     "components/email-list/DownloadAllButton.tsx"

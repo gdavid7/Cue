@@ -431,6 +431,69 @@ describe("useEngineMailThreads", () => {
   });
 });
 
+describe("useEngineMailThreads unreachable accounts", () => {
+  it("names no failed account until the check answers for the current connection", async () => {
+    let snapshot = mailboxSnapshot();
+    const listeners = new Set<() => void>();
+    const push = (connection: "offline" | "blocked_auth") => {
+      snapshot = {
+        ...snapshot,
+        data: { ...snapshot.data!, connection },
+      };
+      for (const listener of listeners) listener();
+    };
+    let answerSecondCheck: (() => void) | undefined;
+    const getDiagnostics = vi
+      .fn()
+      .mockResolvedValueOnce({ connection: "offline" })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerSecondCheck = () => resolve({ connection: "ready" });
+          }),
+      );
+    const client = {
+      observeMailbox: () => ({
+        getSnapshot: () => snapshot,
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        close: () => undefined,
+      }),
+      getDiagnostics,
+      requestSync: vi.fn(async () => ({ status: "scheduled" as const })),
+    } as unknown as MailClient;
+    const { result } = renderHook(
+      () =>
+        useEngineMailThreads({
+          emailAccountId: "acc-1",
+          providers: GMAIL,
+          query: { type: "inbox" } as ThreadsQuery,
+        }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <MailEngineProvider client={client}>{children}</MailEngineProvider>
+        ),
+      },
+    );
+
+    act(() => push("offline"));
+    await waitFor(() =>
+      expect(result.current.failedAccountIds).toEqual(["acc-1"]),
+    );
+
+    // The connection changed, and the account may well have recovered: the
+    // earlier answer says nothing about it.
+    act(() => push("blocked_auth"));
+    expect(result.current.failedAccountIds).toEqual([]);
+
+    await act(async () => answerSecondCheck?.());
+    await waitFor(() => expect(getDiagnostics).toHaveBeenCalledTimes(2));
+    expect(result.current.failedAccountIds).toEqual([]);
+  });
+});
+
 describe("useEngineMailThreads in All inboxes", () => {
   it("shows a message delivered to two accounts once, saying where else it is", async () => {
     const { result } = renderAllInboxes([

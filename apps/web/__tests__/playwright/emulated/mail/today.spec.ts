@@ -410,7 +410,12 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
     // Today's own answer only, not its other routes.
     (url) => url.pathname === "/api/user/home",
     async (route) => {
-      const response = await route.fetch();
+      // Today refreshes while it loads; the test may end with one in flight.
+      const response = await route.fetch().catch(() => null);
+      if (!response) {
+        await route.abort();
+        return;
+      }
       const home = await response.json();
       if (!cueHasRead) {
         home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
@@ -491,6 +496,7 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
     await expect(needsReply).toBeVisible();
     await expect(waitingOnYou).toHaveCount(0);
   } finally {
+    await page.unrouteAll({ behavior: "wait" });
     await seeded.remove();
     await other.remove();
   }
@@ -527,7 +533,10 @@ test("a new mailbox shows Waiting on you from local mail before Today answers, a
       await released;
       // Released as the test ends, the page may already be gone.
       const response = await route.fetch().catch(() => null);
-      if (!response) return;
+      if (!response) {
+        await route.abort();
+        return;
+      }
       const home = await response.json();
       home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
       home.needsYou = [];
@@ -715,7 +724,11 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
     // Today's own answer only, not its other routes.
     (url) => url.pathname === "/api/user/home",
     async (route) => {
-      const response = await route.fetch();
+      const response = await route.fetch().catch(() => null);
+      if (!response) {
+        await route.abort();
+        return;
+      }
       const home = await response.json();
       // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
       home.cue = {
@@ -729,60 +742,68 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
   );
   const main = page.getByRole("main");
 
-  for (const theme of ["light", "dark"] as const) {
-    await page.emulateMedia({ colorScheme: theme });
-    await page.addInitScript((value) => {
-      localStorage.setItem("theme", value);
-    }, theme);
-    for (const next of ["busy", "clear", "new"] as const) {
-      state = next;
-      const emailAccountId = await getEmailAccountId(page);
-      await page.goto(`/${emailAccountId}/home`, {
-        waitUntil: "domcontentloaded",
-      });
-      const status = main.getByRole("status");
-      if (next === "busy") {
-        await expect(status).toHaveText(/^\d+\+? needs? a reply/, {
-          timeout: 60_000,
+  try {
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.addInitScript((value) => {
+        localStorage.setItem("theme", value);
+      }, theme);
+      for (const next of ["busy", "clear", "new"] as const) {
+        state = next;
+        const emailAccountId = await getEmailAccountId(page);
+        await page.goto(`/${emailAccountId}/home`, {
+          waitUntil: "domcontentloaded",
         });
-        await expect(
-          page.getByRole("listbox", { name: "Needs reply" }),
-        ).toBeVisible();
-      } else if (next === "clear") {
-        await expect(status).toContainText("All clear.", { timeout: 60_000 });
-        await expect(status).toContainText("Nothing needs a reply.");
-        await expect(
-          page.getByRole("listbox", { name: "Needs reply" }),
-        ).toHaveCount(0);
-      } else {
-        await expect(status).toContainText("Cue is reading your recent mail.", {
-          timeout: 60_000,
-        });
-        await expect(status).toContainText(
-          "What needs a reply will appear here.",
-        );
-        await expect(page.getByText("All clear.")).toHaveCount(0);
+        const status = main.getByRole("status");
+        if (next === "busy") {
+          await expect(status).toHaveText(/^\d+\+? needs? a reply/, {
+            timeout: 60_000,
+          });
+          await expect(
+            page.getByRole("listbox", { name: "Needs reply" }),
+          ).toBeVisible();
+        } else if (next === "clear") {
+          await expect(status).toContainText("All clear.", { timeout: 60_000 });
+          await expect(status).toContainText("Nothing needs a reply.");
+          await expect(
+            page.getByRole("listbox", { name: "Needs reply" }),
+          ).toHaveCount(0);
+        } else {
+          await expect(status).toContainText(
+            "Cue is reading your recent mail.",
+            {
+              timeout: 60_000,
+            },
+          );
+          await expect(status).toContainText(
+            "What needs a reply will appear here.",
+          );
+          await expect(page.getByText("All clear.")).toHaveCount(0);
+        }
+        // One line carries the state; empty lanes don't each say so.
+        await expect(status).toHaveCount(1);
+        await expect(page.getByText(/Nothing here|caught up/)).toHaveCount(0);
+        for (const size of [
+          { width: 1280, height: 800 },
+          { width: 390, height: 844 },
+        ]) {
+          await page.setViewportSize(size);
+          const scrollWidth = await page.evaluate(
+            () => document.documentElement.scrollWidth,
+          );
+          expect(scrollWidth).toBeLessThanOrEqual(size.width);
+          await capturePlaywrightCheckpoint(
+            page,
+            testInfo,
+            `today-${next}-${theme}-${size.width}`,
+          );
+        }
+        await page.setViewportSize({ width: 1280, height: 800 });
       }
-      // One line carries the state; empty lanes don't each say so.
-      await expect(status).toHaveCount(1);
-      await expect(page.getByText(/Nothing here|caught up/)).toHaveCount(0);
-      for (const size of [
-        { width: 1280, height: 800 },
-        { width: 390, height: 844 },
-      ]) {
-        await page.setViewportSize(size);
-        const scrollWidth = await page.evaluate(
-          () => document.documentElement.scrollWidth,
-        );
-        expect(scrollWidth).toBeLessThanOrEqual(size.width);
-        await capturePlaywrightCheckpoint(
-          page,
-          testInfo,
-          `today-${next}-${theme}-${size.width}`,
-        );
-      }
-      await page.setViewportSize({ width: 1280, height: 800 });
     }
+  } finally {
+    // Today refreshes while it loads; one may still be in the route.
+    await page.unrouteAll({ behavior: "wait" });
   }
 });
 
