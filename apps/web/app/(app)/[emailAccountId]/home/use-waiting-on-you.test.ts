@@ -11,6 +11,7 @@ import {
   dismissWaitingOnYou,
   isWaitingOnYouDismissed,
   keepShownOrder,
+  rememberShownOrder,
 } from "./use-waiting-on-you";
 
 const ROW = { conversationId: "t1", messageId: "m1" };
@@ -110,5 +111,19 @@ describe("keepShownOrder", () => {
     );
 
     expect(ids(keepShownOrder(keys(shown), next, 5))).toEqual(["c", "b"]);
+  });
+
+  it("puts a row that left and came back, as an undo does, in its place again", () => {
+    const all = [at("e", 50), at("d", 40), at("c", 30), at("b", 20)];
+    const shown = keepShownOrder([], all, 3);
+    const order = rememberShownOrder([], shown, all);
+    // c is archived: b fills its place.
+    const withoutC = all.filter((row) => row.conversationId !== "c");
+    const filled = keepShownOrder(order, withoutC, 3);
+    expect(ids(filled)).toEqual(["e", "d", "b"]);
+
+    // The undo brings c back where it was.
+    const remembered = rememberShownOrder(order, filled, withoutC);
+    expect(ids(keepShownOrder(remembered, all, 3))).toEqual(["e", "d", "c"]);
   });
 });
