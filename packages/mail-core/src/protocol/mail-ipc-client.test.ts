@@ -3,6 +3,7 @@ import {
   BASELINE_MAIL_ENGINE_CAPABILITIES,
   mailClientSupports,
 } from "../capabilities";
+import { supportsImportantPeople } from "../important-people";
 import { mailIpcRequestSchema } from "./mail-ipc";
 import { createMailIpcClient } from "./mail-ipc-client";
 
@@ -44,8 +45,64 @@ describe("mail IPC capability handshake", () => {
     expect(mailClientSupports(client, "method:forgetDeletedDrafts")).toBe(true);
     // Reported, but this page's client has no way to ask for it.
     expect(mailClientSupports(client, "method:queryWaitingOnYou")).toBe(false);
-    // IPC v1 relays no Important stars, so the person card hides its star.
-    expect(mailClientSupports(client, "method:setImportantPerson")).toBe(false);
+    expect(mailClientSupports(client, "method:setImportantPerson")).toBe(true);
+  });
+
+  it("hides Important stars on a desktop build that doesn't report them", () => {
+    const client = createMailIpcClient(vi.fn(), {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+      capabilities: [
+        "order:newest_first",
+        "method:observeMailboxWindow",
+        "method:getWaitingSummary",
+      ],
+    });
+
+    expect(supportsImportantPeople(client)).toBe(false);
+  });
+
+  it("sends Important star requests the desktop schema accepts", async () => {
+    const invoke = vi.fn(async (_payload: unknown) => ({
+      status: "ok",
+      result: [],
+    }));
+    const client = createMailIpcClient(invoke, {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+      capabilities: [
+        "method:queryImportantPeople",
+        "method:setImportantPerson",
+      ],
+    });
+    expect(supportsImportantPeople(client)).toBe(true);
+
+    await client.queryImportantPeople?.(["acc-1", "acc-2"]);
+    await expect(
+      client.setImportantPerson?.({
+        accountIds: ["acc-1"],
+        email: "dana@example.com",
+        important: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(invoke.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({
+        method: "queryImportantPeople",
+        payload: { accountIds: ["acc-1", "acc-2"] },
+      }),
+      expect.objectContaining({
+        method: "setImportantPerson",
+        payload: {
+          accountIds: ["acc-1"],
+          email: "dana@example.com",
+          important: true,
+        },
+      }),
+    ]);
+    for (const [request] of invoke.mock.calls) {
+      expect(mailIpcRequestSchema.safeParse(request).success).toBe(true);
+    }
   });
 
   it("keeps sending requests an engine that predates reporting accepts", async () => {

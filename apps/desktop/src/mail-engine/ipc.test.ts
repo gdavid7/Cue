@@ -42,6 +42,56 @@ describe("dispatchMailIpc", () => {
     });
   });
 
+  it("relays Important stars to the desktop engine", async () => {
+    const stars = [
+      { accountId: "acc-1", email: "dana@example.com", addedAtMs: 1 },
+    ];
+    const queryImportantPeople = vi.fn(async () => stars);
+    const setImportantPerson = vi.fn(async () => {});
+    const engine = { queryImportantPeople, setImportantPerson } as never;
+
+    await expect(
+      dispatchMailIpc(engine, {
+        protocolVersion: MAIL_IPC_PROTOCOL_VERSION,
+        requestId: "req-1",
+        method: "queryImportantPeople",
+        payload: { accountIds: ["acc-1"] },
+      }),
+    ).resolves.toEqual({ status: "ok", result: stars });
+    expect(queryImportantPeople).toHaveBeenCalledWith(["acc-1"]);
+
+    const star = {
+      accountIds: ["acc-1", "acc-2"],
+      email: "dana@example.com",
+      important: false,
+    };
+    await expect(
+      dispatchMailIpc(engine, {
+        protocolVersion: MAIL_IPC_PROTOCOL_VERSION,
+        requestId: "req-2",
+        method: "setImportantPerson",
+        payload: star,
+      }),
+    ).resolves.toEqual({ status: "ok", result: null });
+    expect(setImportantPerson).toHaveBeenCalledWith(star);
+  });
+
+  it("rejects an Important star write beyond the account limit", async () => {
+    const setImportantPerson = vi.fn(async () => {});
+    const result = await dispatchMailIpc({ setImportantPerson } as never, {
+      protocolVersion: MAIL_IPC_PROTOCOL_VERSION,
+      requestId: "req-1",
+      method: "setImportantPerson",
+      payload: {
+        accountIds: Array.from({ length: 51 }, (_, index) => `acc-${index}`),
+        email: "dana@example.com",
+        important: true,
+      },
+    });
+    expect(result).toMatchObject({ status: "invalid" });
+    expect(setImportantPerson).not.toHaveBeenCalled();
+  });
+
   it("advertises exactly the optional methods its IPC schema routes", () => {
     const routed = Object.fromEntries(
       mailIpcRequestSchema.options.map((option) => [

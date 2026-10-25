@@ -83,6 +83,11 @@ export function createMailIpcClient(
     getDiagnostics: (accountId) => call("getDiagnostics", { accountId }),
     getWaitingSummary: (accountIds) =>
       call("getWaitingSummary", { accountIds }),
+    queryImportantPeople: (accountIds) =>
+      call("queryImportantPeople", { accountIds }),
+    setImportantPerson: async (input) => {
+      await call("setImportantPerson", input);
+    },
     forgetDeletedDrafts: (input) => call("forgetDeletedDrafts", input),
     purgeAccount: (accountId) => call("purgeAccount", { accountId }),
     retainAccounts: (accountIds) => call("retainAccounts", { accountIds }),
