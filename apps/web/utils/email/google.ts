@@ -107,6 +107,10 @@ import {
 import { getLatestNonDraftMessage } from "@/utils/email/latest-message";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import {
+  pickThreadHeadline,
+  type ThreadHeadline,
+} from "@/utils/email/thread-headline";
+import {
   getFiltersList,
   createFilter,
   deleteFilter,
@@ -1756,6 +1760,28 @@ export class GmailProvider implements EmailProvider {
       isDraft: (message) =>
         message.labelIds?.includes(GmailLabel.DRAFT) ?? false,
       getTimestamp: getMessageTimestamp,
+    });
+  }
+
+  async getThreadHeadline(
+    threadId: string,
+    ownEmail: string,
+  ): Promise<ThreadHeadline | null> {
+    return this.withRateLimitTracking("get-thread-headline", async () => {
+      const { data } = await this.client.users.threads.get({
+        userId: "me",
+        id: threadId,
+        format: "metadata",
+        metadataHeaders: ["Subject", "From"],
+      });
+      return pickThreadHeadline({
+        messages: (data.messages || []).map((message) =>
+          parseMessage(message as MessageWithPayload),
+        ),
+        ownEmail,
+        isDraft: (message) =>
+          message.labelIds?.includes(GmailLabel.DRAFT) ?? false,
+      });
     });
   }
 

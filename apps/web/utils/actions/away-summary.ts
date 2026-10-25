@@ -20,7 +20,7 @@ export const dismissAwaySummaryAction = actionClientUser
 
 /** The browser saw the user using the app; see VisitRecorder. */
 export const recordVisitAction = actionClientUser
-  .metadata({ name: "recordVisit" })
+  .metadata({ name: "recordVisit", backgroundCall: true })
   .action(async ({ ctx: { userId } }) => {
     const returned = await recordLastLogin(userId);
     return { returned };

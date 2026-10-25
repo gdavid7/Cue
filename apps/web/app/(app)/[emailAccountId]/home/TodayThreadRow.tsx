@@ -2,6 +2,7 @@
 
 import {
   ArchiveIcon,
+  BellRingIcon,
   EllipsisIcon,
   type LucideIcon,
   ReplyIcon,
@@ -28,6 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { cn } from "@/utils";
 import { CUE_DRAFTED_REPLY } from "@/utils/inbox-insights/compose-insight";
 import type { TodayThread } from "@/utils/home/merge-home";
@@ -79,6 +81,9 @@ export function TodayThreadRow({
 }) {
   const id = rowKey;
   const CorrectionIcon = correction?.icon;
+  // Replying on a conversation the user wrote last is a follow-up: the reply
+  // goes to the people on their own last message.
+  const reply = waiting ? NUDGE : REPLY;
 
   return (
     <div className="contents" data-today-thread={id}>
@@ -113,9 +118,9 @@ export function TodayThreadRow({
                   />
                 ) : null}
                 <RowButton
-                  ariaLabel="Reply to conversation"
-                  icon={ReplyIcon}
-                  label="Reply"
+                  ariaLabel={reply.ariaLabel}
+                  icon={reply.icon}
+                  label={reply.label}
                   onClick={() => handlers.reply(id)}
                 />
                 {canChange ? (
@@ -131,8 +136,8 @@ export function TodayThreadRow({
             </div>
             <div className="flex shrink-0 items-center border-border/60 border-b bg-background pr-1.5 sm:hidden">
               <PhoneButton
-                icon={ReplyIcon}
-                label="Reply to conversation"
+                icon={reply.icon}
+                label={reply.ariaLabel}
                 onClick={() => handlers.reply(id)}
               />
               {thread.inInbox ? (
@@ -260,6 +265,17 @@ export function TodayThreadRow({
     </div>
   );
 }
+
+const REPLY = {
+  icon: ReplyIcon,
+  label: "Reply",
+  ariaLabel: "Reply to conversation",
+};
+const NUDGE = {
+  icon: BellRingIcon,
+  label: `Nudge (${getShortcutHint("nudge")})`,
+  ariaLabel: "Nudge: follow up on conversation",
+};
 
 // 40px: the smallest comfortable target for a thumb.
 const PHONE_BUTTON_CLASS =

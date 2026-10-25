@@ -394,6 +394,7 @@ describe("loading calendar invitations", () => {
     mocks.findEvent.mockResolvedValue({ id: "event", response: "accepted" });
     expect(await getCalendarInvitation(params)).toEqual({
       invitation: {
+        uid: expect.any(String),
         title: "Calendar invitation",
         organizer: "organizer@example.com",
         recurring: false,

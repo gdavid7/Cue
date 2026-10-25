@@ -17,6 +17,7 @@ async function fetchGoogleCalendarBusyPeriods({
   timeMax,
   logger,
   failOnCalendarError,
+  onCalendarAnswered,
 }: {
   calendarClient: calendar_v3.Calendar;
   calendarIds: string[];
@@ -24,6 +25,7 @@ async function fetchGoogleCalendarBusyPeriods({
   timeMax: string;
   logger: Logger;
   failOnCalendarError?: boolean;
+  onCalendarAnswered?: (calendarId: string) => void;
 }): Promise<BusyPeriod[]> {
   try {
     const response = await calendarClient.freebusy.query({
@@ -65,6 +67,7 @@ async function fetchGoogleCalendarBusyPeriods({
           continue;
         }
 
+        onCalendarAnswered?.(_calendarId);
         if (calendar.busy) {
           for (const period of calendar.busy) {
             if (period.start && period.end) {
@@ -110,6 +113,7 @@ export function createGoogleAvailabilityProvider(
       timeMin,
       timeMax,
       failOnCalendarError,
+      onCalendarAnswered,
     }) {
       const calendarClient = await getCalendarClientWithRefresh({
         accessToken,
@@ -127,6 +131,7 @@ export function createGoogleAvailabilityProvider(
         timeMax,
         logger,
         failOnCalendarError,
+        onCalendarAnswered,
       });
     },
   };

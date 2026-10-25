@@ -5,8 +5,11 @@ import type { ScheduledEmail } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { isInvalidGrantError, SafeError } from "@/utils/error";
-import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
-import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
+import { isMissingConversation } from "@/utils/email/thread-not-found";
+import {
+  getRetryDelayMs,
+  MAX_RETRY_ATTEMPTS,
+} from "@/utils/retry/background-backoff";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
 import { executeDurableEmailSend } from "@/utils/email/durable-email-send";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -19,6 +22,10 @@ import { publishToQstashAt } from "@/utils/upstash";
 const LEASE_MS = 5 * 60 * 1000;
 const RECONNECT_REMINDER_DELAY_MS = 60 * 60 * 1000;
 const HELD_EMAIL_EXECUTE_PATH = "/api/scheduled-emails/execute";
+const CANCELLABLE_HELD_STATUSES: readonly ScheduledEmail["status"][] = [
+  "PENDING",
+  "BLOCKED_AUTH",
+];
 
 export async function scheduleEmail(
   emailAccountId: string,
@@ -188,7 +195,7 @@ export async function cancelHeldEmail(
       emailAccountId,
       clientMutationId,
       heldForUndo: true,
-      status: { in: ["PENDING", "BLOCKED_AUTH"] },
+      status: { in: [...CANCELLABLE_HELD_STATUSES] },
     },
     data: {
       status: "CANCELLED",
@@ -200,9 +207,16 @@ export async function cancelHeldEmail(
   if (cancelled.count) return "cancelled";
   const existing = await findScheduledEmail(emailAccountId, clientMutationId);
   if (existing) {
-    return existing.heldForUndo && existing.status === "CANCELLED"
-      ? "cancelled"
-      : "too_late";
+    if (existing.heldForUndo && existing.status === "CANCELLED")
+      return "cancelled";
+    // The hold was written after the update above found nothing: the send it
+    // carries hasn't started, so the undo still wins.
+    if (
+      existing.heldForUndo &&
+      CANCELLABLE_HELD_STATUSES.includes(existing.status)
+    )
+      return cancelHeldEmail(emailAccountId, clientMutationId);
+    return "too_late";
   }
   try {
     await prisma.scheduledEmail.create({
@@ -531,8 +545,25 @@ async function processReminder(row: ScheduledEmail, logger: Logger, now: Date) {
       });
       return;
     }
-    logger.error("Email reminder failed", { error, scheduledEmailId: row.id });
-    // Retain the lease to avoid tight retries and recover on the next stale scan.
+    const reminderAttempts = row.reminderAttempts + 1;
+    const gaveUp = reminderAttempts >= MAX_RETRY_ATTEMPTS;
+    logger.error(
+      gaveUp ? "Gave up on an email reminder" : "Email reminder failed",
+      { error, scheduledEmailId: row.id, reminderAttempts },
+    );
+    await prisma.scheduledEmail.updateMany({
+      where,
+      data: gaveUp
+        ? { reminderStatus: "CANCELLED", reminderAttempts }
+        : {
+            reminderStatus: "PENDING",
+            reminderStartedAt: null,
+            reminderAttempts,
+            remindAt: new Date(
+              now.getTime() + getRetryDelayMs(reminderAttempts),
+            ),
+          },
+    });
   }
 }
 
@@ -574,13 +605,6 @@ export async function processDueScheduledEmails(
     }
   });
   return { processed: rows.length };
-}
-
-function isMissingConversation(error: unknown) {
-  return (
-    extractGmailErrorInfo(error).status === 404 ||
-    extractOutlookErrorInfo(error).status === 404
-  );
 }
 
 function getSentThreadId(result: unknown) {

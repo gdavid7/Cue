@@ -42,6 +42,12 @@ export function createNewMailNotifier(deps: {
   loadImportantPeople: (
     accountIds: string[],
   ) => Promise<ImportantPerson[] | null>;
+  /**
+   * Thread ids the reader muted for an account, or null when they can't be
+   * loaded. The server archives a muted conversation's new mail, but the tab
+   * can see it in the inbox first.
+   */
+  loadMutedThreadIds: (accountId: string) => Promise<Set<string> | null>;
   /** Triage runs after mail arrives, so "important" waits for it. */
   triageSettleMs: number;
 }) {
@@ -68,6 +74,22 @@ export function createNewMailNotifier(deps: {
     const people = await deps.loadImportantPeople(accountIds).catch(() => null);
     const index = importantPeopleIndex(people ?? []);
     return new Set(conversations.filter((c) => index.has(c.accountId, c.from)));
+  }
+
+  async function dropMuted(conversations: TrackedConversation[]) {
+    const accountIds = [...new Set(conversations.map((c) => c.accountId))];
+    const mutedByAccount = new Map(
+      await Promise.all(
+        accountIds.map(
+          async (accountId) =>
+            [accountId, await deps.loadMutedThreadIds(accountId)] as const,
+        ),
+      ),
+    );
+    return conversations.filter(
+      (conversation) =>
+        !mutedByAccount.get(conversation.accountId)?.has(conversation.threadId),
+    );
   }
 
   async function dropBulk(conversations: TrackedConversation[]) {
@@ -100,7 +122,10 @@ export function createNewMailNotifier(deps: {
           if (due.length === 0) return;
           for (const conversation of due)
             pending.splice(pending.indexOf(conversation), 1);
-          if (canNotify()) deps.notify(due);
+          return dropMuted(due);
+        })
+        .then((unmuted) => {
+          if (unmuted?.length && canNotify()) deps.notify(unmuted);
         })
         .catch(() => undefined);
     }, IMPORTANT_BATCH_MS);
@@ -126,7 +151,11 @@ export function createNewMailNotifier(deps: {
       if (fresh.length === 0 || !canNotify()) return;
 
       if (deps.getMode() === "all") {
-        deps.notify(fresh);
+        dropMuted(fresh)
+          .then((unmuted) => {
+            if (unmuted.length > 0 && canNotify()) deps.notify(unmuted);
+          })
+          .catch(() => undefined);
         return;
       }
       // One timer and one triage lookup per account for everything that
@@ -138,7 +167,8 @@ export function createNewMailNotifier(deps: {
         timer = undefined;
         const batch = pending.splice(0);
         if (!canNotify()) return;
-        dropBulk(batch)
+        dropMuted(batch)
+          .then(dropBulk)
           .then((kept) => {
             if (kept.length > 0 && canNotify()) deps.notify(kept);
           })

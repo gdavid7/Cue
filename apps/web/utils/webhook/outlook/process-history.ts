@@ -32,6 +32,7 @@ export async function processHistoryForUser({
   emailAddress,
   resourceData,
   isNewMessage = false,
+  isUpdate = false,
   logger,
 }: {
   preloadedEmailAccount?: Awaited<
@@ -41,6 +42,8 @@ export async function processHistoryForUser({
   emailAddress?: string;
   resourceData: OutlookResourceData;
   isNewMessage?: boolean;
+  /** An `updated` notification: mail the user may have moved on purpose. */
+  isUpdate?: boolean;
   logger: Logger;
 }) {
   // Notifications are processed after the webhook answers, within its 300s.
@@ -200,6 +203,7 @@ export async function processHistoryForUser({
                 {
                   provider,
                   isNewMessage,
+                  isUpdate,
                   emailAccount: {
                     ...validatedEmailAccount,
                     account: { provider: accountProvider },

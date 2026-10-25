@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { processHistoryItem } from "@/utils/webhook/process-history-item";
 import {
   createMockEmailProvider,
@@ -35,6 +35,9 @@ vi.mock("@/utils/prisma", () => ({
     newsletter: {
       findFirst: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
+    mutedThread: {
       findUnique: vi.fn().mockResolvedValue(null),
     },
   },
@@ -446,6 +449,190 @@ describe("Provider Edge Cases", () => {
         ),
       ).rejects.toThrow("fetch failed");
     });
+  });
+
+  describe.each([
+    "google",
+    "microsoft",
+  ])("Muted conversations (%s)", (providerName) => {
+    beforeEach(() => {
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValue({
+        id: "mute-1",
+      } as any);
+    });
+    afterEach(() => {
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValue(null);
+    });
+
+    function getArrival(overrides: Record<string, unknown> = {}) {
+      const message = getMockParsedMessage({
+        id: "muted-message",
+        threadId: "muted-thread",
+        internalDate: String(Date.now() - 60_000),
+      });
+      const provider = createMockEmailProvider({
+        name: providerName,
+        getMessage: vi.fn().mockResolvedValue(message),
+        isSentMessage: vi.fn().mockReturnValue(false),
+        ...overrides,
+      });
+      return { message, provider };
+    }
+
+    async function processArrival(
+      provider: ReturnType<typeof createMockEmailProvider>,
+      {
+        isNewMessage = true,
+        isUpdate,
+      }: { isNewMessage?: boolean; isUpdate?: boolean } = {},
+    ) {
+      await processHistoryItem(
+        { messageId: "muted-message", threadId: "muted-thread" },
+        {
+          ...baseOptions,
+          provider,
+          hasAutomationRules: true,
+          hasAiAccess: true,
+          isNewMessage,
+          isUpdate,
+        },
+      );
+    }
+
+    it("archives only the message that arrived, and skips rules and notifications", async () => {
+      const { provider } = getArrival();
+
+      await processArrival(provider);
+
+      expect(prisma.mutedThread.findUnique).toHaveBeenCalledWith({
+        where: {
+          emailAccountId_threadId: {
+            emailAccountId: baseOptions.emailAccount.id,
+            threadId: "muted-thread",
+          },
+        },
+        select: { id: true },
+      });
+      expect(provider.archiveMessage).toHaveBeenCalledExactlyOnceWith(
+        "muted-message",
+      );
+      expect(provider.archiveThread).not.toHaveBeenCalled();
+      expect(runRules).not.toHaveBeenCalled();
+      expect(categorizeSender).not.toHaveBeenCalled();
+      expect(sendOtpPushNotification).not.toHaveBeenCalled();
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
+      expect(sendMobilePushNotification).not.toHaveBeenCalled();
+    });
+
+    it("leaves an update event alone, so mail moved back to the inbox stays there", async () => {
+      vi.mocked(runRules).mockResolvedValueOnce([]);
+      const { provider } = getArrival();
+
+      await processArrival(provider, { isNewMessage: false, isUpdate: true });
+
+      expect(prisma.mutedThread.findUnique).not.toHaveBeenCalled();
+      expect(provider.archiveMessage).not.toHaveBeenCalled();
+      expect(provider.archiveThread).not.toHaveBeenCalled();
+    });
+
+    // Outlook's backfill and catch-up process mail that arrived unnoticed
+    // without isNewMessage, so they never push; it is still new mail.
+    it("archives mail a backfill picks up, which isn't flagged as new", async () => {
+      const { provider } = getArrival();
+
+      await processArrival(provider, { isNewMessage: false });
+
+      expect(provider.archiveMessage).toHaveBeenCalledExactlyOnceWith(
+        "muted-message",
+      );
+      expect(runRules).not.toHaveBeenCalled();
+    });
+
+    it("hands a passing archive failure to the retry path, without running rules", async () => {
+      const timeout = Object.assign(new Error("timed out"), {
+        name: "TimeoutError",
+      });
+      const { provider } = getArrival({
+        archiveMessage: vi.fn().mockRejectedValue(timeout),
+      });
+
+      await expect(processArrival(provider)).rejects.toBe(timeout);
+
+      expect(runRules).not.toHaveBeenCalled();
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
+    });
+
+    it("stays muted when archiving fails: no rules or pushes, and no error", async () => {
+      const { provider } = getArrival({
+        archiveMessage: vi.fn().mockRejectedValue(new Error("boom")),
+      });
+
+      await expect(processArrival(provider)).resolves.toBeUndefined();
+
+      expect(runRules).not.toHaveBeenCalled();
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
+      expect(sendOtpPushNotification).not.toHaveBeenCalled();
+    });
+
+    it("processes mail normally when the conversation isn't muted", async () => {
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValue(null);
+      vi.mocked(runRules).mockResolvedValueOnce([]);
+      const { provider } = getArrival();
+
+      await processArrival(provider);
+
+      expect(provider.archiveMessage).not.toHaveBeenCalled();
+      expect(runRules).toHaveBeenCalledOnce();
+    });
+
+    it("still handles the user's own reply in a muted conversation", async () => {
+      const { provider } = getArrival({
+        isSentMessage: vi.fn().mockReturnValue(true),
+      });
+
+      await processArrival(provider);
+
+      expect(handleOutboundMessage).toHaveBeenCalledOnce();
+      expect(provider.archiveMessage).not.toHaveBeenCalled();
+      expect(provider.archiveThread).not.toHaveBeenCalled();
+    });
+  });
+
+  // Outlook moves mail between folders, so archiving the whole conversation
+  // would sweep the user's Sent reply into Archive (and stop at ten messages).
+  it("on Outlook keeps the user's Sent reply in Sent and archives only the new message", async () => {
+    vi.mocked(prisma.mutedThread.findUnique).mockResolvedValueOnce({
+      id: "mute-1",
+    } as any);
+    const sentReply = getMockParsedMessage({
+      id: "own-reply",
+      threadId: "muted-thread",
+      labelIds: ["SENT"],
+    });
+    const arrival = getMockParsedMessage({
+      id: "muted-message",
+      threadId: "muted-thread",
+      labelIds: ["INBOX"],
+    });
+    const provider = createMockEmailProvider({
+      name: "microsoft",
+      getMessage: vi.fn().mockResolvedValue(arrival),
+      getThreadMessages: vi.fn().mockResolvedValue([sentReply, arrival]),
+      isSentMessage: vi.fn().mockReturnValue(false),
+    });
+
+    await processHistoryItem(
+      { messageId: arrival.id, threadId: arrival.threadId },
+      { ...baseOptions, provider, isNewMessage: true },
+    );
+
+    expect(provider.archiveMessage).toHaveBeenCalledExactlyOnceWith(
+      "muted-message",
+    );
+    expect(provider.archiveMessage).not.toHaveBeenCalledWith("own-reply");
+    expect(provider.archiveThread).not.toHaveBeenCalled();
+    expect(provider.archiveThreadWithLabel).not.toHaveBeenCalled();
+    expect(provider.moveThreadToFolder).not.toHaveBeenCalled();
   });
 
   describe("Message processing", () => {

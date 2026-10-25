@@ -78,6 +78,9 @@ describe("shortcut registry", () => {
     expect(formatShortcutKeys(getShortcut("markSpam"))).toBe("!");
     expect(formatShortcutKeys(getShortcut("openExternal"))).toBe("G G");
     expect(formatShortcutKeys(getShortcut("forward"))).toBe("F");
+    expect(formatShortcutKeys(getShortcut("nudge"))).toBe("⇧N");
+    expect(formatShortcutKeys(getShortcut("mute"))).toBe("M");
+    expect(formatShortcutKeys(getShortcut("openTeamComments"))).toBe("⇧M");
   });
 
   it.each([

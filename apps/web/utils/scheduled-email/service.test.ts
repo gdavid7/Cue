@@ -15,6 +15,7 @@ import {
   processDueScheduledEmails,
   releaseHeldEmail,
   holdEmailForUndo,
+  cancelHeldEmail,
 } from "./service";
 import { Prisma, type ScheduledEmail } from "@/generated/prisma/client";
 import type { ParsedMessage } from "@/utils/types";
@@ -271,29 +272,39 @@ describe("scheduled replies", () => {
     );
   });
 
-  it("keeps a reminder's lease for a retry after a passing failure", async () => {
-    prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder()]);
-    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
-    prisma.emailAccount.findUniqueOrThrow.mockResolvedValue({
-      email: "me@example.com",
-      account: { provider: "google" },
-    } as never);
-    vi.mocked(createEmailProvider).mockResolvedValue(
-      createMockEmailProvider({
-        getThreadMessages: vi
-          .fn()
-          .mockRejectedValue(
-            Object.assign(new Error("Backend Error"), { status: 503 }),
-          ),
-      }),
+  // The cron ticks often, so a reminder that keeps failing waits longer each
+  // time and stops after about a day of tries.
+  it("waits longer before each retry of a failing reminder", async () => {
+    mockReminderFailure(
+      Object.assign(new Error("Backend Error"), { status: 503 }),
+      { reminderAttempts: 2 },
     );
 
     await processDueScheduledEmails(logger, now);
 
-    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledOnce();
-    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledWith(
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        data: { reminderStatus: "PROCESSING", reminderStartedAt: now },
+        data: {
+          reminderStatus: "PENDING",
+          reminderStartedAt: null,
+          reminderAttempts: 3,
+          remindAt: new Date(now.getTime() + 20 * 60 * 1000),
+        },
+      }),
+    );
+  });
+
+  it("gives up on a reminder that keeps failing", async () => {
+    mockReminderFailure(
+      Object.assign(new Error("Backend Error"), { status: 503 }),
+      { reminderAttempts: 9 },
+    );
+
+    await processDueScheduledEmails(logger, now);
+
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: { reminderStatus: "CANCELLED", reminderAttempts: 10 },
       }),
     );
   });
@@ -618,7 +629,11 @@ describe("scheduled replies", () => {
       vi.mocked(createEmailProvider).mockResolvedValue(provider);
       await processDueScheduledEmails(logger, now);
       expect(provider.unarchiveThread).not.toHaveBeenCalled();
-      expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.scheduledEmail.updateMany).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ reminderStatus: "PENDING" }),
+        }),
+      );
     });
 
     it("does nothing after losing the reminder claim", async () => {
@@ -818,6 +833,64 @@ describe("holdEmailForUndo", () => {
   });
 });
 
+describe("cancelHeldEmail", () => {
+  beforeEach(() => vi.resetAllMocks());
+  // Undo and the send's hold reach the server together: the hold is written
+  // between cancel's update, which found nothing, and its look at the row.
+  it("cancels a hold written while the undo was being recorded", async () => {
+    prisma.scheduledEmail.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    prisma.scheduledEmail.findUnique.mockResolvedValueOnce(
+      row({ heldForUndo: true, status: "PENDING" }),
+    );
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("cancelled");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
+  });
+  it("cancels a hold that was waiting on a reconnect when first looked at", async () => {
+    prisma.scheduledEmail.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    prisma.scheduledEmail.findUnique.mockResolvedValueOnce(
+      row({ heldForUndo: true, status: "BLOCKED_AUTH" }),
+    );
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("cancelled");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
+  });
+  // The hold appears as pending, but delivery claims it before the undo's
+  // second try: the send is under way, so the undo is honestly too late.
+  it("reports too late when delivery claims a hold between the undo's tries", async () => {
+    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 0 });
+    prisma.scheduledEmail.findUnique
+      .mockResolvedValueOnce(row({ heldForUndo: true, status: "PENDING" }))
+      .mockResolvedValueOnce(row({ heldForUndo: true, status: "PROCESSING" }));
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("too_late");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
+  });
+  it("reports too late once the hold has started sending", async () => {
+    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 0 });
+    prisma.scheduledEmail.findUnique.mockResolvedValue(
+      row({ heldForUndo: true, status: "PROCESSING" }),
+    );
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("too_late");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledOnce();
+  });
+});
+
 function row(overrides: Partial<ScheduledEmail> = {}): ScheduledEmail {
   return {
     id: "id",
@@ -838,23 +911,28 @@ function row(overrides: Partial<ScheduledEmail> = {}): ScheduledEmail {
     remindAt: null,
     reminderStatus: "NONE",
     reminderStartedAt: null,
+    reminderAttempts: 0,
     heldForUndo: false,
     ...overrides,
   };
 }
 
-function dueReminder() {
+function dueReminder(overrides: Partial<ScheduledEmail> = {}) {
   return row({
     id: "reminder",
     status: "SENT",
     sentAt: new Date(now.getTime() - 60_000),
     remindAt: now,
     reminderStatus: "PENDING",
+    ...overrides,
   });
 }
 
-function mockReminderFailure(failure: Error) {
-  prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder()]);
+function mockReminderFailure(
+  failure: Error,
+  overrides: Partial<ScheduledEmail> = {},
+) {
+  prisma.scheduledEmail.findMany.mockResolvedValue([dueReminder(overrides)]);
   prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
   prisma.emailAccount.findUniqueOrThrow.mockResolvedValue({
     email: "me@example.com",

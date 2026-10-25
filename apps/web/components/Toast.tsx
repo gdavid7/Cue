@@ -1,4 +1,5 @@
 import { Check, CircleAlert, Loader2, X } from "lucide-react";
+import type { MouseEvent } from "react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { Kbd } from "@/components/Kbd";
 import { cn } from "@/utils";
@@ -74,7 +75,12 @@ export function toastInfo(options: {
 
 type ToastUndoHandler = () => void | Promise<void>;
 
-let latestToastUndo: { id: string; onUndo: ToastUndoHandler } | null = null;
+let latestToastUndo: {
+  id: string;
+  onUndo: ToastUndoHandler;
+  /** The undo replaces the toast with its outcome, so it isn't closed first. */
+  reportsOutcome: boolean;
+} | null = null;
 
 export function toastUndo(options: {
   id?: string;
@@ -97,13 +103,18 @@ export function toastUndo(options: {
 /**
  * The send's one toast, from hold to delivery. While the send is held it offers
  * Undo and drains a bar over the hold; without `hold` it only says it's sending.
+ * Undo leaves the toast up for the outcome to replace: closing it first loses
+ * an outcome that arrives during the exit animation.
  */
 export function toastSending(options: {
   id: string;
   hold?: { durationMs: number; shortcut?: string; onUndo: ToastUndoHandler };
 }) {
   const { id, hold } = options;
-  const release = hold ? registerUndo(id, hold.onUndo) : () => {};
+  if (!hold) releaseUndo(id);
+  const release = hold
+    ? registerUndo(id, hold.onUndo, { reportsOutcome: true })
+    : () => {};
   return toast(
     hold ? <SendingTitle durationMs={hold.durationMs} /> : "Sending…",
     {
@@ -113,7 +124,9 @@ export function toastSending(options: {
       duration: Number.POSITIVE_INFINITY,
       onAutoClose: release,
       onDismiss: release,
-      action: hold ? undoAction(hold.onUndo, hold.shortcut) : undefined,
+      action: hold
+        ? undoAction(hold.onUndo, hold.shortcut, { reportsOutcome: true })
+        : undefined,
     },
   );
 }
@@ -129,15 +142,27 @@ export function toastSent(id: string) {
   });
 }
 
-export function toastSendUndone(id: string) {
+/**
+ * `draftReopened: false` is for a composer that couldn't be put back; the
+ * undone send's draft is still kept on this device.
+ */
+export function toastSendUndone(
+  id: string,
+  { draftReopened = true }: { draftReopened?: boolean } = {},
+) {
   releaseUndo(id);
-  return toast.success("Send undone. Draft restored.", {
-    id,
-    icon: null,
-    description: undefined,
-    duration: 4000,
-    action: undefined,
-  });
+  return toast.success(
+    draftReopened
+      ? "Send undone. Draft restored."
+      : "Send undone. Couldn't reopen the draft — it's saved on this device.",
+    {
+      id,
+      icon: null,
+      description: undefined,
+      duration: draftReopened ? 4000 : 8000,
+      action: undefined,
+    },
+  );
 }
 
 /**
@@ -175,8 +200,10 @@ export function toastSendFailed(options: { id: string; onRetry: () => void }) {
 export async function undoLatestToast() {
   const current = latestToastUndo;
   if (!current) return false;
-  latestToastUndo = null;
-  toast.dismiss(current.id);
+  if (!current.reportsOutcome) {
+    latestToastUndo = null;
+    toast.dismiss(current.id);
+  }
   await current.onUndo();
   return true;
 }
@@ -230,8 +257,12 @@ export function Toaster() {
   );
 }
 
-function registerUndo(id: string, onUndo: ToastUndoHandler) {
-  latestToastUndo = { id, onUndo };
+function registerUndo(
+  id: string,
+  onUndo: ToastUndoHandler,
+  { reportsOutcome = false } = {},
+) {
+  latestToastUndo = { id, onUndo, reportsOutcome };
   return () => {
     if (latestToastUndo?.onUndo === onUndo) latestToastUndo = null;
   };
@@ -241,7 +272,11 @@ function releaseUndo(id: string) {
   if (latestToastUndo?.id === id) latestToastUndo = null;
 }
 
-function undoAction(onUndo: ToastUndoHandler, shortcut?: string) {
+function undoAction(
+  onUndo: ToastUndoHandler,
+  shortcut?: string,
+  { reportsOutcome = false } = {},
+) {
   return {
     label: (
       <>
@@ -253,7 +288,11 @@ function undoAction(onUndo: ToastUndoHandler, shortcut?: string) {
         )}
       </>
     ),
-    onClick: onUndo,
+    onClick: (event: MouseEvent<HTMLButtonElement>) => {
+      // Sonner closes the toast after its action unless this is prevented.
+      if (reportsOutcome) event.preventDefault();
+      return onUndo();
+    },
   };
 }
 

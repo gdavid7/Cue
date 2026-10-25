@@ -11,21 +11,8 @@ import { isGoogleProvider } from "@/utils/email/provider-types";
 import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import { onePerExternalAccount } from "@/utils/user/owned-by-same-user";
 
-/**
- * Fetch calendar availability across all connected calendars (Google and Microsoft)
- */
-export async function getUnifiedCalendarAvailability({
-  emailAccountId,
-  startDate,
-  endDate,
-  timezone = "UTC",
-  logger,
-  failClosed = false,
-  excludeGoogleVirtualCalendars = false,
-}: {
+type UnifiedAvailabilityOptions = {
   emailAccountId: string;
-  startDate: Date | string;
-  endDate: Date | string;
   timezone?: string;
   logger: Logger;
   /**
@@ -37,20 +24,68 @@ export async function getUnifiedCalendarAvailability({
     | boolean
     | ((connection: { id: string; emailAccountId: string }) => boolean);
   excludeGoogleVirtualCalendars?: boolean;
-}): Promise<BusyPeriod[]> {
-  // Compute day boundaries in the user's timezone
-  // Parse dates as calendar dates in the target timezone to avoid UTC shift issues
-  const startDateInTZ = parseDateInTimezone(startDate, timezone);
-  const endDateInTZ = parseDateInTimezone(endDate, timezone);
+} & (
+  | {
+      /** Whole days, from the start of `startDate` to the end of `endDate`. */
+      startDate: Date | string;
+      endDate: Date | string;
+      range?: never;
+    }
+  | {
+      /** Exactly these instants, for a question about one meeting's time. */
+      range: { start: Date; end: Date };
+      startDate?: never;
+      endDate?: never;
+    }
+);
 
-  const timeMin = startOfDay(startDateInTZ).toISOString();
-  const timeMax = endOfDay(endDateInTZ).toISOString();
+/**
+ * Fetch calendar availability across all connected calendars (Google and Microsoft)
+ */
+export async function getUnifiedCalendarAvailability(
+  options: UnifiedAvailabilityOptions,
+): Promise<BusyPeriod[]> {
+  const { busyPeriods } = await getUnifiedCalendarBusy(options);
+  return busyPeriods;
+}
+
+/**
+ * Busy time as `getUnifiedCalendarAvailability` reads it, with how many
+ * calendars were read for it: none means there was nothing that could show
+ * the person busy, which an empty list alone can't tell apart from free.
+ */
+export async function getUnifiedCalendarBusy(
+  options: UnifiedAvailabilityOptions,
+): Promise<{
+  busyPeriods: BusyPeriod[];
+  readableCalendars: number;
+}> {
+  const {
+    emailAccountId,
+    timezone = "UTC",
+    logger,
+    failClosed = false,
+    excludeGoogleVirtualCalendars = false,
+  } = options;
+  let timeMin: string;
+  let timeMax: string;
+  if (options.range) {
+    timeMin = options.range.start.toISOString();
+    timeMax = options.range.end.toISOString();
+  } else {
+    // Compute day boundaries in the user's timezone
+    // Parse dates as calendar dates in the target timezone to avoid UTC shift issues
+    timeMin = startOfDay(
+      parseDateInTimezone(options.startDate, timezone),
+    ).toISOString();
+    timeMax = endOfDay(
+      parseDateInTimezone(options.endDate, timezone),
+    ).toISOString();
+  }
 
   logger.trace("Unified calendar availability request", {
     timezone,
     emailAccountId,
-    startDate: startDate instanceof Date ? startDate.toISOString() : startDate,
-    endDate: endDate instanceof Date ? endDate.toISOString() : endDate,
     timeMin,
     timeMax,
   });
@@ -75,7 +110,7 @@ export async function getUnifiedCalendarAvailability({
 
   if (!calendarConnections.length) {
     logger.info("No calendar connections found", { emailAccountId });
-    return [];
+    return { busyPeriods: [], readableCalendars: 0 };
   }
 
   // Group calendars by provider
@@ -87,6 +122,12 @@ export async function getUnifiedCalendarAvailability({
   );
 
   const promises: Promise<BusyPeriod[]>[] = [];
+  // Counted as calendars answer: one skipped as missing, or that failed,
+  // was not read and can't show the person free.
+  let readableCalendars = 0;
+  const onCalendarAnswered = () => {
+    readableCalendars++;
+  };
 
   // Fetch Google calendar availability
   for (const connection of googleConnections) {
@@ -113,6 +154,7 @@ export async function getUnifiedCalendarAvailability({
           timeMin,
           timeMax,
           failOnCalendarError: mustRead,
+          onCalendarAnswered,
         })
         .catch((error) => {
           logger.error("Error fetching Google calendar availability", {
@@ -153,6 +195,7 @@ export async function getUnifiedCalendarAvailability({
           timeMin,
           timeMax,
           failOnCalendarError: mustRead,
+          onCalendarAnswered,
         })
         .catch((error) => {
           logger.error("Error fetching Microsoft calendar availability", {
@@ -184,7 +227,7 @@ export async function getUnifiedCalendarAvailability({
     microsoftConnectionsCount: microsoftConnections.length,
   });
 
-  return convertedBusyPeriods;
+  return { busyPeriods: convertedBusyPeriods, readableCalendars };
 }
 
 /**

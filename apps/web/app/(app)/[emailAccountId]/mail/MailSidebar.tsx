@@ -24,6 +24,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   AlarmClockIcon,
+  BellOffIcon,
   Clock3Icon,
   FileIcon,
   FlagIcon,
@@ -170,6 +171,8 @@ type SystemItem = {
 
 export const MAIL_SCHEDULED_TYPE = "scheduled";
 export const MAIL_SNOOZED_TYPE = "snoozed";
+/** Conversations the user muted, kept in our database. */
+export const MAIL_MUTED_TYPE = "muted";
 /** Every attachment on the mail stored on this device. */
 export const MAIL_FILES_TYPE = "files";
 /** Mailboxes All inboxes merges from every included account's local mail. */
@@ -182,6 +185,7 @@ export const ALL_INBOXES_MAILBOX_TYPES: ReadonlySet<string> = new Set([
 export const ALL_INBOXES_VIEW_TYPES: ReadonlySet<string> = new Set([
   ...ALL_INBOXES_MAILBOX_TYPES,
   MAIL_SNOOZED_TYPE,
+  MAIL_MUTED_TYPE,
   MAIL_SCHEDULED_TYPE,
   MAIL_FILES_TYPE,
 ]);
@@ -221,6 +225,12 @@ const MORE_MAILBOX_ITEMS: SystemItem[] = [
     type: MAIL_SNOOZED_TYPE,
     countId: null,
     Icon: AlarmClockIcon,
+  },
+  {
+    name: "Muted",
+    type: MAIL_MUTED_TYPE,
+    countId: null,
+    Icon: BellOffIcon,
   },
   {
     name: "Scheduled",

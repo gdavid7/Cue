@@ -256,6 +256,7 @@ model EmailAccount {
   digests              Digest[]
   scheduledActions     ScheduledAction[]
   snoozedThreads       SnoozedThread[]
+  mutedThreads         MutedThread[]
   emailSendOperations  EmailSendOperation[]
   sentMessageOpens     SentMessageOpen[]
   scheduledEmails      ScheduledEmail[]
@@ -988,6 +989,8 @@ model SnoozedThread {
   scheduledFor     DateTime
   status           SnoozedThreadStatus @default(PENDING)
   clientMutationId String?
+  // Failed restores so far, which space out and then end the retries.
+  restoreAttempts  Int                 @default(0)
 
   emailAccountId String
   emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
@@ -995,6 +998,21 @@ model SnoozedThread {
   @@unique([emailAccountId, clientMutationId])
   @@index([status, scheduledFor])
   @@index([emailAccountId, threadId, status])
+}
+
+// A conversation the user muted: Cue archives its new mail on arrival and
+// skips rules and notifications for it. Only the thread id is kept (R-1), and
+// nothing is written to the mailbox (D-008).
+model MutedThread {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  threadId  String
+
+  emailAccountId String
+  emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([emailAccountId, threadId])
+  @@index([emailAccountId, createdAt])
 }
 
 model ScheduledEmail {
@@ -1016,6 +1034,8 @@ model ScheduledEmail {
   remindAt            DateTime?
   reminderStatus      EmailReminderStatus  @default(NONE)
   reminderStartedAt   DateTime?
+  // Failed reminder runs so far, which space out and then end the retries.
+  reminderAttempts    Int                  @default(0)
   // A just-sent email the server holds for the undo window, not one the user scheduled.
   heldForUndo         Boolean              @default(false)
   // The mailbox draft's saved copies, which the thread hides while the send is pending.

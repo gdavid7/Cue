@@ -23,6 +23,8 @@ Create free accounts at:
 
 You need the repo on GitHub (your fork of Cue).
 
+**Make the crons daily before your first deploy.** `apps/web/vercel.json` runs `/api/cron/scheduled-actions` and `/api/cron/automation-jobs` more often than once a day, which needs Vercel Pro. Hobby rejects a deployment with any cron more frequent than daily, so in your fork set those two `schedule` values to `"0 0 * * *"` and `"0 14 * * *"`, and commit. Step 7 explains the free pinger that keeps send-later and snooze on time.
+
 Open a terminal and generate the secrets now. Paste each one into a note, because you need them in step 3:
 
 ```bash
@@ -269,6 +271,8 @@ Outlook doesn't need Pub/Sub. Cue creates Microsoft Graph subscriptions pointing
 3. Open `https://cue-yourname.vercel.app`.
 
 ### What runs on a schedule (Hobby allows once a day per job)
+
+The table shows the Hobby schedules you set in step 0.
 
 | Cron | When (UTC, ±59 min) | What it does |
 |---|---|---|

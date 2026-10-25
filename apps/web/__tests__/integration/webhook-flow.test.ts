@@ -43,6 +43,9 @@ vi.mock("@/utils/prisma", () => ({
     action: {
       updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    mutedThread: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
   },
 }));
 

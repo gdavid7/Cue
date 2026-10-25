@@ -1,12 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { after } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureException } from "@/utils/error";
 import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
 } from "@/utils/gmail/quota";
 import { auth } from "@/utils/auth";
+import prisma from "@/utils/prisma";
 import { SESSION_EXPIRED_MESSAGE } from "@/utils/session-expired";
 import {
   actionClient,
@@ -14,6 +15,7 @@ import {
   adminActionClient,
 } from "./safe-action";
 
+vi.mock("@/utils/prisma");
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/utils/auth", () => ({
   auth: vi.fn(async () => ({
@@ -134,5 +136,77 @@ describe("server actions and revoked sessions", () => {
         disableCookieCache: true,
         disableRefresh: true,
       });
+  });
+});
+
+describe("server actions fired by the app with an expired session", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(auth).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("answers a background action without a warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(null);
+    const run = vi.fn();
+
+    const results = await Promise.all([
+      actionClientUser
+        .metadata({ name: "recordVisit", backgroundCall: true })
+        .action(run)(),
+      actionClient
+        .metadata({ name: "assessUser", backgroundCall: true })
+        .action(run)("account-1"),
+    ]);
+
+    for (const result of results)
+      expect(result?.serverError).toBe(SESSION_EXPIRED_MESSAGE);
+    expect(run).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("Background action skipped: not signed in"),
+    );
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("keeps the warning for an action the user triggered", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await Promise.all([
+      actionClientUser.metadata({ name: "deleteAccount" }).action(vi.fn())(),
+      actionClient.metadata({ name: "sendEmail" }).action(vi.fn())("account-1"),
+    ]);
+
+    const warnings = warn.mock.calls.map(([line]) => String(line));
+    expect(warnings.some((line) => line.includes("Unauthorized"))).toBe(true);
+    expect(
+      warnings.filter((line) => line.includes("Server action error:")),
+    ).toHaveLength(2);
+  });
+
+  it("still warns when a background call names an account owned by someone else", async () => {
+    vi.mocked(auth).mockResolvedValue({
+      user: { id: "user-1", email: "user@example.com" },
+    } as any);
+    vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue({
+      email: "other@example.com",
+      account: { userId: "user-2", provider: "google" },
+    } as any);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const run = vi.fn();
+
+    const result = await actionClient
+      .metadata({ name: "assessUser", backgroundCall: true })
+      .action(run)("account-of-user-2");
+
+    expect(result?.serverError).toBe("Unauthorized");
+    expect(run).not.toHaveBeenCalled();
+    const warnings = warn.mock.calls.map(([line]) => String(line));
+    expect(warnings.some((line) => line.includes("Unauthorized"))).toBe(true);
   });
 });

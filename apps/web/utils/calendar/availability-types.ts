@@ -17,6 +17,8 @@ export interface CalendarAvailabilityProvider {
     timeMin: string;
     timeMax: string;
     failOnCalendarError?: boolean;
+    /** Called for each calendar that answered, so callers can tell read from skipped. */
+    onCalendarAnswered?: (calendarId: string) => void;
   }): Promise<BusyPeriod[]>;
   name: "google" | "microsoft";
 }

@@ -12,6 +12,7 @@ import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { BRAND_ICON_URL } from "@/utils/branding";
 import { buildMailPath } from "@/utils/mail-url";
 import type { CueMembershipResponse } from "@/app/api/user/mail-splits/cue-membership/route";
+import { loadMutedThreadIds } from "@/utils/web-notifications/muted-thread-ids";
 import {
   claimNotifierLeadership,
   createNewMailNotifier,
@@ -158,6 +159,7 @@ export function WebNewMailNotifications() {
         if (!supportsImportantPeople(current)) return null;
         return current.queryImportantPeople(accountIds);
       },
+      loadMutedThreadIds,
       triageSettleMs: TRIAGE_SETTLE_MS,
     });
     notifierRef.current = notifier;

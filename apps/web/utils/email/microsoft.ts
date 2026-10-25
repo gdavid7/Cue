@@ -52,6 +52,10 @@ import {
 import { getLatestNonDraftMessage } from "@/utils/email/latest-message";
 import { getMessageTimestamp } from "@/utils/email/message-timestamp";
 import {
+  pickThreadHeadline,
+  type ThreadHeadline,
+} from "@/utils/email/thread-headline";
+import {
   draftEmail,
   forwardEmail,
   replyToEmail,
@@ -1805,10 +1809,40 @@ export class OutlookProvider implements EmailProvider {
   async getLatestMessageInThread(
     threadId: string,
   ): Promise<ParsedMessage | null> {
-    const escapedThreadId = escapeODataString(threadId);
     // A whole conversation with bodies can be megabytes, and Graph sometimes
     // ends such 200 responses mid-body. Pick the latest message from metadata,
     // then fetch only that one in full.
+    const messages = await this.listConversationMetadata(threadId);
+
+    const parsedMessages: ParsedMessage[] = messages
+      .filter((message: Message) => !message.isDraft)
+      .map((message: Message) => convertMessage(message));
+    if (parsedMessages.length === 0) return null;
+
+    const latestMessage = getLatestNonDraftMessage({
+      messages: parsedMessages,
+      getTimestamp: getMessageTimestamp,
+    });
+    if (!latestMessage) return null;
+
+    return this.getMessage(latestMessage.id);
+  }
+
+  async getThreadHeadline(
+    threadId: string,
+    ownEmail: string,
+  ): Promise<ThreadHeadline | null> {
+    const messages = await this.listConversationMetadata(threadId);
+    return pickThreadHeadline({
+      messages: messages.map((message) => convertMessage(message)),
+      ownEmail,
+      isDraft: (message) => message.labelIds?.includes("DRAFT") ?? false,
+    });
+  }
+
+  /** Every message in a conversation, headers and preview only, no bodies. */
+  private async listConversationMetadata(threadId: string) {
+    const escapedThreadId = escapeODataString(threadId);
     const messages: Message[] = [];
     let nextLink: string | undefined;
     do {
@@ -1830,19 +1864,7 @@ export class OutlookProvider implements EmailProvider {
       messages.push(...(page.value ?? []));
       nextLink = page["@odata.nextLink"];
     } while (nextLink);
-
-    const parsedMessages: ParsedMessage[] = messages
-      .filter((message: Message) => !message.isDraft)
-      .map((message: Message) => convertMessage(message));
-    if (parsedMessages.length === 0) return null;
-
-    const latestMessage = getLatestNonDraftMessage({
-      messages: parsedMessages,
-      getTimestamp: getMessageTimestamp,
-    });
-    if (!latestMessage) return null;
-
-    return this.getMessage(latestMessage.id);
+    return messages;
   }
 
   async getDrafts(options?: { maxResults?: number }): Promise<ParsedMessage[]> {

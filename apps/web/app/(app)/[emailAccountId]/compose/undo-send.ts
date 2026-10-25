@@ -71,9 +71,12 @@ type TrackedSend = {
    */
   reopenDraft?: () => void;
   toastId: string;
+  holdUntil: number;
   /** Undo is offered only while the send is held. */
   holding: boolean;
   undoing: boolean;
+  /** Reports the send's status, which is held back while an undo runs. */
+  inspect: () => void;
   release: () => void;
 };
 
@@ -182,8 +185,10 @@ function trackSend({
     restoreComposer,
     reopenDraft,
     toastId,
+    holdUntil,
     holding: true,
     undoing: false,
+    inspect: () => {},
     release: () => {
       clearTimeout(holdTimeout);
       clearTimeout(settleTimeout);
@@ -226,6 +231,7 @@ function trackSend({
     // Cancelled, uncertain and blocked sends are reported by the composer.
     else settle(() => toast.dismiss(toastId));
   };
+  current.inspect = inspect;
   unsubscribe = handle.subscribe(inspect);
   toastSending({
     id: toastId,
@@ -246,8 +252,26 @@ export async function undoPendingSend() {
   const current = tracked;
   if (!current?.holding || current.undoing) return false;
   current.undoing = true;
-  const status = await cancelSend(current);
-  current.undoing = false;
+  try {
+    return await reportUndo(current, await cancelSend(current));
+  } catch {
+    // The send's toast never closes by itself, so one left on "Sending…"
+    // with Undo would stay that way.
+    if (tracked === current) stopTracking({ dismiss: true });
+    else toast.dismiss(current.toastId);
+    return false;
+  } finally {
+    current.undoing = false;
+    // A send that settled while the undo ran is reported now, not when the
+    // toast's settle timeout ends it.
+    if (tracked === current) current.inspect();
+  }
+}
+
+async function reportUndo(
+  current: TrackedSend,
+  status: Awaited<ReturnType<typeof cancelSend>>,
+) {
   if (status === "cancelled" && current.reopenDraft) {
     if (tracked === current) stopTracking({ dismiss: false });
     await reportUndoneElsewhere(current, current.reopenDraft);
@@ -255,14 +279,27 @@ export async function undoPendingSend() {
   }
   if (status === "unavailable") {
     // The send is still held, so the user can try again within the window.
+    // A hold that ended while undo waited is past retrying.
+    const holdEnded = Date.now() >= current.holdUntil;
+    if (holdEnded) {
+      stopHolding(current);
+      if (tracked === current) toastSending({ id: current.toastId });
+    }
     toastError({
-      description: "Couldn't reach the server to undo. Try again.",
+      description: holdEnded
+        ? "Couldn't reach the server to undo."
+        : "Couldn't reach the server to undo. Try again.",
     });
     return false;
   }
   if (status === "cancelled") {
     if (tracked === current) stopTracking({ dismiss: false });
-    current.restoreComposer();
+    try {
+      current.restoreComposer();
+    } catch {
+      toastSendUndone(current.toastId, { draftReopened: false });
+      return true;
+    }
     toastSendUndone(current.toastId);
     return true;
   }
@@ -276,7 +313,7 @@ export async function undoPendingSend() {
   toastError({
     description:
       status === "too_late"
-        ? "Too late to undo. This email was already sent."
+        ? "Couldn't undo — it's already being sent."
         : "Couldn't undo send",
   });
   return false;

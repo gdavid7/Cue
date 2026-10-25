@@ -176,6 +176,7 @@ describe("ThreadRow", () => {
           setRead: vi.fn(),
           setStarred: vi.fn(),
           snooze: vi.fn(),
+          mute: vi.fn(),
         }}
         thread={thread()}
         userEmail="david@example.com"
@@ -187,6 +188,17 @@ describe("ThreadRow", () => {
       name: "Archive conversation",
     });
     expect(screen.getByRole("option").contains(archive)).toBe(false);
+  });
+
+  it("mutes from the row's hover actions without opening the conversation", () => {
+    const onOpen = vi.fn();
+    const rowActions = actions();
+    renderRow({ onOpen, rowActions });
+
+    fireEvent.click(screen.getByRole("button", { name: "Mute conversation" }));
+
+    expect(rowActions.mute).toHaveBeenCalledExactlyOnceWith(expect.any(String));
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("announces an unread conversation, not only by weight", () => {
@@ -395,6 +407,7 @@ function actions() {
     setRead: vi.fn(),
     setStarred: vi.fn(),
     snooze: vi.fn(),
+    mute: vi.fn(),
   };
 }
 
