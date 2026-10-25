@@ -376,7 +376,7 @@ test("works through the All inboxes Inbox tab and Today across accounts, acting 
     );
     await page.emulateMedia({ colorScheme: "light" });
     // Keep cards until one is a conversation Today lists, then archive it:
-    // its row leaves Today, and Z in Catch up brings it back.
+    // it leaves Today in every account, and Z in Catch up brings it back.
     const todayLeft = await leftCount(todayDialog);
     let listed:
       | { card: { messageId: string; threadId: string }; account: string }
@@ -400,7 +400,9 @@ test("works through the All inboxes Inbox tab and Today across accounts, acting 
     }
     if (!listed)
       throw new Error("No Catch up card is a conversation Today lists");
-    const row = todayRow(page, listed.account, listed.card.threadId);
+    // Today shows a message in two mailboxes once, as whichever copy comes
+    // first, so after Z it may come back as its copy in the other account.
+    const row = page.locator(`[data-today-thread$=":${listed.card.threadId}"]`);
     const todayBefore = countFor(operations, listed.account);
     await press(page, "e", listed.card, "archive", tokens[listed.account]);
     await expect
