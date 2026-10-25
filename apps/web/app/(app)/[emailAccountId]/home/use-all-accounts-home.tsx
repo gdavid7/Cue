@@ -120,6 +120,8 @@ export function useAllAccountsHome(accounts: AllInboxesAccount[] | null) {
 
   return {
     merged,
+    /** Each account's own Today, as far as it has loaded. */
+    feeds,
     /** Each loaded account's labels for mail Cue files without asking. */
     handledLabelIdsByAccount,
     /** Each loaded account's conversations Cue sorted as newsletters lately. */
