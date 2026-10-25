@@ -24,14 +24,27 @@ const state = vi.hoisted(() => ({
   provider: "google",
   client: null as null | { searchSemantic?: () => Promise<unknown> },
   semantic: undefined as unknown,
+  /** What each search by meaning answers, by the text it reads, where set. */
+  semanticByText: new Map<string, unknown>(),
+  semanticKeys: [] as unknown[],
 }));
 
 vi.mock("swr", () => ({
   default: (key: unknown, fetcher: (key: unknown) => Promise<unknown>) => {
-    if (Array.isArray(key) && key[0] === "cue-semantic")
-      return { data: state.semantic, error: undefined };
+    if (Array.isArray(key) && key[0] === "cue-semantic") {
+      state.semanticKeys.push(key);
+      const text = key[2] as string;
+      return {
+        data: state.semanticByText.has(text)
+          ? state.semanticByText.get(text)
+          : state.semantic,
+        error: undefined,
+      };
+    }
+    // A null key may be any request switched off, the search by meaning's
+    // included, so only a live one says which fetcher reads the search.
     state.swrKeys.push(key);
-    state.fetcher = fetcher;
+    if (key) state.fetcher = fetcher;
     return { data: key ? state.intent : undefined, error: undefined };
   },
 }));
@@ -110,6 +123,8 @@ beforeEach(() => {
   state.labelsLoading = false;
   state.client = null;
   state.semantic = undefined;
+  state.semanticByText = new Map();
+  state.semanticKeys = [];
 });
 
 afterEach(() => {
@@ -133,7 +148,7 @@ describe("useCueSearch", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(SENTENCE);
 
-    await state.fetcher?.(state.swrKeys.at(-1));
+    await state.fetcher?.(state.swrKeys.findLast((key) => key !== null));
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [
       string,
@@ -156,7 +171,7 @@ describe("useCueSearch", () => {
 
     state.labelsLoading = false;
     rerender({ q: SENTENCE });
-    expect(state.swrKeys.at(-1)).not.toBeNull();
+    expect(state.swrKeys.some((key) => key !== null)).toBe(true);
   });
 
   it("shows what the searches found", () => {
@@ -186,6 +201,56 @@ describe("useCueSearch", () => {
     rerender({ q: SENTENCE });
     expect(result.current.threads.map((t) => t.id)).toContain("lease");
     expect(state.localOnlyWindows).toContain("messages:m-lease");
+  });
+
+  it("searches by meaning on the words of Cue's reading too, and ranks by the closest either finds", () => {
+    // A reading can hold the mailbox's words for what was typed in another
+    // language, which the on-device model knows better.
+    const typed = "quand est mon vol pour Lisbonne ?";
+    const search = "(vol OR flight) (Lisbonne OR Lisbon)";
+    state.intent = { searches: [search], explanation: "", isQuestion: true };
+    state.client = { searchSemantic: vi.fn() };
+    state.results.set(search, { settled: true, ids: [] });
+    for (const step of getWideningLadder([search], {
+      now: new Date(),
+      provider: "google",
+    }))
+      for (const key of [step.searches.join(" | "), ...step.searches])
+        state.results.set(key, { settled: true, ids: [] });
+    state.results.set("messages:m-flight,m-hotel,m-invoice", {
+      settled: true,
+      ids: ["invoice", "hotel", "flight"],
+    });
+    // Says it found nothing only once the reading's words have answered too.
+    state.semanticByText.set(typed, []);
+    const { result, rerender } = render(typed);
+    expect(state.semanticKeys).toContainEqual([
+      "cue-semantic",
+      "account",
+      "vol flight Lisbonne Lisbon",
+    ]);
+    expect(result.current.foundNothing).toBe(false);
+    state.semanticByText.set("vol flight Lisbonne Lisbon", []);
+    rerender({ q: typed });
+    expect(result.current.foundNothing).toBe(true);
+
+    state.semanticByText.set(typed, [
+      { messageId: "m-invoice", conversationId: "invoice", similarity: 0.37 },
+      { messageId: "m-hotel", conversationId: "hotel", similarity: 0.27 },
+    ]);
+    state.semanticByText.set("vol flight Lisbonne Lisbon", [
+      { messageId: "m-flight", conversationId: "flight", similarity: 0.54 },
+      { messageId: "m-hotel", conversationId: "hotel", similarity: 0.51 },
+    ]);
+    rerender({ q: typed });
+    expect(state.localOnlyWindows).toContain(
+      "messages:m-flight,m-hotel,m-invoice",
+    );
+    expect(result.current.threads.map((t) => t.id)).toEqual([
+      "flight",
+      "hotel",
+      "invoice",
+    ]);
   });
 
   it("says it found nothing only once the search by meaning has answered too", () => {
@@ -447,6 +512,25 @@ describe("searchByMeaning", () => {
   it("gives up at the search's budget, so a model still downloading never holds the search", async () => {
     const pending = searchByMeaning(() => new Promise(() => undefined), query);
     await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS);
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it("counts the budget from when the search was committed, for a search by meaning that starts later", async () => {
+    // The reading's words are searched once the reading lands, so the
+    // search still gives up within the budget from commit.
+    const committedAtMs = Date.now() - 3000;
+    let settled = false;
+    const pending = searchByMeaning(
+      () => new Promise(() => undefined),
+      query,
+      committedAtMs,
+    ).then((matches) => {
+      settled = true;
+      return matches;
+    });
+    await vi.advanceTimersByTimeAsync(CUE_SEARCH_BUDGET_MS - 3000 - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(pending).resolves.toEqual([]);
   });
 

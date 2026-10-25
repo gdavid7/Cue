@@ -16,9 +16,18 @@ import {
   syncPositionSchema,
 } from "../sync";
 import { preparedOperationSchema, targetOutcomeSchema } from "../operations";
-import { MAX_CHANGES_BATCH_READS } from "../ports/mailbox-source";
+import {
+  MAX_CHANGES_BATCH_READS,
+  MAX_ENUMERATION_RETRY_AFTER_MS,
+} from "../ports/mailbox-source";
 
 export const mailProtocolVersionSchema = z.literal(MAIL_PROTOCOL_VERSION);
+
+// Sent on every mail/v1 request so the server can tell engine builds apart
+// when a long-lived tab keeps running one from before a deploy. Bump the
+// revision only when the server should treat engines below it differently.
+export const MAIL_ENGINE_REVISION_HEADER = "x-cue-engine-rev";
+export const MAIL_ENGINE_REVISION = 1;
 
 export const mailHttpErrorCodeSchema = z.enum([
   "invalid",
@@ -134,6 +143,15 @@ export const enumerationResultSchema = z.object({
   nextPage: z.string().max(16_384).nullable(),
   catchUpFrom: syncPositionSchema.nullable(),
   windowStartMs: z.number().int().optional(),
+  // With nextPage: how long from this response the server expects to refuse
+  // the next page, so the client waits instead of spending a refused request.
+  // Relative, so client and server clocks need not agree.
+  retryAfterMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_ENUMERATION_RETRY_AFTER_MS)
+    .optional(),
 });
 
 export const changesRequestSchema = z.object({

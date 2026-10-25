@@ -5,8 +5,10 @@ import {
   MailIcon,
   MailOpenIcon,
   PaperclipIcon,
+  UserStarIcon,
 } from "lucide-react";
 import {
+  type DragEvent,
   memo,
   type MouseEvent,
   type PointerEvent,
@@ -87,6 +89,11 @@ export type ThreadRowProps = {
   inInbox?: boolean;
   /** Hover actions on wide rows; touch layouts use selection instead. */
   rowActions?: ThreadRowActionHandlers;
+  /** Someone in the conversation is starred as Important for its account. */
+  fromImportantPerson?: boolean;
+  /** Makes the row draggable onto the sidebar; touch keeps the pickers. */
+  onDragStart?: (index: number, event: DragEvent<HTMLElement>) => void;
+  onDragEnd?: () => void;
 };
 
 export const ThreadRow = memo(function ThreadRow({
@@ -112,6 +119,9 @@ export const ThreadRow = memo(function ThreadRow({
   accountColorClassName,
   inInbox,
   rowActions,
+  fromImportantPerson = false,
+  onDragStart,
+  onDragEnd,
 }: ThreadRowProps) {
   // Like Gmail, an unsent draft is marked on the row but doesn't stand in for
   // the message the user received.
@@ -128,6 +138,7 @@ export const ThreadRow = memo(function ThreadRow({
     [thread.messages, userLabels],
   );
   const account = "account" in thread ? thread.account : null;
+  const alsoIn = "account" in thread ? thread.alsoIn : undefined;
   const accountEmail = account?.email ?? userEmail;
   const participantSummary = useMemo(
     () =>
@@ -189,6 +200,13 @@ export const ThreadRow = memo(function ThreadRow({
     // Text selection and iOS's callout would start on the same hold.
     <div
       className="group/swipe relative pointer-coarse:select-none pointer-coarse:[-webkit-touch-callout:none] data-[swiping]:overflow-hidden"
+      // The browser starts a drag only once the pointer has moved a few
+      // pixels, so clicks, Shift+clicks and the checkbox stay as they were.
+      draggable={onDragStart ? true : undefined}
+      onDragStart={
+        onDragStart ? (event) => onDragStart(index, event) : undefined
+      }
+      onDragEnd={onDragEnd}
       onClickCapture={(event) => {
         swipe.handlers.onClickCapture(event);
         if (!event.isPropagationStopped()) longPress.onClickCapture(event);
@@ -291,18 +309,42 @@ export const ThreadRow = memo(function ThreadRow({
           isSelected={isSelected}
           isStarred={isThreadStarred(thread.messages)}
           isUnread={isUnread}
-          labels={chips.map((label) => (
-            <MailLabelChip
-              color={label.color}
-              key={label.id}
-              name={label.name}
-            />
-          ))}
+          labels={[
+            ...chips.map((label) => (
+              <MailLabelChip
+                color={label.color}
+                key={label.id}
+                name={label.name}
+              />
+            )),
+            // The same message in another of the user's mailboxes, as Today
+            // marks it.
+            ...(alsoIn?.length
+              ? [
+                  <MailLabelChip
+                    key="also-in"
+                    name={`Also in ${alsoIn.map((other) => other.email).join(", ")}`}
+                  />,
+                ]
+              : []),
+          ]}
           layout={layout}
           messageCount={thread.messages.length}
           onOpen={onOpen}
           onSelectRangeTo={onSelectRangeTo}
           onToggleSelect={onToggleSelect}
+          participantMarker={
+            fromImportantPerson ? (
+              <>
+                <span className="sr-only">From an important person,</span>
+                <UserStarIcon
+                  aria-hidden
+                  className="size-3.5 shrink-0 self-center text-amber-600 dark:text-amber-400"
+                  data-testid="important-person-marker"
+                />
+              </>
+            ) : null
+          }
           participantSummary={participantSummary}
           renderSelectionControl={({
             ariaLabel,
@@ -353,6 +395,22 @@ export const ThreadRow = memo(function ThreadRow({
     </div>
   );
 });
+
+/**
+ * Whether a conversation has mail from someone starred as Important in its
+ * account. A row's own drafts don't count.
+ */
+export function isFromImportantPerson(
+  thread: ListThread,
+  accountId: string,
+  isImportant: (accountId: string, addressOrHeader: string) => boolean,
+) {
+  return thread.messages.some(
+    (message) =>
+      !message.labelIds?.includes(GmailLabel.DRAFT) &&
+      isImportant(accountId, message.headers.from),
+  );
+}
 
 /**
  * What a swipe will do, revealed behind the row as it moves: muted until the

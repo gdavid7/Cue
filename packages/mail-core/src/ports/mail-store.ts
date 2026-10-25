@@ -37,8 +37,14 @@ import type {
   FileSender,
   FilesPage,
   FilesQuery,
+  NeverReadSender,
+  NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
+  WaitingOnYouConversation,
+  WaitingOnYouQuery,
+  SenderHistory,
+  SenderHistoryQuery,
   QuerySnapshot,
   SemanticMatch,
 } from "../queries";
@@ -48,6 +54,11 @@ import type {
   ProviderChange,
   SyncPage,
 } from "../sync";
+import type { MailWaitingSummary } from "../engine";
+import type {
+  ImportantPerson,
+  SetImportantPersonInput,
+} from "../important-people";
 import type { MessageAttachmentDescriptor, MessageMetadata } from "../messages";
 
 export type ConversationView = {
@@ -349,7 +360,8 @@ export interface MailStore {
     bootstrapId: string;
     page: string;
     nextAttemptAtMs: number;
-    errorCode: string;
+    /** Null when the scan is only paced, not failing. */
+    errorCode: string | null;
   }): Promise<
     { status: "committed"; revision: LocalRevision } | { status: "stale" }
   >;
@@ -433,6 +445,11 @@ export interface MailStore {
       conversationIds: string[];
     }>;
   }>;
+  /** See `MailClient.getWaitingSummary`; one entry per account asked for. */
+  getWaitingSummary(
+    accountIds: string[],
+    nowMs: number,
+  ): Promise<MailWaitingSummary[]>;
   indexContactBacklog(): Promise<{ remaining: boolean }>;
   /** Indexes one short batch of stored bodies missing from local search. */
   indexSearchBacklog(): Promise<{ remaining: boolean }>;
@@ -479,11 +496,13 @@ export interface MailStore {
   }): Promise<EmbeddingSource[]>;
   readFileSenders(accountIds: string[]): Promise<FileSender[]>;
   readFiles(query: FilesQuery): Promise<FilesPage>;
+  readFilesNotOnDevice(accountIds: string[]): Promise<number>;
   /**
    * A send already handed to the server to deliver at its `sendAtMs`, which
    * only the server can still stop.
    */
   readHeldSend(key: OperationKey): Promise<PreparedOperation | null>;
+  readImportantPeople(accountIds: string[]): Promise<ImportantPerson[]>;
   readMailboxCounts(query: MailboxCountsQuery): Promise<{
     revision: LocalRevision;
     view: MailboxCountsView;
@@ -500,6 +519,9 @@ export interface MailStore {
     view: MailboxView;
   }>;
   readMessageSearch(query: MessageSearchQuery): Promise<MessageSearchPage>;
+  readNeverReadSenders(
+    query: NeverReadSendersQuery,
+  ): Promise<NeverReadSender[]>;
   readOperation(key: OperationKey): Promise<{
     revision: LocalRevision;
     operation: OperationState | null;
@@ -518,6 +540,10 @@ export interface MailStore {
     limit: number;
     minSimilarity: number;
   }): Promise<SemanticMatch[]>;
+  readSenderHistory(query: SenderHistoryQuery): Promise<SenderHistory>;
+  readWaitingOnYou(
+    query: WaitingOnYouQuery,
+  ): Promise<WaitingOnYouConversation[]>;
   /** Resolves `true` when the stored connection state changed. */
   recordConnection(input: {
     accountId: string;
@@ -570,6 +596,8 @@ export interface MailStore {
     scopeId: string;
     seenMessageIds: string[];
   }): Promise<LocalRevision>;
+  /** Rejects an input without a valid address. */
+  writeImportantPerson(input: SetImportantPersonInput): Promise<void>;
   writeMessageEmbeddings(input: {
     model: string;
     embeddings: MessageEmbedding[];

@@ -2,17 +2,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   chooseWebNotificationMode,
+  pauseWebNotifications,
   recordWebNotificationOffer,
+  resumeWebNotifications,
   shouldOfferWebNotifications,
 } from "@/utils/web-notifications/permission";
-import { readStoredMode } from "@/utils/web-notifications/preference";
-import { syncWebPushSubscription } from "@/utils/web-push/subscription";
+import {
+  readQuietUntilMs,
+  readStoredMode,
+} from "@/utils/web-notifications/preference";
+import {
+  syncWebPushQuietUntil,
+  syncWebPushSubscription,
+} from "@/utils/web-push/subscription";
 
 const { push } = vi.hoisted(() => ({ push: { available: true } }));
 
 vi.mock("@/utils/web-push/subscription", () => ({
   isWebPushAvailable: () => push.available,
   syncWebPushSubscription: vi.fn(async () => true),
+  syncWebPushQuietUntil: vi.fn(async () => true),
 }));
 
 function stubNotification(
@@ -28,6 +37,7 @@ beforeEach(() => {
   window.localStorage.clear();
   push.available = true;
   vi.mocked(syncWebPushSubscription).mockClear();
+  vi.mocked(syncWebPushQuietUntil).mockClear();
 });
 
 afterEach(() => {
@@ -82,6 +92,78 @@ describe("chooseWebNotificationMode", () => {
     await chooseWebNotificationMode("all");
 
     expect(syncWebPushSubscription).not.toHaveBeenCalled();
+  });
+});
+
+describe("pausing notifications", () => {
+  it("keeps this browser subscribed and tells the server until when it is paused", () => {
+    stubNotification("granted");
+    const until = Date.now() + 60 * 60 * 1000;
+
+    pauseWebNotifications(until);
+    expect(readQuietUntilMs()).toBe(until);
+    expect(syncWebPushQuietUntil).toHaveBeenLastCalledWith(until);
+
+    pauseWebNotifications(until + 1000);
+    expect(syncWebPushQuietUntil).toHaveBeenLastCalledWith(until + 1000);
+
+    resumeWebNotifications();
+    expect(readQuietUntilMs()).toBeNull();
+    expect(syncWebPushQuietUntil).toHaveBeenLastCalledWith(null);
+    expect(syncWebPushSubscription).not.toHaveBeenCalled();
+  });
+
+  it("retries a pause the server didn't get, until a newer change replaces it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      stubNotification("granted");
+      const quiet = vi.mocked(syncWebPushQuietUntil);
+      quiet.mockResolvedValue(false);
+      const until = Date.now() + 60 * 60 * 1000;
+
+      pauseWebNotifications(until);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(quiet).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(quiet).toHaveBeenCalledTimes(2);
+      expect(quiet).toHaveBeenLastCalledWith(until);
+
+      resumeWebNotifications();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(quiet).toHaveBeenCalledTimes(3);
+      expect(quiet).toHaveBeenLastCalledWith(null);
+
+      quiet.mockResolvedValue(true);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      // Only the resume's own retry runs; the pause's was cancelled.
+      expect(quiet).toHaveBeenCalledTimes(4);
+      expect(quiet).toHaveBeenLastCalledWith(null);
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(quiet).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.mocked(syncWebPushQuietUntil).mockResolvedValue(true);
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses only this tab's alerts when push is unavailable", () => {
+    push.available = false;
+
+    pauseWebNotifications(Date.now() + 60_000);
+
+    expect(readQuietUntilMs()).not.toBeNull();
+    expect(syncWebPushQuietUntil).not.toHaveBeenCalled();
+  });
+
+  it("still saves a mode chosen during a pause to push", async () => {
+    stubNotification("granted");
+    pauseWebNotifications(Date.now() + 60_000);
+
+    await chooseWebNotificationMode("all");
+
+    expect(syncWebPushSubscription).toHaveBeenCalledWith("all");
   });
 });
 

@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { cueDemoChat } from "@/__tests__/fixtures/inboxes/cue-demo-inbox";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
 import { OUTLOOK_STEP_PREFIX } from "@/scripts/qa/health-report";
@@ -158,7 +158,8 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
 
   await step(
     "thread shows reply actions",
-    async () => {
+    async (metrics) => {
+      const started = Date.now();
       await page.goto(appUrl(page, `/mail/u/${qaAccount().index}/inbox`));
       // A seeded announcement sent to a class list, so Reply all applies.
       const row = page
@@ -170,17 +171,24 @@ test("production smoke as the QA account", async ({ page }, testInfo) => {
         row,
         "the seeded multi-recipient thread is in the inbox (run the seed workflow if not)",
       ).toBeVisible({ timeout: 60_000 });
+      // Split the step so a slow run says whether the seeded row was still
+      // syncing in (row), the body was loading (open) or the buttons were late.
+      metrics.rowVisibleMs = Date.now() - started;
+      const clicked = Date.now();
       await row.click();
       const message = page.locator("[data-thread-message-id]").last();
       await expect(message, "the thread opens").toBeVisible({
         timeout: 60_000,
       });
+      metrics.threadOpenMs = Date.now() - clicked;
+      const opened = Date.now();
       for (const name of ["Reply", "Reply all", "Forward"]) {
         await expect(
           message.getByRole("button", { name, exact: true }),
           `${name} is visible`,
         ).toBeVisible();
       }
+      metrics.replyActionsMs = Date.now() - opened;
     },
     "gmail",
   );
@@ -474,15 +482,22 @@ async function checkSuggestionText(
   // Delivered mail's subject words, for the cleanup search.
   const subjectWords = ["suggestion", "probe", tag];
   metrics.suggestionShown = false;
+  // Sub-timings say whether a slow step was the IMAP append, the probe
+  // syncing into the inbox, Cue writing the reply, or the cleanup.
+  const started = Date.now();
   try {
     await appendInboxMessages(credentials, [
       {
         subject,
         from: { name: "Jonas Weber", address: "jonas.weber@example.com" },
-        text: "Hi,\n\nCan you confirm Q3's numbers & send them over? A quick yes or no on timing is fine.\n\nThanks,\nJonas",
+        // Answerable from its own text, so Cue confirms every fact and the
+        // step sees a reply shown. The "&" is for the escaped-HTML check.
+        text: "Hi,\n\nThanks for sending the notes & slides — could you reply to confirm you got them?\n\nThanks,\nJonas",
         messageId: `<cue-qa-suggestion-${tag}@cue-qa.invalid>`,
       },
     ]);
+    metrics.appendMs = Date.now() - started;
+    const appended = Date.now();
     await page.goto(appUrl(page, `/mail/u/${accountIndex}/inbox`));
     const probe = page
       .getByRole("listbox", { name: "Conversations" })
@@ -495,35 +510,43 @@ async function checkSuggestionText(
     }, "the suggestion probe reaches the inbox").toPass({
       timeout: PROBE_ARRIVAL_TIMEOUT_MS,
     });
+    metrics.probeArrivalMs = Date.now() - appended;
     await probe.click();
+    const clicked = Date.now();
 
     const reader = page.getByTestId("thread-reader");
     const shown = reader.getByText("Suggested by Cue");
     const draftButton = reader.getByRole("button", { name: "Draft a reply" });
-    const gaveUp = reader.getByRole("button", { name: "Try again" });
-    const left = reader.getByText(/Cue left this reply|Cue couldn't confirm/);
+    // Fixed labels only, never the line's text: the report is public.
+    const exits = {
+      "Cue gave up waiting (Try again)": reader.getByRole("button", {
+        name: "Try again",
+      }),
+      "Cue couldn't confirm a fact": reader.getByText(/Cue couldn't confirm/),
+      "Cue left this reply": reader.getByText(/Cue left this reply/),
+    };
     // Whichever way the account is set up, Cue writes the reply on its own or
     // after "Draft a reply"; it is asked at most once so the run costs one call.
     const deadline = Date.now() + SUGGESTION_TIMEOUT_MS;
     let asked = false;
+    let exitReason = "timed out";
     while (Date.now() < deadline && !(await shown.isVisible())) {
-      if (
-        (await gaveUp.isVisible()) ||
-        (await left
-          .first()
-          .isVisible()
-          .catch(() => false))
-      ) {
+      const seen = await firstVisible(exits);
+      if (seen) {
+        exitReason = seen;
         break;
       }
       if (!asked && (await draftButton.isVisible())) {
         asked = true;
+        metrics.draftButtonAfterMs = Date.now() - clicked;
         await draftButton.click();
       }
       await page.waitForTimeout(1000);
     }
+    metrics.suggestionWaitMs = Date.now() - clicked;
+    metrics.draftButtonClicked = asked;
     if (!(await shown.isVisible())) {
-      throw new StepSkippedError("skipped: no suggestion");
+      throw new StepSkippedError(`skipped: no suggestion (${exitReason})`);
     }
 
     const editor = reader.locator("[data-email-editor-content]").last();
@@ -544,10 +567,26 @@ async function checkSuggestionText(
       `the suggested reply shows escaped HTML (${leaks.join(", ")})`,
     ).toEqual([]);
   } finally {
+    const cleanup = Date.now();
     await trashMessagesWithSubject(credentials, subjectWords).catch(
       () => undefined,
     );
+    metrics.cleanupMs = Date.now() - cleanup;
   }
+}
+
+/** The label of the first locator on screen, if any. */
+async function firstVisible(locators: Record<string, Locator>) {
+  for (const [label, locator] of Object.entries(locators)) {
+    if (
+      await locator
+        .first()
+        .isVisible()
+        .catch(() => false)
+    )
+      return label;
+  }
+  return null;
 }
 
 async function checkToday(

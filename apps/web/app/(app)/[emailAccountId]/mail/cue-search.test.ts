@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type CueSearchIntent,
+  fuseSemanticMatches,
   getCueSearchStage,
   getSearchAnswerRequest,
   getWideningLadder,
@@ -291,3 +292,33 @@ describe("withoutPlainDuplicates", () => {
 function row(id: string) {
   return { id, messages: [{ id: `${id}-m` }], snippet: "" };
 }
+
+describe("fuseSemanticMatches", () => {
+  it("keeps each conversation once, at the closest any search by meaning found it, closest first", () => {
+    const typed = [
+      { messageId: "m-invoice", conversationId: "invoice", similarity: 0.37 },
+      { messageId: "m-flight", conversationId: "flight", similarity: 0.28 },
+    ];
+    const reading = [
+      { messageId: "m-flight-2", conversationId: "flight", similarity: 0.54 },
+      { messageId: "m-hotel", conversationId: "hotel", similarity: 0.51 },
+    ];
+    expect(fuseSemanticMatches([typed, reading], 10)).toEqual([
+      { messageId: "m-flight-2", conversationId: "flight", similarity: 0.54 },
+      { messageId: "m-hotel", conversationId: "hotel", similarity: 0.51 },
+      { messageId: "m-invoice", conversationId: "invoice", similarity: 0.37 },
+    ]);
+  });
+
+  it("keeps the limit across the searches", () => {
+    const matches = (prefix: string, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        messageId: `${prefix}-${index}`,
+        conversationId: `${prefix}-${index}`,
+        similarity: 0.9 - index / 100,
+      }));
+    expect(
+      fuseSemanticMatches([matches("a", 10), matches("b", 10)], 15),
+    ).toHaveLength(15);
+  });
+});

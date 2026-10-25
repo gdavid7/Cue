@@ -1,3 +1,4 @@
+import { describeMailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import {
   createMailEngine,
   createHostRuntime,
@@ -13,6 +14,7 @@ import { createMailHttpRequest } from "@/utils/mail-engine/http";
 import { browserStoragePressure } from "@/utils/mail-engine/storage-pressure";
 import { createWasmMailStore } from "@/utils/mail-engine/wasm-sqlite";
 import { notifySessionExpired } from "@/utils/session-expired";
+import { noteServerBuild } from "@/utils/build-update";
 import {
   pageConnectivityOnline,
   requestSyncUnlessOffline,
@@ -46,7 +48,7 @@ export async function createInTabEngine(
   await ensureAccount(input);
   const ports = createRoutedBackendAdapter({
     requestFor: (accountId) =>
-      createMailHttpRequest(accountId, notifySessionExpired),
+      createMailHttpRequest(accountId, notifySessionExpired, noteServerBuild),
   });
   const engine = createMailEngine({
     store,
@@ -63,17 +65,22 @@ export async function createInTabEngine(
   const loop = startEngineLoop(engine);
   const originalClose = engine.close.bind(engine);
   const originalRequestSync = engine.requestSync.bind(engine);
-  return {
+  const client: BrowserMailEngine = {
     ...engine,
-    // Local autocomplete, the person card, the Files view and the assistant's
+    // Local autocomplete, the person card, the sender check, the Files view,
+    // Today's Waiting on you and "Mail you never read", and the assistant's
     // message search stay off the UI thread if dedicated workers fail; before
     // indexing completes a search can scan the mailbox, so the assistant
     // searches Gmail instead.
     queryContactSuggestions: undefined,
     searchMessages: undefined,
     queryPersonCard: undefined,
+    queryNeverReadSenders: undefined,
+    querySenderHistory: undefined,
     queryFiles: undefined,
     queryFileSenders: undefined,
+    queryFilesNotOnDevice: undefined,
+    queryWaitingOnYou: undefined,
     ensureAccount,
     requestSync: (accountIds) =>
       requestSyncUnlessOffline(pageConnectivityOnline(), () =>
@@ -86,4 +93,6 @@ export async function createInTabEngine(
       await originalClose();
     },
   };
+  // Reported after the methods this host leaves out are gone.
+  return { ...client, capabilities: describeMailEngineCapabilities(client) };
 }

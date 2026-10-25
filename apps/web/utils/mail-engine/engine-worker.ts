@@ -4,6 +4,7 @@ import {
 } from "@inboxzero/mail-core/engine";
 import { startEngineLoop } from "./engine-loop";
 import { createMailHttpRequest } from "./http";
+import { resetSessionGone } from "@/utils/session-refresh";
 import { createWasmMailStore, preloadSqlite } from "./wasm-sqlite";
 import {
   shouldReleaseDeferredOnStart,
@@ -11,6 +12,7 @@ import {
   type WorkerPreopenRequest,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerSessionResetRequest,
 } from "./worker-protocol";
 import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import { classifyMailboxError } from "@inboxzero/mail-sqlite/mailbox-errors";
@@ -46,6 +48,8 @@ let preopened:
     }
   | undefined;
 let startReceived = false;
+// Every response names its deployment; the page needs to hear only changes.
+let lastServerBuild: string | undefined;
 
 const host = createMailWorkerHost({
   createEngine: createWorkerEngine,
@@ -55,9 +59,15 @@ const host = createMailWorkerHost({
 });
 
 self.onmessage = (
-  event: MessageEvent<WorkerRequest | WorkerPreopenRequest>,
+  event: MessageEvent<
+    WorkerRequest | WorkerPreopenRequest | WorkerSessionResetRequest
+  >,
 ) => {
   const message = event.data;
+  if (message.type === "session_reset") {
+    resetSessionGone();
+    return;
+  }
   if (message.type === "preopen") {
     if (!startReceived && !preopened) preopenStore(message);
     return;
@@ -91,9 +101,23 @@ async function createWorkerEngine(
   performance.mark("mail-engine:account-ensured");
   const ports = createRoutedBackendAdapter({
     requestFor: (accountId) =>
-      createMailHttpRequest(accountId, () => {
-        self.postMessage({ type: "session_expired" } satisfies WorkerResponse);
-      }),
+      createMailHttpRequest(
+        accountId,
+        (reason) => {
+          self.postMessage({
+            type: "session_expired",
+            reason,
+          } satisfies WorkerResponse);
+        },
+        (buildId) => {
+          if (buildId === lastServerBuild) return;
+          lastServerBuild = buildId;
+          self.postMessage({
+            type: "server_build",
+            buildId,
+          } satisfies WorkerResponse);
+        },
+      ),
   });
   const created = createMailEngine({
     store,

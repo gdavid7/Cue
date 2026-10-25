@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ListThread } from "./types";
-import { getListThreadSelection, getThreadSelectionKey } from "./types";
+import {
+  getListThreadSelection,
+  getRepliedThreadEmailAccountId,
+  getThreadSelectionKey,
+} from "./types";
 
 describe("thread selection identity", () => {
   it("keeps identical provider thread ids distinct across accounts", () => {
@@ -24,6 +28,46 @@ describe("thread selection identity", () => {
       emailAccountId: "route-account",
       threadId: "thread-1",
     });
+  });
+});
+
+describe("getRepliedThreadEmailAccountId", () => {
+  const threads = [
+    createCombinedThread("work", "thread-w"),
+    createCombinedThread("home", "thread-h"),
+  ];
+
+  it("credits the account of the thread that was replied to, not the open one", () => {
+    expect(
+      getRepliedThreadEmailAccountId({
+        repliedThreadId: "thread-h",
+        openSelection: { emailAccountId: "work", threadId: "thread-w" },
+        threads,
+        currentEmailAccountId: "route-account",
+      }),
+    ).toBe("home");
+  });
+
+  it("uses the open thread's account when it is the one replied to", () => {
+    expect(
+      getRepliedThreadEmailAccountId({
+        repliedThreadId: "gone",
+        openSelection: { emailAccountId: "work", threadId: "gone" },
+        threads: [],
+        currentEmailAccountId: "route-account",
+      }),
+    ).toBe("work");
+  });
+
+  it("falls back to the mailbox on screen for a plain list", () => {
+    expect(
+      getRepliedThreadEmailAccountId({
+        repliedThreadId: "thread-1",
+        openSelection: null,
+        threads: [createThread("thread-1")],
+        currentEmailAccountId: "route-account",
+      }),
+    ).toBe("route-account");
   });
 });
 

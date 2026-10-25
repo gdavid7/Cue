@@ -17,6 +17,7 @@ if (!ipc?.mailEngine) {
 }
 
 const client = createMailIpcClient(ipc.mailEngine, {
+  capabilities: ipc.mailEngineCapabilities,
   push: {
     subscribe: ipc.mailEngineSubscribe,
     unsubscribe: ipc.mailEngineUnsubscribe,

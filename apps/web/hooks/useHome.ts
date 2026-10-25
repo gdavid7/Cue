@@ -1,15 +1,18 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import useSWR, {
   type Cache,
   type BareFetcher,
   unstable_serialize,
   useSWRConfig,
 } from "swr";
+import type { GetHomeDeadlinesResponse } from "@/app/api/user/home/deadlines/route";
+import type { GetHomeCueResponse } from "@/app/api/user/home/cue/route";
 import {
   keepShownLanes,
   type TodayHomeData,
 } from "@/utils/home/keep-shown-lanes";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
+import { HOME_CUE_MAX_ACCOUNTS } from "@/utils/home/today-constants";
 import { onTodayChanged } from "@/utils/home/today-changes";
 import { getAccountScopedKey } from "@/utils/swr";
 
@@ -140,6 +143,58 @@ export function useWarmHome(
       if (key && !cache.get(discarded)?.isValidating) mutate(key);
     },
   });
+}
+
+/**
+ * Work due soon in the user's connected apps, for Today's Next up. It loads
+ * beside Today, not inside it: an app can take seconds to answer, and Today
+ * shows without it. Kept in memory only, never in Today's saved copy, so a
+ * finished task doesn't come back from an earlier visit.
+ */
+export function useHomeDeadlines(emailAccountId?: string | null) {
+  const { data } = useSWR<GetHomeDeadlinesResponse>(
+    emailAccountId
+      ? getAccountScopedKey(
+          `/api/user/home/deadlines?tz=${encodeURIComponent(browserTimeZone())}`,
+          emailAccountId,
+        )
+      : null,
+    // Each load asks every connected app, so tab switches share one, and a
+    // failed load waits for the next visit rather than asking them again.
+    { focusThrottleInterval: FOCUS_REFRESH_MIN_MS, shouldRetryOnError: false },
+  );
+  return data?.items;
+}
+
+/**
+ * By account, whether Cue has read any of each mailbox, which each account's
+ * Today also says but only after seconds of Gmail reads. Asked while
+ * `enabled`; an account that isn't the user's, past the first
+ * HOME_CUE_MAX_ACCOUNTS, or whose reads failed is missing, and so unknown.
+ */
+export function useHomeCue(accountIds: string[], enabled: boolean) {
+  const { data } = useSWR<GetHomeCueResponse>(
+    enabled && accountIds.length
+      ? `/api/user/home/cue?ids=${accountIds
+          .slice(0, HOME_CUE_MAX_ACCOUNTS)
+          .map(encodeURIComponent)
+          .join(",")}`
+      : null,
+    {
+      revalidateIfStale: false,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      shouldRetryOnError: false,
+    },
+  );
+  return useMemo(
+    () =>
+      data &&
+      Object.fromEntries(
+        data.accounts.map(({ id, hasReadMail }) => [id, hasReadMail]),
+      ),
+    [data],
+  );
 }
 
 /**

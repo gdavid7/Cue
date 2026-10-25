@@ -10,7 +10,14 @@ import {
 import { CUE_SEARCH_BUDGET_MS } from "@/app/(app)/[emailAccountId]/mail/cue-search";
 import type { AllInboxesAccount } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 
-type Row = { id: string; subject: string };
+type Row = {
+  id: string;
+  subject: string;
+  /** The newest message's Message-ID, as the local mail stores it. */
+  messageId?: string;
+  /** Copies in other accounts that All inboxes shows behind this row. */
+  copies?: Array<{ accountId: string; threadId: string }>;
+};
 
 const state = vi.hoisted(() => ({
   swrKeys: [] as unknown[],
@@ -86,6 +93,8 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-engine-mail-threads", () => ({
         (rows[accountId] ?? []).map((row) => ({
           id: row.id,
           account: accounts[accountId],
+          ...(row.messageId ? { latestInternetMessageId: row.messageId } : {}),
+          ...(row.copies ? { copies: row.copies } : {}),
           messages: [
             {
               id: `${row.id}-message`,
@@ -434,6 +443,66 @@ describe("useAllInboxesCueSearch widening", () => {
       ["home", "h1"],
     ]);
     expect(result.current.stage).toBe("done");
+  });
+
+  // A copy shown once still counts for its own account, as before copies
+  // were shown once, so collapsing never widens an account's search.
+  it("counts an account's matches shown behind another account's row", () => {
+    state.rows = {
+      work: [
+        {
+          id: "w1",
+          subject: "Lease from Sarah",
+          copies: [{ accountId: "home", threadId: "h1" }],
+        },
+        {
+          id: "w2",
+          subject: "Lease from Sarah",
+          copies: [{ accountId: "home", threadId: "h2" }],
+        },
+      ],
+    };
+    state.answered = new Set(["work", "home"]);
+    const { result, rerender } = render([WORK, HOME]);
+    rerender();
+    rerender();
+
+    expect(widenedWindows()).toEqual([]);
+    expect(result.current.stage).toBe("done");
+  });
+
+  it("leaves out a wider match that is a copy of a message already shown", () => {
+    state.rows = {
+      work: [
+        {
+          id: "w1",
+          subject: "Lease from Sarah",
+          messageId: "lease@sarah.example",
+        },
+        { id: "w2", subject: "Lease from Sarah" },
+      ],
+    };
+    state.answered = new Set(["work", "home"]);
+    state.widerRows = {
+      home: [
+        {
+          id: "h1",
+          subject: "Lease from Sarah",
+          messageId: "lease@sarah.example",
+        },
+        { id: "h2", subject: "Hello from Sarah" },
+      ],
+    };
+    const { result, rerender } = render([WORK, HOME]);
+    rerender();
+    rerender();
+
+    expect(widenedWindows().length).toBeGreaterThan(0);
+    expect(result.current.threads.map((thread) => thread.id)).toEqual([
+      "w1",
+      "w2",
+      "h2",
+    ]);
   });
 
   it("doesn't widen an account a busier one may have pushed off a full page", () => {

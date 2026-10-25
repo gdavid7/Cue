@@ -41,6 +41,7 @@ vi.mock("@/utils/snooze/scheduler", () => ({
   prepareSnoozedThread: vi.fn(),
   activatePreparedSnoozedThread: vi.fn(),
   cancelSnoozedThreadByClientMutationId: vi.fn(),
+  cancelSnoozedThreads: vi.fn(),
 }));
 
 const RUN_INTEGRATION_TESTS = process.env.RUN_INTEGRATION_TESTS;

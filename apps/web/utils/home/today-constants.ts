@@ -6,6 +6,11 @@ import type { NextUpItem } from "@/utils/home/next-up";
 
 /** Each of Today's lanes holds at most this many conversations. */
 export const HOME_LANE_LIMIT = 10;
+/**
+ * One ask of whether Cue has read each mailbox covers at most this many,
+ * more than All inboxes holds for anyone; the rest wait for their answer.
+ */
+export const HOME_CUE_MAX_ACCOUNTS = 20;
 /** Next up shows this many meetings and deadlines. */
 export const NEXT_UP_SHOWN = 4;
 /** Before your meeting shows this many meetings. */

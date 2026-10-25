@@ -48,8 +48,8 @@ test("Cue found in All inboxes searches every included account and opens each ro
 }, testInfo) => {
   const { emailAccountId: primaryId } = await openMail(page);
   const primary = await getEmailAccount(page);
-  // Every account here reads the same seeded mailbox, so one message is
-  // found once in each account Cue searches.
+  // Every account here has its own mailbox; each included one gets a match
+  // below, so Cue finds one row in each account it searches.
   const included = await createSecondEmailAccount(primaryId);
   const excluded = await createSecondEmailAccount(primaryId);
   extraAccounts = [included, excluded];
@@ -62,7 +62,18 @@ test("Cue found in All inboxes searches every included account and opens each ro
 
   const cueToken = randomToken();
   const subject = `Harvest invoice ${cueToken}`;
-  const threadId = await insertInboxMail(page, subject);
+  // Two separate messages, one per included account, each with its own
+  // Message-ID; copies of one message would show as a single row.
+  const primaryEmail = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!primaryEmail) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  await insertInboxMail(page, subject, {
+    to: primaryEmail,
+    token: await readProviderAccessToken(),
+  });
+  const threadId = await insertInboxMail(page, subject, {
+    to: included.email,
+    token: included.accessToken,
+  });
   let intentCalls = 0;
   await page.route("**/api/user/search-intent", async (route) => {
     intentCalls++;
@@ -141,21 +152,24 @@ test("Cue found in All inboxes searches every included account and opens each ro
   );
 });
 
-async function insertInboxMail(page: Page, subject: string) {
-  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+async function insertInboxMail(
+  page: Page,
+  subject: string,
+  { to, token }: { to: string; token: string | undefined },
+) {
   const baseUrl = process.env.GOOGLE_BASE_URL;
-  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  if (!token) throw new Error("The account has no mailbox of its own");
   const inserted = await page.request.post(
     `${baseUrl}/gmail/v1/users/me/messages`,
     {
       headers: {
-        Authorization: `Bearer ${await readProviderAccessToken()}`,
+        Authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
       data: {
         from: "Sam Seller <sam@vendor.example>",
-        to: email,
+        to,
         subject,
         body_text: "Cue found coverage across accounts.",
         labelIds: ["INBOX"],

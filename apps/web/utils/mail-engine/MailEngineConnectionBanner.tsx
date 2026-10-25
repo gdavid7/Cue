@@ -4,12 +4,9 @@ import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
 import { AppAlertBanner } from "@/app/(app)/AppAlertBanner";
 import { Button } from "@/components/ui/button";
-import { toastError } from "@/components/Toast";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { getAccountLinkingUrl } from "@/utils/account-linking";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { mailEngineConnectionCopy } from "@/utils/mail-engine/connection-notice";
-import { redirectToSafeUrl } from "@/utils/redirect";
+import { reconnectMailAccount } from "@/utils/mail-engine/reconnect-account";
 
 export const MailEngineConnectionBanner = memo(
   function MailEngineConnectionBanner() {
@@ -76,23 +73,9 @@ export const MailEngineConnectionBanner = memo(
               disabled={reconnecting || !emailAccountId}
               onClick={() => {
                 setReconnecting(true);
-                getAccountLinkingUrl(
-                  isMicrosoftProvider(provider) ? "microsoft" : "google",
-                  { reconnectEmailAccountId: emailAccountId },
-                )
-                  .then((url) =>
-                    redirectToSafeUrl(url, { allowExternal: true }),
-                  )
-                  .catch((error: unknown) => {
-                    toastError({
-                      title: "Couldn't start reconnecting",
-                      description:
-                        error instanceof Error
-                          ? error.message
-                          : "Check your connection and try again.",
-                    });
-                  })
-                  .finally(() => setReconnecting(false));
+                reconnectMailAccount({ emailAccountId, provider }).finally(() =>
+                  setReconnecting(false),
+                );
               }}
               size="sm"
             >

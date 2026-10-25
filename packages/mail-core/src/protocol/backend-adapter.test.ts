@@ -62,6 +62,26 @@ describe("backend mailbox source", () => {
       expected: { status: "paused", reason: "unavailable" },
     },
     {
+      name: "a quota-gate deferral in the mail envelope",
+      status: 503,
+      json: {
+        protocolVersion: MAIL_PROTOCOL_VERSION,
+        requestId: "r1",
+        error: { code: "throttled", retryable: true, retryAfterMs: 12_300 },
+      },
+      expected: { status: "paused", reason: "throttled", retryAfterMs: 12_300 },
+    },
+    {
+      name: "a quota-gate deferral from a server without the envelope",
+      status: 503,
+      json: { error: "Gmail is busy for this account.", isKnownError: true },
+      expected: {
+        status: "paused",
+        reason: "unavailable",
+        retryAfterMs: 30_000,
+      },
+    },
+    {
       name: "a proxy error page",
       status: 502,
       json: null,

@@ -25,4 +25,13 @@ export const LOCAL_MIGRATIONS = {
   contactNameTokens: { id: 14, name: "0014-contact-name-tokens" },
   filesOrderIndex: { id: 15, name: "0015-files-order-index" },
   internetMessageIds: { id: 16, name: "0016-internet-message-ids" },
+  conversationMessageKeys: {
+    id: 17,
+    name: "0017-conversation-message-keys",
+  },
+  importantPeople: { id: 18, name: "0018-important-people" },
+  operationsAccountStatusIndex: {
+    id: 19,
+    name: "0019-operations-account-status-index",
+  },
 } as const;

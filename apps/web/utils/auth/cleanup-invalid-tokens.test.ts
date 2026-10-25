@@ -232,6 +232,31 @@ describe("cleanupInvalidTokens", () => {
     );
   });
 
+  it("keeps one warning per disconnect, with ids and the reason only", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      ...mockEmailAccount,
+      account: { ...mockEmailAccount.account, provider: "google" },
+    } as any);
+    prisma.account.updateMany.mockResolvedValue({ count: 1 });
+
+    await cleanupInvalidTokens({
+      emailAccountId: "ea_1",
+      failedAccessToken: "access-token",
+      reason: "invalid_grant",
+      logger,
+    });
+
+    const lines = warn.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes("Tokens cleared"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("invalid_grant");
+    expect(lines[0]).toContain("google");
+    expect(lines[0]).not.toContain("test@example.com");
+    warn.mockRestore();
+  });
+
   it("sends action-required email for provider policy blocks", async () => {
     prisma.emailAccount.findUnique.mockResolvedValue(mockEmailAccount as any);
     prisma.account.updateMany.mockResolvedValue({ count: 1 });

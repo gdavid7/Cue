@@ -7,6 +7,103 @@ import {
   resolveSearchPredicates,
 } from "./query-semantics";
 
+describe("conversation predicates", () => {
+  const named: Extract<MailPredicate, { kind: "conversation" }> = {
+    kind: "conversation",
+    ids: ["c-1"],
+  };
+  const conversation = [
+    message({ messageId: "m-1", conversationId: "c-1", roles: ["inbox"] }),
+    message({ messageId: "m-2", conversationId: "c-1", roles: ["inbox"] }),
+  ];
+
+  it("matches every message of a named conversation, so its inverse matches none", () => {
+    expect(conversationMatchesPredicate(conversation, named)).toBe(true);
+    expect(
+      conversationMatchesPredicate(conversation, {
+        kind: "not",
+        predicate: named,
+      }),
+    ).toBe(false);
+  });
+
+  it("is accepted by the query schema and scoped to its account", () => {
+    expect(mailPredicateSchema.safeParse(named).success).toBe(true);
+    expect(
+      conversationMatchesPredicate(conversation, {
+        ...named,
+        accountId: "someone-else",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("internet_message_id predicates", () => {
+  const key = (
+    messageId: string,
+    internetMessageId: string,
+    receivedAtMs: number,
+    roles: EffectiveMessage["roles"] = ["inbox"],
+  ) => message({ messageId, internetMessageId, receivedAtMs, roles });
+
+  it("matches a conversation by its key, as summaries give it, in the account named", () => {
+    const conversation = [key("m1", "<Shared@Example.com>", 1)];
+    expect(
+      conversationMatchesPredicate(conversation, {
+        kind: "internet_message_id",
+        ids: ["shared@example.com"],
+      }),
+    ).toBe(true);
+    expect(
+      conversationMatchesPredicate(conversation, {
+        kind: "internet_message_id",
+        ids: ["shared@example.com"],
+        accountId: "elsewhere",
+      }),
+    ).toBe(false);
+  });
+
+  it("follows the key when the user replies, but not for a newer draft or trash", () => {
+    const received = key("m1", "<shared@example.com>", 1);
+    const draft = key("m2", "<draft@example.com>", 2, ["draft"]);
+    const trashed = key("m3", "<gone@example.com>", 3, ["trash"]);
+    const reply = key("m4", "<reply@example.com>", 4, ["sent"]);
+    const ids = (conversation: EffectiveMessage[]) =>
+      ["shared@example.com", "reply@example.com"].filter((id) =>
+        conversationMatchesPredicate(conversation, {
+          kind: "internet_message_id",
+          ids: [id],
+        }),
+      );
+    expect(ids([received, draft, trashed])).toEqual(["shared@example.com"]);
+    expect(ids([received, draft, trashed, reply])).toEqual([
+      "reply@example.com",
+    ]);
+  });
+
+  it("compares keys as stored, so a key normalised once still matches", () => {
+    // Normalising strips one pair of brackets; the stored key keeps the rest.
+    const conversation = [key("m1", "<<a@b>>", 1)];
+    const matches = (id: string) =>
+      conversationMatchesPredicate(conversation, {
+        kind: "internet_message_id",
+        ids: [id],
+      });
+    expect(matches("<a@b>")).toBe(true);
+    expect(matches("a@b")).toBe(false);
+  });
+
+  it("is a predicate the query schema accepts", () => {
+    expect(
+      mailPredicateSchema.safeParse({
+        kind: "internet_message_id",
+        ids: ["<a@b>"],
+        accountId: "account",
+      }).success,
+    ).toBe(true);
+  });
+});
+
 describe("mailbox predicates", () => {
   it("treats archive as a conversation with no inbox, trash, or spam members", () => {
     expect(
@@ -104,66 +201,88 @@ describe("conversationMatchesAfterChange", () => {
   };
 
   it("knows an archived conversation leaves the inbox", () => {
-    expect(conversationMatchesAfterChange(inbox, { kind: "archive" })).toBe(
-      false,
-    );
+    expect(
+      conversationMatchesAfterChange(inbox, { kind: "archive" }, "google"),
+    ).toBe(false);
     expect(
       conversationMatchesAfterChange(
         { kind: "role", role: "inbox" },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(false);
   });
 
   it("cannot tell whether an archived conversation stays in a label", () => {
-    expect(conversationMatchesAfterChange(label, { kind: "archive" })).toBe(
-      null,
-    );
+    expect(
+      conversationMatchesAfterChange(label, { kind: "archive" }, "google"),
+    ).toBe(null);
     expect(
       conversationMatchesAfterChange(
         { kind: "mailbox", mailbox: "archive" },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(null);
   });
 
   it("knows a conversation marked read leaves an unread view but not the inbox", () => {
     expect(
-      conversationMatchesAfterChange(unread, { kind: "set_read", read: true }),
+      conversationMatchesAfterChange(
+        unread,
+        { kind: "set_read", read: true },
+        "google",
+      ),
     ).toBe(false);
     expect(
-      conversationMatchesAfterChange(inbox, { kind: "set_read", read: true }),
+      conversationMatchesAfterChange(
+        inbox,
+        { kind: "set_read", read: true },
+        "google",
+      ),
     ).toBe(null);
   });
 
   it("follows starring in and out of the starred mailbox", () => {
     const starred: MailPredicate = { kind: "mailbox", mailbox: "starred" };
     expect(
-      conversationMatchesAfterChange(starred, {
-        kind: "set_starred",
-        starred: false,
-      }),
+      conversationMatchesAfterChange(
+        starred,
+        {
+          kind: "set_starred",
+          starred: false,
+        },
+        "google",
+      ),
     ).toBe(false);
     expect(
-      conversationMatchesAfterChange(starred, {
-        kind: "set_starred",
-        starred: true,
-      }),
+      conversationMatchesAfterChange(
+        starred,
+        {
+          kind: "set_starred",
+          starred: true,
+        },
+        "google",
+      ),
     ).toBe(true);
   });
 
   it("knows trash leaves every mailbox but trash", () => {
-    expect(conversationMatchesAfterChange(label, { kind: "trash" })).toBe(null);
+    expect(
+      conversationMatchesAfterChange(label, { kind: "trash" }, "google"),
+    ).toBe(null);
     expect(
       conversationMatchesAfterChange(
         { kind: "mailbox", mailbox: "all" },
         { kind: "trash" },
+        "google",
       ),
     ).toBe(false);
     expect(
       conversationMatchesAfterChange(
         { kind: "mailbox", mailbox: "trash" },
         { kind: "trash" },
+        "google",
       ),
     ).toBe(true);
   });
@@ -179,18 +298,21 @@ describe("conversationMatchesAfterChange", () => {
       conversationMatchesAfterChange(
         { kind: "all", predicates: [inbox, fromAda] },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(false);
     expect(
       conversationMatchesAfterChange(
         { kind: "any", predicates: [inbox, fromAda] },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(null);
     expect(
       conversationMatchesAfterChange(
         { kind: "not", predicate: inbox },
         { kind: "archive" },
+        "google",
       ),
     ).toBe(true);
   });
@@ -292,18 +414,30 @@ describe("typed searches", () => {
   it("drops a provider match once a change rules out the whole query", () => {
     // Archiving under in:inbox.
     expect(
-      conversationMatchesAfterChange(search(FALSE, inbox), { kind: "archive" }),
+      conversationMatchesAfterChange(
+        search(FALSE, inbox),
+        { kind: "archive" },
+        "google",
+      ),
     ).toBe(false);
     // The provider may still match it on what the change leaves alone.
     expect(
-      conversationMatchesAfterChange(search(FALSE, TRUE), { kind: "archive" }),
+      conversationMatchesAfterChange(
+        search(FALSE, TRUE),
+        { kind: "archive" },
+        "google",
+      ),
     ).toBe(null);
     const starred: MailPredicate = { kind: "mailbox", mailbox: "starred" };
     expect(
-      conversationMatchesAfterChange(search(starred, starred), {
-        kind: "set_starred",
-        starred: true,
-      }),
+      conversationMatchesAfterChange(
+        search(starred, starred),
+        {
+          kind: "set_starred",
+          starred: true,
+        },
+        "google",
+      ),
     ).toBe(true);
   });
 });

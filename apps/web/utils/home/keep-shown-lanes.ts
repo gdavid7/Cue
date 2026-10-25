@@ -46,6 +46,8 @@ export function keepShownLanes(
     } else if (lane === "waiting") {
       next.stats.waiting = shown.stats.waiting;
       next.stats.waitingCapped = shown.stats.waitingCapped;
+    } else if (lane === "reading") {
+      next.stats.readingCapped = shown.stats.readingCapped;
     }
   }
   return next;

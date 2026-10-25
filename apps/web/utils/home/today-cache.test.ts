@@ -55,6 +55,7 @@ describe("Today's cache", () => {
           connected: true,
           clearThroughTomorrow: false,
           next: {
+            id: "review",
             title: "Standup",
             at: iso(NOW + HOUR),
             url: undefined,
@@ -218,9 +219,15 @@ describe("Today's cache", () => {
     // A newer version.
     stored({ version: 99, savedAt: NOW, timeZone: ZONE, data: home() });
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    // Older ones: Next up with deadlines, a next meeting without an id, or no
+    // Reading lane. Each of 2's shapes shipped from a different branch.
+    for (const version of [1, 2, 3]) {
+      stored({ version, savedAt: NOW, timeZone: ZONE, data: home() });
+      expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
+    }
     // The right version, missing what Today reads.
     stored({
-      version: 1,
+      version: 4,
       savedAt: NOW,
       timeZone: ZONE,
       data: { needsYou: "nope" },
@@ -228,7 +235,7 @@ describe("Today's cache", () => {
     expect(readCachedToday({ ...account, now: NOW })).toBeUndefined();
     // A time zone this browser can't read.
     stored({
-      version: 1,
+      version: 4,
       savedAt: NOW,
       timeZone: "Nowhere/Else",
       data: home(),
@@ -321,6 +328,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
     needsYou: [thread("needs-1")],
     waiting: [],
     alsoInInbox: [thread("inbox-1")],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
@@ -336,6 +344,7 @@ function home(overrides: Partial<GetHomeResponse> = {}): GetHomeResponse {
       waiting: 0,
       needsYouCapped: false,
       waitingCapped: false,
+      readingCapped: false,
     },
     ...overrides,
   } as GetHomeResponse;

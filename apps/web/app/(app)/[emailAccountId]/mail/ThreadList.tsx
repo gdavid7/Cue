@@ -2,10 +2,20 @@
 
 import { addDays } from "date-fns/addDays";
 import { startOfDay } from "date-fns/startOfDay";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type DragEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { markRumRowsShown } from "@/utils/analytics/rum-actions";
 import { MailboxThreadList } from "@inboxzero/mail-ui/MailboxSurface";
-import { ThreadRow } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import {
+  isFromImportantPerson,
+  ThreadRow,
+} from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
 import type { ThreadRowActionHandlers } from "@/app/(app)/[emailAccountId]/mail/ThreadRowActions";
 import type {
   ListThread,
@@ -21,7 +31,8 @@ import { LoadingMiniSpinner } from "@/components/Loading";
 import { Button } from "@/components/ui/button";
 import type { EmailLabels } from "@/providers/email-label-types";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { useImportantPeople } from "@/hooks/useImportantPeople";
+import { useIsCoarsePointer, useIsMobile } from "@/hooks/use-mobile";
 import { useHydrated } from "@/hooks/useHydrated";
 import { useInboxInsights } from "@/hooks/useInboxInsights";
 import { useSentMessageOpensForThreads } from "@/hooks/useSentMessageOpens";
@@ -72,6 +83,9 @@ export type ThreadListProps = {
   prefetchReaderOnHover?: boolean;
   /** The row the reader shows, which asks for itself. */
   openThreadKey?: string | null;
+  /** Dragging rows onto the sidebar, with a mouse or trackpad only. */
+  onRowDragStart?: (index: number, event: DragEvent<HTMLElement>) => void;
+  onRowDragEnd?: () => void;
 };
 
 export const ThreadList = memo(function ThreadList({
@@ -100,6 +114,8 @@ export const ThreadList = memo(function ThreadList({
   insightsPaused = false,
   prefetchReaderOnHover = false,
   openThreadKey = null,
+  onRowDragStart,
+  onRowDragEnd,
 }: ThreadListProps) {
   const { emailAccountId } = useAccount();
   const { onRowHover, onRowHoverEnd } = useReaderRowPrefetch({
@@ -107,7 +123,21 @@ export const ThreadList = memo(function ThreadList({
     openThreadKey,
     listKey,
   });
+  const rowAccountIds = useMemo(
+    () => [
+      ...new Set([
+        emailAccountId,
+        ...threads.flatMap((thread) =>
+          "account" in thread ? [thread.account.id] : [],
+        ),
+      ]),
+    ],
+    [emailAccountId, threads],
+  );
+  const { isImportant } = useImportantPeople(rowAccountIds);
   const isMobile = useIsMobile();
+  // A held finger selects the row, so touch never drags.
+  const canDrag = !useIsCoarsePointer() && Boolean(onRowDragStart);
   const dayStart = useDayStart();
   const hasRows = threads.length > 0;
   // The list only renders empty once it has loaded; until then the screen
@@ -209,6 +239,8 @@ export const ThreadList = memo(function ThreadList({
           layout={layout}
           onHoverIntent={prefetchReaderOnHover ? onRowHover : undefined}
           onHoverIntentEnd={prefetchReaderOnHover ? onRowHoverEnd : undefined}
+          onDragEnd={canDrag ? onRowDragEnd : undefined}
+          onDragStart={canDrag ? onRowDragStart : undefined}
           onOpen={row.onOpen}
           onSelectRangeTo={row.onSelectRangeTo}
           onToggleSelect={row.onToggleSelect}
@@ -228,6 +260,11 @@ export const ThreadList = memo(function ThreadList({
                 )
               : undefined
           }
+          fromImportantPerson={isFromImportantPerson(
+            row.item,
+            "account" in row.item ? row.item.account.id : emailAccountId,
+            isImportant,
+          )}
           inInbox={inInbox}
           thread={row.item}
           userEmail={userEmail}

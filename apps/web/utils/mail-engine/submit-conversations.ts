@@ -44,6 +44,8 @@ export async function submitConversationChanges(input: {
   accountId: string;
   conversationIds: string[];
   change: MetadataChange;
+  /** Made in Sent or Drafts: reaches the user's own copies too. */
+  wholeConversation?: boolean;
 }) {
   const accepted: Array<{ conversationId: string; commandId: string }> = [];
   const rejectionCodes: string[] = [];
@@ -63,6 +65,7 @@ export async function submitConversationChanges(input: {
         conversationId,
       })),
       change: input.change,
+      ...(input.wholeConversation ? { wholeConversation: true } : {}),
     });
     if (admission.status === "rejected") {
       rejectionCodes.push(admission.code);

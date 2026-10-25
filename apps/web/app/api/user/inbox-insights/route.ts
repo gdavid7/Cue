@@ -33,13 +33,20 @@ export type GetInboxInsightsResponse = Awaited<
 
 export const maxDuration = 300;
 
+// What the rows' reads wait at the gate in all before the rest is deferred
+// to the browser's next request (PF-9v). Waits are summed across the
+// request's concurrent reads, so the request answers within a few seconds
+// of queueing rather than holding a lambda for most of a minute.
+const BACKGROUND_GMAIL_WAIT_MS = 10_000;
+
 /**
  * `?items=threadId:messageId,...` — each thread with its latest message.
  * `known=messageId,...` names the messages the browser already holds an
  * insight for; `events=1` asks for upcoming meetings to match its people.
  * `open=1` asks for the one conversation on screen, which someone is looking
  * at, so its reads run at interactive priority (D-086) and answer or defer
- * within the open thread's wait budget; the rows' stay background.
+ * within the open thread's wait budget; the rows' stay background, with a
+ * budget of their own: what is ready goes back and `deferred` names the rest.
  */
 export const GET = withEmailProvider("user/inbox-insights", async (request) => {
   const raw = new URL(request.url).searchParams.get("items") ?? "";
@@ -76,6 +83,7 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
       items,
       known,
       withEvents: searchParams.get("events") === "1",
+      openThread: isOpenThread,
       emailProvider: request.emailProvider,
       logger: request.logger,
     });
@@ -83,6 +91,9 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
     ? await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, load, {
         priority: "interactive",
       })
-    : await load();
+    : await runWithGmailWaitBudget(BACKGROUND_GMAIL_WAIT_MS, load);
+  request.logger = request.logger.with({
+    deferredCount: result.deferred?.messageIds.length ?? 0,
+  });
   return NextResponse.json(result satisfies GetInboxInsightsResponse);
 });

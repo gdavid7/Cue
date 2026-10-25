@@ -18,6 +18,8 @@ const TRIAGE_SHORTCUT_IDS = new Set<string>([
   "markUnread",
   "markImportant",
   "markNotImportant",
+  // Catch up's S: marks read and moves on, told apart from the list's star.
+  "catchUpKeep",
 ]);
 const TRIAGE_COUNT_KEY = "cue:get-started:keyboard-triage";
 

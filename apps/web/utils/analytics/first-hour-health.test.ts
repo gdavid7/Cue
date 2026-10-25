@@ -184,6 +184,7 @@ describe("recordFirstHourHealthForNewMailboxes", () => {
         rulesApplying: 0,
         rulesSkipped: 4,
         rulesSkippedNoMatch: 3,
+        noRuleShare: { noRule: 3, total: 11 },
         rulesErrored: 1,
         minutesSinceLastRuleRun: 10,
         needsReplyCount: 5,

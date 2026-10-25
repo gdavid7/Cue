@@ -1,3 +1,4 @@
+import type { MailEngineCapabilities } from "@inboxzero/mail-core/capabilities";
 import type { MailClient, WorkAdmission } from "@inboxzero/mail-core/engine";
 import type { QuerySnapshot } from "@inboxzero/mail-core/queries";
 import type { DroppedMailWork } from "@inboxzero/mail-sqlite/recovery";
@@ -85,6 +86,15 @@ export type WorkerPreopenRequest = {
   maxPendingOperations?: number;
 };
 
+/** The page found the app session back; the worker's requests may go out again. */
+export type WorkerSessionResetRequest = { type: "session_reset" };
+
+/**
+ * The worker's answer to `start`. Its engine reports its capabilities here so
+ * the page knows them before the first query.
+ */
+export type WorkerStarted = { capabilities: MailEngineCapabilities };
+
 export type WorkerRequest =
   | { id: string; type: "start"; input: BrowserEngineStart }
   | { id: string; type: "call"; method: string; args: unknown[] }
@@ -110,8 +120,13 @@ export type WorkerResponse =
   | { type: "rebuilding" }
   /** Carried work a rebuild could not restore; counts only, no content. */
   | { type: "dropped"; drop: DroppedMailWork }
-  /** A request found the app session signed out; only the page can act. */
-  | { type: "session_expired" };
+  /**
+   * The worker stopped sending: no session ("signed-out"), or the gate
+   * refused even a refreshed one ("rejected"). Only the page can act.
+   */
+  | { type: "session_expired"; reason: "signed-out" | "rejected" }
+  /** A deployment other than the last one named answered a request. */
+  | { type: "server_build"; buildId: string };
 
 export function browserMailEngineCapabilities() {
   return {

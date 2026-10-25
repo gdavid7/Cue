@@ -57,13 +57,18 @@ function message(overrides: Parameters<typeof getMockParsedMessage>[0] = {}) {
   });
 }
 
-function subscription(id: string, mode: WebPushMode) {
+function subscription(
+  id: string,
+  mode: WebPushMode,
+  quietUntil: Date | null = null,
+) {
   return {
     id,
     endpoint: `https://fcm.googleapis.com/fcm/send/${id}`,
     p256dh: `p256dh-${id}`,
     auth: `auth-${id}`,
     mode,
+    quietUntil,
   };
 }
 
@@ -269,6 +274,44 @@ describe("sendNewMailWebPush", () => {
       }),
     });
     await send({ message: message({ threadId: "" }) });
+
+    expect(prisma.webPushDelivery.createMany).not.toHaveBeenCalled();
+    expect(sendNotification).not.toHaveBeenCalled();
+  });
+
+  it("skips a browser paused past now and pushes to it once the pause ends", async () => {
+    const pauseEnd = new Date(now.getTime() + 60 * 60 * 1000);
+    prisma.webPushSubscription.findMany.mockResolvedValue([
+      subscription("paused", WebPushMode.ALL, pauseEnd),
+      subscription("ended", WebPushMode.ALL, new Date(now.getTime() - 1000)),
+    ] as never);
+
+    await send();
+    expect(sentEndpoints()).toEqual([
+      "https://fcm.googleapis.com/fcm/send/ended",
+    ]);
+
+    sendNotification.mockClear();
+    const later = new Date(pauseEnd.getTime() + 1000);
+    await send({
+      now: later,
+      message: message({
+        id: "message-2",
+        internalDate: String(later.getTime() - 30_000),
+      }),
+    });
+    expect(sentEndpoints()).toEqual([
+      "https://fcm.googleapis.com/fcm/send/paused",
+      "https://fcm.googleapis.com/fcm/send/ended",
+    ]);
+  });
+
+  it("does not claim a message when every browser is paused", async () => {
+    prisma.webPushSubscription.findMany.mockResolvedValue([
+      subscription("paused", WebPushMode.ALL, new Date(now.getTime() + 60_000)),
+    ] as never);
+
+    await send();
 
     expect(prisma.webPushDelivery.createMany).not.toHaveBeenCalled();
     expect(sendNotification).not.toHaveBeenCalled();

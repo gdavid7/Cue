@@ -55,14 +55,17 @@ export type FakeGmailCall = {
  * A Gmail double that charges each request its modelled cost and, like
  * Gmail, refuses requests once a rolling minute of accepted cost would pass
  * `unitsPerMinute`. Recent mail is `recentCount` messages; older mail is
- * `historyCount` more. With `unitsPerSecond`, it also refuses what would push
- * the last second past that many units, for a test that bounds bursts.
+ * `historyCount` more, of which every `inboxEvery`th is still in the inbox;
+ * an `in:inbox` list returns only those and a `-in:inbox` list only the
+ * rest. With `unitsPerSecond`, it also refuses what would push the last
+ * second past that many units, for a test that bounds bursts.
  */
 export function createFakeGmail({
   unitsPerMinute = 6000,
   latencyMs = 250,
   recentCount = 150,
   historyCount = 4000,
+  inboxEvery = 1,
   unitsPerSecond = Number.POSITIVE_INFINITY,
 }: {
   unitsPerMinute?: number;
@@ -70,8 +73,11 @@ export function createFakeGmail({
   latencyMs?: number;
   recentCount?: number;
   historyCount?: number;
+  inboxEvery?: number;
 } = {}) {
   const calls: FakeGmailCall[] = [];
+  // Like Gmail's, a list cursor belongs to the query that minted it.
+  const mismatchedPageTokens: string[] = [];
 
   function charge(units: number) {
     const now = Date.now();
@@ -110,7 +116,14 @@ export function createFakeGmail({
     const path = url.pathname.replace(/^.*\/gmail\/v1\/users\/[^/]+/, "");
     const q = url.searchParams.get("q") ?? "";
     const max = Number(url.searchParams.get("maxResults") || 100);
-    const pageToken = Number(url.searchParams.get("pageToken") || 0);
+    const cursor = url.searchParams.get("pageToken");
+    const queryKey = Buffer.from(q).toString("base64url");
+    const [mintedFor, offset] = cursor ? cursor.split(".") : [queryKey, "0"];
+    if (mintedFor !== queryKey) {
+      mismatchedPageTokens.push(q);
+      throw new InvalidPageTokenError();
+    }
+    const pageToken = Number(offset);
     if (path === "/profile")
       return {
         emailAddress: "me@example.com",
@@ -145,15 +158,29 @@ export function createFakeGmail({
           : q.includes("from:") || q.includes(" OR ")
             ? [0, 12]
             : [0, recentCount];
-      const from = start + pageToken;
-      const to = Math.min(end, from + max);
-      const ids = Array.from({ length: to - from }, (_, i) => from + i);
-      const next = to < end ? String(to - start) : undefined;
+      const inOlderInbox = (i: number) =>
+        i >= recentCount && (i - recentCount) % inboxEvery === 0;
+      const olderMail = !label && q.includes("before:");
+      const listsInbox =
+        olderMail && !q.includes("{") && /(^|\s)in:inbox/.test(q);
+      const pool = Array.from(
+        { length: end - start },
+        (_, i) => start + i,
+      ).filter((i) => {
+        if (olderMail && q.includes("-in:inbox")) return !inOlderInbox(i);
+        if (listsInbox) return inOlderInbox(i);
+        return true;
+      });
+      const ids = pool.slice(pageToken, pageToken + max);
+      const next =
+        pageToken + max < pool.length
+          ? `${queryKey}.${pageToken + max}`
+          : undefined;
       return path === "/messages"
         ? {
             messages: ids.map((i) => ({ id: `m${i}`, threadId: `t${i}` })),
             nextPageToken: next,
-            resultSizeEstimate: end - start,
+            resultSizeEstimate: pool.length,
           }
         : {
             threads: ids.map((i) => ({ id: `t${i}`, historyId: "9000" })),
@@ -209,7 +236,23 @@ export function createFakeGmail({
         status: 403,
         headers: { "content-type": "application/json" },
       });
-    const json = JSON.stringify(handle(url));
+    let body: unknown;
+    try {
+      body = handle(url);
+    } catch (error) {
+      if (!(error instanceof InvalidPageTokenError)) throw error;
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: 400,
+            message: "Invalid pageToken",
+            status: "INVALID_ARGUMENT",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+    const json = JSON.stringify(body);
     const response = new Response(json, {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -270,6 +313,10 @@ export function createFakeGmail({
     limitedCalls() {
       return calls.filter((call) => call.limited);
     },
+    /** Queries a list cursor was sent with other than the one that minted it. */
+    mismatchedPageTokens() {
+      return mismatchedPageTokens;
+    },
   };
 }
 
@@ -306,3 +353,5 @@ function message(i: number) {
     },
   };
 }
+
+class InvalidPageTokenError extends Error {}

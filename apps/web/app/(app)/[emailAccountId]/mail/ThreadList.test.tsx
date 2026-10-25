@@ -19,7 +19,10 @@ vi.mock("@/providers/EmailAccountProvider", () => ({
 vi.mock("@/utils/analytics/rum-actions", () => ({
   markRumRowsShown: vi.fn(),
 }));
-vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+vi.mock("@/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
+  useIsCoarsePointer: () => false,
+}));
 vi.mock("@/hooks/useInboxInsights", () => ({
   useInboxInsights: () => ({ data: undefined }),
 }));
@@ -28,6 +31,7 @@ vi.mock("@/hooks/useSentMessageOpens", () => ({
 }));
 vi.mock("@/app/(app)/[emailAccountId]/mail/ThreadRow", () => ({
   ThreadRow: ({ thread }: { thread: { id: string } }) => <div>{thread.id}</div>,
+  isFromImportantPerson: () => false,
 }));
 
 type Item = { id: string; day: string };

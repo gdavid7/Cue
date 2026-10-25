@@ -354,6 +354,18 @@ test("All inboxes prefetches a row's summary with the row's own account", async 
 }, testInfo) => {
   const { emailAccountId } = await openMail(page);
   const second = await createSecondEmailAccount(emailAccountId);
+  // The same email in two accounts is one row (FT-1f-f1), so the second
+  // account, which reads a mailbox of its own, gets one of its own from Maya.
+  if (!second.accessToken)
+    throw new Error("The second account has no mailbox of its own");
+  const mailbox = { email: second.email, token: second.accessToken };
+  const own = await ensureMessage(page, {
+    from: "Maya Chen <maya@talent.example>",
+    subject: PERSON_SUBJECT,
+    body: PERSON_BODY,
+    labelIds: ["INBOX", "UNREAD", await ensureLabel(page, "FYI", mailbox)],
+    mailbox,
+  });
   try {
     const briefAccounts: string[] = [];
     page.on("request", (request) => {
@@ -388,6 +400,11 @@ test("All inboxes prefetches a row's summary with the row's own account", async 
       "cue-strip-prefetched-all-inboxes",
     );
   } finally {
+    // Later specs' second accounts read this mailbox too.
+    await page.request.delete(
+      `${gmailBaseUrl()}/gmail/v1/users/me/messages/${own.messageId}`,
+      { headers: await gmailHeaders(mailbox.token) },
+    );
     await deleteSecondEmailAccount(second.accountId);
   }
 });
@@ -508,9 +525,9 @@ async function countBriefModelCalls() {
   ).length;
 }
 
-async function ensureLabel(page: Page, name: string) {
+async function ensureLabel(page: Page, name: string, mailbox?: Mailbox) {
   const base = `${gmailBaseUrl()}/gmail/v1/users/me/labels`;
-  const headers = await gmailHeaders();
+  const headers = await gmailHeaders(mailbox?.token);
   const list = await page.request.get(base, { headers });
   expect(list.ok(), await list.text()).toBe(true);
   const { labels } = (await list.json()) as {
@@ -527,9 +544,16 @@ async function ensureLabel(page: Page, name: string) {
 // A retry runs beforeEach again against the same mailbox, so each is made once.
 async function ensureMessage(
   page: Page,
-  input: { from: string; subject: string; body: string; labelIds: string[] },
+  input: {
+    from: string;
+    subject: string;
+    body: string;
+    labelIds: string[];
+    /** Another account's own mailbox, not the primary's. */
+    mailbox?: Mailbox;
+  },
 ) {
-  const headers = await gmailHeaders();
+  const headers = await gmailHeaders(input.mailbox?.token);
   const search = await page.request.get(
     `${gmailBaseUrl()}/gmail/v1/users/me/messages`,
     // Every inbox message, not a search: the emulator's search can't be
@@ -555,12 +579,12 @@ async function ensureMessage(
       return { threadId: candidate.threadId, messageId: candidate.id };
   }
 
-  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  const email = input.mailbox?.email ?? process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
   const inserted = await page.request.post(
     `${gmailBaseUrl()}/gmail/v1/users/me/messages`,
     {
-      headers: await gmailHeaders(),
+      headers,
       data: {
         from: input.from,
         to: email,
@@ -576,12 +600,14 @@ async function ensureMessage(
   return { threadId: message.threadId, messageId: message.id };
 }
 
-async function gmailHeaders() {
+async function gmailHeaders(token?: string) {
   return {
-    Authorization: `Bearer ${await readProviderAccessToken()}`,
+    Authorization: `Bearer ${token ?? (await readProviderAccessToken())}`,
     "content-type": "application/json",
   };
 }
+
+type Mailbox = { email: string; token: string };
 
 function gmailBaseUrl() {
   const baseUrl = process.env.GOOGLE_BASE_URL;

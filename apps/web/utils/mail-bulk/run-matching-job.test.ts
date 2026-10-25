@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { gmail_v1 } from "@googleapis/gmail";
 import type { EmailProvider } from "@/utils/email/types";
 import type {
   MatchingFilter,
@@ -8,6 +9,7 @@ import {
   GmailCallDeferredError,
   currentGmailQuotaContext,
 } from "@/utils/gmail/quota";
+import { listGmailMatchingMessages } from "@/utils/gmail/matching";
 import { createScopedLogger } from "@/utils/logger";
 import {
   ACTIVE_MAIL_BULK_JOB_STATUSES,
@@ -90,6 +92,93 @@ describe("runMailBulkJobStep", () => {
       expect.objectContaining({ only: { unread: true } }),
     );
     expect(provider.markMessagesReadState).toHaveBeenCalledWith(["m1"], true);
+  });
+
+  it("the Reading lane's job archives and marks read whole conversations, labels split across messages", async () => {
+    // Only the digest's first message carries the label; its reply doesn't.
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX", "UNREAD"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = {
+      labelIds: ["INBOX", "Label_42"],
+      wholeConversations: true,
+    };
+
+    for (const action of ["archive", "mark_read"] as const) {
+      const store = createStore();
+      await store.create(JOB_ID, newJob({ action }));
+      const provider = gmailProvider(gmail);
+
+      await runStep({ store, provider, listings: createListings({ scope }) });
+
+      if (action === "archive")
+        expect(provider.archiveMessages).toHaveBeenCalledWith(["m1", "m2"]);
+      else
+        expect(provider.markMessagesReadState).toHaveBeenCalledWith(
+          ["m1", "m2"],
+          true,
+        );
+      await expect(store.get(JOB_ID)).resolves.toMatchObject({
+        status: "done",
+        total: 2,
+        conversations: 1,
+      });
+    }
+  });
+
+  it("lists a conversation split across two pages once", async () => {
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }], [{ id: "m3", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX"] },
+          { id: "m3", labelIds: ["INBOX", "Label_42"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = {
+      labelIds: ["INBOX", "Label_42"],
+      wholeConversations: true,
+    };
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = gmailProvider(gmail);
+
+    await runStep({ store, provider, listings: createListings({ scope }) });
+
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m1", "m2", "m3"]);
+    await expect(store.get(JOB_ID)).resolves.toMatchObject({
+      status: "done",
+      total: 3,
+      conversations: 1,
+    });
+  });
+
+  it("keeps any other label view's job per message", async () => {
+    const gmail = gmailWith({
+      pages: [[{ id: "m1", threadId: "t1" }]],
+      threads: {
+        t1: [
+          { id: "m1", labelIds: ["INBOX", "Label_42"] },
+          { id: "m2", labelIds: ["INBOX"] },
+        ],
+      },
+    });
+    const scope: MatchingScope = { labelIds: ["INBOX", "Label_42"] };
+    const store = createStore();
+    await store.create(JOB_ID, newJob({ action: "archive" }));
+    const provider = gmailProvider(gmail);
+
+    await runStep({ store, provider, listings: createListings({ scope }) });
+
+    expect(provider.archiveMessages).toHaveBeenCalledWith(["m1"]);
   });
 
   it("trashes and reports spam once per conversation", async () => {
@@ -793,7 +882,13 @@ function createProvider({
   pageLink?: (index: number) => string;
 }) {
   const listMatchingMessages = vi.fn(
-    async ({ pageToken }: { only: MatchingFilter; pageToken?: string }) => {
+    async ({
+      pageToken,
+    }: {
+      scope: MatchingScope;
+      only: MatchingFilter;
+      pageToken?: string;
+    }) => {
       const index = pageToken ? Number(pageToken.split(/[-=]/).at(-1)) : 0;
       return {
         messages: pages[index] ?? [],
@@ -852,6 +947,10 @@ function createStore(): typeof mailBulkJobStore {
       conversations.set(jobId, seen);
       return seen.size - before;
     },
+    async knownConversations(jobId, threadIds) {
+      const seen = conversations.get(jobId) ?? new Set<string>();
+      return new Set(threadIds.filter((threadId) => seen.has(threadId)));
+    },
     async readTargets(jobId, start, count) {
       return (targets.get(jobId) ?? []).slice(start, start + count);
     },
@@ -887,4 +986,50 @@ function createListings(
       if (owned(jobId, emailAccountId)) rows.delete(jobId);
     },
   };
+}
+
+/** A Gmail client whose listing returns `pages` and threads hold `threads`. */
+function gmailWith({
+  pages,
+  threads,
+}: {
+  pages: { id: string; threadId: string }[][];
+  threads: Record<string, { id: string; labelIds: string[] }[]>;
+}) {
+  return {
+    users: {
+      messages: {
+        list: vi.fn(async ({ pageToken }: { pageToken?: string }) => {
+          const index = pageToken ? Number(pageToken) : 0;
+          return {
+            data: {
+              messages: pages[index] ?? [],
+              nextPageToken:
+                index + 1 < pages.length ? String(index + 1) : undefined,
+            },
+          };
+        }),
+      },
+      threads: {
+        get: vi.fn(async ({ id }: { id: string }) => ({
+          data: {
+            messages: (threads[id] ?? []).map((message) => ({
+              ...message,
+              threadId: id,
+            })),
+          },
+        })),
+      },
+    },
+  } as unknown as gmail_v1.Gmail;
+}
+
+/** A provider that lists through Gmail's own matching listing. */
+function gmailProvider(gmail: gmail_v1.Gmail) {
+  const provider = createProvider({ pages: [] });
+  vi.mocked(provider.listMatchingMessages).mockImplementation(
+    ({ scope, only, pageToken }) =>
+      listGmailMatchingMessages({ gmail, scope, only, pageToken }),
+  );
+  return provider;
 }

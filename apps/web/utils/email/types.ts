@@ -471,6 +471,15 @@ export interface EmailProvider {
     messages: { id: string; threadId: string }[];
     nextPageToken?: string;
   }>;
+  /**
+   * Conversations in the inbox with unread mail received since `after`,
+   * newest first, by id only: one cheap listing to check ids against. `full`
+   * says the provider had more than one page holds, so some may be missing.
+   */
+  listUnreadInboxThreadIds(options: {
+    after: Date;
+    maxResults: number;
+  }): Promise<{ threadIds: string[]; full: boolean }>;
   readonly localMailSyncStrategy: "account-history" | "folder-delta";
   markMessagesReadState(messageIds: string[], read: boolean): Promise<void>;
   markMessagesStarredState(
@@ -481,6 +490,8 @@ export interface EmailProvider {
   markRead(threadId: string): Promise<void>;
   markReadThread(threadId: string, read: boolean): Promise<void>;
   markSpam(threadId: string): Promise<void>;
+  /** Moves just these messages, not their conversations. Outlook only. */
+  moveMessagesToFolder(messageIds: string[], folderId: string): Promise<void>;
   moveThreadToFolder(
     threadId: string,
     ownerEmail: string,

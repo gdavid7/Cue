@@ -9,19 +9,24 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GetCalendarTodayEventsResponse } from "@/app/api/user/calendar/upcoming-events/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { ShortcutsProvider } from "@/lib/shortcuts/ShortcutsProvider";
 import { MAIL_SHORTCUT_SCOPES } from "@/lib/shortcuts/registry";
 import { resetBrowserCacheForTesting } from "@/utils/browser-cache";
 import type { HomeThread } from "@/utils/home/get-home";
+import type { TodayThread } from "@/utils/home/merge-home";
+import type { NextUpItem } from "@/utils/home/next-up";
 import type {
   ConversationSummary,
   MailboxView,
 } from "@inboxzero/mail-core/queries";
 import type { useLocalInboxRows } from "./use-local-inbox-rows";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
+import type { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import { HomeDashboard } from "./HomeDashboard";
 
 const mocks = vi.hoisted(() => ({
@@ -34,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   searchParams: new URLSearchParams(),
   emailAccounts: [] as unknown[] | undefined,
   homes: {} as Record<string, GetHomeResponse | undefined>,
+  // Work due in connected apps, which loads after Today.
+  deadlines: undefined as NextUpItem[] | undefined,
   markNeedsReply: vi.fn(),
   markNoReplyNeeded: vi.fn(),
   toastUndo: vi.fn(),
@@ -41,6 +48,16 @@ const mocks = vi.hoisted(() => ({
   // The browser's own inbox, as the mail engine lists it.
   localInbox: null as ConversationSummary[] | null,
   localInboxArgs: [] as Parameters<typeof useLocalInboxRows>[0][],
+  // Today's meetings, as the calendar answers for the Your day strip.
+  // `undefined` while the calendar is still being read.
+  day: { events: [], more: 0 } as GetCalendarTodayEventsResponse | undefined,
+  // What Waiting on you reads from local mail.
+  waitingOnYou: [] as TodayThread[],
+  dismissWaitingOnYou: vi.fn(),
+  // By account, whether Cue has read the mailbox, asked before Today's answer.
+  homeCue: undefined as Record<string, boolean> | undefined,
+  reportActivation: vi.fn(),
+  catchUpProps: [] as Array<Record<string, unknown>>,
   home: {
     isLoading: false,
     data: undefined as GetHomeResponse | undefined,
@@ -104,7 +121,13 @@ vi.mock("@/hooks/useMailHref", () => ({
     },
 }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsLargeScreen: () => true }));
+vi.mock("@/hooks/useActivationSignal", () => ({
+  reportActivationSignal: mocks.reportActivation,
+}));
 vi.mock("@/hooks/useHome", () => ({
+  useHomeDeadlines: () => mocks.deadlines,
+  useHomeCue: (_accountIds: string[], enabled: boolean) =>
+    enabled ? mocks.homeCue : undefined,
   // A stand-in for SWR's cache: local mutations apply, nothing revalidates.
   useHome: (emailAccountId?: string | null) => {
     const [data, setData] = useState(
@@ -152,6 +175,39 @@ vi.mock("./use-local-inbox-rows", async (importOriginal) => {
     },
   };
 });
+vi.mock("@/hooks/useCalendarUpcomingEvents", () => ({
+  useCalendarTodayEvents: () => ({ data: mocks.day }),
+}));
+vi.mock("./use-waiting-on-you", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./use-waiting-on-you")>();
+  return {
+    ...actual,
+    // What the hook found in the accounts it reads, whether or not Today
+    // still wants it.
+    useWaitingOnYou: ({
+      accounts,
+      handledLabelIds,
+    }: Parameters<typeof actual.useWaitingOnYou>[0]) => ({
+      threads: mocks.waitingOnYou.filter(
+        (thread) => (thread.account?.id ?? accounts[0]?.id) in handledLabelIds,
+      ),
+      dismiss: mocks.dismissWaitingOnYou,
+    }),
+  };
+});
+vi.mock("@/app/(app)/[emailAccountId]/mail/CatchUp", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/app/(app)/[emailAccountId]/mail/CatchUp")
+    >();
+  return {
+    ...actual,
+    CatchUpEntry: (props: Record<string, unknown>) => {
+      mocks.catchUpProps.push(props);
+      return null;
+    },
+  };
+});
 vi.mock("./BeforeYourMeeting", () => ({ BeforeYourMeeting: () => null }));
 vi.mock("./TodayWeather", () => ({ TodayWeather: () => null }));
 
@@ -171,6 +227,17 @@ describe("HomeDashboard row actions", () => {
   });
 
   afterEach(cleanup);
+
+  it("offers one account's Catch up, without All inboxes", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    expect(mocks.catchUpProps.at(-1)).toMatchObject({
+      emailAccountId: "account",
+      query: { type: "inbox" },
+      allInboxes: undefined,
+    });
+  });
 
   it("archives through the mail engine, moves focus to the next row, and undo brings it back", async () => {
     renderToday();
@@ -347,6 +414,7 @@ describe("HomeDashboard states", () => {
     mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
     mocks.home.error = undefined;
     mocks.home.gaveUp = false;
+    mocks.deadlines = undefined;
   });
 
   afterEach(cleanup);
@@ -385,6 +453,38 @@ describe("HomeDashboard states", () => {
 
     expect(optionFor("a").textContent).toContain("Cue drafted a reply");
     expect(optionFor("b").textContent).not.toContain("Cue drafted a reply");
+  });
+
+  it("lists mail from people starred as Important first in Needs reply", async () => {
+    const original = mocks.client;
+    mocks.client = Object.assign(Object.create(original), {
+      capabilities: [
+        "method:queryImportantPeople",
+        "method:setImportantPerson",
+      ],
+      queryImportantPeople: async () => [
+        { accountId: "account", email: "dana@example.com", addedAtMs: 1 },
+      ],
+      setImportantPerson: async () => undefined,
+    });
+    mocks.home.data = homeData([
+      thread("a", "Quarterly numbers"),
+      { ...thread("b", "Contract"), fromEmail: "Dana@example.com" },
+      thread("c", "Lunch on Friday?"),
+    ]);
+
+    try {
+      renderToday();
+      await waitFor(() =>
+        expect(
+          [...document.querySelectorAll("[data-today-thread]")].map((row) =>
+            row.getAttribute("data-today-thread"),
+          ),
+        ).toEqual(["b", "a", "c"]),
+      );
+    } finally {
+      mocks.client = original;
+    }
   });
 
   it("light: one email that needs a reply, and no empty lanes", () => {
@@ -581,7 +681,9 @@ describe("HomeDashboard states", () => {
     ).toBe("/account/integrations");
   });
 
-  it("busy with deadlines: lists what's next, soonest first, each with its source", () => {
+  it("busy with deadlines: shows Today without them, then adds them to what's next, soonest first", () => {
+    const at = (hours: number) =>
+      new Date(Date.now() + hours * 3_600_000).toISOString();
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
       calendar: {
@@ -594,34 +696,59 @@ describe("HomeDashboard states", () => {
           id: "event:review",
           kind: "event",
           title: "Design review",
-          at: new Date(Date.now() + 3_600_000).toISOString(),
+          at: at(1),
           source: "Calendar",
           url: "https://calendar.example.com/review",
         },
         {
-          id: "jira:OPS-12",
-          kind: "deadline",
-          title: "OPS-12 Rotate keys",
-          at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
-          allDay: true,
-          source: "Jira",
+          id: "event:dinner",
+          kind: "event",
+          title: "Dinner",
+          at: at(30),
+          source: "Calendar",
         },
       ],
     };
+    const nextUpTitles = () =>
+      within(screen.getByRole("region", { name: "Next up" }))
+        .getAllByRole("listitem")
+        .map((item) =>
+          item.textContent?.replace(/^.*?(Design|Dinner|OPS)/, "$1"),
+        );
 
-    renderToday();
+    const { rerender } = renderToday();
+
+    // Today and its meetings show before any connected app answers.
+    expect(screen.getByText("Quarterly numbers")).toBeTruthy();
+    expect(nextUpTitles()).toEqual([
+      "Design reviewCalendar (opens in a new tab)",
+      "DinnerCalendar",
+    ]);
+
+    mocks.deadlines = [
+      {
+        id: "jira:OPS-12",
+        kind: "deadline",
+        title: "OPS-12 Rotate keys",
+        at: at(5),
+        allDay: true,
+        source: "Jira",
+      },
+    ];
+    rerender(
+      <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
+        <HomeDashboard />
+      </ShortcutsProvider>,
+    );
 
     // The meeting is in the list below, so the summary doesn't repeat it.
     expect(onlyStatus().textContent).toBe("1 needs a reply");
-    const nextUp = screen.getByRole("region", { name: "Next up" });
-    expect(
-      within(nextUp)
-        .getAllByRole("listitem")
-        .map((item) => item.textContent?.replace(/^.*?(Design|OPS)/, "$1")),
-    ).toEqual([
+    expect(nextUpTitles()).toEqual([
       "Design reviewCalendar (opens in a new tab)",
       "OPS-12 Rotate keysJira",
+      "DinnerCalendar",
     ]);
+    const nextUp = screen.getByRole("region", { name: "Next up" });
     expect(within(nextUp).getByRole("link").getAttribute("href")).toBe(
       "https://calendar.example.com/review",
     );
@@ -706,6 +833,313 @@ describe("HomeDashboard states", () => {
 
     expect(lanes()).toEqual(["Needs reply"]);
     expect(screen.queryByText("Couldn't load this")).toBeNull();
+  });
+});
+
+describe("HomeDashboard Your day", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.day = { events: [], more: 0 };
+  });
+
+  it("busy with meetings today: the strip lists them and Next up keeps only what it doesn't", () => {
+    const review = new Date(Date.now() + 3_600_000).toISOString();
+    mocks.day = day([dayMeeting("review", "Design review", review)]);
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: {
+          id: "review",
+          title: "Design review",
+          at: review,
+          url: undefined,
+          tomorrow: false,
+        },
+      },
+      nextUp: [
+        {
+          id: "event:review",
+          kind: "event",
+          title: "Design review",
+          at: review,
+          source: "Calendar",
+        },
+        {
+          id: "jira:OPS-12",
+          kind: "deadline",
+          title: "OPS-12 Rotate keys",
+          at: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+          allDay: true,
+          source: "Jira",
+        },
+      ],
+    };
+
+    renderToday();
+
+    const strip = screen.getByRole("region", { name: "Your day" });
+    expect(within(strip).getByText("Design review")).toBeTruthy();
+    // Said once: not again in Next up or the summary.
+    expect(screen.getAllByText(/Design review/)).toHaveLength(1);
+    expect(onlyStatus().textContent).toBe("1 needs a reply");
+    const nextUp = screen.getByRole("region", { name: "Next up" });
+    expect(within(nextUp).getByText("OPS-12 Rotate keys")).toBeTruthy();
+  });
+
+  it("all clear with a meeting today: the strip names it instead of the Next line", () => {
+    const review = new Date(Date.now() + 45 * 60_000).toISOString();
+    mocks.day = day([dayMeeting("review", "Design review", review)]);
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: {
+          id: "review",
+          title: "Design review",
+          at: review,
+          url: undefined,
+          tomorrow: false,
+        },
+      },
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(screen.getByRole("region", { name: "Your day" })).toBeTruthy();
+    expect(screen.queryByText(/^Next:/)).toBeNull();
+  });
+
+  it("a different meeting with the same name and time stays in Next up", () => {
+    const at = new Date(Date.now() + 3_600_000).toISOString();
+    mocks.day = day([dayMeeting("team-sync", "Sync", at)]);
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      nextUp: [
+        {
+          id: "event:client-sync",
+          kind: "event",
+          title: "Sync",
+          at,
+          source: "Calendar",
+        },
+      ],
+    };
+
+    renderToday();
+
+    const nextUp = screen.getByRole("region", { name: "Next up" });
+    expect(within(nextUp).getByText("Sync")).toBeTruthy();
+    expect(
+      within(screen.getByRole("region", { name: "Your day" })).getByText(
+        "Sync",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("while today's meetings load, holds them back rather than move them when they land", () => {
+    mocks.day = undefined;
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: {
+        connected: true,
+        clearThroughTomorrow: false,
+        next: {
+          id: "review",
+          title: "Design review",
+          at: soon,
+          url: undefined,
+          tomorrow: false,
+        },
+      },
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(screen.queryByText(/^Next:/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
+  });
+
+  it("no meetings today: no strip, and the clear line still says so", () => {
+    mocks.day = day([]);
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: true, clearThroughTomorrow: true, next: null },
+    };
+
+    renderToday();
+
+    expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
+    expect(screen.getByText("Calendar clear through tomorrow.")).toBeTruthy();
+  });
+
+  it("no calendar connected: no strip", () => {
+    mocks.day = { events: [], more: 0 };
+    mocks.home.data = {
+      ...homeData([]),
+      calendar: { connected: false, clearThroughTomorrow: false, next: null },
+    };
+
+    renderToday();
+
+    expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Connect Calendar" })).toBeTruthy();
+  });
+});
+
+describe("HomeDashboard Waiting on you", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.waitingOnYou = [thread("asked", "Lunch on Friday?")];
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.waitingOnYou = [];
+  });
+
+  it("new mailbox: lists local mail that may need a reply while Cue reads, each conversation once", () => {
+    mocks.home.data = {
+      ...homeData([]),
+      cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+      alsoInInbox: [
+        thread("asked", "Lunch on Friday?"),
+        thread("b", "Dentist"),
+      ],
+    };
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("Cue is reading");
+    expect(lanes()).toEqual(["Waiting on you", "Also in your inbox"]);
+    expect(screen.getByText("From your mail, not checked by AI")).toBeTruthy();
+    expect(optionFor("asked").textContent).toContain("May need a reply");
+    expect(
+      within(lane("Also in your inbox")).queryByText("Lunch on Friday?"),
+    ).toBeNull();
+  });
+
+  it("leaves a mailbox Cue has read to Cue, even when nothing needs a reply", () => {
+    mocks.home.data = homeData([]);
+
+    renderToday();
+
+    expect(onlyStatus().textContent).toContain("All clear.");
+    expect(lanes()).not.toContain("Waiting on you");
+  });
+
+  it("hides once Needs reply has conversations of its own", () => {
+    mocks.home.data = unread(homeData([thread("a", "Quarterly numbers")]));
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Needs reply"]);
+  });
+
+  it("stays while Needs reply loads, which has nothing for a mailbox Cue hasn't read", () => {
+    mocks.home.data = { ...unread(homeData([])), pending: ["needsYou"] };
+
+    renderToday();
+
+    expect(lanes()).toEqual(["Waiting on you"]);
+  });
+
+  it("sits above Cue's notice, where it showed before Today answered", () => {
+    mocks.home.data = unread(homeData([]));
+
+    renderToday();
+
+    const group = lane("Waiting on you");
+    expect(
+      group.compareDocumentPosition(onlyStatus()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("reports how many rows first showed, and nothing about them", () => {
+    mocks.home.data = unread(homeData([]));
+    mocks.waitingOnYou = [
+      thread("asked", "Lunch on Friday?"),
+      thread("b", "Dentist"),
+    ];
+
+    renderToday();
+
+    expect(mocks.reportActivation).toHaveBeenCalledWith(
+      "account",
+      "first_waiting_on_you_item",
+      { itemCount: 2, msSinceTodayOpened: expect.any(Number) },
+    );
+  });
+
+  describe("before Today answers", () => {
+    beforeEach(() => {
+      mocks.home.isLoading = true;
+      mocks.home.data = undefined;
+    });
+
+    afterEach(() => {
+      mocks.home.isLoading = false;
+      mocks.homeCue = undefined;
+    });
+
+    it("shows from local mail for a mailbox Cue hasn't read", () => {
+      mocks.homeCue = { account: false };
+
+      renderToday();
+
+      expect(lanes()[0]).toBe("Waiting on you");
+      expect(optionFor("asked").textContent).toContain("May need a reply");
+      // The rest of Today still loads below it.
+      expect(skeletons()).not.toEqual([]);
+      expect(mocks.reportActivation).toHaveBeenCalledWith(
+        "account",
+        "first_waiting_on_you_item",
+        { itemCount: 1, msSinceTodayOpened: expect.any(Number) },
+      );
+    });
+
+    it("waits for the answer for a mailbox Cue has read, which leaves it to Cue", () => {
+      mocks.homeCue = { account: true };
+
+      renderToday();
+
+      expect(lanes()).not.toContain("Waiting on you");
+      expect(mocks.reportActivation).not.toHaveBeenCalled();
+    });
+
+    it("waits while it isn't known whether Cue has read the mailbox", () => {
+      renderToday();
+
+      expect(lanes()).not.toContain("Waiting on you");
+    });
+  });
+
+  it("dismisses a conversation", () => {
+    mocks.home.data = unread(homeData([]));
+
+    renderToday();
+    fireEvent.click(
+      within(rowFor("asked")).getAllByRole("button", { name: "Dismiss" })[0],
+    );
+
+    expect(mocks.dismissWaitingOnYou).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "asked" }),
+    );
   });
 });
 
@@ -910,6 +1344,85 @@ describe("HomeDashboard across accounts", () => {
     mocks.homes = {};
   });
 
+  it("offers Catch up on every included account's inbox", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    expect(mocks.catchUpProps.at(-1)).toMatchObject({
+      query: { type: "inbox" },
+      allInboxes: {
+        accounts: [
+          { id: "account", email: "a@example.com" },
+          { id: "account-b", email: "b@example.com" },
+        ],
+      },
+    });
+  });
+
+  it("hides a caught-up card's copies in other accounts, and replies in its own account", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+    const props = latestCatchUpProps();
+
+    act(() => props.onRemoved(caughtUpCard(), []));
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.queryByText("Lunch on Friday?")).toBeNull();
+
+    act(() => props.onReply(caughtUpCard()));
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/mail/u/0/all-inboxes/inbox/a1?account=0&from=today&reply=1",
+    );
+  });
+
+  it("keeps a copy's row where its account refused the change", () => {
+    mocks.catchUpProps = [];
+    renderToday();
+
+    act(() => latestCatchUpProps().onRemoved(caughtUpCard(), ["account-b"]));
+
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.getByText("Lunch on Friday?")).toBeTruthy();
+  });
+
+  it("brings back a caught-up card's copies when its undo restores it", async () => {
+    mocks.catchUpProps = [];
+    render(
+      <StrictMode>
+        <ShortcutsProvider scopes={MAIL_SHORTCUT_SCOPES}>
+          <HomeDashboard />
+        </ShortcutsProvider>
+      </StrictMode>,
+    );
+    const { actions, onRemoved } = latestCatchUpProps();
+    const card = caughtUpCard();
+
+    await act(async () => {
+      actions.addTargets([
+        {
+          id: card.threadId,
+          account: { id: card.accountId },
+          messageIds: ["a1-message"],
+          inInbox: true,
+          copies: card.copies,
+        },
+      ]);
+      await actions.changeCard([card.key], { kind: "archive" });
+      onRemoved(card, []);
+    });
+    expect(screen.queryByText("Quarterly numbers")).toBeNull();
+    expect(screen.queryByText("Lunch on Friday?")).toBeNull();
+
+    // With another change to Today still pending, React works out the
+    // restore during render, where Strict Mode runs it twice.
+    await act(async () => {
+      onRemoved({ ...caughtUpCard(), key: "account:other", copies: [] }, []);
+      await actions.undo();
+    });
+
+    expect(screen.getByText("Quarterly numbers")).toBeTruthy();
+    expect(screen.getByText("Lunch on Friday?")).toBeTruthy();
+  });
+
   it("reads every account's local inbox, each row naming its account", () => {
     mocks.localInboxArgs = [];
     renderToday();
@@ -1105,6 +1618,133 @@ describe("HomeDashboard across accounts", () => {
     );
   });
 
+  describe("Waiting on you", () => {
+    const A = { id: "account", email: "a@example.com" };
+    const B = { id: "account-b", email: "b@example.com" };
+
+    beforeEach(() => {
+      mocks.waitingOnYou = [
+        { ...thread("b-ask", "Ski trip"), account: B },
+        { ...thread("a-ask", "Dentist"), account: A },
+      ];
+    });
+
+    afterEach(() => {
+      mocks.waitingOnYou = [];
+      mocks.homeCue = undefined;
+      mocks.home.isLoading = false;
+    });
+
+    it("shows a new mailbox's rows before any account answers, and not one Cue has read", () => {
+      mocks.home.isLoading = true;
+      mocks.homes = { account: undefined, "account-b": undefined };
+      mocks.homeCue = { account: true, "account-b": false };
+
+      renderToday();
+
+      expect(lanes()[0]).toBe("Waiting on you");
+      expect(rowFor("account-b:b-ask")).toBeTruthy();
+      expect(screen.queryByText("Dentist")).toBeNull();
+      expect(skeletons()).not.toEqual([]);
+    });
+
+    it("waits for an account whose state isn't known yet", () => {
+      mocks.home.isLoading = true;
+      mocks.homes = { account: undefined, "account-b": undefined };
+      mocks.homeCue = { account: true };
+
+      renderToday();
+
+      expect(lanes()).not.toContain("Waiting on you");
+    });
+
+    it("stays first while another account's Needs reply loads, and when it lands", () => {
+      mocks.homes = {
+        account: { ...homeData([]), pending: ["needsYou"] },
+        "account-b": unread(homeData([])),
+      };
+
+      const view = renderToday();
+      expect(lanes()[0]).toBe("Waiting on you");
+      expect(rowFor("account-b:b-ask")).toBeTruthy();
+
+      mocks.homes = {
+        account: homeData([thread("a1", "Quarterly numbers")]),
+        "account-b": unread(homeData([])),
+      };
+      view.unmount();
+      renderToday();
+
+      expect(lanes().slice(0, 2)).toEqual(["Waiting on you", "Needs reply"]);
+      expect(rowFor("account-b:b-ask")).toBeTruthy();
+      expect(screen.queryByText("Dentist")).toBeNull();
+    });
+
+    it("leaves out a copy of mail another account lists in Needs reply past the merged cap", () => {
+      const many = Array.from({ length: 12 }, (_, index) =>
+        thread(`a${index}`, `Request ${index}`),
+      );
+      mocks.waitingOnYou = [
+        {
+          ...thread("b-ask", "Contract"),
+          rfcMessageId: "same@mail",
+          account: B,
+        },
+      ];
+      mocks.homes = {
+        // Its last row is past what Today's merged lane lists.
+        account: homeData([
+          ...many,
+          {
+            ...thread("a-contract", "Contract"),
+            at: "2026-10-01T09:00:00.000Z",
+            priority: "low",
+            // Normalised where its header is read, as the store keys it.
+            rfcMessageId: "same@mail",
+          },
+        ]),
+        "account-b": unread(homeData([])),
+      };
+
+      renderToday();
+
+      expect(screen.queryByText("Contract")).toBeNull();
+    });
+
+    it("leaves out a copy of mail another account lists in Needs reply, and in the inbox below", () => {
+      mocks.waitingOnYou = [
+        {
+          ...thread("b-ask", "Contract"),
+          rfcMessageId: "same@mail",
+          account: B,
+        },
+        {
+          ...thread("b-lunch", "Lunch"),
+          rfcMessageId: "lunch@mail",
+          account: B,
+        },
+      ];
+      mocks.homes = {
+        account: {
+          ...homeData([
+            { ...thread("a1", "Contract"), rfcMessageId: "same@mail" },
+          ]),
+          alsoInInbox: [
+            { ...thread("a-lunch", "Lunch"), rfcMessageId: "lunch@mail" },
+          ],
+        },
+        "account-b": unread(homeData([])),
+      };
+
+      renderToday();
+
+      expect(screen.getAllByText("Contract")).toHaveLength(1);
+      expect(within(lane("Needs reply")).getByText("Contract")).toBeTruthy();
+      expect(screen.getAllByText("Lunch")).toHaveLength(1);
+      expect(within(lane("Waiting on you")).getByText("Lunch")).toBeTruthy();
+    });
+  });
+
   it("is one account's Today with one account in All inboxes", () => {
     mocks.emailAccounts = [emailAccount("account", "a@example.com")];
     mocks.home.data = homeData([thread("a1", "Quarterly numbers")]);
@@ -1113,6 +1753,170 @@ describe("HomeDashboard across accounts", () => {
 
     expect(rowFor("a1")).toBeTruthy();
     expect(screen.queryByRole("img", { name: /^Inbox:/ })).toBeNull();
+  });
+});
+
+describe("HomeDashboard Reading", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.client.cancelOperation.mockResolvedValue({ status: "cancelled" });
+    mocks.undoLatestToast.mockResolvedValue(false);
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = {
+      ...homeData([thread("first", "Quarterly numbers")]),
+      reading: [
+        newsletter("n1", "Field Notes", "Slow travel"),
+        newsletter("n2", "Morning Brew", "Markets"),
+        newsletter("n3", "Field Notes", "Trains"),
+      ],
+    };
+  });
+
+  afterEach(cleanup);
+
+  it("bundles newsletters into one row naming who they're from, which opens in place", () => {
+    renderToday();
+
+    const toggle = screen.getByRole("button", {
+      name: "From Field Notes and Morning Brew",
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Slow travel")).toBeNull();
+    expect(lanes()).not.toContain("Reading");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(within(lane("Reading")).getAllByRole("option")).toHaveLength(3);
+    // The newsletters stay out of the other lanes.
+    expect(within(lane("Needs reply")).getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("marks the whole bundle read through the mail engine", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Mark all read" }));
+    });
+
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: ["n1", "n2", "n3"].map((conversationId) => ({
+          accountId: "account",
+          conversationId,
+        })),
+        change: { kind: "set_read", read: true },
+      }),
+    );
+    expect(screen.queryByRole("heading", { name: /Reading/ })).toBeNull();
+  });
+
+  it("archives the whole bundle, and undo brings it back", async () => {
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive all" }));
+    });
+
+    expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversations: ["n1", "n2", "n3"].map((conversationId) => ({
+          accountId: "account",
+          conversationId,
+        })),
+        change: { kind: "archive" },
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: /^From Field Notes/ }),
+    ).toBeNull();
+
+    const [{ message, onUndo }] = mocks.toastUndo.mock.calls[0];
+    expect(message).toBe("Archived 3 conversations");
+    await act(async () => onUndo());
+
+    expect(
+      screen.getByRole("button", { name: "From Field Notes and Morning Brew" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps the bundle when the engine refuses the change", async () => {
+    mocks.client.submitConversations.mockResolvedValue({
+      status: "rejected",
+      code: "queue_full",
+    });
+    renderToday();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive all" }));
+    });
+
+    expect(
+      screen.getByRole("button", { name: "From Field Notes and Morning Brew" }),
+    ).toBeTruthy();
+  });
+});
+
+describe("HomeDashboard Reading across accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.client.submitConversations.mockResolvedValue({ status: "queued" });
+    mocks.undoLatestToast.mockResolvedValue(false);
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = undefined;
+    mocks.searchParams = new URLSearchParams("accounts=all");
+    mocks.emailAccounts = [
+      emailAccount("account", "a@example.com"),
+      emailAccount("account-b", "b@example.com"),
+    ];
+    mocks.homes = {
+      account: {
+        ...homeData([]),
+        reading: [newsletter("a-n", "Field Notes", "Slow travel")],
+      },
+      "account-b": {
+        ...homeData([]),
+        reading: [newsletter("b-n", "Morning Brew", "Markets")],
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.searchParams = new URLSearchParams();
+    mocks.emailAccounts = [];
+    mocks.homes = {};
+  });
+
+  it("bundles every account's newsletters and archives each in its own account", async () => {
+    renderToday();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "From Field Notes and Morning Brew" }),
+    );
+    expect(within(lane("Reading")).getAllByRole("option")).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Archive all" }));
+    });
+
+    for (const [accountId, conversationId] of [
+      ["account", "a-n"],
+      ["account-b", "b-n"],
+    ]) {
+      expect(mocks.client.submitConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accountId,
+          conversations: [{ accountId, conversationId }],
+          change: { kind: "archive" },
+        }),
+      );
+    }
   });
 });
 
@@ -1212,6 +2016,7 @@ function lanes() {
 
 function nextEvent(tomorrow: boolean) {
   return {
+    id: "review",
     title: "Design review",
     at: new Date(Date.now() + 45 * 60_000).toISOString(),
     url: "https://calendar.example.com/review",
@@ -1235,6 +2040,7 @@ function savedYesterday() {
         connected: true,
         clearThroughTomorrow: false,
         next: {
+          id: "review",
           title: "Design review",
           at: new Date(Date.now() + 3_600_000).toISOString(),
           url: undefined,
@@ -1246,6 +2052,34 @@ function savedYesterday() {
   const copy = readCachedToday({ emailAccountId: "account", timeZone });
   expect(copy?.earlierDay).toBe(true);
   return copy;
+}
+
+type TodayCatchUpProps = Parameters<typeof CatchUpEntry>[0];
+
+function latestCatchUpProps() {
+  const props = mocks.catchUpProps.at(-1) as TodayCatchUpProps | undefined;
+  if (!props?.onRemoved) throw new Error("Today rendered no Catch up");
+  return { ...props, onRemoved: props.onRemoved };
+}
+
+/** Account a's a1, a copy of which is account b's b1. */
+function caughtUpCard(): CatchUpItem {
+  return {
+    key: "account:a1",
+    accountId: "account",
+    threadId: "a1",
+    latestMessageId: "a1-message",
+    messageKey: "<shared@example.com>",
+    inInbox: true,
+    unread: true,
+    copies: [
+      { accountId: "account-b", threadId: "b1", inInbox: true, unread: true },
+    ],
+    sender: "Ada",
+    subject: "Quarterly numbers",
+    preview: "",
+    atMs: 1,
+  };
 }
 
 function renderToday() {
@@ -1282,6 +2116,14 @@ function thread(threadId: string, subject: string): HomeThread {
     starred: false,
     inInbox: true,
   };
+}
+
+function newsletter(
+  threadId: string,
+  fromName: string,
+  subject: string,
+): HomeThread {
+  return { ...thread(threadId, subject), fromName, tag: "Newsletter" };
 }
 
 function localConversation(
@@ -1330,11 +2172,40 @@ function syncedView(
   };
 }
 
+function day(
+  events: GetCalendarTodayEventsResponse["events"],
+): GetCalendarTodayEventsResponse {
+  return { events, more: 0 };
+}
+
+function dayMeeting(
+  id: string,
+  title: string,
+  startTime: string,
+): GetCalendarTodayEventsResponse["events"][number] {
+  return {
+    id,
+    title,
+    startTime,
+    endTime: new Date(new Date(startTime).getTime() + 1_800_000).toISOString(),
+    attendees: [],
+  };
+}
+
+function unread(home: GetHomeResponse): GetHomeResponse {
+  return {
+    ...home,
+    cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+  };
+}
+
 function homeData(needsYou: HomeThread[]): GetHomeResponse {
   return {
     needsYou,
     waiting: [],
     alsoInInbox: [],
+    reading: [],
+    newsletterThreadIds: [],
     handledLabelIds: [],
     pending: [],
     failed: [],
@@ -1351,6 +2222,7 @@ function homeData(needsYou: HomeThread[]): GetHomeResponse {
       waiting: 0,
       needsYouCapped: false,
       waitingCapped: false,
+      readingCapped: false,
     },
   };
 }

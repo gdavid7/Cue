@@ -52,6 +52,26 @@ describe("applyMetadataChange", () => {
       applyMetadataChange(confirmed, { kind: "snooze", untilMs: 1 }).roles,
     ).toEqual([]);
   });
+
+  it("ends a snooze on archive, move to inbox, trash and spam, but not on not-spam", () => {
+    const snoozed = applyMetadataChange(confirmed, {
+      kind: "snooze",
+      untilMs: 5,
+    });
+    expect(snoozed.snoozedUntilMs).toBe(5);
+    for (const change of [
+      { kind: "archive" },
+      { kind: "unarchive" },
+      { kind: "trash" },
+      { kind: "set_spam", spam: true },
+    ] as const) {
+      expect(applyMetadataChange(snoozed, change).snoozedUntilMs).toBeNull();
+    }
+    expect(
+      applyMetadataChange(snoozed, { kind: "set_spam", spam: false })
+        .snoozedUntilMs,
+    ).toBe(5);
+  });
 });
 
 describe("deriveEffectiveMessage", () => {

@@ -23,6 +23,7 @@ export type RunningJob = { accountId: string; jobId: string };
 /**
  * Follows running select-all jobs with a progress toast that can stop them,
  * then reports the result and, where the action is reversible, offers undo.
+ * Resolves with how many messages the jobs changed.
  */
 export async function followMatchingJobs({
   jobs,
@@ -32,7 +33,7 @@ export async function followMatchingJobs({
   jobs: RunningJob[];
   action: MatchingBulkAction | "undo";
   onFinished: () => void;
-}) {
+}): Promise<number> {
   const toastId = `mail-bulk-${jobs[0]?.jobId}`;
   const stop = () => {
     for (const job of jobs)
@@ -77,6 +78,10 @@ export async function followMatchingJobs({
     0,
   );
   const failed = known.reduce((sum, state) => sum + state.failed, 0);
+  const applied = Math.max(
+    0,
+    known.reduce((sum, state) => sum + state.applied, 0) - failed,
+  );
   const anyFailed = known.some((state) => state.status === "failed");
   const capped = known.some((state) => state.capped);
   const cancelled = known.some((state) => state.status === "cancelled");
@@ -90,7 +95,7 @@ export async function followMatchingJobs({
       description: "It carries on in the background; you can leave this page.",
       duration: 8000,
     });
-    return;
+    return applied;
   }
   if (anyFailed) {
     toast.error("Couldn't finish that for every conversation", {
@@ -98,7 +103,7 @@ export async function followMatchingJobs({
       description: "Some may have changed. Try again to finish the rest.",
       duration: 10_000,
     });
-    return;
+    return applied;
   }
 
   const message = cancelled
@@ -123,13 +128,14 @@ export async function followMatchingJobs({
       onUndo: () => undoJobs({ jobs, onFinished }),
     });
     if (description) toast.message(description);
-    return;
+    return applied;
   }
   toast.success(message, {
     id: toastId,
     description: description || undefined,
     duration: 6000,
   });
+  return applied;
 }
 
 async function undoJobs({

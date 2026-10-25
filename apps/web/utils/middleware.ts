@@ -6,6 +6,8 @@ import {
   captureException,
   checkCommonErrors,
   getEmailProviderRateLimitMessage,
+  isReconnectRequiredError,
+  NO_REFRESH_TOKEN_MESSAGE,
   SafeError,
 } from "@/utils/error";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
@@ -33,11 +35,13 @@ import {
   toRateLimitProvider,
 } from "@/utils/email/rate-limit-mode-error";
 import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import { mailHttpErrorResponse } from "@inboxzero/mail-core/protocol/mail-http";
 import {
   EMAIL_ACCOUNT_HEADER,
   EMAIL_ACCOUNT_ID_REQUIRED_ERROR,
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
+  RECONNECT_REQUIRED_MESSAGE,
   SESSION_EXPIRED_ERROR_CODE,
 } from "@/utils/config";
 import { isAdmin } from "@/utils/admin";
@@ -53,6 +57,7 @@ import { startRequestTimer } from "@/utils/request-timing";
 import {
   createRequestMetrics,
   getRequestMetricsFields,
+  noteRequestPause,
   runWithRequestMetrics,
   timeRequestDependency,
 } from "@/utils/request-metrics";
@@ -216,22 +221,26 @@ function withMiddleware<T extends NextRequest>(
             );
 
             if (error instanceof SafeError) {
-              if (error.message === "No refresh token") {
-                getLogger(requestForError).warn("Returning 401", {
-                  reason: "no_refresh_token",
-                });
+              if (error.message === NO_REFRESH_TOKEN_MESSAGE) {
+                // Calendar clients throw a plain SafeError for the same state
+                // and keep logging it as a warning.
+                const log = getLogger(requestForError);
+                (isReconnectRequiredError(error) ? log.info : log.warn).call(
+                  log,
+                  "Returning 401",
+                  { reason: "no_refresh_token" },
+                );
                 if (publicApiRequest) {
                   return publicApiErrorResponse({
                     status: 401,
                     code: "UNAUTHORIZED",
-                    message:
-                      "Authorization required. Please grant permissions.",
+                    message: RECONNECT_REQUIRED_MESSAGE,
                   });
                 }
 
                 return NextResponse.json(
                   {
-                    error: "Authorization required. Please grant permissions.",
+                    error: RECONNECT_REQUIRED_MESSAGE,
                     errorCode: NO_REFRESH_TOKEN_ERROR_CODE,
                     isKnownError: true,
                   },
@@ -290,19 +299,33 @@ function withMiddleware<T extends NextRequest>(
                   retryAfterMs: deferred.retryAfterMs,
                 },
               );
+              noteRequestPause({
+                source: "quota_gate",
+                reason: deferred.reason,
+                retryAfterMs: deferred.retryAfterMs,
+              });
+              const headers = {
+                "Retry-After": String(Math.ceil(deferred.retryAfterMs / 1000)),
+              };
+              // The mail engine reads only the mail envelope's wait; any other
+              // body leaves it guessing.
+              if (scope?.startsWith("mail/v1/")) {
+                return NextResponse.json(
+                  mailHttpErrorResponse({
+                    requestId,
+                    code: "throttled",
+                    retryable: true,
+                    retryAfterMs: deferred.retryAfterMs,
+                  }),
+                  { status: 503, headers },
+                );
+              }
               return NextResponse.json(
                 {
                   error: "Gmail is busy for this account. Try again shortly.",
                   isKnownError: true,
                 },
-                {
-                  status: 503,
-                  headers: {
-                    "Retry-After": String(
-                      Math.ceil(deferred.retryAfterMs / 1000),
-                    ),
-                  },
-                },
+                { status: 503, headers },
               );
             }
 
@@ -759,6 +782,10 @@ async function emailProviderMiddleware(
 
     return providerReq;
   } catch (error) {
+    // The account is already marked as needing a reconnect; withMiddleware
+    // answers it with the typed 401, and createEmailProvider has logged it.
+    if (isReconnectRequiredError(error)) throw error;
+
     emailAccountReq.logger.error("Failed to create email provider", {
       error,
       emailAccountId,

@@ -16,7 +16,10 @@ import {
   getFastRequestSampleRate,
   isFastRequestSampled,
 } from "@/utils/request-sampling";
-import { timeRequestDependency } from "@/utils/request-metrics";
+import {
+  noteGmailDeferral,
+  timeRequestDependency,
+} from "@/utils/request-metrics";
 import { sleep } from "@/utils/sleep";
 
 // The per-user Gmail limit for this Google Cloud project, shared by every
@@ -135,7 +138,13 @@ const SUMMARY_LOOKBACK_MINUTES = 4;
 //   units per user, about 3% of the highest budget).
 // - A call whose lane was just told to wait, for a call costing no more, takes
 //   that answer for up to `SHARED_WAIT_MS` instead of asking again. This can
-//   only make a call wait, never admit it.
+//   only make a call wait, never admit it. A round trip that admits also says
+//   what the next call would be told (the first waiting call it left out, or
+//   one costing the same), so a lane sending one call after another, as a
+//   sync page's batches do, waits that out instead of asking only to hear it.
+//   A wait the bucket set, unless it defers, is taken for up to
+//   `SHARED_BUCKET_WAIT_MS`, since nothing but a budget raise (at most every
+//   ten minutes) makes the bucket fill sooner.
 // What this instance learns (a refusal, a first sync starting or ending, a
 // person's turn) clears its lanes at once; other instances follow within one
 // lease. Usage counts and deferrals stay in memory until the account's next
@@ -144,6 +153,7 @@ const SUMMARY_LOOKBACK_MINUTES = 4;
 const LEASE_MS = 500;
 const LEASE_SHARE = 0.5;
 const SHARED_WAIT_MS = 500;
+const SHARED_BUCKET_WAIT_MS = 5000;
 const BURST_MS = 100;
 const NOTE_FLUSH_MS = 2000;
 const NOTE_FLUSH_FIELDS = 100;
@@ -174,6 +184,12 @@ type GmailQuotaContext = {
   maxTotalWaitMs?: number;
   /** Told before each Gmail call this context makes, admitted or not. */
   onAdmit?: () => void;
+  /**
+   * Sync work that still waits for a primary scan to end, as background
+   * does: a first sync's older inbox, which must not slow the scan of the
+   * newest mail.
+   */
+  afterInitialSync?: boolean;
 };
 
 // Route scopes, matched exactly so a route added under a background path is
@@ -265,6 +281,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/mail-splits",
     "user/vacation-responder",
     "user/meeting-recorder/meeting-draft",
+    // The composer's "Share my free times", asked for by the person writing.
+    "user/calendar/free-times",
     "labels/counts",
     "/api/labels/create",
     "/api/user/drive/preview",
@@ -468,6 +486,7 @@ export function runWithGmailQuota<T>(
     stats?: GmailQuotaStats;
     maxTotalWaitMs?: number;
     onAdmit?: () => void;
+    afterInitialSync?: boolean;
   },
   operation: () => T,
 ): T {
@@ -479,6 +498,7 @@ export function runWithGmailQuota<T>(
       stats: context.stats ?? current.stats,
       maxTotalWaitMs: context.maxTotalWaitMs ?? current.maxTotalWaitMs,
       onAdmit: context.onAdmit ?? current.onAdmit,
+      afterInitialSync: context.afterInitialSync ?? current.afterInitialSync,
     },
     operation,
   );
@@ -607,6 +627,8 @@ export type GmailQuotaTicket = {
   emailAccountId: string | undefined;
   caller: string;
   priority: GmailQuotaPriority;
+  /** Sync held behind the primary scan, which a refusal treats as background. */
+  afterInitialSync?: boolean;
 };
 
 export async function admitGmailCall({
@@ -621,7 +643,13 @@ export async function admitGmailCall({
   const context = currentGmailQuotaContext();
   const priority = priorityOverride ?? context.priority;
   context.onAdmit?.();
-  const ticket = { emailAccountId, caller: context.caller, priority };
+  const afterInitialSync = priority === "sync" && !!context.afterInitialSync;
+  const ticket: GmailQuotaTicket = {
+    emailAccountId,
+    caller: context.caller,
+    priority,
+    ...(afterInitialSync && { afterInitialSync }),
+  };
   const admitted = () => {
     if (context.stats) context.stats.admittedCost += cost;
     return ticket;
@@ -638,19 +666,26 @@ export async function admitGmailCall({
   rememberUnsummarizedAccount(emailAccountId);
   gateStats.calls += 1;
   const keys = accountKeys(emailAccountId);
+  const scanHold =
+    context.caller === ENGINE_SCAN_CALLER
+      ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
+      : { key: keys.initialSync };
   const blockers = {
     interactive: [{ key: keys.interactivePause }],
-    sync: [{ key: keys.syncPause }],
-    background: [
-      context.caller === ENGINE_SCAN_CALLER
-        ? { key: keys.initialSync, deferMs: INITIAL_SYNC_RETRY_MS }
-        : { key: keys.initialSync },
-      { key: keys.backgroundPause },
-    ],
+    // After a refusal it stands back as background does, which is all its
+    // own refusal pauses.
+    sync: afterInitialSync
+      ? [{ key: keys.syncPause }, scanHold, { key: keys.backgroundPause }]
+      : [{ key: keys.syncPause }],
+    background: [scanHold, { key: keys.backgroundPause }],
   }[priority];
   const blockerReasons: GmailDeferralReason[] = {
     interactive: ["interactive_pause" as const],
-    sync: ["sync_pause" as const],
+    sync: [
+      "sync_pause" as const,
+      "initial_sync_scan" as const,
+      "background_pause" as const,
+    ],
     background: ["initial_sync_scan" as const, "background_pause" as const],
   }[priority];
   const { stats, maxTotalWaitMs } = context;
@@ -665,14 +700,16 @@ export async function admitGmailCall({
     getRequestDeadline() ?? Number.POSITIVE_INFINITY,
   );
   // A person's large request starts a demand episode as it arrives, which
-  // only the store can do, so it never rides on the lane.
+  // only the store can do, so it never rides on the lane. Nor does sync
+  // that waits for the primary scan: the scan's own reservation on the sync
+  // lane would admit it past that hold.
+  const startsDemand =
+    priority === "interactive" && cost >= INTERACTIVE_DEMAND_MIN_UNITS;
   const lane =
-    priority === "interactive" && cost >= INTERACTIVE_DEMAND_MIN_UNITS
-      ? null
-      : laneFor(emailAccountId, priority);
+    startsDemand || afterInitialSync ? null : laneFor(emailAccountId, priority);
   // What sync and background hold here would only delay it; their unspent
   // reservations are cut with its own round trip.
-  if (!lane) forgetLanes(emailAccountId, ["sync", "background"]);
+  if (startsDemand) forgetLanes(emailAccountId, ["sync", "background"]);
 
   const waitKey = context.caller === ENGINE_SCAN_CALLER ? "scan" : "";
   const usageField = `${priority}:${context.caller}`;
@@ -791,6 +828,7 @@ export async function admitGmailCall({
         1,
       );
       if (stats) stats.deferred += 1;
+      noteGmailDeferral();
       const error = new GmailCallDeferredError(
         wait,
         priority,
@@ -854,7 +892,10 @@ export async function noteGmailQuotaRefusal(
       },
     ]),
   ];
-  if (ticket.priority !== "background")
+  // A first sync's older inbox reads at sync but stands back like the
+  // backfill it is: its refusal must not hold webhooks and live changes for
+  // up to a refusal's retry time.
+  if (ticket.priority !== "background" && !ticket.afterInitialSync)
     writes.push(
       gmailQuotaStore.block({
         key: keys.syncPause,
@@ -1489,8 +1530,8 @@ async function takeForLane(
       });
       gateStats.leasedUnits += result.ahead;
     }
-    if (result.waitMs > 0) lane.waitedAt = sentAt;
-    if (result.waitMs > 0)
+    if (result.waitMs > 0) {
+      lane.waitedAt = sentAt;
       lane.waits.set(waitKey, {
         from: sentAt,
         until: sentAt + result.waitMs,
@@ -1498,6 +1539,21 @@ async function takeForLane(
         defer: result.defer,
         held: result.held,
       });
+    } else if (
+      result.nextWait &&
+      !request.blockers.some((blocker) => blocker.deferMs)
+    ) {
+      // What the store would tell the next call, as if it had asked itself.
+      // A caller a marker defers (the engine's backfill) keeps asking, so it
+      // never waits inside the gate while one is up.
+      lane.waits.set(waitKey, {
+        from: sentAt,
+        until: sentAt + result.nextWait.waitMs,
+        cost: queued[result.queued]?.cost ?? request.cost,
+        defer: false,
+        held: result.nextWait.held,
+      });
+    }
     return result;
   } catch (error) {
     for (const waiter of lane.queue) {
@@ -1576,13 +1632,22 @@ function recentLaneUnits(lane: Lane) {
     .reduce((sum, entry) => sum + entry.units, 0);
 }
 
+// Only spending or a lower budget changes how soon the bucket has room, and
+// both make it later, so the bucket's wait holds for up to
+// `SHARED_BUCKET_WAIT_MS`; a wait set by the pace can end sooner, once others
+// release what they reserved. A deferral comes from a marker another instance
+// may clear at any time, so it is shared only briefly too.
 function sharedWait(lane: Lane, waitKey: string, cost: number) {
   const wait = lane.waits.get(waitKey);
+  if (!wait) return null;
   const now = Date.now();
+  const shareMs =
+    wait.held?.gate === "bucket" && !wait.defer
+      ? SHARED_BUCKET_WAIT_MS
+      : SHARED_WAIT_MS;
   if (
-    !wait ||
     wait.from > now ||
-    now >= Math.min(wait.until, wait.from + SHARED_WAIT_MS) ||
+    now >= Math.min(wait.until, wait.from + shareMs) ||
     cost < wait.cost
   )
     return null;

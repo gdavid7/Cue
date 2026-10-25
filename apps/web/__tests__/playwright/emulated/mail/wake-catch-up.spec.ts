@@ -39,10 +39,7 @@ test("an inbox shown again after a long absence catches up without a reload", as
     for (const change of body?.changes ?? [])
       if (change.key?.messageId) handedOver.push(change.key.messageId);
   });
-  const loads: string[] = [];
-  page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) loads.push(frame.url());
-  });
+  const loads = watchDocumentLoads(page);
 
   await setVisibility(page, "hidden");
   const insertedMessageId = await insertInboxMailInConversation(page, {
@@ -104,10 +101,7 @@ test("an inbox left showing while the laptop slept catches up without a reload",
     for (const change of body?.changes ?? [])
       if (change.key?.messageId) handedOver.push(change.key.messageId);
   });
-  const loads: string[] = [];
-  page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) loads.push(frame.url());
-  });
+  const loads = watchDocumentLoads(page);
 
   const insertedMessageId = await insertInboxMailInConversation(page, {
     threadId: THREAD_ID,
@@ -141,6 +135,16 @@ test("an inbox left showing while the laptop slept catches up without a reload",
     await deleteProviderMessage(page, insertedMessageId);
   }
 });
+
+// Counts real document loads only. A background server action that refreshes
+// the session cookie makes Next.js refresh the route and rewrite the same URL
+// into history, which Playwright also reports as a navigation; that is not a
+// reload and does not lose the page's state.
+function watchDocumentLoads(page: Page) {
+  const loads: string[] = [];
+  page.on("load", (loaded) => loads.push(loaded.url()));
+  return loads;
+}
 
 async function setVisibility(page: Page, state: DocumentVisibilityState) {
   await page.evaluate((next) => {

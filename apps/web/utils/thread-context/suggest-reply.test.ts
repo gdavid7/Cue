@@ -895,3 +895,80 @@ describe("suggestReaderReply outcome log", () => {
     });
   });
 });
+
+describe("suggestReply attachments in the model's sources", () => {
+  const logger = createScopedLogger("suggest-reply-test");
+  const attachment = (filename: string) => ({
+    attachmentId: filename,
+    filename,
+    mimeType: "application/pdf",
+    size: 1000,
+    headers: {},
+  });
+
+  async function promptFor(messages: ReturnType<typeof getMockMessage>[]) {
+    collectThreadContext.mockResolvedValue({
+      thread: { id: "t9", messages, snippet: "" },
+      items: [],
+    });
+    getEmailAccountWithAi.mockResolvedValue({
+      id: "a1",
+      userId: "u1",
+      email: "me@example.com",
+      name: "Me",
+      timezone: null,
+      user: { aiApiKey: null },
+    });
+    generateObject.mockClear();
+    generateObject.mockResolvedValue({
+      object: {
+        enoughEvidence: false,
+        missing: "Nothing.",
+        webQuery: "",
+        reply: "",
+        claims: [],
+      },
+    });
+    await suggestReply({
+      emailAccountId: "a1",
+      userEmail: "me@example.com",
+      threadId: "t9",
+      emailProvider: {} as EmailProvider,
+      logger,
+      settings: { draftReplies: "on", webLookupEnabled: false },
+    });
+    return generateObject.mock.calls[0][0].prompt as string;
+  }
+
+  it("names a message's attachments, a capped number of capped names", async () => {
+    const prompt = await promptFor([
+      getMockMessage({
+        id: "m1",
+        threadId: "t9",
+        from: "sarah@example.com",
+        textPlain: "Here you go.",
+        attachments: [
+          attachment("contract.pdf"),
+          attachment("w9.pdf"),
+          attachment(`${"a".repeat(200)}.pdf`),
+          attachment("four.pdf"),
+          attachment("five.pdf"),
+          attachment("six.pdf"),
+        ],
+      }),
+    ]);
+
+    const line = prompt.split("\n").find((l) => l.startsWith("Attachments:"));
+    expect(line).toBe(
+      `Attachments: contract.pdf, w9.pdf, ${"a".repeat(80)}, four.pdf, five.pdf`,
+    );
+  });
+
+  it("leaves the line out for a message without attachments", async () => {
+    const prompt = await promptFor([
+      getMockMessage({ id: "m1", threadId: "t9", from: "sarah@example.com" }),
+    ]);
+
+    expect(prompt).not.toContain("Attachments:");
+  });
+});

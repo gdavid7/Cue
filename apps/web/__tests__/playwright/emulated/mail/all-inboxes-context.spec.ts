@@ -8,7 +8,7 @@ import {
 } from "./account-test-helpers";
 import { openMail, withClient } from "./mail-test-helpers";
 
-// Both accounts read the same seeded mailbox, so this thread exists in each.
+// Each account has its own copy of the seeded mail, so this thread is in each.
 const THREAD_ID = "thr_playwright_reply";
 const THREAD_SUBJECT = "Reply Workflow Message";
 const SECOND_THREAD_SUBJECT = "Playwright Test Message";

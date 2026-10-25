@@ -15,12 +15,25 @@ import {
 import { useSetAtom } from "jotai";
 import type { KeyedMutator } from "swr";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
-import { CheckIcon, FlagIcon, MailSearchIcon, PauseIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  FlagIcon,
+  MailSearchIcon,
+  PauseIcon,
+  XIcon,
+} from "lucide-react";
 import type { GetEmailAccountsResponse } from "@/app/api/user/email-accounts/route";
+import type { GetCalendarTodayEventsResponse } from "@/app/api/user/calendar/upcoming-events/route";
 import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
+import {
+  type CatchUpAccounts,
+  CatchUpEntry,
+} from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -35,12 +48,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeading } from "@/components/Typography";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
 import { useAccounts } from "@/hooks/useAccounts";
-import { useHome } from "@/hooks/useHome";
+import { reportActivationSignal } from "@/hooks/useActivationSignal";
+import { useCalendarTodayEvents } from "@/hooks/useCalendarUpcomingEvents";
+import { useHome, useHomeCue, useHomeDeadlines } from "@/hooks/useHome";
 import {
   ALSO_IN_INBOX_LIMIT,
   removeFromCachedToday,
 } from "@/utils/home/today-cache";
 import { useMailHref } from "@/hooks/useMailHref";
+import { cn } from "@/utils";
 import { useShortcuts } from "@/lib/shortcuts/useShortcuts";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { mailCommandContextAtom } from "@/store/command-palette";
@@ -48,14 +64,18 @@ import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
-import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
+import {
+  engineProvider,
+  registerEngineAccounts,
+} from "@/utils/mail-engine/engine-accounts";
 import type { HomeLane, HomeThread } from "@/utils/home/get-home";
+import type { ThreadsQuery } from "@/utils/threads/validation";
 import {
   type TodayAccount,
   type TodayAgentTask,
   type TodayData,
   type TodayThread,
+  mergeNextUp,
   todayConversationKey,
 } from "@/utils/home/merge-home";
 import { AllClear, CueChecked } from "./AllClear";
@@ -66,8 +86,9 @@ import {
 } from "./CueNotice";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { ConnectLine, NextUpList } from "./NextUp";
-import { formatTime } from "./today-format";
+import { formatSenders, formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
+import { NeverReadCard } from "./NeverReadCard";
 import { TodayWeather } from "./TodayWeather";
 import {
   type TodayRowCorrection,
@@ -76,8 +97,14 @@ import {
 } from "./TodayThreadRow";
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
+import { YourDay } from "./YourDay";
+import { useWaitingOnYou, waitingOnYouScope } from "./use-waiting-on-you";
+import { useNeverReadSenders } from "./use-never-read-senders";
+import { useImportantPeople } from "@/hooks/useImportantPeople";
+import { useAwaySummary, WhileYouWereAway } from "./WhileYouWereAway";
 
 const NO_THREADS: ReadonlySet<string> = new Set();
+const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
 
@@ -97,7 +124,17 @@ export function HomeDashboard() {
   const single = useHome(allInboxesAccounts ? null : emailAccountId);
   const all = useAllAccountsHome(allInboxesAccounts);
   const { merged } = all;
-  const data: TodayData | undefined = merged ? merged.data : single.data;
+  // Apps are connected for the user, not a mailbox: one load covers every
+  // account Today shows. They append to Next up once they answer.
+  const deadlines = useHomeDeadlines(emailAccountId);
+  const home: TodayData | undefined = merged ? merged.data : single.data;
+  const data = useMemo(
+    () =>
+      home && deadlines?.length
+        ? { ...home, nextUp: mergeNextUp([home.nextUp, deadlines]) }
+        : home,
+    [home, deadlines],
+  );
   const isLoading = merged ? merged.isLoading : single.isLoading;
   const error = merged ? merged.error : single.error;
   const gaveUp = merged ? false : single.gaveUp;
@@ -114,6 +151,19 @@ export function HomeDashboard() {
       ),
     [allInboxesAccounts],
   );
+  // Calendars are the person's, so the routed account reads every one,
+  // across accounts too.
+  const { data: day, error: dayError } = useCalendarTodayEvents(
+    emailAccountId || null,
+  );
+  const dayMeetings = useMemo<DayMeetings>(
+    () => ({
+      ids: new Set(day?.events.map((event) => `event:${event.id}`)),
+      // Without an account there's no request, so nothing to wait for.
+      loading: Boolean(emailAccountId) && !day && !dayError,
+    }),
+    [day, dayError, emailAccountId],
+  );
   const greetingText = useGreeting();
   const firstName = getUserFirstName(accountsData?.emailAccounts);
   const mailHref = useMailHref();
@@ -128,6 +178,7 @@ export function HomeDashboard() {
   const [hidden, setHidden] = useState(NO_THREADS);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [waitingShown, setWaitingShown] = useState(false);
+  const [readingShown, setReadingShown] = useState(false);
 
   // The local engine syncs, and so acts in, only accounts it was told about;
   // the routed one is told on startup. All inboxes tells it the same way.
@@ -139,9 +190,7 @@ export function HomeDashboard() {
         .filter((account) => account.id !== emailAccountId)
         .map((account) => ({
           accountId: account.id,
-          provider: isMicrosoftProvider(account.provider)
-            ? "microsoft"
-            : "google",
+          provider: engineProvider(account.provider),
         })),
     ).catch(() => undefined);
   }, [allInboxesAccounts, emailAccountId, mailClient]);
@@ -160,24 +209,129 @@ export function HomeDashboard() {
     if (!singleHandledLabelIds) return;
     return { [emailAccountId]: singleHandledLabelIds };
   }, [merged, handledLabelIdsByAccount, emailAccountId, singleHandledLabelIds]);
+  // Waiting on you reads only mailboxes Cue hasn't read, and shows before
+  // Today's answer for each: whether Cue has read it is two database reads,
+  // while the answer waits on Gmail. Asked while any account's is coming.
+  const { feeds } = all;
+  const localAccountIds = useMemo(
+    () => localAccounts.map((account) => account.id),
+    [localAccounts],
+  );
+  const homeCue = useHomeCue(
+    localAccountIds,
+    merged ? localAccountIds.some((id) => !feeds[id]?.data) : !single.data,
+  );
+  const waitingOnYouScopeState = useMemo(
+    () =>
+      waitingOnYouScope(
+        localAccounts,
+        Object.fromEntries(
+          localAccounts.map(({ id }) => {
+            const feed = merged
+              ? feeds[id]
+              : { data: single.data, error: single.error, gaveUp };
+            return [
+              id,
+              {
+                home: feed?.data,
+                gaveUp: feed?.gaveUp,
+                hasReadMail: homeCue?.[id],
+                failed: !feed?.data && feed?.error !== undefined,
+              },
+            ];
+          }),
+        ),
+      ),
+    [localAccounts, merged, feeds, single.data, single.error, gaveUp, homeCue],
+  );
+  const { newsletterThreadIdsByAccount } = all;
+  const singleNewsletterThreadIds = single.data?.newsletterThreadIds;
+  const newsletterThreadIds = useMemo(() => {
+    if (merged) return newsletterThreadIdsByAccount;
+    if (!singleNewsletterThreadIds) return;
+    return { [emailAccountId]: singleNewsletterThreadIds };
+  }, [
+    merged,
+    newsletterThreadIdsByAccount,
+    emailAccountId,
+    singleNewsletterThreadIds,
+  ]);
   const localInbox = useLocalInboxRows({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
     handledLabelIds,
+    newsletterThreadIds,
     enabled: !data || data.pending.includes("alsoInInbox"),
   });
+  const waitingOnYou = useWaitingOnYou({
+    accounts: localAccounts,
+    named: Boolean(allInboxesAccounts),
+    ...waitingOnYouScopeState,
+  });
+  // Each conversation shows once on Today: never one it already lists as
+  // needing a reply or waiting on someone else, in any of the mailboxes.
+  // Across accounts, every account's own lists: the merge caps each lane,
+  // and a copy past the cap is still Cue's to answer.
+  const waitingOnYouShown = useMemo(() => {
+    if (!data) return waitingOnYou.threads;
+    const listed: TodayThread[] = merged
+      ? localAccounts.flatMap((account) => {
+          const home = feeds[account.id]?.data;
+          return home
+            ? [...home.needsYou, ...home.waiting].map((thread) => ({
+                ...thread,
+                account,
+              }))
+            : [];
+        })
+      : [...data.needsYou, ...data.waiting];
+    const rows = new Set(listed.map(rowKey));
+    const messages = new Set(listed.map(todayConversationKey));
+    return waitingOnYou.threads.filter(
+      (thread) =>
+        !rows.has(rowKey(thread)) &&
+        !messages.has(todayConversationKey(thread)),
+    );
+  }, [data, merged, localAccounts, feeds, waitingOnYou.threads]);
+  const visibleWaitingOnYou = useMemo(
+    () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
+    [waitingOnYouShown, hidden],
+  );
+  // Today opened when this mounted, for how long the group took to show.
+  const [openedAtMs] = useState(() => performance.now());
+  const reportWaitingOnYouShown = useStableCallback(
+    (threads: TodayThread[]) => {
+      const counts = new Map<string, number>();
+      for (const thread of threads) {
+        const accountId = thread.account?.id ?? emailAccountId;
+        counts.set(accountId, (counts.get(accountId) ?? 0) + 1);
+      }
+      const msSinceTodayOpened = Math.round(performance.now() - openedAtMs);
+      for (const [accountId, itemCount] of counts)
+        reportActivationSignal(accountId, "first_waiting_on_you_item", {
+          itemCount,
+          msSinceTodayOpened,
+        });
+    },
+  );
+  const neverRead = useNeverReadSenders({ accounts: localAccounts });
+  const { isImportant } = useImportantPeople(localAccountIds);
+  const away = useAwaySummary(localAccountIds);
   const alsoInInbox = useMemo(() => {
-    if (!localInbox) return data?.alsoInInbox ?? [];
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
-    const needsYou = new Set(data?.needsYou.map(rowKey));
-    const needsYouMessages = new Set(data?.needsYou.map(todayConversationKey));
-    return localInbox.filter(
-      (thread) =>
-        !needsYou.has(rowKey(thread)) &&
-        !needsYouMessages.has(todayConversationKey(thread)),
-    );
-  }, [data, localInbox]);
+    const shown = new Set(waitingOnYouShown.map(rowKey));
+    const shownMessages = new Set(waitingOnYouShown.map(todayConversationKey));
+    const notShown = (thread: TodayThread) =>
+      !shown.has(rowKey(thread)) &&
+      !shownMessages.has(todayConversationKey(thread));
+    if (!localInbox) return (data?.alsoInInbox ?? []).filter(notShown);
+    for (const thread of data?.needsYou ?? []) {
+      shown.add(rowKey(thread));
+      shownMessages.add(todayConversationKey(thread));
+    }
+    return localInbox.filter(notShown);
+  }, [data, localInbox, waitingOnYouShown]);
   const visibleAlsoInInbox = useMemo(
     () =>
       alsoInInbox
@@ -190,11 +344,22 @@ export function HomeDashboard() {
     const visible = (threads: TodayThread[]) =>
       threads.filter((thread) => !hidden.has(rowKey(thread)));
     return {
-      needsYou: visible(data.needsYou),
+      needsYou: importantFirst(visible(data.needsYou), (thread) =>
+        isImportant(thread.account?.id ?? emailAccountId, thread.fromEmail),
+      ),
+      waitingOnYou: visibleWaitingOnYou,
       waiting: visible(data.waiting),
       alsoInInbox: visibleAlsoInInbox,
+      reading: visible(data.reading),
     };
-  }, [data, hidden, visibleAlsoInInbox]);
+  }, [
+    data,
+    hidden,
+    visibleWaitingOnYou,
+    visibleAlsoInInbox,
+    isImportant,
+    emailAccountId,
+  ]);
   const notice =
     data && lanes && !earlierDay
       ? cueNotice(data.cue, emailAccountId, {
@@ -228,21 +393,36 @@ export function HomeDashboard() {
     [data, refreshFailed],
   );
   // Keyboard order, top to bottom, as the lanes render.
-  const rows = useMemo(
-    () =>
-      lanes
-        ? [
-            ...lanes.needsYou,
-            ...(allClear && !waitingShown ? [] : lanes.waiting),
-            ...lanes.alsoInInbox,
-          ]
-        : visibleAlsoInInbox,
-    [lanes, allClear, waitingShown, visibleAlsoInInbox],
-  );
+  const rows = useMemo(() => {
+    if (!lanes) return [...visibleWaitingOnYou, ...visibleAlsoInInbox];
+    // The All clear holds who you're waiting on, above Waiting on you.
+    const middle = allClear
+      ? [...(waitingShown ? lanes.waiting : []), ...lanes.waitingOnYou]
+      : [...lanes.waitingOnYou, ...lanes.waiting];
+    return [
+      ...lanes.needsYou,
+      ...middle,
+      ...lanes.alsoInInbox,
+      ...(readingShown ? lanes.reading : []),
+    ];
+  }, [
+    lanes,
+    allClear,
+    waitingShown,
+    readingShown,
+    visibleWaitingOnYou,
+    visibleAlsoInInbox,
+  ]);
   const focused = rows.find((thread) => rowKey(thread) === focusedId);
   const allRows = useMemo(
-    () => [...(data?.needsYou ?? []), ...(data?.waiting ?? []), ...alsoInInbox],
-    [data, alsoInInbox],
+    () => [
+      ...(data?.needsYou ?? []),
+      ...waitingOnYouShown,
+      ...(data?.waiting ?? []),
+      ...alsoInInbox,
+      ...(data?.reading ?? []),
+    ],
+    [data, waitingOnYouShown, alsoInInbox],
   );
   const actionable = useMemo<ActionableThread[]>(
     () =>
@@ -266,13 +446,28 @@ export function HomeDashboard() {
         : single.mutate,
     [all.mutateAccount, merged, single.mutate],
   );
+  // Across accounts a Catch up card hides its copies' rows too, and an undo
+  // of the card, which reports only its own key, brings them back.
+  const caughtUpCopyKeys = useRef(new Map<string, string[]>());
   const showThreads = useCallback((threadIds: string[]) => {
+    const keys = new Set(threadIds);
+    for (const threadId of threadIds) {
+      for (const key of caughtUpCopyKeys.current.get(threadId) ?? [])
+        keys.add(key);
+      caughtUpCopyKeys.current.delete(threadId);
+    }
     setHidden((current) => {
       const next = new Set(current);
-      for (const threadId of threadIds) next.delete(threadId);
+      for (const key of keys) next.delete(key);
       return next;
     });
   }, []);
+  // One undo stack for Today: Catch up acts through these too.
+  const threadActions = useThreadActions({
+    emailAccountId,
+    threads: actionable,
+    onRestored: showThreads,
+  });
   const {
     archive,
     moveToInbox,
@@ -281,14 +476,41 @@ export function HomeDashboard() {
     snooze,
     trash,
     undo,
-  } = useThreadActions({
-    emailAccountId,
-    threads: actionable,
-    onRestored: showThreads,
-  });
+  } = threadActions;
+
+  // Catch up reports a conversation once its archive or snooze has been
+  // queued. Across accounts it walks the Inbox tab of All inboxes, keyed as
+  // Today's rows are, and a card acts on every copy of its message; a copy
+  // in an account that refused stays.
+  const catchUpAccounts = useMemo<CatchUpAccounts | undefined>(
+    () => (allInboxesAccounts ? { accounts: allInboxesAccounts } : undefined),
+    [allInboxesAccounts],
+  );
+  const hideCaughtUp = useCallback(
+    (item: CatchUpItem, refusedAccountIds: string[]) => {
+      const removed = [
+        { key: item.key, accountId: item.accountId, threadId: item.threadId },
+        ...item.copies.map((copy) => ({
+          key: getListThreadKey({
+            id: copy.threadId,
+            account: { id: copy.accountId },
+          }),
+          accountId: copy.accountId,
+          threadId: copy.threadId,
+        })),
+      ].filter(({ accountId }) => !refusedAccountIds.includes(accountId));
+      const keys = removed.map(({ key }) => key);
+      const copyKeys = keys.filter((key) => key !== item.key);
+      if (copyKeys.length) caughtUpCopyKeys.current.set(item.key, copyKeys);
+      setHidden((current) => new Set([...current, ...keys]));
+      for (const { accountId, threadId } of removed)
+        removeFromCachedToday(accountId, [threadId]);
+    },
+    [],
+  );
 
   const threadHref = useCallback(
-    (thread: { threadId: string; account?: TodayAccount }, reply = false) => {
+    (thread: { threadId: string; account?: { id: string } }, reply = false) => {
       // Across accounts a row opens in All inboxes, in its own account, so
       // the reader comes back to Today across accounts.
       const threadAccountIndex = thread.account
@@ -330,23 +552,57 @@ export function HomeDashboard() {
     element?.focus({ preventScroll: !target });
   });
 
-  // Gone at once, with focus on its neighbour; back if the engine refuses it.
-  const removeRow = useStableCallback(
-    async (key: string, run: (threadKeys: string[]) => Promise<string[]>) => {
-      const index = rows.findIndex((thread) => rowKey(thread) === key);
-      const neighbour = rows[index + 1] ?? rows[index - 1];
-      setHidden((current) => new Set(current).add(key));
-      focusRow(neighbour ? rowKey(neighbour) : null);
-      const done = await run([key]);
-      if (!done.length) return showThreads([key]);
-      // So it doesn't come back on the next visit before Today refreshes.
-      const thread = rowByKey.get(key);
-      if (thread)
-        removeFromCachedToday(thread.account?.id ?? emailAccountId, [
+  // Gone at once; back if the engine refuses them.
+  const removeRows = useStableCallback(
+    async (
+      keys: string[],
+      run: (threadKeys: string[]) => Promise<string[]>,
+    ) => {
+      setHidden((current) => {
+        const next = new Set(current);
+        for (const key of keys) next.add(key);
+        return next;
+      });
+      const done = new Set(await run(keys));
+      const refused = keys.filter((key) => !done.has(key));
+      if (refused.length) showThreads(refused);
+      // So they don't come back on the next visit before Today refreshes.
+      const threadIdsByAccount = new Map<string, string[]>();
+      for (const key of done) {
+        const thread = rowByKey.get(key);
+        if (!thread) continue;
+        const accountId = thread.account?.id ?? emailAccountId;
+        threadIdsByAccount.set(accountId, [
+          ...(threadIdsByAccount.get(accountId) ?? []),
           thread.threadId,
         ]);
+      }
+      for (const [accountId, threadIds] of threadIdsByAccount)
+        removeFromCachedToday(accountId, threadIds);
     },
   );
+  // With focus on its neighbour, so the keyboard keeps its place.
+  const removeRow = useStableCallback(
+    (key: string, run: (threadKeys: string[]) => Promise<string[]>) => {
+      const index = rows.findIndex((thread) => rowKey(thread) === key);
+      const neighbour = rows[index + 1] ?? rows[index - 1];
+      focusRow(neighbour ? rowKey(neighbour) : null);
+      return removeRows([key], run);
+    },
+  );
+  // The whole Reading bundle at once. Read or archived, a newsletter has
+  // left the bundle, so its rows go either way.
+  const clearReading = useStableCallback((change: "read" | "archive") => {
+    const keys = (lanes?.reading ?? []).map(rowKey);
+    if (!keys.length) return;
+    if (focusedId && keys.includes(focusedId)) focusRow(null);
+    return removeRows(
+      keys,
+      change === "read"
+        ? (threadKeys) => setReadState(threadKeys, true)
+        : archive,
+    );
+  });
 
   // Flags change in place; the server snapshot catches up on its next load.
   const patchRow = useStableCallback(
@@ -372,6 +628,15 @@ export function HomeDashboard() {
       }
     },
   );
+  // Kept in this browser only; focus moves on as when a row is archived.
+  const dismissWaitingOnYou = useStableCallback((thread: TodayThread) => {
+    const key = rowKey(thread);
+    const index = rows.findIndex((row) => rowKey(row) === key);
+    const neighbour = rows[index + 1] ?? rows[index - 1];
+    if (focusedId === key) focusRow(neighbour ? rowKey(neighbour) : null);
+    waitingOnYou.dismiss(thread);
+  });
+
   const openRow = useStableCallback((key: string, reply?: boolean) => {
     const thread = rowByKey.get(key);
     if (thread) router.push(threadHref(thread, reply));
@@ -554,12 +819,38 @@ export function HomeDashboard() {
           </p>
         ) : data && lanes && !notice && !allClear && needsYouLoaded ? (
           <p className="mt-1 text-muted-foreground text-sm" role="status">
-            {busySummary(data, lanes.needsYou.length)}
+            {busySummary(data, lanes.needsYou.length, dayMeetings)}
           </p>
         ) : null}
       </header>
 
       <GetStartedChecklist />
+
+      <WhileYouWereAway
+        accountColorIndexById={accountColorIndexById}
+        accounts={allInboxesAccounts ? localAccounts : undefined}
+        onDismiss={away.dismiss}
+        summary={away.summary}
+      />
+
+      <CatchUpEntry
+        actions={threadActions}
+        allInboxes={catchUpAccounts}
+        emailAccountId={emailAccountId}
+        onRemoved={hideCaughtUp}
+        onReply={(item) =>
+          router.push(
+            threadHref(
+              {
+                threadId: item.threadId,
+                account: catchUpAccounts ? { id: item.accountId } : undefined,
+              },
+              true,
+            ),
+          )
+        }
+        query={INBOX_QUERY}
+      />
 
       <LoadingContent
         hasData={Boolean(data)}
@@ -567,6 +858,13 @@ export function HomeDashboard() {
         loading={isLoading}
         loadingComponent={
           <>
+            {/* Where it shows once Today answers, so nothing moves then. */}
+            <WaitingOnYouSection
+              threads={visibleWaitingOnYou}
+              rowContext={rowContext}
+              onDismiss={dismissWaitingOnYou}
+              onShown={reportWaitingOnYouShown}
+            />
             <HomeSkeleton layout={isLargeScreen ? "list" : "split"} />
             {/* Cue's lanes wait for the server; the inbox is already here.
                 No Needs reply correction: whether Cue is on isn't known yet. */}
@@ -580,17 +878,33 @@ export function HomeDashboard() {
         {data && lanes ? (
           <HomeLanes
             data={data}
+            day={day}
+            dayMeetings={dayMeetings}
             lanes={lanes}
             notice={notice}
             allClear={allClear}
             waitingShown={waitingShown}
             onToggleWaiting={() => setWaitingShown((shown) => !shown)}
+            readingShown={readingShown}
+            onToggleReading={() => setReadingShown((shown) => !shown)}
+            onClearReading={clearReading}
             emailAccountId={emailAccountId}
             accountIds={allInboxesAccounts?.map((account) => account.id)}
             accountColorIndexById={accountColorIndexById}
             rowContext={rowContext}
             layout={isLargeScreen ? "list" : "split"}
             onCorrect={correct}
+            onDismissWaitingOnYou={dismissWaitingOnYou}
+            onWaitingOnYouShown={reportWaitingOnYouShown}
+            neverRead={
+              <NeverReadCard
+                accountColorIndexById={accountColorIndexById}
+                accounts={allInboxesAccounts ? localAccounts : undefined}
+                onHide={neverRead.hide}
+                senders={neverRead.senders}
+                sinceMs={neverRead.sinceMs}
+              />
+            }
             // Past the last refresh a pending lane would load forever.
             pending={gaveUp ? NO_LANES : pending}
             outdated={outdated}
@@ -624,11 +938,16 @@ export function HomeDashboard() {
 
 function HomeLanes({
   data,
+  day,
+  dayMeetings,
   lanes,
   notice,
   allClear,
   waitingShown,
   onToggleWaiting,
+  readingShown,
+  onToggleReading,
+  onClearReading,
   emailAccountId,
   accountIds,
   accountColorIndexById,
@@ -636,28 +955,51 @@ function HomeLanes({
   layout,
   threadHref,
   onCorrect,
+  onDismissWaitingOnYou,
+  onWaitingOnYouShown,
+  neverRead,
   pending,
   outdated,
 }: {
   data: TodayData;
+  /** Today's meetings, for the Your day strip. */
+  day?: GetCalendarTodayEventsResponse;
+  /** The strip's meetings, which Next up and the All clear don't repeat. */
+  dayMeetings: DayMeetings;
   lanes: {
     needsYou: TodayThread[];
+    /** From local mail, while Needs reply has nothing of its own. */
+    waitingOnYou: TodayThread[];
     waiting: TodayThread[];
     alsoInInbox: TodayThread[];
+    reading: TodayThread[];
   };
   /** Why Cue can't yet say what needs a reply, which then says so instead. */
   notice: ReturnType<typeof cueNotice>;
   allClear: boolean;
   waitingShown: boolean;
   onToggleWaiting: () => void;
+  readingShown: boolean;
+  onToggleReading: () => void;
+  onClearReading: (change: "read" | "archive") => void;
   emailAccountId: string;
   /** Across accounts: every account Today shows. */
   accountIds?: string[];
   accountColorIndexById: Record<string, number>;
   rowContext: TodayRowContext;
   layout: "list" | "split";
-  threadHref: (thread: { threadId: string; account?: TodayAccount }) => string;
+  threadHref: (thread: {
+    threadId: string;
+    account?: { id: string };
+  }) => string;
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
+  onDismissWaitingOnYou: (thread: TodayThread) => void;
+  onWaitingOnYouShown: (threads: TodayThread[]) => void;
+  /**
+   * The first week's clean-up card. Below what needs a reply or waits on
+   * someone, which is the day's work; above the rest of the inbox.
+   */
+  neverRead: React.ReactNode;
   pending: ReadonlySet<HomeLane>;
   /** Lanes showing rows from an earlier answer that a refresh couldn't replace. */
   outdated: ReadonlySet<HomeLane>;
@@ -668,19 +1010,47 @@ function HomeLanes({
   const otherTasks = data.agentTasks.filter((task) => task.kind !== "draft");
   const row = (
     thread: TodayThread,
-    options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
+    options: {
+      waiting?: boolean;
+      note?: string;
+      correction?: TodayRowCorrection;
+    } = {},
   ) => renderTodayRow(thread, rowContext, options);
   const hasFocus = (threads: TodayThread[]) =>
     threads.some((thread) => rowKey(thread) === rowContext.focusedId);
+  const nextUp = data.nextUp.filter(
+    (item) => item.kind !== "event" || !isOnDay(data, dayMeetings, item),
+  );
+  const yourDay = day?.events.length ? (
+    <Section title="Your day">
+      <YourDay
+        accountIds={accountIds}
+        events={day.events}
+        layout={layout}
+        more={day.more}
+        now={now}
+        threadHref={threadHref}
+      />
+    </Section>
+  ) : null;
 
   return (
     <>
+      {/* Above Cue's notice: it shows before Today's answer, which brings
+          the notice, and stays put when that answer arrives. */}
+      <WaitingOnYouSection
+        threads={lanes.waitingOnYou}
+        rowContext={rowContext}
+        onDismiss={onDismissWaitingOnYou}
+        onShown={onWaitingOnYouShown}
+      />
       {notice ? <CueNoticeStatus notice={notice} /> : null}
 
       {allClear ? (
         <AllClear
           data={data}
           emailAccountId={emailAccountId}
+          nextShown={!isNextInDay(data, dayMeetings)}
           now={now}
           onToggleWaiting={onToggleWaiting}
           waitingOn={
@@ -696,7 +1066,9 @@ function HomeLanes({
           </ThreadList>
         </AllClear>
       ) : null}
+
       {/* What needs the user comes first; meeting news sits with what's next. */}
+      {allClear ? yourDay : null}
       {allClear ? (
         <BeforeYourMeeting
           accountIds={accountIds}
@@ -752,14 +1124,15 @@ function HomeLanes({
         </Section>
       ) : null}
 
+      {allClear ? null : yourDay}
       {/* The All clear names what's next itself. */}
-      {!allClear && (data.nextUp.length > 0 || data.suggestion) ? (
+      {!allClear && (nextUp.length > 0 || data.suggestion) ? (
         <Section title="Next up">
-          {data.nextUp.length > 0 ? (
-            <NextUpList items={data.nextUp} layout={layout} now={now} />
+          {nextUp.length > 0 ? (
+            <NextUpList items={nextUp} layout={layout} now={now} />
           ) : null}
           {data.suggestion ? (
-            <div className={data.nextUp.length > 0 ? "mt-2" : undefined}>
+            <div className={nextUp.length > 0 ? "mt-2" : undefined}>
               <ConnectLine
                 emailAccountId={emailAccountId}
                 name={data.suggestion.name}
@@ -799,6 +1172,8 @@ function HomeLanes({
         </p>
       ) : null}
 
+      {neverRead}
+
       {pending.has("alsoInInbox") ? <HomeSkeleton layout={layout} /> : null}
       <AlsoInInboxSection
         threads={lanes.alsoInInbox}
@@ -814,7 +1189,161 @@ function HomeLanes({
             : undefined
         }
       />
+
+      <ReadingSection
+        threads={lanes.reading}
+        capped={stats.readingCapped}
+        open={readingShown}
+        onToggle={onToggleReading}
+        onClear={onClearReading}
+        outdated={outdated.has("reading")}
+        rowContext={rowContext}
+      />
     </>
+  );
+}
+
+/**
+ * Local mail from people the user writes to, while Cue hasn't read the
+ * mailbox. Shown means on screen, which `onShown` hears each time it changes.
+ */
+function WaitingOnYouSection({
+  threads,
+  rowContext,
+  onDismiss,
+  onShown,
+}: {
+  threads: TodayThread[];
+  rowContext: TodayRowContext;
+  onDismiss: (thread: TodayThread) => void;
+  onShown: (threads: TodayThread[]) => void;
+}) {
+  const detailId = useId();
+  useEffect(() => {
+    if (threads.length) onShown(threads);
+  }, [threads, onShown]);
+  if (!threads.length) return null;
+  return (
+    <Section
+      title="Waiting on you"
+      detail="From your mail, not checked by AI"
+      detailId={detailId}
+    >
+      <ThreadList
+        describedBy={detailId}
+        hasFocusedRow={threads.some(
+          (thread) => rowKey(thread) === rowContext.focusedId,
+        )}
+        label="Waiting on you"
+      >
+        {threads.map((thread) =>
+          renderTodayRow(thread, rowContext, {
+            note: "May need a reply",
+            correction: {
+              label: "Dismiss",
+              icon: XIcon,
+              onClick: () => onDismiss(thread),
+            },
+          }),
+        )}
+      </ThreadList>
+    </Section>
+  );
+}
+
+/**
+ * Unread newsletters in one calm row that names who they're from, rather than
+ * a row each. It opens in place to the list; the whole bundle can be marked
+ * read or archived at once.
+ */
+function ReadingSection({
+  threads,
+  capped,
+  open,
+  onToggle,
+  onClear,
+  outdated,
+  rowContext,
+}: {
+  threads: TodayThread[];
+  capped: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onClear: (change: "read" | "archive") => void;
+  outdated?: boolean;
+  rowContext: TodayRowContext;
+}) {
+  const listId = useId();
+  if (!threads.length) return null;
+  const actionClassName =
+    "font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50";
+  return (
+    <Section
+      title="Reading"
+      count={formatCount(threads.length, capped)}
+      outdated={outdated}
+      action={
+        // Changes go through the mail engine, as the rows' own do.
+        <span className="flex items-center gap-3">
+          <button
+            className={actionClassName}
+            disabled={!rowContext.canChange}
+            onClick={() => onClear("read")}
+            type="button"
+          >
+            Mark all read
+          </button>
+          <button
+            className={actionClassName}
+            disabled={!rowContext.canChange}
+            onClick={() => onClear("archive")}
+            type="button"
+          >
+            Archive all
+          </button>
+        </span>
+      }
+    >
+      <div className="-mx-4 sm:mx-0 border-border/60 border-t">
+        <button
+          aria-controls={open ? listId : undefined}
+          aria-expanded={open}
+          // Text starts where the lanes' rows put it, past their unread-dot slot.
+          className={cn(
+            "flex w-full items-center gap-3 bg-background py-2.5 pr-3.5 pl-8 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-muted lg:pr-5",
+            !open && "border-border/60 border-b",
+          )}
+          onClick={onToggle}
+          type="button"
+        >
+          <span className="min-w-0 flex-1 truncate text-foreground text-sm">
+            From {formatSenders(threads.map((thread) => thread.fromName))}
+          </span>
+          <ChevronDownIcon
+            aria-hidden
+            className={cn(
+              "size-4 shrink-0 text-muted-foreground motion-safe:transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+      </div>
+      {open ? (
+        <div id={listId}>
+          <ThreadList
+            hasFocusedRow={threads.some(
+              (thread) => rowKey(thread) === rowContext.focusedId,
+            )}
+            label="Reading"
+          >
+            {/* Every row here is a newsletter; the lane already says so. */}
+            {threads.map((thread) =>
+              renderTodayRow({ ...thread, tag: undefined }, rowContext),
+            )}
+          </ThreadList>
+        </div>
+      ) : null}
+    </Section>
   );
 }
 
@@ -874,7 +1403,11 @@ type TodayRowContext = {
 function renderTodayRow(
   thread: TodayThread,
   context: TodayRowContext,
-  options: { waiting?: boolean; correction?: TodayRowCorrection } = {},
+  options: {
+    waiting?: boolean;
+    note?: string;
+    correction?: TodayRowCorrection;
+  } = {},
 ) {
   const key = rowKey(thread);
   return (
@@ -892,6 +1425,7 @@ function renderTodayRow(
       isFocused={key === context.focusedId}
       key={key}
       layout={context.layout}
+      note={options.note}
       rowKey={key}
       thread={thread}
       waiting={options.waiting}
@@ -938,12 +1472,18 @@ function cueNotice(
 
 function Section({
   title,
+  detail,
+  detailId,
   count,
   outdated,
   action,
   children,
 }: {
   title: string;
+  /** A quiet line under the title, such as where its rows come from. */
+  detail?: string;
+  /** For a list that the detail line describes. */
+  detailId?: string;
   count?: string;
   /** Its rows are from an earlier answer that a refresh couldn't replace. */
   outdated?: boolean;
@@ -967,6 +1507,11 @@ function Section({
         ) : null}
         {action ? <span className="ml-auto">{action}</span> : null}
       </h2>
+      {detail ? (
+        <p className="-mt-1 mb-2 text-muted-foreground text-sm" id={detailId}>
+          {detail}
+        </p>
+      ) : null}
       {children}
     </section>
   );
@@ -979,15 +1524,18 @@ function Section({
  */
 function ThreadList({
   label,
+  describedBy,
   hasFocusedRow,
   children,
 }: {
   label: string;
+  describedBy?: string;
   hasFocusedRow: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div
+      aria-describedby={describedBy}
       aria-label={label}
       className="-mx-4 sm:mx-0 border-border/60 border-t outline-none"
       onFocus={(event) => {
@@ -1063,18 +1611,57 @@ function HomeSkeleton({ layout }: { layout: "list" | "split" }) {
 
 /**
  * "3 need a reply · next: Design review 2:00 PM". The meeting is left to the
- * Next up list when that shows, rather than said twice.
+ * Next up list or the Your day strip when either shows, rather than said twice.
  */
-function busySummary(data: TodayData, needsReply: number) {
+function busySummary(
+  data: TodayData,
+  needsReply: number,
+  dayMeetings: DayMeetings,
+) {
   const count = formatCount(needsReply, data.stats.needsYouCapped) ?? "0";
   const status = `${count} ${needsReply === 1 ? "needs" : "need"} a reply`;
   const next = data.calendar.next;
-  if (!next || data.nextUp.length > 0) return status;
+  if (!next || data.nextUp.length > 0 || isNextInDay(data, dayMeetings))
+    return status;
   return (
     <>
       {status} · {next.tomorrow ? "tomorrow" : "next"}: {next.title}{" "}
       <span className="whitespace-nowrap">{formatTime(next.at)}</span>
     </>
+  );
+}
+
+/**
+ * Today's meetings on the Your day strip, by Next up's own `event:` ids. While
+ * the strip loads, which is shortly after Today's own answer, `loading` holds
+ * today's meetings back from Next up rather than move them once it lands.
+ */
+type DayMeetings = { ids: ReadonlySet<string>; loading: boolean };
+
+/** A meeting the Your day strip shows, or is about to. */
+function isOnDay(
+  data: TodayData,
+  day: DayMeetings,
+  meeting: { id?: string; at: string },
+) {
+  if (day.loading)
+    return (
+      data.calendar.connected &&
+      new Date(meeting.at).toDateString() === new Date().toDateString()
+    );
+  return Boolean(meeting.id && day.ids.has(meeting.id));
+}
+
+/** Today's next meeting is on the Your day strip already. */
+function isNextInDay(data: TodayData, day: DayMeetings) {
+  const next = data.calendar.next;
+  return Boolean(
+    next &&
+      !next.tomorrow &&
+      isOnDay(data, day, {
+        id: next.id ? `event:${next.id}` : undefined,
+        at: next.at,
+      }),
   );
 }
 
@@ -1126,6 +1713,16 @@ function rowKey(thread: TodayThread) {
   return getListThreadKey({ id: thread.threadId, account: thread.account });
 }
 
+/** Rows from Important people first, each group in its own order. */
+function importantFirst(
+  threads: TodayThread[],
+  important: (thread: TodayThread) => boolean,
+) {
+  const starred = threads.filter(important);
+  if (starred.length === 0) return threads;
+  return [...starred, ...threads.filter((thread) => !important(thread))];
+}
+
 /** Moves a conversation between Needs reply and the rest of the inbox. */
 function moveLane(
   data: GetHomeResponse,
@@ -1161,5 +1758,6 @@ function patchThread(
     needsYou: patch(data.needsYou),
     waiting: patch(data.waiting),
     alsoInInbox: patch(data.alsoInInbox),
+    reading: patch(data.reading),
   };
 }

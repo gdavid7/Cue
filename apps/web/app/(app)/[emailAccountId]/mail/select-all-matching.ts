@@ -60,6 +60,25 @@ export function getMatchingScope(
   return scope;
 }
 
+/**
+ * The scope "select all that match" covers in one account's view. A bundled
+ * inbox has none: its list leaves out the conversations its Reading row
+ * stands in for, which no mailbox search leaves out exactly (Gmail matches
+ * per message), so selecting stays per page.
+ */
+export function getAccountMatchingScope({
+  query,
+  provider,
+  bundlesReading,
+}: {
+  query: ThreadsQuery;
+  provider: string | null | undefined;
+  bundlesReading: boolean;
+}): MatchingScope | null {
+  if (bundlesReading) return null;
+  return getMatchingScope(query, provider);
+}
+
 export function getMatchingBannerCopy({
   pageCount,
   total,

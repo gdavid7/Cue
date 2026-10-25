@@ -32,6 +32,8 @@ import { createScopedLogger } from "@/utils/logger";
 import {
   activatePreparedSnoozedThread,
   cancelSnoozedThreadByClientMutationId,
+  cancelSnoozedThreads,
+  getActiveSnoozedThreadIds,
   prepareSnoozedThread,
 } from "@/utils/snooze/scheduler";
 import prisma from "@/utils/prisma";
@@ -39,11 +41,15 @@ import { isInvalidGrantError } from "@/utils/error";
 import { EmailSendOperationStatus } from "@/generated/prisma/enums";
 import type { ParsedMessage } from "@/utils/types";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
+import { ProviderChangeRejectedError } from "@/utils/email/provider-change-error";
 
 const logger = createScopedLogger("mail-api/operations");
 const HELD_SEND_POLL_MS = 2000;
 const BLOCKED_HELD_SEND_RETRY_MS = 60_000;
 const METADATA_OBSERVATION_BATCH_SIZE = 20;
+// Messages whose conversation is looked up to end a snooze, when the
+// read-back after the change missed them.
+const MAX_SNOOZE_THREAD_LOOKUPS = 100;
 type SendIntent = Extract<PreparedOperation["intent"], { kind: "send" }>;
 type PreparedMetadataOperation = PreparedOperation & {
   intent: Extract<PreparedOperation["intent"], { kind: "metadata" }>;
@@ -86,6 +92,9 @@ export function createEmailProviderOperationExecutor(input: {
             reason: "blocked_auth",
             retryAfterMs: null,
           };
+        }
+        if (error instanceof ProviderChangeRejectedError) {
+          return { status: "rejected", code: error.code, targets: [] };
         }
         // One bad message fails the whole bulk call; per-message retries
         // isolate it so the rest still apply.
@@ -146,7 +155,7 @@ async function executeMetadataPerTarget(
       targets.push(failedTargetOutcome(target, error));
     }
   }
-  return metadataResult(accountId, operation, targets, observations);
+  return metadataResult(provider, accountId, operation, targets, observations);
 }
 
 async function observeAppliedMetadata(
@@ -185,7 +194,7 @@ async function observeAppliedMetadata(
       targets.push({ key: target, outcome: "applied", code: null });
     }
   }
-  return metadataResult(accountId, operation, targets, observations);
+  return metadataResult(provider, accountId, operation, targets, observations);
 }
 
 // One failed read rejects a whole provider batch, so retry individually to
@@ -234,10 +243,11 @@ async function inspectMetadataOperation(
       targets.push(failedTargetOutcome(target, error));
     }
   }
-  return metadataResult(accountId, operation, targets, observations);
+  return metadataResult(provider, accountId, operation, targets, observations);
 }
 
 async function metadataResult(
+  provider: EmailProvider,
   accountId: string,
   operation: PreparedMetadataOperation,
   targets: TargetOutcome[],
@@ -258,7 +268,11 @@ async function metadataResult(
       receiptId: operation.key.operationId,
     };
   }
-  if (operation.intent.change.kind === "archive") {
+  const { change } = operation.intent;
+  if (endsSnooze(change)) {
+    await endSnoozesOfMovedThreads(provider, accountId, targets, observations);
+  }
+  if (change.kind === "archive") {
     const messageIds = targets
       .filter((target) => target.outcome === "applied")
       .map((target) => target.key.messageId);
@@ -284,6 +298,69 @@ async function metadataResult(
     observations,
     targets,
   };
+}
+
+// The engine takes archive, move to inbox, trash and spam to end a snooze, so
+// the server does too: otherwise the scheduled return still fires, and the
+// Snoozed view still lists the conversation. This is also how a snooze is
+// undone. It runs on inspect too, on purpose: a change confirmed there was
+// applied just the same.
+async function endSnoozesOfMovedThreads(
+  provider: EmailProvider,
+  accountId: string,
+  targets: TargetOutcome[],
+  observations: ProviderChange[],
+) {
+  try {
+    const snoozed = await getActiveSnoozedThreadIds(accountId);
+    if (!snoozed.size) return;
+    const applied = new Set(
+      targets
+        .filter((target) => target.outcome === "applied")
+        .map((target) => target.key.messageId),
+    );
+    const ending = new Set<string>();
+    const observed = new Set<string>();
+    for (const observation of observations) {
+      if (observation.kind !== "message_patch") continue;
+      observed.add(observation.key.messageId);
+      const threadId = observation.reference.conversationId;
+      if (applied.has(observation.key.messageId) && snoozed.has(threadId)) {
+        ending.add(threadId);
+      }
+    }
+    const unresolved = [...applied]
+      .filter((messageId) => !observed.has(messageId))
+      .slice(0, MAX_SNOOZE_THREAD_LOOKUPS);
+    for (const batch of chunk(unresolved, METADATA_OBSERVATION_BATCH_SIZE)) {
+      if ([...snoozed].every((threadId) => ending.has(threadId))) break;
+      try {
+        for (const message of await provider.getMessagesBatch(batch)) {
+          if (snoozed.has(message.threadId)) ending.add(message.threadId);
+        }
+      } catch {
+        // Unreadable now; its snooze, if any, returns it as scheduled.
+      }
+    }
+    await cancelSnoozedThreads({
+      emailAccountId: accountId,
+      threadIds: [...ending],
+    });
+  } catch (error) {
+    logger.error("Failed to end snoozes of moved conversations", {
+      emailAccountId: accountId,
+      error,
+    });
+  }
+}
+
+function endsSnooze(change: MetadataChange) {
+  return (
+    change.kind === "archive" ||
+    change.kind === "unarchive" ||
+    change.kind === "trash" ||
+    (change.kind === "set_spam" && change.spam)
+  );
 }
 
 function failedTargetOutcome(
@@ -358,14 +435,9 @@ async function applyChange(
     }
     case "move": {
       if (!change.folderId) return;
-      for (const messageId of messageIds) {
-        const message = await provider.getMessage(messageId);
-        await provider.moveThreadToFolder(
-          message.threadId,
-          message.headers.to || "",
-          change.folderId,
-        );
-      }
+      // The targets already name every message of a moved conversation, and
+      // an undo returns its messages to different folders one by one.
+      await provider.moveMessagesToFolder(messageIds, change.folderId);
       return;
     }
     case "set_membership": {

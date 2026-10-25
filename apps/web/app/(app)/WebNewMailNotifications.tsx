@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useOptionalMailClient } from "@inboxzero/mail-react/MailEngineProvider";
+import { supportsImportantPeople } from "@inboxzero/mail-core/important-people";
 import type { Coverage, MailboxView } from "@inboxzero/mail-core/queries";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAccount } from "@/providers/EmailAccountProvider";
@@ -74,11 +75,6 @@ export function WebNewMailNotifications() {
     readStoredMode,
     () => null,
   );
-  const quiet = useSyncExternalStore(
-    subscribeToPreference,
-    () => readQuietUntilMs() !== null,
-    () => false,
-  );
   // The desktop app shows its own notifications.
   const isDesktopApp = useSyncExternalStore(
     subscribeToPreference,
@@ -108,6 +104,10 @@ export function WebNewMailNotifications() {
       buildMailPath({ accountIndex, view: { kind: "inbox" }, threadId }),
     );
   };
+
+  // Read for each batch of new mail, so a star set a moment ago counts.
+  const clientRef = useRef(client);
+  clientRef.current = client;
 
   const active = !isDesktopApp && permission === "granted" && mode !== "off";
   const notifierRef =
@@ -153,6 +153,11 @@ export function WebNewMailNotifications() {
             ),
         }),
       loadBulkMessageIds,
+      loadImportantPeople: async (accountIds) => {
+        const current = clientRef.current;
+        if (!supportsImportantPeople(current)) return null;
+        return current.queryImportantPeople(accountIds);
+      },
       triageSettleMs: TRIAGE_SETTLE_MS,
     });
     notifierRef.current = notifier;
@@ -196,17 +201,10 @@ export function WebNewMailNotifications() {
   }, [active, client, connectedAccountIds]);
 
   // Keeps the server's copy of this browser's push subscription fresh, so mail
-  // still notifies after the browser rotates it or the server dropped it.
-  // Browsers require every push to show a notification, so a pause turns push
-  // off for this browser, and the end of the pause, seen by any open tab or
-  // the next one opened, turns it back on.
+  // still notifies after the browser rotates it or the server dropped it. A
+  // pause leaves it alone: the server holds pushes back until the pause ends.
   useEffect(() => {
-    if (!active || !isWebPushAvailable()) return;
-    if (quiet) {
-      syncWebPushSubscription("off").catch(() => undefined);
-      return;
-    }
-    if (!isWebPushResyncDue()) return;
+    if (!active || !isWebPushAvailable() || !isWebPushResyncDue()) return;
     return syncWithRetry({
       sync: () => syncWebPushSubscription(mode),
       // The scoped logger reads server-only env, so the browser warns directly.
@@ -215,7 +213,7 @@ export function WebNewMailNotifications() {
           `[web-push] Subscription sync failed (attempt ${attempt + 1})`,
         ),
     });
-  }, [active, mode, quiet]);
+  }, [active, mode]);
 
   // The one-time offer needs to know a first sync finished, and nothing else.
   const mightOffer =

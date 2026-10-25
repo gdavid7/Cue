@@ -58,9 +58,9 @@ import {
 } from "@/utils/web-notifications/quiet-command-palette";
 import { formatQuietUntil } from "@/utils/web-notifications/quiet-presets";
 import {
-  pauseNotificationsUntil,
-  resumeNotifications,
-} from "@/utils/web-notifications/preference";
+  pauseWebNotifications,
+  resumeWebNotifications,
+} from "@/utils/web-notifications/permission";
 
 const SECTION_ORDER: CommandSection[] = [
   "actions",
@@ -324,7 +324,7 @@ function CommandPaletteContent({
       parseDate: parseSnoozeDate,
       query: search,
       pause: (until) => {
-        pauseNotificationsUntil(until.getTime());
+        pauseWebNotifications(until.getTime());
         toastSuccess({
           description: `Notifications paused until ${formatQuietUntil(until, new Date())}`,
         });
@@ -372,7 +372,7 @@ function CommandPaletteContent({
             setPage("quiet");
           },
           resume: () => {
-            resumeNotifications();
+            resumeWebNotifications();
             toastSuccess({ description: "Notifications resumed" });
           },
         }),

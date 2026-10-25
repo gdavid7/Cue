@@ -14,6 +14,7 @@ import {
   LocalMailSyncPausedError,
   withLocalMailSyncBudget,
 } from "@/utils/email/local-mail-sync-budget";
+import { forgetEmailProviderRateLimitState } from "@/utils/redis/email-provider-rate-limit";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/redis", () => ({
@@ -31,7 +32,9 @@ const input = {
   emailAccountId: "account-1",
   provider: "google" as const,
   priority: "backfill" as const,
-  cost: 1100,
+  // The largest reservation, so one page leaves the 5,000-unit backfill
+  // bucket unable to pay for another.
+  cost: 3100,
 };
 let created = false;
 
@@ -58,6 +61,8 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
     });
     beforeEach(async () => {
       await command("FLUSHDB");
+      // Rate-limit mode is memoized per instance, past the FLUSHDB.
+      forgetEmailProviderRateLimitState(input.emailAccountId);
     });
     afterAll(async () => {
       if (created) await execute("docker", ["rm", "--force", container]);
@@ -93,6 +98,37 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       ).resolves.toBe("current");
     });
 
+    it("says how long until the next page fits, matching the refusal it saves", async () => {
+      const page = { ...input, cost: 545, nextCost: 545 };
+      let hint: number | null = null;
+      // Nine 545-unit pages leave the 5,000-unit backfill bucket 450 short
+      // of a tenth.
+      for (let index = 0; index < 9; index++)
+        await withLocalMailSyncBudget(page, async (_signal, admission) => {
+          hint = admission.nextAdmitAfterMs;
+        });
+      expect(hint).toBeGreaterThan(0);
+      const refused = await withLocalMailSyncBudget(page, vi.fn()).catch(
+        (error: unknown) => error,
+      );
+      expect(refused).toMatchObject({ reason: "account_backfill_budget" });
+      const { retryAfterMs } = refused as LocalMailSyncPausedError;
+      // The refusal comes moments later, after a little refill.
+      expect(retryAfterMs).toBeLessThanOrEqual(hint!);
+      expect(retryAfterMs).toBeGreaterThan(hint! - 1000);
+    });
+
+    it("reports no wait while the budget covers the next page", async () => {
+      let hint: number | null | undefined;
+      await withLocalMailSyncBudget(
+        { ...input, cost: 545, nextCost: 545 },
+        async (_signal, admission) => {
+          hint = admission.nextAdmitAfterMs;
+        },
+      );
+      expect(hint).toBeNull();
+    });
+
     it("returns the part of a reservation that never reached the provider", async () => {
       const keys = [
         "local-mail-budget:google:account-1:total",
@@ -116,18 +152,18 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
 
       await expect(failWith(turnedAway)).rejects.toBe(turnedAway);
       // The bucket is back to full, so the reservation cost nothing.
-      expect(await tokens()).toEqual([4000, 2000]);
+      expect(await tokens()).toEqual([10_000, 5000]);
 
       // Only what the provider never saw comes back.
       await expect(failWith(partly)).rejects.toBe(partly);
-      expect(await tokens()).toEqual([3300, 1300]);
+      expect(await tokens()).toEqual([9300, 4300]);
 
       // Work that may have reached the provider keeps its reservation spent.
       const failed = new Error("provider failure");
       await expect(failWith(failed)).rejects.toBe(failed);
       const [total, backfill] = await tokens();
-      expect(total).toBeLessThan(3300 - 1000);
-      expect(backfill).toBeLessThan(1300 - 1000);
+      expect(total).toBeLessThan(9300 - 3000);
+      expect(backfill).toBeLessThan(4300 - 3000);
     });
 
     it("applies the shared app limit before debiting an account and refills from Redis time", async () => {
@@ -165,7 +201,8 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         "tokens",
         "0",
         "at",
-        String((await redisTime()) - 30_000),
+        // 3.6 s refills 300 units at full rate but only 150 at half.
+        String((await redisTime()) - 3600),
       );
       await command(
         "SET",

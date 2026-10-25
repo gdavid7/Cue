@@ -402,6 +402,81 @@ export async function insertInboxMailInConversation(
   return message.id;
 }
 
+/**
+ * Puts a new conversation in the inbox, for a test that writes to its thread
+ * and must not share one with other tests or with its own earlier attempts.
+ */
+export async function insertInboxThread(
+  page: Page,
+  input: {
+    subject: string;
+    body: string;
+    from: { name: string; address: string };
+  },
+): Promise<{ threadId: string; messageId: string }> {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const baseUrl = process.env.MICROSOFT_BASE_URL;
+    if (!baseUrl) throw new Error("MICROSOFT_BASE_URL is missing");
+    const created = await page.request.post(`${baseUrl}/v1.0/me/messages`, {
+      headers,
+      data: {
+        subject: input.subject,
+        body: { contentType: "text", content: input.body },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    const patched = await page.request.patch(
+      `${baseUrl}/v1.0/me/messages/${id}`,
+      {
+        headers,
+        data: {
+          from: { emailAddress: input.from },
+          isRead: false,
+        },
+      },
+    );
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(
+      `${baseUrl}/v1.0/me/messages/${id}/move`,
+      { headers, data: { destinationId: "inbox" } },
+    );
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return { threadId: message.conversationId, messageId: message.id };
+  }
+  const baseUrl = process.env.GOOGLE_BASE_URL;
+  if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
+  const inserted = await page.request.post(
+    `${baseUrl}/gmail/v1/users/me/messages`,
+    {
+      headers,
+      data: {
+        from: `${input.from.name} <${input.from.address}>`,
+        to: email,
+        subject: input.subject,
+        body_text: input.body,
+        labelIds: ["INBOX", "UNREAD"],
+        internalDate: String(Date.now()),
+      },
+    },
+  );
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string; threadId: string };
+  return { threadId: message.threadId, messageId: message.id };
+}
+
 async function insertOutlookInboxReply(
   page: Page,
   token: string,
@@ -447,6 +522,49 @@ async function insertOutlookInboxReply(
   return message.id;
 }
 
+/** Whether the provider has any of the conversation's messages in the inbox. */
+export async function providerConversationInInbox(threadId: string) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  if (isMicrosoftPlaywright()) {
+    const response = await fetch(
+      `${process.env.MICROSOFT_BASE_URL}/v1.0/me/mailFolders/inbox/messages?$top=100`,
+      { headers },
+    );
+    expect(response.ok, await response.clone().text()).toBe(true);
+    const { value } = (await response.json()) as {
+      value: Array<{ conversationId: string }>;
+    };
+    return value.some((message) => message.conversationId === threadId);
+  }
+  const response = await fetch(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/threads/${threadId}`,
+    { headers },
+  );
+  expect(response.ok, await response.clone().text()).toBe(true);
+  const { messages } = (await response.json()) as {
+    messages: Array<{ labelIds?: string[] }>;
+  };
+  return messages.some((message) => message.labelIds?.includes("INBOX"));
+}
+
+/** The conversation's snoozes our database still means to act on. */
+export async function activeSnoozeCount(
+  emailAccountId: string,
+  threadId: string,
+) {
+  return withClient(async (client) => {
+    const result = await client.query(
+      `SELECT 1 FROM "SnoozedThread"
+       WHERE "emailAccountId" = $1 AND "threadId" = $2
+         AND status IN ('PREPARING', 'PENDING', 'EXECUTING')`,
+      [emailAccountId, threadId],
+    );
+    return result.rowCount ?? 0;
+  });
+}
+
 export async function readProviderAccessToken() {
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
@@ -469,3 +587,114 @@ type ReplyHandoffFrame = { composer: boolean; rows: number };
 type ReplyHandoffWindow = {
   __replyHandoff: { frames: ReplyHandoffFrame[]; raf: number };
 };
+
+const KAI = { address: "kai@example.com", name: "Kai Example" };
+
+/**
+ * A conversation the user started with Kai, who answered an hour later: an
+ * inbox reply from someone the user writes to, with nothing sent after it.
+ * Returns its thread and what takes it out again.
+ */
+export async function seedMailFromContact(page: Page, subject: string) {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  const body = "Are we still on for Thursday?";
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    const draft = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Dinner Thursday?" },
+        toRecipients: [
+          { emailAddress: { address: KAI.address, name: KAI.name } },
+        ],
+      },
+    });
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const sent = await page.request.post(`${base}/messages/${draftId}/move`, {
+      headers,
+      data: { destinationId: "sentitems" },
+    });
+    expect(sent.ok(), await sent.text()).toBe(true);
+    const sentId = ((await sent.json()) as { id: string }).id;
+    const reply = await page.request.post(
+      `${base}/messages/${sentId}/createReply`,
+      { headers },
+    );
+    expect(reply.ok(), await reply.text()).toBe(true);
+    const replyId = ((await reply.json()) as { id: string }).id;
+    const patched = await page.request.patch(`${base}/messages/${replyId}`, {
+      headers,
+      data: {
+        from: { emailAddress: KAI },
+        toRecipients: [{ emailAddress: { address: email } }],
+        body: { contentType: "text", content: body },
+        isRead: false,
+      },
+    });
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(`${base}/messages/${replyId}/move`, {
+      headers,
+      data: { destinationId: "inbox" },
+    });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return {
+      threadId: message.conversationId,
+      subject,
+      remove: async () => {
+        for (const id of [message.id, sentId])
+          await page.request.post(`${base}/messages/${id}/permanentDelete`, {
+            headers,
+          });
+      },
+    };
+  }
+
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const sent = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      from: email,
+      to: `${KAI.name} <${KAI.address}>`,
+      subject,
+      body_text: "Dinner Thursday?",
+      labelIds: ["SENT"],
+      internalDate: String(Date.now() - 2 * 3_600_000),
+    },
+  });
+  expect(sent.ok(), await sent.text()).toBe(true);
+  const first = (await sent.json()) as { id: string; threadId: string };
+  const inserted = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      threadId: first.threadId,
+      from: `${KAI.name} <${KAI.address}>`,
+      to: email,
+      subject,
+      body_text: body,
+      labelIds: ["INBOX", "UNREAD"],
+      internalDate: String(Date.now() - 3_600_000),
+    },
+  });
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string };
+  return {
+    threadId: first.threadId,
+    subject,
+    remove: async () => {
+      for (const id of [message.id, first.id])
+        await page.request.delete(`${base}/messages/${id}`, { headers });
+    },
+  };
+}

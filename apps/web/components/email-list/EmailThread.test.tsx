@@ -270,6 +270,83 @@ describe("EmailThread reply composer", () => {
   });
 });
 
+describe("EmailThread pre-send addresses", () => {
+  afterEach(cleanup);
+
+  const earlier = {
+    ...createReaderMessage("earlier", "1000"),
+    headers: {
+      ...createReaderMessage("earlier", "1000").headers,
+      from: "dropped@example.com",
+      to: "user@example.com",
+    },
+  } as ThreadMessage;
+  const sentFromAlias = {
+    ...createReaderMessage("mine", "2000"),
+    headers: {
+      ...createReaderMessage("mine", "2000").headers,
+      from: "alias@example.com",
+      to: "sender@example.com",
+    },
+    labelIds: ["SENT"],
+  } as ThreadMessage;
+  const latest = createReaderMessage("latest", "3000");
+
+  const composerData = () => {
+    const composer = screen.getByRole("textbox", { name: "Email message" });
+    return {
+      participants: composer.dataset.participants?.split(",").sort(),
+      sentFrom: composer.dataset.sentFrom,
+    };
+  };
+
+  it("gathers the whole loaded thread for a reply", () => {
+    render(
+      <EmailThread
+        messages={[earlier, sentFromAlias, latest]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Reply" }).at(-1)!);
+
+    const { participants, sentFrom } = composerData();
+    expect(participants).toContain("dropped@example.com");
+    expect(sentFrom).toBe("alias@example.com");
+  });
+
+  it("keeps to the replied-to message while earlier messages are unloaded", () => {
+    render(
+      <EmailThread
+        earlierMessages={{ loading: false, onLoad: vi.fn() }}
+        messages={[earlier, sentFromAlias, latest]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Reply" }).at(-1)!);
+
+    expect(composerData()).toEqual({
+      participants: ["sender@example.com", "user@example.com"],
+      sentFrom: undefined,
+    });
+  });
+
+  it("gathers the whole loaded thread for a reopened draft too", () => {
+    render(
+      <EmailThread
+        messages={[earlier, sentFromAlias, createReaderDraft("draft", "4000")]}
+        refetch={vi.fn()}
+        showReplyButton
+      />,
+    );
+
+    const { participants, sentFrom } = composerData();
+    expect(participants).toContain("dropped@example.com");
+    expect(sentFrom).toBe("alias@example.com");
+  });
+});
+
 describe("EmailThread outgoing replies", () => {
   afterEach(cleanup);
 
@@ -1204,9 +1281,11 @@ function MockComposer({
   draftKeyMessageId,
   draftSessionId,
   providerDraftMessageId,
+  replyingToEmail,
   onClose,
   onDiscard,
 }: {
+  replyingToEmail?: { participants?: string; sentFrom?: string };
   autoFocus?: boolean;
   draftKeyMessageId?: string;
   draftSessionId?: string;
@@ -1226,6 +1305,8 @@ function MockComposer({
         data-draft-key-message-id={draftKeyMessageId}
         data-draft-session-id={draftSessionId}
         data-provider-draft-message-id={providerDraftMessageId}
+        data-participants={replyingToEmail?.participants}
+        data-sent-from={replyingToEmail?.sentFrom}
       />
       <button onClick={onClose} type="button">
         Send

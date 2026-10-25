@@ -51,6 +51,7 @@ const HOSTED_PROOF_POLL_MS = 500;
 const HOSTED_IDLE_CATCH_UP_INTERVAL_MS = 1000;
 // A hosted mail page loads in a few seconds.
 const PAGE_LOAD_TIMEOUT_MS = 60_000;
+const CAPTURE_TIMEOUT_MS = 10_000;
 // While a fresh mailbox first syncs, the inbox shows the server's rows as a
 // placeholder: the same "Conversations" listbox, but nothing there selects or
 // triages. Only the mail engine's own list is ready for a proof to act on.
@@ -2393,7 +2394,18 @@ async function loadPage(window: BrowserWindow, url: string) {
 
 async function captureWindow(window: BrowserWindow, screenshotPath?: string) {
   if (!screenshotPath) return;
-  const image = await window.webContents.capturePage();
+  // A page that never painted, such as a stalled load, never resolves
+  // capturePage, which would hang the proof instead of reporting why.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const image = await Promise.race([
+    window.webContents.capturePage(),
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("capturePage did not answer")),
+        CAPTURE_TIMEOUT_MS,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
   writeFileSync(screenshotPath, image.toPNG());
 }
 

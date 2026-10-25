@@ -99,6 +99,77 @@ describe("listGmailMatchingMessages", () => {
   });
 });
 
+describe("listGmailMatchingMessages for the Reading lane's own job", () => {
+  // A digest conversation: only its first message carries the label.
+  const thread = {
+    messages: [
+      { id: "m1", threadId: "t1", labelIds: ["INBOX", "UNREAD", "Label_42"] },
+      { id: "m2", threadId: "t1", labelIds: ["INBOX", "UNREAD"] },
+      { id: "m3", threadId: "t1", labelIds: [] },
+      { id: "m5", threadId: "t1", labelIds: ["TRASH", "INBOX", "UNREAD"] },
+    ],
+  };
+  const gmailFor = () => {
+    const list = vi.fn().mockResolvedValue({
+      data: { messages: [{ id: "m1", threadId: "t1" }] },
+    });
+    const get = vi.fn().mockResolvedValue({ data: thread });
+    const gmail = {
+      users: { messages: { list }, threads: { get } },
+    } as unknown as gmail_v1.Gmail;
+    return { gmail, get };
+  };
+
+  it("archives the whole conversation, not just its labelled messages", async () => {
+    const { gmail, get } = gmailFor();
+    const result = await listGmailMatchingMessages({
+      gmail,
+      scope: { labelIds: ["INBOX", "Label_42"], wholeConversations: true },
+      only: { inInbox: true },
+    });
+    // Not m3, archived already, nor m5, in the trash.
+    expect(result.messages).toEqual([
+      { id: "m1", threadId: "t1" },
+      { id: "m2", threadId: "t1" },
+    ]);
+    expect(get).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t1", format: "minimal" }),
+    );
+  });
+
+  it("marks the whole conversation read", async () => {
+    const { gmail } = gmailFor();
+    const result = await listGmailMatchingMessages({
+      gmail,
+      scope: { labelIds: ["INBOX", "Label_42"], wholeConversations: true },
+      only: { unread: true },
+    });
+    expect(result.messages.map((message) => message.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("keeps a conversation's listed messages when it's gone by the time it's read", async () => {
+    const { gmail, get } = gmailFor();
+    get.mockRejectedValue(Object.assign(new Error("Not Found"), { code: 404 }));
+    const result = await listGmailMatchingMessages({
+      gmail,
+      scope: { labelIds: ["INBOX", "Label_42"], wholeConversations: true },
+      only: { inInbox: true },
+    });
+    expect(result.messages).toEqual([{ id: "m1", threadId: "t1" }]);
+  });
+
+  it("leaves any other label's view per message, as before", async () => {
+    const { gmail, get } = gmailFor();
+    const result = await listGmailMatchingMessages({
+      gmail,
+      scope: { labelIds: ["INBOX", "Label_42"] },
+      only: { inInbox: true },
+    });
+    expect(get).not.toHaveBeenCalled();
+    expect(result.messages).toEqual([{ id: "m1", threadId: "t1" }]);
+  });
+});
+
 describe("countGmailMatchingConversations", () => {
   it("reads a single-label view's conversation count from the label", async () => {
     const get = vi

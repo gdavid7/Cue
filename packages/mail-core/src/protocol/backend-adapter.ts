@@ -207,6 +207,9 @@ export function createBackendMailboxSource(input: {
             bodies: parsed.bodies ?? [],
             nextPage: parsed.nextPage,
             catchUpFrom: null,
+            ...(parsed.retryAfterMs !== undefined && {
+              retryAfterMs: parsed.retryAfterMs,
+            }),
           },
         };
       }

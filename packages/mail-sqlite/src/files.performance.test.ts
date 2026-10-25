@@ -128,6 +128,25 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
     expect(after).toBeNull();
     expect(calls).toBeGreaterThan(1);
 
+    // A one-letter name can't use the search index, so it reads file names
+    // under the same per-call cap.
+    after = null;
+    calls = 0;
+    const lettered: string[] = [];
+    do {
+      queries.length = 0;
+      const start = performance.now();
+      const page = await store.readFiles({ ...query, name: "u", after });
+      const elapsed = performance.now() - start;
+      calls += 1;
+      expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES_PER_CALL);
+      expect(elapsed).toBeLessThan(SCAN_BUDGET_MS);
+      lettered.push(...page.files.map((file) => file.attachment.filename));
+      after = page.nextPage;
+    } while (after && calls < 10);
+    expect(lettered).toEqual(["launch.pptx"]);
+    expect(calls).toBeGreaterThan(1);
+
     // Walks mail with files newest first through its own index, never a
     // sort of the whole mailbox.
     const read = queries.find(({ sql }) => sql.includes("AS indexed"));
@@ -140,6 +159,70 @@ it("shows the first page of files in under 100 ms on a 10k-message mailbox", asy
         expect.stringMatching(/^SCAN e USING INDEX effective_files_order/),
       ]),
     );
+  } finally {
+    await store.close();
+  }
+}, 60_000);
+
+it("reads one giant conversation once per call under a sparse sender filter", async () => {
+  const { driver, queries } = recordingDriver();
+  const store = await createSqliteMailStore(driver);
+  try {
+    await store.ensureAccount({
+      accountId: "a",
+      provider: "google",
+      generation: "g",
+    });
+    await driver.write(async (tx) => {
+      for (let i = 0; i < MESSAGES; i++) {
+        const giant = i % FILES_EVERY === 0;
+        await tx.execute(
+          `INSERT INTO effective_messages(account_id,message_id,conversation_id,subject,preview,from_address,to_json,cc_json,received_at_ms,read,starred,label_ids_json,category_ids_json,roles_json,in_inbox,in_sent,in_draft,in_trash,in_spam,has_attachments,pending_operation_ids_json)
+           VALUES ('a', ?, ?, 'Subject', '', ?, '[]', '[]', ?, 1, 0, '[]', '[]', '["inbox"]', 1, 0, 0, 0, 0, 1, '[]')`,
+          [
+            String(i),
+            giant ? "giant" : `c-${i}`,
+            giant ? "Giant <giant@example.com>" : `other${i % 50}@example.com`,
+            1_700_000_000_000 + i * 60_000,
+          ],
+        );
+        await tx.execute(
+          "INSERT INTO message_content(account_id, message_id, version, html, text, attachments_json) VALUES ('a', ?, '1', NULL, 'x', ?)",
+          [
+            String(i),
+            JSON.stringify([attachment("report.pdf", "application/pdf")]),
+          ],
+        );
+      }
+    });
+
+    const query: FilesQuery = {
+      accountIds: ["a"],
+      kind: null,
+      sender: "giant@example.com",
+      name: null,
+      pageSize: 100,
+      after: null,
+    };
+    let after: string | null = null;
+    let calls = 0;
+    let reports = 0;
+    do {
+      queries.length = 0;
+      const start = performance.now();
+      const page = await store.readFiles({ ...query, after });
+      const elapsed = performance.now() - start;
+      calls += 1;
+      // The scan's batches plus the conversation's single, capped lookup.
+      expect(queries.length).toBeLessThanOrEqual(MAX_QUERIES_PER_CALL + 2);
+      expect(elapsed).toBeLessThan(SCAN_BUDGET_MS);
+      reports += page.files.filter(
+        (file) => file.attachment.filename === "report.pdf",
+      ).length;
+      after = page.nextPage;
+    } while (after && calls < 100);
+    expect(after).toBeNull();
+    expect(reports).toBe(1);
   } finally {
     await store.close();
   }

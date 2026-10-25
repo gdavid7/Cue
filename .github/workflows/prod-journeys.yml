@@ -117,13 +117,15 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-${{ steps.playwright.outputs.version }}
 
+      # The runner image already ships chromium's shared libraries, so apt is
+      # only used when a binary is missing one (see ensure-browser-libs.sh).
+      # Installing is a no-op when the browser came from the cache.
       - name: Install Playwright Chromium
-        if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Install Chromium system dependencies
-        if: steps.config.outputs.robot == 'true' && steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm exec playwright install-deps chromium
+        if: steps.config.outputs.robot == 'true'
+        timeout-minutes: 6
+        run: |
+          INSTALL_ATTEMPT_TIMEOUT=120 $GITHUB_WORKSPACE/.github/scripts/install-with-retry.sh pnpm exec playwright install chromium
+          $GITHUB_WORKSPACE/.github/scripts/ensure-browser-libs.sh pnpm exec playwright install-deps chromium -- "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux*/chrome "$HOME"/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell
 
       - name: Run journeys
         if: steps.config.outputs.robot == 'true'

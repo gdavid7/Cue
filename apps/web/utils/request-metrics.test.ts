@@ -4,6 +4,7 @@ import {
   getRequestMetricsFields,
   runWithRequestMetrics,
   timeRequestDependency,
+  timeRequestPhase,
 } from "@/utils/request-metrics";
 
 describe("request metrics", () => {
@@ -38,6 +39,21 @@ describe("request metrics", () => {
     expect(fields.gmailBatchCalls).toBe(1);
     expect(fields.waitMs).toBeGreaterThanOrEqual(15);
     expect(fields.gmailCalls).toBe(0);
+  });
+
+  it("times named phases that overlap, and omits phaseMs when none ran", async () => {
+    const metrics = createRequestMetrics();
+    expect(getRequestMetricsFields(metrics).phaseMs).toBeUndefined();
+    await runWithRequestMetrics(metrics, () =>
+      Promise.all([
+        timeRequestPhase("a", () => new Promise((r) => setTimeout(r, 20))),
+        timeRequestPhase("b", () => Promise.resolve()),
+        timeRequestPhase("b", () => Promise.resolve()),
+      ]),
+    );
+    const { phaseMs } = getRequestMetricsFields(metrics);
+    expect(phaseMs?.a).toBeGreaterThanOrEqual(15);
+    expect(Object.keys(phaseMs ?? {}).sort()).toEqual(["a", "b"]);
   });
 
   it("counts a call that throws and rethrows its error", async () => {

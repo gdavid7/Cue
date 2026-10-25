@@ -517,8 +517,38 @@ describe("EmailMessage with a rule's reply to someone else", () => {
     ).toBeNull();
   });
 
+  // RS-1b: the reader keeps checking for a rule's reply on fresh mail, so one
+  // can land while the user is already writing their own.
+  it("keeps what the user typed when a rule's reply lands afterwards", () => {
+    const { rerender } = renderWithAssist(null);
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.change(editor(), { target: { value: "My own words" } });
+
+    rerender(
+      <ReplyAssistContext.Provider
+        value={{
+          ...toFinance,
+          recipients: undefined,
+          toSomeoneElse: false,
+          label: undefined,
+        }}
+      >
+        <EmailMessage
+          expanded
+          message={createMessage("message-1")}
+          onSendSuccess={vi.fn()}
+          refetch={vi.fn()}
+          showReplyButton
+        />
+      </ReplyAssistContext.Provider>,
+    );
+
+    expect(editor().value).toBe("My own words");
+    expect(composer().dataset.body).toBe("");
+  });
+
   function renderWithAssist(
-    assist: ReplyAssist,
+    assist: ReplyAssist | null,
     props: {
       defaultComposeMode?: "reply";
       ownReplyRequested?: boolean;

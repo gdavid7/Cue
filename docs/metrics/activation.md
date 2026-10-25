@@ -1,6 +1,6 @@
 # Activation metrics
 
-Cue records five activation events as structured server logs that ship to
+Cue records nine activation events as structured server logs that ship to
 Axiom. There is no separate analytics vendor. The definitions live in
 `apps/web/utils/analytics/activation.ts`.
 
@@ -15,8 +15,25 @@ only: no addresses, subjects or content.
 | `activation.first_sign_in` | A mailbox is created, either at sign-in or when another mailbox is linked | `emailAccountId`, `at` |
 | `activation.needs_reply_first_item` | The first time Needs reply has an item for the mailbox | `emailAccountId`, `at`, `firstSignInAt`, `msSinceFirstSignIn` |
 | `activation.first_suggested_reply_sent` | The first sent reply that started from a reply Cue wrote: a saved suggested reply or an AI draft, sent rather than discarded | `emailAccountId`, `at` |
+| `activation.first_sync_ready` | The mail engine finished its first sync of the mailbox, as reported by the signed-in client | `emailAccountId`, `at`, `firstSignInAt`, `msSinceFirstSignIn` |
+| `activation.first_thread_opened` | The first time a thread opens in the reader | `emailAccountId`, `at` |
+| `activation.first_triage_action` | The first archive, snooze or reply done from Cue | `emailAccountId`, `at` |
+| `activation.first_waiting_on_you_item` | Today first shows Waiting on you, read from the browser's local mail with no AI, as reported by the signed-in client | `emailAccountId`, `at`, `firstSignInAt`, `msSinceFirstSignIn`, `itemCount` (rows shown, at most 5), `msSinceTodayOpened` (from Today opening to the rows showing) |
 | `activation.active_day` | The mailbox opens Mail or Today, at most once per UTC day | `emailAccountId`, `at`, `day` (`YYYY-MM-DD`) |
 | `activation.first_hour_health` | Once per mailbox, from the daily `/api/cron/scheduled-actions` tick, for mailboxes between 60 minutes and 26 hours past first sign-in. The window outlives the longest gap between daily ticks, so every mailbox is covered once. Use `minutesSinceFirstSignIn` to tell an early snapshot from a late one. At most 200 per tick, oldest first | `emailAccountId`, `at`, `firstSignInAt`, `minutesSinceFirstSignIn`, `provider`, enabled rule counts and `replyTrackingEnabled`, ExecutedRule counts by status (`rulesApplied`, `rulesApplying`, `rulesSkipped`, `rulesSkippedNoMatch`, `rulesErrored`), `minutesSinceLastRuleRun`, `needsReplyCount`, `awaitingReplyCount`, `accountDisconnected`, `watchStatus` (`active`/`expired`/`missing`), `hasSyncCursor`, `errorTypes` (stored error type names) |
+
+`first_sync_ready`, `first_thread_opened`, `first_triage_action` and
+`first_waiting_on_you_item` come from the browser. The client reports each
+through one authenticated server action, `recordActivationSignalAction`
+(`apps/web/utils/actions/activation.ts`), whose input is only an event name
+from a fixed list, plus for `first_waiting_on_you_item` a row count and a
+duration, and whose mailbox must belong to the signed-in user. The
+client sends each at most once per mailbox per page session and ignores a
+failure. The server's Redis claim is the real dedupe. Mailboxes that finished a
+sync before these events shipped log `first_sync_ready` on their next visit,
+with a large `msSinceFirstSignIn`; the funnel query leaves out mailboxes that
+signed in before `shippedAt`. Bulk "select all that match" archives run as a server
+job and are not counted as a triage action.
 
 The unit is the mailbox, because `emailAccountId` is the only id the events
 carry. A person with two mailboxes counts as two.
@@ -28,7 +45,10 @@ How each event fires only once:
   `SET NX`, so a race still logs it once. The keys expire after 400 days,
   long past every metric window: `activation:first-sign-in:<id>`,
   `activation:needs-reply-first-item:<id>` and
-  `activation:first-suggested-reply-sent:<id>`.
+  `activation:first-suggested-reply-sent:<id>`,
+  `activation:first-sync-ready:<id>`, `activation:first-thread-opened:<id>`,
+  `activation:first-triage-action:<id>` and
+  `activation:first-waiting-on-you-item:<id>`.
 - `first_hour_health` claims `activation:first-hour-health:<id>`, which
   expires after three days, and releases it if the snapshot fails so a later tick
   retries.
@@ -110,4 +130,55 @@ counted.
     by emailAccountId
 | summarize mailboxes = count(), retained = countif(week1Days >= 3 and week2Days >= 1)
 | extend retentionRate = todouble(retained) / mailboxes
+```
+
+### First-run funnel
+
+How many mailboxes reach each step after sign-in, and the median minutes it
+takes. Use the same time range as above. Set `shippedAt` to the day the
+client events were deployed: mailboxes that signed in earlier have no
+trustworthy first-run timings, and their late `first_sync_ready` would skew the
+medians. A mailbox that skips a step (for example a triage before the reader
+opens) still counts at the later step, so read each step as "reached", not
+"reached in order".
+
+```kusto
+let shippedAt = datetime(2026-10-23);
+['DATASET']
+| where message in (
+    "activation.first_sign_in",
+    "activation.first_sync_ready",
+    "activation.first_waiting_on_you_item",
+    "activation.needs_reply_first_item",
+    "activation.first_thread_opened",
+    "activation.first_triage_action"
+  )
+| extend emailAccountId = tostring(['fields']['emailAccountId'])
+| summarize
+    signedInCount = countif(message == "activation.first_sign_in"),
+    syncReadyCount = countif(message == "activation.first_sync_ready"),
+    waitingOnYouCount = countif(message == "activation.first_waiting_on_you_item"),
+    needsReplyCount = countif(message == "activation.needs_reply_first_item"),
+    openedCount = countif(message == "activation.first_thread_opened"),
+    triagedCount = countif(message == "activation.first_triage_action"),
+    signedInAt = minif(_time, message == "activation.first_sign_in"),
+    syncReadyAt = minif(_time, message == "activation.first_sync_ready"),
+    waitingOnYouAt = minif(_time, message == "activation.first_waiting_on_you_item"),
+    needsReplyAt = minif(_time, message == "activation.needs_reply_first_item"),
+    openedAt = minif(_time, message == "activation.first_thread_opened"),
+    triagedAt = minif(_time, message == "activation.first_triage_action")
+    by emailAccountId
+| where signedInCount > 0 and todatetime(signedInAt) >= shippedAt
+| summarize
+    signedIn = count(),
+    syncReady = countif(syncReadyCount > 0),
+    waitingOnYou = countif(waitingOnYouCount > 0),
+    needsReply = countif(needsReplyCount > 0),
+    opened = countif(openedCount > 0),
+    triaged = countif(triagedCount > 0),
+    medianMinToSyncReady = percentileif(datetime_diff('second', todatetime(syncReadyAt), todatetime(signedInAt)) / 60.0, 50, syncReadyCount > 0),
+    medianMinToWaitingOnYou = percentileif(datetime_diff('second', todatetime(waitingOnYouAt), todatetime(signedInAt)) / 60.0, 50, waitingOnYouCount > 0),
+    medianMinToNeedsReply = percentileif(datetime_diff('second', todatetime(needsReplyAt), todatetime(signedInAt)) / 60.0, 50, needsReplyCount > 0),
+    medianMinToOpened = percentileif(datetime_diff('second', todatetime(openedAt), todatetime(signedInAt)) / 60.0, 50, openedCount > 0),
+    medianMinToTriaged = percentileif(datetime_diff('second', todatetime(triagedAt), todatetime(signedInAt)) / 60.0, 50, triagedCount > 0)
 ```

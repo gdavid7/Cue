@@ -26,6 +26,7 @@ function setup() {
     isForeground: () => false,
     notify: (conversations) => notified.push(conversations),
     loadBulkMessageIds,
+    loadImportantPeople: async () => [],
     triageSettleMs: 15_000,
   });
   return { notifier, notified, loadBulkMessageIds };

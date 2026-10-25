@@ -17,6 +17,7 @@ import { formatDay, formatFromNow, formatTime } from "./today-format";
 export function AllClear({
   data,
   emailAccountId,
+  nextShown = true,
   now,
   waitingOn,
   waitingShown,
@@ -25,6 +26,8 @@ export function AllClear({
 }: {
   data: TodayData;
   emailAccountId: string;
+  /** False when today's next meeting is already on the Your day strip. */
+  nextShown?: boolean;
   now: Date;
   /** How many people the user is waiting on. */
   waitingOn: number;
@@ -37,7 +40,7 @@ export function AllClear({
   const { today, calendar, suggestion } = data;
   const titleId = useId();
   const waitingId = useId();
-  const next = calendar.next;
+  const next = nextShown ? calendar.next : null;
   const deadline = data.nextUp.find((item) => item.kind === "deadline");
 
   return (
@@ -75,7 +78,7 @@ export function AllClear({
             )}
           </p>
         ) : null}
-        {!next && calendar.clearThroughTomorrow ? (
+        {!calendar.next && calendar.clearThroughTomorrow ? (
           <p className="text-foreground">Calendar clear through tomorrow.</p>
         ) : null}
         {calendar.connected ? null : (
@@ -87,7 +90,8 @@ export function AllClear({
           />
         )}
         {deadline ? (
-          <p className="text-foreground">
+          // Loads after Today, so it eases in; reduced motion just shows it.
+          <p className="text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
             Due {formatDay(deadline.at, now)}:{" "}
             {deadline.url ? (
               <ExternalLink href={deadline.url}>{deadline.title}</ExternalLink>

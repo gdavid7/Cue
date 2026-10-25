@@ -113,7 +113,12 @@ describe("mergeHomeData", () => {
     ]);
 
     expect(data?.needsYou.map((row) => row.threadId)).toEqual(["a1"]);
-    expect(data?.pending).toEqual(["needsYou", "waiting", "alsoInInbox"]);
+    expect(data?.pending).toEqual([
+      "needsYou",
+      "waiting",
+      "alsoInInbox",
+      "reading",
+    ]);
     expect(failedAccountIds).toEqual([]);
   });
 
@@ -139,7 +144,12 @@ describe("mergeHomeData", () => {
     ]);
 
     expect(data?.needsYou).toEqual([]);
-    expect(data?.failed).toEqual(["needsYou", "waiting", "alsoInInbox"]);
+    expect(data?.failed).toEqual([
+      "needsYou",
+      "waiting",
+      "alsoInInbox",
+      "reading",
+    ]);
     expect(failedAccountIds).toEqual([B.id]);
   });
 
@@ -169,7 +179,7 @@ describe("mergeHomeData", () => {
         alsoInInbox: [thread("a-copy", { rfcMessageId: "<same@mail>" })],
       }),
       loaded(B, {
-        needsYou: [thread("b-copy", { rfcMessageId: " SAME@mail " })],
+        needsYou: [thread("b-copy", { rfcMessageId: "<same@mail>" })],
       }),
     ]);
 
@@ -254,6 +264,7 @@ describe("mergeHomeData", () => {
           connected: true,
           clearThroughTomorrow: false,
           next: {
+            id: "late",
             title: "Late",
             at: "2026-10-14T15:00:00Z",
             url: undefined,
@@ -276,6 +287,7 @@ describe("mergeHomeData", () => {
           connected: false,
           clearThroughTomorrow: false,
           next: {
+            id: "early",
             title: "Early",
             at: "2026-10-14T10:00:00Z",
             url: undefined,
@@ -289,6 +301,7 @@ describe("mergeHomeData", () => {
       connected: true,
       clearThroughTomorrow: false,
       next: {
+        id: "early",
         title: "Early",
         at: "2026-10-14T10:00:00Z",
         url: undefined,
@@ -386,6 +399,7 @@ function home(): GetHomeResponse {
     needsYou: [],
     waiting: [],
     alsoInInbox: [],
+    reading: [],
     pending: [],
     failed: [],
     agentTasks: [],
@@ -406,6 +420,7 @@ function stats(): GetHomeResponse["stats"] {
     waiting: 0,
     needsYouCapped: false,
     waitingCapped: false,
+    readingCapped: false,
   };
 }
 

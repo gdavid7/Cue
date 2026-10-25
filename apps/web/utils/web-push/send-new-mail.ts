@@ -69,10 +69,19 @@ export async function sendNewMailWebPush({
   )
     return;
 
-  const subscriptions = await prisma.webPushSubscription.findMany({
-    where: { userId },
-    select: { id: true, endpoint: true, p256dh: true, auth: true, mode: true },
-  });
+  const subscriptions = (
+    await prisma.webPushSubscription.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        endpoint: true,
+        p256dh: true,
+        auth: true,
+        mode: true,
+        quietUntil: true,
+      },
+    })
+  ).filter(({ quietUntil }) => !quietUntil || quietUntil <= now);
   if (subscriptions.length === 0) return;
 
   const claim = await prisma.webPushDelivery.createMany({

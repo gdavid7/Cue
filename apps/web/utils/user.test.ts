@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   clearBrowserCaches: vi.fn(),
   clearInboxInsightRequests: vi.fn(),
   syncWebPush: vi.fn(),
+  resumeNotifications: vi.fn(),
 }));
 
 vi.mock("@/utils/auth-client", () => ({ signOut: mocks.signOut }));
@@ -41,6 +42,9 @@ vi.mock("@/hooks/useInboxInsights", () => ({
 }));
 vi.mock("@/utils/browser-cache", () => ({
   clearBrowserCaches: mocks.clearBrowserCaches,
+}));
+vi.mock("@/utils/web-notifications/preference", () => ({
+  resumeNotifications: mocks.resumeNotifications,
 }));
 vi.mock("@/utils/web-push/subscription", () => ({
   isWebPushAvailable: () => true,
@@ -153,6 +157,14 @@ describe("logOut", () => {
     await logOut();
 
     expect(mocks.syncWebPush).toHaveBeenCalledExactlyOnceWith("off");
+  });
+
+  it("forgets this browser's notification pause, so the next person isn't paused", async () => {
+    const logOut = await loadLogOut();
+
+    await logOut();
+
+    expect(mocks.resumeNotifications).toHaveBeenCalledTimes(1);
   });
 
   it("leaves without waiting for a push unsubscribe that never finishes", async () => {

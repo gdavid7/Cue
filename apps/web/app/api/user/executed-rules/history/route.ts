@@ -5,6 +5,11 @@ import { withEmailAccount } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 import { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import { Prisma } from "@/generated/prisma/client";
+import {
+  type HistoryAction,
+  isHistoryAction,
+} from "@/utils/rule/history-action-kinds";
+import { historyActionCondition } from "@/utils/rule/history-actions";
 
 const LIMIT = 50;
 
@@ -28,6 +33,12 @@ export const GET = withEmailAccount(
       ? url.searchParams.get("excludeMessageId") || undefined
       : undefined;
     const ruleId = url.searchParams.get("ruleId") || "all";
+    const action = url.searchParams.get("action");
+    // Today's "While you were away" links here with the window it counted,
+    // and only Cue's own runs, so the list matches the count.
+    const since = parseDate(url.searchParams.get("since"));
+    const until = parseDate(url.searchParams.get("until"));
+    const automatedOnly = url.searchParams.get("automated") === "1";
 
     const result = await getExecutedRules({
       page,
@@ -35,6 +46,10 @@ export const GET = withEmailAccount(
       emailAccountId,
       threadId,
       excludeMessageId,
+      action: isHistoryAction(action) ? action : undefined,
+      since,
+      until,
+      automatedOnly,
     });
 
     return NextResponse.json(result);
@@ -47,12 +62,20 @@ async function getExecutedRules({
   emailAccountId,
   threadId,
   excludeMessageId,
+  action,
+  since,
+  until,
+  automatedOnly,
 }: {
   page: number;
   ruleId?: string;
   emailAccountId: string;
   threadId?: string;
   excludeMessageId?: string;
+  action?: HistoryAction;
+  since?: Date;
+  until?: Date;
+  automatedOnly?: boolean;
 }) {
   const conditions = [Prisma.sql`"emailAccountId" = ${emailAccountId}`];
   if (ruleId === "skipped") {
@@ -71,6 +94,16 @@ async function getExecutedRules({
   if (excludeMessageId) {
     conditions.push(Prisma.sql`"messageId" != ${excludeMessageId}`);
   }
+  if (action) {
+    conditions.push(Prisma.sql`EXISTS (
+      SELECT 1 FROM "ExecutedAction" ea
+      WHERE ea."executedRuleId" = "ExecutedRule".id
+        AND ${historyActionCondition("ea", [action])}
+    )`);
+  }
+  if (since) conditions.push(Prisma.sql`"createdAt" >= ${since}`);
+  if (until) conditions.push(Prisma.sql`"createdAt" < ${until}`);
+  if (automatedOnly) conditions.push(Prisma.sql`automated = true`);
   const where = Prisma.sql`WHERE ${Prisma.join(conditions, " AND ")}`;
   const groupColumn = threadId
     ? Prisma.sql`"messageId"`
@@ -170,4 +203,10 @@ async function getExecutedRules({
     results,
     totalPages: Math.ceil(Number(totals[0]?.total ?? 0) / LIMIT),
   };
+}
+
+function parseDate(value: string | null) {
+  if (!value) return;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
 }

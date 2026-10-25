@@ -57,6 +57,18 @@ const NO_PLANS: never[] = [];
 // How long the reader waits on a reply before it says it couldn't write one
 // and offers to try again, rather than spinning for as long as Gmail is busy.
 export const REPLY_WAIT_LIMIT_MS = 15_000;
+// The user's rules write their reply to fresh mail while the reader works out
+// its own, and can finish seconds after the reader settled. For mail that
+// just arrived, the reader keeps checking for the rule's reply this often,
+// for this long after it opened, and no longer.
+export const RULE_REPLY_POLL_INTERVAL_MS = 2000;
+export const RULE_REPLY_POLL_LIMIT_MS = 30_000;
+const FRESH_MAIL_MS = 2 * 60 * 1000;
+// Kept outside the hook so reopening the conversation, or the reader
+// remounting, never starts the window again: one window per message. Holds
+// IDs and times only, and only the most recent messages.
+const ruleReplyDueByMessage = new Map<string, number>();
+const RULE_REPLY_WINDOWS_KEPT = 200;
 
 /**
  * Cue's suggested reply for the open conversation, delivered where the user
@@ -311,6 +323,29 @@ export function useReaderReplySuggestion({
   const verified =
     latestSuggestion?.status === "suggested" ? latestSuggestion : undefined;
 
+  // Until the rule's reply lands, fetched again on a short, bounded schedule.
+  // Never once the user has a draft or Cue's own checked reply is ready.
+  const ruleReplyDueBy =
+    enabled &&
+    gate.canRequest &&
+    writesReplies &&
+    needsReply &&
+    plansSettled &&
+    !ruleSuggestion &&
+    !verified &&
+    latest &&
+    isInInbox(messages)
+      ? ruleReplyWindowEnd(emailAccountId, latest)
+      : undefined;
+  useEffect(() => {
+    if (!ruleReplyDueBy) return;
+    const timer = setInterval(() => {
+      if (Date.now() >= ruleReplyDueBy) clearInterval(timer);
+      else mutatePlans();
+    }, RULE_REPLY_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [ruleReplyDueBy, mutatePlans]);
+
   let assist: ReplyAssist | null =
     latest && verified
       ? {
@@ -381,7 +416,8 @@ export function useReaderReplySuggestion({
         {suggestionPhaseLabel(phase)}
       </p>
     );
-  } else if (latest && suggestion?.status === "insufficient") {
+  } else if (latest && !assist && suggestion?.status === "insufficient") {
+    // A rule's reply that landed after Cue declined stands on its own.
     replyStatus = (
       <p className="fade-in animate-in text-muted-foreground text-xs duration-150">
         {abstentionLine(suggestion.missing)}
@@ -485,6 +521,42 @@ function namesFrom(
     const name = record[key];
     return typeof name === "string" && name.trim() ? [name.trim()] : [];
   });
+}
+
+/**
+ * Until when the reader checks for the rule's reply to this message: set the
+ * first time it is asked for, and kept. Undefined for mail that wasn't fresh
+ * then, so it is never checked for at all.
+ */
+function ruleReplyWindowEnd(emailAccountId: string, message: ThreadMessage) {
+  const key = `${emailAccountId}:${message.id}`;
+  let dueBy = ruleReplyDueByMessage.get(key);
+  if (dueBy === undefined) {
+    dueBy = isFreshMail(message) ? Date.now() + RULE_REPLY_POLL_LIMIT_MS : 0;
+    ruleReplyDueByMessage.set(key, dueBy);
+    if (ruleReplyDueByMessage.size > RULE_REPLY_WINDOWS_KEPT) {
+      const oldest = ruleReplyDueByMessage.keys().next().value;
+      if (oldest !== undefined) ruleReplyDueByMessage.delete(oldest);
+    }
+  }
+  return dueBy || undefined;
+}
+
+/**
+ * Whether the message arrived within the last couple of minutes. Both clocks
+ * here can be off: this device's clock is the user's, and without the
+ * provider's receipt time the Date header is whatever the sender wrote. So a
+ * message dated ahead of now counts as fresh only within the same window
+ * ahead, never for as long as its date stays in the future.
+ */
+function isFreshMail(message: ThreadMessage) {
+  const receivedAt = message.internalDate
+    ? Number(message.internalDate)
+    : new Date(message.headers.date).getTime();
+  return (
+    Number.isFinite(receivedAt) &&
+    Math.abs(Date.now() - receivedAt) < FRESH_MAIL_MS
+  );
 }
 
 function isInInbox(messages: ThreadMessage[]) {

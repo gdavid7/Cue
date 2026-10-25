@@ -98,18 +98,19 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         "local-mail-budget:google:account-1:total",
         "tokens",
       );
-      expect(Number(account)).toBeCloseTo(3000, -1);
+      expect(Number(account)).toBeCloseTo(9000, -1);
       expect(
         await redis!.exists("local-mail-budget:google:account-1:active"),
       ).toBe(0);
     });
 
     it("slows a background scan that follows the foreground reads", async () => {
+      // Three full-size reads leave the 10,000-unit account bucket 1,000.
       for (let i = 0; i < 3; i++)
         await debitLocalMailSyncBudget({
           emailAccountId: "account-1",
           provider: "google",
-          cost: 1000,
+          cost: 3000,
         });
 
       await expect(
@@ -130,7 +131,7 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
         await debitLocalMailSyncBudget({
           emailAccountId: "account-1",
           provider: "google",
-          cost: 1000,
+          cost: 3000,
         });
 
       const account = await redis!.hget(

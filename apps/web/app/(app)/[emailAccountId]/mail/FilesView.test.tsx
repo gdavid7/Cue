@@ -23,6 +23,7 @@ import { FilesView } from "@/app/(app)/[emailAccountId]/mail/FilesView";
 const mocks = vi.hoisted(() => ({
   queryFiles: vi.fn(),
   queryFileSenders: vi.fn(),
+  queryFilesNotOnDevice: vi.fn(),
   preview: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => ({
     queryFiles: mocks.queryFiles,
     queryFileSenders: mocks.queryFileSenders,
+    queryFilesNotOnDevice: mocks.queryFilesNotOnDevice,
   }),
 }));
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -86,6 +88,7 @@ describe("FilesView", () => {
     mocks.queryFileSenders.mockResolvedValue([
       { email: "ana@example.com", name: "Ana Lima", files: 2 },
     ]);
+    mocks.queryFilesNotOnDevice.mockResolvedValue(0);
   });
   afterEach(() => {
     cleanup();
@@ -100,6 +103,57 @@ describe("FilesView", () => {
     expect(mocks.queryFiles).toHaveBeenCalledWith(
       expect.objectContaining({ accountIds: ["a"], kind: null, after: null }),
     );
+  });
+
+  it("says nothing about older mail when every message with files is on this device", async () => {
+    renderView();
+    await screen.findByText("budget.xlsx");
+
+    expect(mocks.queryFilesNotOnDevice).toHaveBeenCalledWith(["a"]);
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("leaves the note out while a filter is on, since the count covers every file", async () => {
+    mocks.queryFilesNotOnDevice.mockResolvedValue(4);
+    renderView();
+    await screen.findByText(/4 older messages/);
+
+    fireEvent.click(screen.getByRole("button", { name: "PDFs" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe(""),
+    );
+  });
+
+  it("doesn't retry a count the engine can't answer", async () => {
+    mocks.queryFilesNotOnDevice.mockRejectedValue(new Error("unsupported"));
+    renderView();
+    await screen.findByText("budget.xlsx");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(mocks.queryFilesNotOnDevice).toHaveBeenCalledTimes(1);
+  });
+
+  it("notes how many older messages with attachments aren't on this device yet", async () => {
+    mocks.queryFilesNotOnDevice.mockResolvedValue(12);
+    renderView();
+
+    expect(
+      await screen.findByText(
+        "12 older messages with attachments aren't on this device yet",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("uses the singular for one older message", async () => {
+    mocks.queryFilesNotOnDevice.mockResolvedValue(1);
+    renderView();
+
+    expect(
+      await screen.findByText(
+        "1 older message with an attachment isn't on this device yet",
+      ),
+    ).toBeTruthy();
   });
 
   it("narrows the list to one kind of file", async () => {
@@ -159,6 +213,38 @@ describe("FilesView", () => {
     expect(screen.queryByText(/No files/)).toBeNull();
   });
 
+  it("notes how many messages carry a file only when more than one does", async () => {
+    mocks.queryFiles.mockResolvedValue({
+      files: [
+        { ...entry("plan.pdf", "pdf", "m1"), copies: 3 },
+        entry("budget.xlsx", "spreadsheet", "m2"),
+      ],
+      nextPage: null,
+    });
+    renderView();
+
+    expect(await screen.findByText(/In 3 messages/)).toBeTruthy();
+    expect(screen.getAllByText(/In \d+ messages?/)).toHaveLength(1);
+  });
+
+  it("searches names from the first letter typed", async () => {
+    renderView();
+    await screen.findByText("budget.xlsx");
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search file names" }),
+      {
+        target: { value: "q" },
+      },
+    );
+
+    await waitFor(() =>
+      expect(mocks.queryFiles).toHaveBeenLastCalledWith(
+        expect.objectContaining({ name: "q" }),
+      ),
+    );
+  });
+
   it("offers to clear filters that match nothing", async () => {
     mocks.queryFiles.mockResolvedValue({ files: [], nextPage: null });
     renderView();
@@ -194,6 +280,7 @@ function entry(
     subject: "Q3",
     from: "Ana Lima <ana@example.com>",
     receivedAtMs: Date.UTC(2026, 0, 2),
+    copies: 1,
     kind,
     attachment: {
       attachmentId: `att-${messageId}`,

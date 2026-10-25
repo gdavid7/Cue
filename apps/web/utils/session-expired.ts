@@ -17,11 +17,16 @@ type SessionExpiredHold = {
   prompt: (signIn: () => void) => void;
   /** Saves what the user typed before the page leaves. */
   beforeRedirect: () => Promise<unknown>;
+  /** Takes the prompt back when the session turns out to be live again. */
+  dismiss?: () => void;
 };
 
 let state: "active" | "held" | "redirected" = "active";
 let armedBy = 0;
+let armedUserId: string | undefined;
+let leftForOtherUser = false;
 const holds = new Set<SessionExpiredHold>();
+const armedListeners = new Set<() => void>();
 
 export function isSessionExpiredErrorBody(body: unknown) {
   return (
@@ -37,11 +42,56 @@ export function isSessionExpiredErrorBody(body: unknown) {
  * session too, and a 401 there only means "signed out", so they must never be
  * sent to log in.
  */
-export function armSessionExpiredRedirect() {
+export function armSessionExpiredRedirect(userId?: string) {
+  if (userId) armedUserId = userId;
   armedBy += 1;
+  if (armedBy === 1) for (const listener of armedListeners) listener();
   return () => {
     armedBy -= 1;
+    // A public page must never act for the user who was signed in.
+    if (armedBy === 0) armedUserId = undefined;
   };
+}
+
+export function isSessionExpiredRedirectArmed() {
+  return armedBy > 0;
+}
+
+/** The user this page was rendered for, once a signed-in page armed it. */
+export function getArmedUserId() {
+  return armedUserId;
+}
+
+/**
+ * Someone else signed in on this browser. Nothing on this page is theirs, not
+ * even the draft a composer would save, so it leaves without saving or
+ * asking.
+ */
+export function leaveForOtherUser() {
+  if (typeof window === "undefined" || leftForOtherUser) return;
+  leftForOtherUser = true;
+  state = "redirected";
+  for (const hold of holds) hold.dismiss?.();
+  redirectToSafeUrl("/");
+}
+
+/** A page for a signed-in user has just rendered. */
+export function onSessionExpiredRedirectArmed(listener: () => void) {
+  armedListeners.add(listener);
+  return () => {
+    armedListeners.delete(listener);
+  };
+}
+
+/**
+ * The session is live again: take back a sign-in prompt still waiting, so a
+ * composer closing later does not send a signed-in user to log in, and let a
+ * later expiry be noticed.
+ */
+export function clearSessionExpired() {
+  if (leftForOtherUser) return;
+  if (state === "held") for (const hold of holds) hold.dismiss?.();
+  state = "active";
 }
 
 /**

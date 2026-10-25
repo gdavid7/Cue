@@ -64,8 +64,12 @@ export function useSelectAllMatching({
   const clear = useCallback(() => setSelected(null), []);
 
   const run = useCallback(
-    async (action: MatchingBulkAction, options?: { labelId?: string }) => {
-      if (!accounts?.length) return;
+    /** Resolves with how many messages the jobs changed, once they end. */
+    async (
+      action: MatchingBulkAction,
+      options?: { labelId?: string },
+    ): Promise<number> => {
+      if (!accounts?.length) return 0;
       setSelected(null);
       const started = await Promise.all(
         accounts.map(async (account): Promise<RunningJob | null> => {
@@ -83,8 +87,8 @@ export function useSelectAllMatching({
         }),
       );
       const jobs = started.filter((job): job is RunningJob => Boolean(job));
-      if (!jobs.length) return;
-      await followMatchingJobs({ jobs, action, onFinished });
+      if (!jobs.length) return 0;
+      return followMatchingJobs({ jobs, action, onFinished });
     },
     [accounts, onFinished],
   );

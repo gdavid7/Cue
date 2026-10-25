@@ -16,8 +16,10 @@ import {
   type EmailEditorState,
 } from "@inboxzero/email-editor/web";
 import {
+  CalendarClockIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  FileSearchIcon,
   ImageIcon,
   Loader2Icon,
   PaperclipIcon,
@@ -59,7 +61,7 @@ import {
 } from "@/hooks/useHiddenDraftMessageIds";
 import { forgetDeletedDrafts } from "@/utils/mail-engine/forget-deleted-drafts";
 import { VoiceInput } from "@/components/voice/VoiceInput";
-import { toastError, toastSuccess } from "@/components/Toast";
+import { toastDismiss, toastError, toastSuccess } from "@/components/Toast";
 import {
   holdSessionExpiredRedirect,
   SESSION_EXPIRED_MESSAGE,
@@ -154,6 +156,7 @@ import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
 import { resolveRemoteImages } from "./resolve-remote-images";
 import { useComposeAssist } from "./useComposeAssist";
 import { useComposeSnippets } from "./useComposeSnippets";
+import { useShareFreeTimes } from "./useShareFreeTimes";
 import {
   getReminderAfterSendTimeChange,
   parseDeliveryTimes,
@@ -184,6 +187,8 @@ import {
   resolveDraftId,
   uploadDraftAttachment,
 } from "./upload-draft-attachment";
+import { AttachFromMailDialog } from "./AttachFromMailDialog";
+import { attachFromMailSenders } from "./attach-from-mail";
 import { useComposeDraftAttachments } from "./useComposeDraftAttachments";
 import {
   type ComposeAttachment,
@@ -222,6 +227,8 @@ export type ReplyingToEmail = {
   references?: string;
   /** Everyone on the message being replied to, to tell who a reply adds. */
   participants?: string;
+  /** Addresses the user wrote from in the thread, which can be send-as aliases. */
+  sentFrom?: string;
   /** Recipients a rule the user set up chose for this reply. */
   ruleRecipients?: string;
   subject: string;
@@ -616,6 +623,9 @@ function ComposeEmailFormContent({
   const inlineReplySummaryButtonRef = useRef<HTMLButtonElement>(null);
   const collapseInlineReplyFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const [attachFromMailOpen, setAttachFromMailOpen] = useState(false);
+  // The Files view's local listing; a window without the mail engine has none.
+  const canAttachFromMail = Boolean(useOptionalMailClient()?.queryFiles);
   const inlineImageInputRef = useRef<HTMLInputElement>(null);
   const sendAndMarkDoneButtonRef = useRef<HTMLButtonElement>(null);
   const deliveryOptionsRef = useRef<DeliveryOptionsHandle>(null);
@@ -678,6 +688,10 @@ function ComposeEmailFormContent({
     formRef,
   });
   const { isOpen: assistIsOpen, focus: focusAssist } = assist;
+  const freeTimes = useShareFreeTimes({
+    editorRef,
+    emailAccountId: selectedEmailAccountId,
+  });
   const {
     onSlashKeyDown,
     onSlashTrigger,
@@ -685,6 +699,7 @@ function ComposeEmailFormContent({
   } = useComposeSnippets({
     editorRef,
     onAskCue: assist.openPrompt,
+    onShareFreeTimes: freeTimes.shareFreeTimes,
     to: watch("to"),
   });
 
@@ -747,6 +762,7 @@ function ComposeEmailFormContent({
     () =>
       holdSessionExpiredRedirect({
         beforeRedirect: flushDraft,
+        dismiss: () => toastDismiss(SESSION_EXPIRED_TOAST_ID),
         prompt: (signIn) => {
           toastError({
             id: SESSION_EXPIRED_TOAST_ID,
@@ -1192,6 +1208,43 @@ function ComposeEmailFormContent({
     captureDraft();
   };
 
+  const attachmentsCountedTowardLimits = () => [
+    ...forwardedAttachments.map((attachment) => ({
+      ...attachment,
+      disposition: "attachment" as const,
+    })),
+    ...attachmentsRef.current.filter((item) => item.status !== "failed"),
+  ];
+
+  // Mail's files are checked before they download, the same way they're
+  // checked again once they arrive.
+  const refuseFileFromMail = ({
+    filename,
+    mimeType,
+    size,
+  }: {
+    filename: string;
+    mimeType: string;
+    size: number;
+  }) => {
+    const fit = fitComposeAttachments({
+      existing: attachmentsCountedTowardLimits(),
+      candidates: [
+        {
+          id: "attach-from-mail",
+          filename,
+          mimeType,
+          size,
+          disposition: "attachment" as const,
+        },
+      ],
+      maxTotalBytes: attachmentLimitBytes,
+    });
+    return fit.error
+      ? describeUnattachedFiles(fit.rejected, fit.error)
+      : undefined;
+  };
+
   const addFiles = async ({
     inline = [],
     attachments: attached = [],
@@ -1220,13 +1273,7 @@ function ComposeEmailFormContent({
     });
     if (!created.length) return;
     const fit = fitComposeAttachments({
-      existing: [
-        ...forwardedAttachments.map((attachment) => ({
-          ...attachment,
-          disposition: "attachment" as const,
-        })),
-        ...attachmentsRef.current.filter((item) => item.status !== "failed"),
-      ],
+      existing: attachmentsCountedTowardLimits(),
       candidates: created.map(({ attachment }) => attachment),
       maxTotalBytes: attachmentLimitBytes,
     });
@@ -1403,7 +1450,10 @@ function ComposeEmailFormContent({
             chosenAddresses: replyingToEmail?.ruleRecipients
               ? [replyingToEmail.ruleRecipients]
               : [],
-            ownEmails,
+            ownEmails: [
+              ...ownEmails,
+              ...extractEmailAddresses(replyingToEmail?.sentFrom ?? ""),
+            ],
           },
         );
         const shown = warnings.map((warning) => warning.message).join("\n");
@@ -2508,6 +2558,26 @@ function ComposeEmailFormContent({
             </span>
           </Button>
           {snippetToolbar}
+          <Tooltip content="Share my free times">
+            <Button
+              aria-busy={freeTimes.isLoading || undefined}
+              aria-label="Share my free times"
+              className="hover:bg-transparent"
+              disabled={isSubmitting}
+              onClick={freeTimes.shareFreeTimes}
+              // Keeps the caret in the message, where the times go.
+              onPointerDown={(event) => event.preventDefault()}
+              size="icon"
+              type="button"
+              variant="ghostMuted"
+            >
+              {freeTimes.isLoading ? (
+                <Loader2Icon className="size-4 animate-spin motion-reduce:animate-none" />
+              ) : (
+                <CalendarClockIcon className="size-4" />
+              )}
+            </Button>
+          </Tooltip>
           <VoiceInput
             onInsert={(text) => {
               editorRef.current?.insertText(
@@ -2541,6 +2611,41 @@ function ComposeEmailFormContent({
               <PaperclipIcon className="size-4" />
             </Button>
           </Tooltip>
+          {canAttachFromMail && (
+            <>
+              <Tooltip content="Attach from mail">
+                <Button
+                  aria-label="Attach from mail"
+                  className="hover:bg-transparent"
+                  disabled={isSubmitting}
+                  onClick={() => setAttachFromMailOpen(true)}
+                  size="icon"
+                  type="button"
+                  variant="ghostMuted"
+                >
+                  <FileSearchIcon className="size-4" />
+                </Button>
+              </Tooltip>
+              <AttachFromMailDialog
+                checkFits={refuseFileFromMail}
+                emailAccountId={selectedEmailAccountId}
+                maxBytes={attachmentLimitBytes - attachmentTotalBytes}
+                onAttach={(file) => {
+                  addFiles({ attachments: [file] }).catch(() =>
+                    toastError({
+                      description: "One of the files could not be read.",
+                    }),
+                  );
+                }}
+                onOpenChange={setAttachFromMailOpen}
+                open={attachFromMailOpen}
+                senders={attachFromMailSenders({
+                  fields: [watch("to"), watch("cc"), watch("bcc")],
+                  ownAddresses: ownEmails,
+                })}
+              />
+            </>
+          )}
           <input
             accept={EMAIL_INLINE_IMAGE_MIME_TYPES.join(",")}
             className="hidden"

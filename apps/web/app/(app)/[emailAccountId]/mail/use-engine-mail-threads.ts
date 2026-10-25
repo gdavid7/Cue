@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MailClient } from "@inboxzero/mail-core/engine";
+import type { Provider } from "@inboxzero/mail-core/identities";
 import type {
   ConversationSummary,
   MailboxView,
@@ -18,6 +19,7 @@ import {
 } from "@/utils/mail-search/search-query-predicate";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import { conversationSummaryToListThread } from "@/utils/mail-engine/list-thread";
+import { showCopiesOnce } from "@/utils/threads/cross-account-copies";
 import { threadsQueryToConversationQuery } from "@/utils/mail-engine/threads-query";
 import {
   applyOptimisticTriage,
@@ -38,6 +40,7 @@ export function useEngineMailThreads({
   emailAccountId,
   accountIds,
   accounts,
+  providers,
   query,
   predicate,
   search,
@@ -47,6 +50,8 @@ export function useEngineMailThreads({
   emailAccountId: string;
   accountIds?: string[];
   accounts?: Record<string, CombinedListThread["account"]>;
+  /** Each account's provider, which decides what triage reaches in Sent. */
+  providers: ReadonlyMap<string, Provider>;
   query: ThreadsQuery;
   predicate?: MailPredicate;
   /** How to read a typed search: the account's labels and syntax. */
@@ -76,30 +81,16 @@ export function useEngineMailThreads({
     client,
     enabled: enabled && Boolean(client),
   });
-  const [failedAccountIds, setFailedAccountIds] = useState<string[]>([]);
-
   useEffect(() => {
     if (!client || !enabled) return;
     client.requestSync(resolvedAccountIds).catch(() => undefined);
   }, [client, enabled, resolvedAccountIds]);
 
-  useEffect(() => {
-    if (!client || !enabled) {
-      setFailedAccountIds((current) => (current.length ? [] : current));
-      return;
-    }
-    if (!mailbox.data?.connection || mailbox.data.connection === "ready") {
-      setFailedAccountIds((current) => (current.length ? [] : current));
-      return;
-    }
-    let cancelled = false;
-    readFailedAccountIds(client, resolvedAccountIds).then((accountIds) => {
-      if (!cancelled) setFailedAccountIds(accountIds);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, enabled, mailbox.data?.connection, resolvedAccountIds]);
+  const { failedAccountIds } = useFailedAccountIds(
+    enabled ? client : null,
+    resolvedAccountIds,
+    mailbox.data?.connection,
+  );
 
   const coverage = mailbox.data?.coverage;
   // Every pushed snapshot carries fresh coverage; keyed so consumers only see
@@ -122,11 +113,13 @@ export function useEngineMailThreads({
         mailbox.data?.conversations ?? NO_CONVERSATIONS,
         conversationQuery.predicate,
         optimisticTriage,
+        providers,
       ),
     [
       mailbox.data?.conversations,
       conversationQuery.predicate,
       optimisticTriage,
+      providers,
     ],
   );
 
@@ -134,6 +127,8 @@ export function useEngineMailThreads({
     rows: new Map(),
     threads: EMPTY_THREADS,
   });
+  // A row in Drafts is the user's own draft in that account, so each stays.
+  const showsCopiesOnce = Boolean(accounts) && query.type !== "draft";
   const threads = useMemo(() => {
     if (!client || !enabled) return EMPTY_THREADS;
     if (!conversations.length) return EMPTY_THREADS;
@@ -141,11 +136,21 @@ export function useEngineMailThreads({
       previousThreads.current,
       conversations,
       accounts,
+      showsCopiesOnce,
+      emailAccountId,
     );
-  }, [accounts, client, enabled, conversations]);
+  }, [
+    accounts,
+    client,
+    enabled,
+    conversations,
+    showsCopiesOnce,
+    emailAccountId,
+  ]);
 
   // The mail screen shows while the engine starts, and has no answer yet.
   const engineStarting = enabled && !client;
+  const lastSyncedAt = lastSyncedAtMs(mailbox.data?.coverage ?? []);
   return {
     threads,
     hasRemoteResponse: !engineStarting && mailbox.status !== "loading",
@@ -183,12 +188,14 @@ export function useEngineMailThreads({
       !mailbox.data?.coverage.some(
         (coverage) => coverage.lastCompletedSyncAtMs != null,
       ),
+    /** A sync of this mailbox has finished, so the engine holds its mail. */
+    hasCompletedSync: enabled && Boolean(client) && lastSyncedAt != null,
     /**
      * When the mailbox last finished catching up: its primary stream's last
      * round where there is one, as Gmail's other scopes finish rounds that
      * read no mail.
      */
-    lastSyncedAtMs: lastSyncedAtMs(mailbox.data?.coverage ?? []),
+    lastSyncedAtMs: lastSyncedAt,
     /** Included accounts with no finished sync yet, once the mailbox has loaded. */
     firstSyncAccountIds,
     failedAccountIds,
@@ -232,17 +239,33 @@ function reuseUnchangedThreads(
   previous: PreviousThreads,
   conversations: ConversationSummary[],
   accounts: Record<string, CombinedListThread["account"]> | undefined,
+  showsCopiesOnce: boolean,
+  routedAccountId: string,
 ): ListThread[] {
   const rows: PreviousThreads["rows"] = new Map();
-  const threads = conversations.map((conversation) => {
+  // All inboxes shows a message delivered to several accounts once. The row
+  // carries the copies it hides, which reading, archiving and starring it
+  // also change (useThreadActions), and reads unread while any copy is.
+  const shown = showsCopiesOnce
+    ? showCopiesOnce(
+        conversations,
+        (conversation) => ({
+          accountId: conversation.key.accountId,
+          messageId: conversation.latestInternetMessageId,
+          at: conversation.latestMessageAtMs,
+        }),
+        routedAccountId,
+      )
+    : conversations.map((row) => ({ row, copies: [] }));
+  const threads = shown.map(({ row: conversation, copies }) => {
     const key = `${conversation.key.accountId}:${conversation.key.conversationId}`;
     const account = accounts?.[conversation.key.accountId];
-    const summary = JSON.stringify(conversation);
+    const summary = JSON.stringify([conversation, copies]);
     const cached = previous.rows.get(key);
     const thread =
       cached?.summary === summary && cached.account === account
         ? cached.thread
-        : conversationSummaryToListThread(conversation, account);
+        : collapsedThread(conversation, copies, account, accounts);
     rows.set(key, { summary, account, thread });
     return thread;
   });
@@ -252,6 +275,70 @@ function reuseUnchangedThreads(
   previous.rows = rows;
   if (!unchanged) previous.threads = threads;
   return previous.threads;
+}
+
+function collapsedThread(
+  conversation: ConversationSummary,
+  copies: ConversationSummary[],
+  account: CombinedListThread["account"] | undefined,
+  accounts: Record<string, CombinedListThread["account"]> | undefined,
+): ListThread {
+  if (!copies.length)
+    return conversationSummaryToListThread(conversation, account);
+  const thread = conversationSummaryToListThread(
+    {
+      ...conversation,
+      unread: conversation.unread || copies.some((copy) => copy.unread),
+    },
+    account,
+  );
+  return {
+    ...thread,
+    alsoIn: copies.flatMap((copy) => accounts?.[copy.key.accountId] ?? []),
+    copies: copies.map((copy) => ({
+      accountId: copy.key.accountId,
+      threadId: copy.key.conversationId,
+      inInbox: copy.roles.includes("inbox"),
+    })),
+  };
+}
+
+/**
+ * The accounts the engine can't reach, read once a mailbox view over them
+ * says its connection isn't ready. `settled` says whether that read answered
+ * for this connection and these accounts, rather than an earlier one.
+ */
+export function useFailedAccountIds(
+  client: MailClient | null | undefined,
+  accountIds: string[],
+  connection: MailboxView["connection"] | undefined,
+) {
+  const [read, setRead] = useState<{
+    failedAccountIds: string[];
+    accountIds: string[];
+    connection: MailboxView["connection"];
+  } | null>(null);
+  const reads = Boolean(client && connection && connection !== "ready");
+  useEffect(() => {
+    if (!client || !connection || connection === "ready") {
+      setRead((current) => (current?.failedAccountIds.length ? null : current));
+      return;
+    }
+    let cancelled = false;
+    readFailedAccountIds(client, accountIds).then((failed) => {
+      if (!cancelled)
+        setRead({ failedAccountIds: failed, accountIds, connection });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connection, accountIds]);
+  return {
+    failedAccountIds: (reads && read?.failedAccountIds) || NO_ACCOUNT_IDS,
+    settled:
+      !reads ||
+      (read?.connection === connection && read?.accountIds === accountIds),
+  };
 }
 
 async function readFailedAccountIds(

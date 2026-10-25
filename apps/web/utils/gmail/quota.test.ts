@@ -22,6 +22,11 @@ import {
 import { gmailQuotaStore } from "@/utils/gmail/quota-store";
 import { withGmailRetry } from "@/utils/gmail/retry";
 import { runWithRequestDeadline } from "@/utils/request-deadline";
+import {
+  createRequestMetrics,
+  getRequestMetricsFields,
+  runWithRequestMetrics,
+} from "@/utils/request-metrics";
 import { isFastRequestSampled } from "@/utils/request-sampling";
 import { sleep } from "@/utils/sleep";
 
@@ -528,6 +533,139 @@ describe("Gmail quota gate", () => {
     await setGmailInitialSync(BACKFILL_ACCOUNT, false);
     await vi.advanceTimersByTimeAsync(retryAfterMs - 1000);
     await expect(backfillPage()).resolves.toBe("page");
+  });
+
+  it("holds a first sync's inbox backfill at sync behind the primary scan, even with the scan's lease live", async () => {
+    const account = "account-inbox-first";
+    const call = (
+      context: Parameters<typeof runWithGmailQuota>[0],
+      cost: number,
+    ) =>
+      runWithGmailQuota(context, () =>
+        meterGmailCall({ emailAccountId: account, cost }, async () => "x"),
+      ).catch((error: unknown) => error as GmailCallDeferredError);
+    const scan = { caller: "mail/v1/enumeration", priority: "sync" } as const;
+    const inboxFirst = { ...scan, afterInitialSync: true };
+
+    // The primary scan pages steadily, so its lane holds a reservation.
+    await setGmailInitialSync(account, true);
+    for (let i = 0; i < 6; i++) {
+      expect(await call(scan, 20)).toBe("x");
+      await vi.advanceTimersByTimeAsync(150);
+    }
+
+    // The inbox backfill is turned away at once and asked back within
+    // seconds, as the background backfill is, while the scan keeps going.
+    const held = await call(inboxFirst, 20);
+    expect(held).toBeInstanceOf(GmailCallDeferredError);
+    expect((held as GmailCallDeferredError).reason).toBe("initial_sync_scan");
+    expect((held as GmailCallDeferredError).retryAfterMs).toBeLessThanOrEqual(
+      5000,
+    );
+    expect(await call(scan, 20)).toBe("x");
+
+    await setGmailInitialSync(account, false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Once the scan is done it pages at sync, in batches of sync's request
+    // size, until what is left is sync's floor: that is kept for a person.
+    let admitted = 0;
+    let stopped: unknown = null;
+    while (!stopped) {
+      const result = await call({ ...inboxFirst, maxTotalWaitMs: 0 }, 240);
+      if (result === "x") admitted += 1;
+      else stopped = result;
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(admitted).toBeGreaterThan(4);
+    expect((stopped as GmailCallDeferredError).reason).toBe(
+      "per_minute_budget",
+    );
+    // A thread a person opens meanwhile is read at once (D-086).
+    expect(
+      await call(
+        {
+          caller: "threads/detail",
+          priority: "interactive",
+          maxTotalWaitMs: 0,
+        },
+        120,
+      ),
+    ).toBe("x");
+  });
+
+  it("lets a refused inbox backfill page stand back as background, never holding webhooks or live changes", async () => {
+    const account = "account-inbox-first-refused";
+    const call = (
+      context: Parameters<typeof runWithGmailQuota>[0],
+      operation: () => Promise<string> = async () => "x",
+    ) =>
+      runWithGmailQuota({ maxTotalWaitMs: 0, ...context }, () =>
+        meterGmailCall({ emailAccountId: account, cost: 20 }, operation),
+      ).catch((error: unknown) => error);
+    const inboxFirst = {
+      caller: "mail/v1/enumeration",
+      priority: "sync",
+      afterInitialSync: true,
+    } as const;
+    // Gmail refuses the page for volume and names a retry minutes away.
+    const volume = refusal(
+      403,
+      `Quota exceeded for quota metric 'Queries' and limit 'Units per minute per user'. Retry after ${new Date(Date.now() + 4 * 60_000).toISOString()}`,
+    );
+    expect(
+      await call(inboxFirst, async () => {
+        throw volume;
+      }),
+    ).toBe(volume);
+
+    // The push and the primary stream's catch-up keep going.
+    expect(await call({ caller: "google/webhook", priority: "sync" })).toBe(
+      "x",
+    );
+    expect(await call({ caller: "mail/v1/changes", priority: "sync" })).toBe(
+      "x",
+    );
+    // The backfill, this page's own scan included, waits out the retry time.
+    const held = await call(inboxFirst);
+    expect(held).toBeInstanceOf(GmailCallDeferredError);
+    expect((held as GmailCallDeferredError).reason).toBe("background_pause");
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(await call(inboxFirst)).toBeInstanceOf(GmailCallDeferredError);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(await call(inboxFirst)).toBe("x");
+  });
+
+  it("drops a first sync's inbox backfill to sync's yield while a person's large request runs", async () => {
+    const account = "account-inbox-first-demand";
+    const inboxFirst = {
+      caller: "mail/v1/enumeration",
+      priority: "sync",
+      afterInitialSync: true,
+      maxTotalWaitMs: 0,
+    } as const;
+    const page = (cost: number) =>
+      runWithGmailQuota(inboxFirst, () =>
+        meterGmailCall({ emailAccountId: account, cost }, async () => "x"),
+      ).catch((error: unknown) => error as GmailCallDeferredError);
+    // A search a person typed: a large read that starts a demand episode.
+    await expect(
+      runWithGmailQuota(
+        { caller: "mail/v1/search", priority: "interactive" },
+        () =>
+          meterGmailCall(
+            { emailAccountId: account, cost: 400 },
+            async () => "found",
+          ),
+      ),
+    ).resolves.toBe("found");
+    const yielded = await page(240);
+    expect(yielded).toBeInstanceOf(GmailCallDeferredError);
+    expect((yielded as GmailCallDeferredError).reason).toBe(
+      "interactive_demand_yield",
+    );
+    // Once the episode ends the inbox backfill pages at sync again.
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(await page(240)).toBe("x");
   });
 
   it("asks only the engine's backfill back within seconds; jobs and routes wait out the first sync", async () => {
@@ -1171,6 +1309,33 @@ describe("Gmail quota gate", () => {
     );
   });
 
+  // PF-9w: the request's "Request completed" line says it was deferred.
+  it("counts each deferred call on the request's metrics", async () => {
+    const account = "account-request-metrics";
+    const read = (cost: number) =>
+      meterGmailCall({ emailAccountId: account, cost }, async () => undefined);
+    await runWithGmailQuota(
+      { caller: "test/other", priority: "interactive" },
+      () => read(2000),
+    );
+    const metrics = createRequestMetrics();
+    const outcome = runWithRequestMetrics(metrics, () =>
+      runWithAuditContext({ source: "user/thread-brief" }, () =>
+        runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, async () => {
+          await read(600);
+          await read(600);
+          await read(600);
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(await outcome).toBeInstanceOf(GmailCallDeferredError);
+    const fields = getRequestMetricsFields(metrics);
+    expect(fields.gmailDeferredCalls).toBe(1);
+    expect(fields.waitMs).toBeGreaterThan(0);
+  });
+
   it("never puts the account in rate-limit mode for the gate's own deferral", async () => {
     const deferred = Object.assign(new Error("request failed"), {
       cause: new GmailCallDeferredError(15_000, "sync"),
@@ -1417,6 +1582,102 @@ describe("Gmail quota gate", () => {
   });
 
   describe("store round trips", () => {
+    it("lets the engine's backfill back in once another instance clears the first-sync marker, however long the bucket's wait", async () => {
+      const account = "account-deferral-shared";
+      // A person's reads overdraw the bucket, so the backfill's wait is the
+      // bucket's, longer than the marker's five-second retry.
+      await drainBucket(account);
+      await gmailQuotaStore.block({
+        key: `gmail-quota:${account}:initial-sync`,
+        ms: 90_000,
+      });
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const backfill = () =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "background" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: account, cost: 100 },
+              async () => "page",
+            ),
+        );
+      const first = await backfill().catch((error: unknown) => error);
+      expect(first).toBeInstanceOf(GmailCallDeferredError);
+      expect((first as GmailCallDeferredError).retryAfterMs).toBeGreaterThan(
+        5000,
+      );
+
+      // Another instance's scan ends.
+      await gmailQuotaStore.clear(`gmail-quota:${account}:initial-sync`);
+      await vi.advanceTimersByTimeAsync(1000);
+      const takesBefore = take.mock.calls.length;
+      const second = backfill().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await expect(second).resolves.toBe("page");
+      expect(take.mock.calls.length).toBeGreaterThan(takesBefore);
+    });
+
+    it("shares a wait the pace set for half a second, then asks the store again", async () => {
+      const account = "account-pace-share";
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const sync = () =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: account, cost: 500 },
+              async () => "batch",
+            ),
+        );
+      // A full second's pace: the admission says the next would wait for it.
+      await expect(sync()).resolves.toBe("batch");
+      expect(take).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(100);
+      const shared = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(shared).resolves.toBe("batch");
+
+      const asks = take.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(600);
+      const lapsed = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take.mock.calls.length).toBe(asks + 1);
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(lapsed).resolves.toBe("batch");
+    });
+
+    it("shares a wait the bucket set past half a second, as it cannot end sooner", async () => {
+      const account = "account-bucket-share";
+      await drainBucket(account);
+      const take = vi.spyOn(gmailQuotaStore, "take");
+      const sync = () =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: account, cost: 100 },
+              async () => "batch",
+            ),
+        );
+      const first = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      const second = sync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(take).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        "batch",
+        "batch",
+      ]);
+    });
+
     it("admits a person's reads that arrive together in one store round trip", async () => {
       const take = vi.spyOn(gmailQuotaStore, "take");
       const reads = Array.from({ length: 5 }, () =>
@@ -1788,6 +2049,17 @@ describe("Gmail quota gate", () => {
     ).toBeNull();
   });
 });
+
+// A person's reads overdraw the account's bucket well below sync's floor.
+async function drainBucket(emailAccountId: string) {
+  const reads = Promise.all(
+    [1, 2, 3, 4].map(() =>
+      interactive(emailAccountId, async () => "read", 650),
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(4000);
+  await reads;
+}
 
 function interactive<T>(
   emailAccountId: string,

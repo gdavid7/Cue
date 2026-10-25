@@ -3,6 +3,7 @@ import prisma from "@/utils/__mocks__/prisma";
 import {
   deleteWebPushSubscriptionAction,
   saveWebPushSubscriptionAction,
+  setWebPushQuietUntilAction,
 } from "@/utils/actions/web-push";
 
 const { vapid } = vi.hoisted(() => ({
@@ -75,6 +76,36 @@ describe("web push subscription actions", () => {
     });
   });
 
+  it("stores this browser's pause with the subscription, replacing any earlier owner's", async () => {
+    const quietUntil = Date.now() + 60 * 60 * 1000;
+
+    await saveWebPushSubscriptionAction({
+      ...subscription,
+      mode: "all",
+      quietUntil,
+    });
+    await saveWebPushSubscriptionAction({
+      ...subscription,
+      mode: "all",
+      quietUntil: null,
+    });
+
+    const [paused, unpaused] = prisma.webPushSubscription.upsert.mock.calls.map(
+      ([args]) => args,
+    );
+    expect(paused.create.quietUntil).toEqual(new Date(quietUntil));
+    expect(paused.update.quietUntil).toEqual(new Date(quietUntil));
+    expect(unpaused.create.quietUntil).toBeNull();
+    expect(unpaused.update.quietUntil).toBeNull();
+  });
+
+  it("treats a save without a pause as not paused", async () => {
+    await saveWebPushSubscriptionAction({ ...subscription, mode: "all" });
+
+    const [[args]] = prisma.webPushSubscription.upsert.mock.calls;
+    expect(args.update.quietUntil).toBeNull();
+  });
+
   it("switches an existing subscription to all new mail", async () => {
     await saveWebPushSubscriptionAction({ ...subscription, mode: "all" });
 
@@ -133,6 +164,47 @@ describe("web push subscription actions", () => {
     expect(prisma.webPushSubscription.deleteMany).toHaveBeenCalledWith({
       where: { endpoint: subscription.endpoint, userId: "user-1" },
     });
+  });
+
+  it("pauses only the signed-in user's subscription for this browser", async () => {
+    const quietUntil = Date.now() + 60 * 60 * 1000;
+
+    const result = await setWebPushQuietUntilAction({
+      endpoint: subscription.endpoint,
+      quietUntil,
+      userId: "user-2",
+    } as never);
+
+    expect(result?.serverError).toBeUndefined();
+    expect(prisma.webPushSubscription.updateMany).toHaveBeenCalledWith({
+      where: { endpoint: subscription.endpoint, userId: "user-1" },
+      data: { quietUntil: new Date(quietUntil) },
+    });
+  });
+
+  it("clears the pause when notifications resume", async () => {
+    await setWebPushQuietUntilAction({
+      endpoint: subscription.endpoint,
+      quietUntil: null,
+    });
+
+    expect(prisma.webPushSubscription.updateMany).toHaveBeenCalledWith({
+      where: { endpoint: subscription.endpoint, userId: "user-1" },
+      data: { quietUntil: null },
+    });
+  });
+
+  it("caps a pause at thirty days", async () => {
+    const before = Date.now();
+    await setWebPushQuietUntilAction({
+      endpoint: subscription.endpoint,
+      quietUntil: before + 90 * 24 * 60 * 60 * 1000,
+    });
+
+    const [{ data }] = prisma.webPushSubscription.updateMany.mock.calls[0];
+    const stored = (data.quietUntil as Date).getTime();
+    expect(stored).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60 * 1000);
+    expect(stored).toBeLessThanOrEqual(Date.now() + 30 * 24 * 60 * 60 * 1000);
   });
 
   it("is unavailable when web push isn't configured", async () => {

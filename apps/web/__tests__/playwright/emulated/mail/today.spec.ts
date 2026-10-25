@@ -6,6 +6,8 @@ import { test } from "../playwright-test";
 import {
   openMail,
   readLatestMailMutation,
+  readProviderAccessToken,
+  seedMailFromContact,
   waitForMetadataCoverage,
   withClient,
 } from "./mail-test-helpers";
@@ -16,6 +18,8 @@ const REPLY_THREAD = "thr_playwright_1";
 const REPLY_SUBJECT = "Playwright Test Message";
 const TRACKER_PREFIX = "playwright-today-";
 const TODAY_SUBSCRIPTION_ID = "playwright-today-subscription";
+const NEWSLETTER_RULE_ID = "playwright-today-newsletter-rule";
+const NEWSLETTER_RUN_PREFIX = "playwright-today-newsletter-run-";
 
 test.beforeEach(async ({ page }) => {
   const emailAccountId = await getEmailAccountId(page);
@@ -61,6 +65,292 @@ test("archives a conversation from Today and restores it with undo", async ({
   await expectEngineMutation(page, emailAccountId, "unarchive");
 });
 
+test("an account without the Newsletter label bundles what Cue sorted as newsletters, on Today and in Mail", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  // Cue sorts without labelling the mailbox by default, so most accounts
+  // have no Newsletter label and only Cue's own records say what's what.
+  const restoreLabel = await removeNewsletterLabel(page);
+  const subject = `Slow Mail digest ${Date.now()}`;
+  const newsletter = await seedNewsletter(page, subject, { labelled: false });
+  const emailAccountId = await getEmailAccountId(page);
+  let unsort: (() => Promise<void>) | undefined;
+  try {
+    unsort = await sortAsNewsletter(emailAccountId, newsletter);
+    await openToday(page);
+    const reading = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: /^Reading/ }) });
+    await expect(
+      reading.getByRole("button", { name: /^From .*Field Notes/ }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(todayRow(page, newsletter.threadId)).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-reading-by-cue");
+
+    const { conversations } = await openMail(page);
+    await waitForMetadataCoverage(page);
+    const bundle = page.getByRole("button", {
+      name: /^Reading, from .*Field Notes/,
+    });
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    await expect(
+      conversations.getByRole("option", { name: subject }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-by-cue");
+
+    await bundle.click();
+    await expect(page).toHaveURL(/\/type\/reading(\/|$|\?)/);
+    const laneRow = page
+      .getByRole("listbox", { name: "Conversations" })
+      .getByRole("option", { name: subject });
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "mail-reading-lane-by-cue",
+    );
+
+    await page.getByRole("button", { name: "Archive all" }).click();
+    await expect(page.getByText("Nothing left to read.")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect
+      .poll(() => newsletter.folderOf(), { timeout: 60_000 })
+      .toBe("archive");
+  } finally {
+    // Each step runs whatever another throws, so the label is put back.
+    await runEach([
+      () => unsort?.(),
+      () => newsletter.remove(),
+      () => restoreLabel(),
+    ]);
+  }
+});
+
+test("bundles unread newsletters into one Reading row that opens in place and marks them all read", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const newsletter = await seedNewsletter(
+    page,
+    `Field Notes weekly ${Date.now()}`,
+  );
+  try {
+    const { emailAccountId } = await openToday(page);
+    const reading = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: /^Reading/ }) });
+    const bundle = reading.getByRole("button", { name: /^From .*Field Notes/ });
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    await expect(bundle).toHaveAttribute("aria-expanded", "false");
+    // One row for the bundle, not one per newsletter, and none elsewhere.
+    await expect(todayRow(page, newsletter.threadId)).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "today-reading-bundled");
+
+    await bundle.click();
+    await expect(bundle).toHaveAttribute("aria-expanded", "true");
+    const list = page.getByRole("listbox", { name: "Reading" });
+    await expect(
+      list.locator(`[data-today-thread="${newsletter.threadId}"]`),
+    ).toBeVisible();
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await reading.scrollIntoViewIfNeeded();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-reading-open-${theme}-${size.width}`,
+        );
+      }
+    }
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    // Through the mail engine, as a row's own Mark as read goes.
+    await reading.getByRole("button", { name: "Mark all read" }).click();
+    await expect(reading).toHaveCount(0);
+    await expect
+      .poll(
+        () =>
+          readLatestMailMutation(page, {
+            emailAccountId,
+            kind: "set_read_state",
+            threadId: newsletter.threadId,
+          }),
+        { timeout: 60_000 },
+      )
+      .toMatchObject({ status: "succeeded" });
+  } finally {
+    await newsletter.remove();
+  }
+});
+
+test("Mail bundles newsletters into one Reading row whose lane reads through them and archives them all with undo", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(240_000);
+  const subject = `Field Notes weekly ${Date.now()}`;
+  const newsletter = await seedNewsletter(page, subject);
+  try {
+    const { conversations } = await openMail(page);
+    await waitForMetadataCoverage(page);
+    const bundle = page.getByRole("button", {
+      name: /^Reading, from .*Field Notes/,
+    });
+    await expect(bundle).toBeVisible({ timeout: 60_000 });
+    // One row for the bundle; the newsletter isn't a row of its own.
+    const inboxRow = conversations.getByRole("option", { name: subject });
+    await expect(inboxRow).toHaveCount(0);
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await expect(bundle).toBeVisible();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `mail-reading-bundle-${theme}-${size.width}`,
+        );
+      }
+    }
+    await page.emulateMedia({ colorScheme: "light" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    await bundle.click();
+    await expect(page).toHaveURL(/\/type\/reading(\/|$|\?)/);
+    const laneRow = page
+      .getByRole("listbox", { name: "Conversations" })
+      .getByRole("option", { name: subject });
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    // The keyboard carries on from the lane's first newsletter, and the lane
+    // reads as part of the inbox.
+    await expect(page.locator("[data-mail-thread-row]").first()).toBeFocused();
+    await expect(
+      page.getByRole("link", { name: /^Inbox/ }).first(),
+    ).toHaveAttribute("aria-current", "page");
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-lane");
+
+    // A search typed in the lane takes over: its bar and actions step aside
+    // rather than act on the search's rows.
+    const search = page.getByPlaceholder("Search mail or ask Cue");
+    await search.fill(subject);
+    await expect(page.getByRole("button", { name: "Archive all" })).toHaveCount(
+      0,
+    );
+    await search.fill("");
+    await expect(
+      page.getByRole("button", { name: "Archive all" }),
+    ).toBeVisible();
+    await expect(laneRow).toBeVisible();
+
+    // Reading one marks it read, and it keeps its place in the lane.
+    await laneRow.click();
+    await expect(page.getByRole("heading", { name: subject })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.keyboard.press("Escape");
+    await expect(laneRow).toBeVisible();
+
+    const archiveAll = page.getByRole("button", { name: "Archive all" });
+    const back = page.getByRole("button", { name: "Back to Inbox" });
+    await archiveAll.click();
+    await expect(laneRow).toHaveCount(0);
+    await expect(back).toBeFocused();
+    // Archive all keeps a row's undo, while its toast shows.
+    await page
+      .getByRole("region", { name: "Notifications alt+T" })
+      .getByRole("button", { name: /^Undo/ })
+      .click();
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+
+    await back.click();
+    await expect(bundle).toBeFocused({ timeout: 60_000 });
+    await bundle.click();
+    await expect(laneRow).toBeVisible({ timeout: 60_000 });
+    await archiveAll.click();
+    await expect(page.getByText("Nothing left to read.")).toBeVisible();
+    await capturePlaywrightCheckpoint(page, testInfo, "mail-reading-empty");
+    await expect
+      .poll(() => newsletter.folderOf(), { timeout: 60_000 })
+      .toBe("archive");
+
+    // All inboxes has no lane: its Reading address goes back to the inbox.
+    const allInboxesReading = new URL(page.url());
+    allInboxesReading.pathname = allInboxesReading.pathname.replace(
+      /\/type\/reading.*$/,
+      "",
+    );
+    allInboxesReading.pathname += "/all-inboxes/type/reading";
+    allInboxesReading.search = "";
+    await page.goto(allInboxesReading.toString(), {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(page).not.toHaveURL(/\/type\/reading/, { timeout: 60_000 });
+    await expect(back).toHaveCount(0);
+  } finally {
+    await newsletter.remove();
+  }
+});
+
+test("a newsletter opened by link reads, closes and archives from the reader", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  const subject = `Field Notes link ${Date.now()}`;
+  const newsletter = await seedNewsletter(page, subject);
+  try {
+    const { emailAccountId } = await openMail(page);
+    await waitForMetadataCoverage(page);
+    const heading = page.getByRole("heading", { name: subject });
+    const openByLink = () =>
+      page.goto(`/${emailAccountId}/mail?thread-id=${newsletter.threadId}`, {
+        waitUntil: "domcontentloaded",
+      });
+
+    // Bundled out of the inbox list, it still opens, and closes to the inbox.
+    await openByLink();
+    await expect(heading).toBeVisible({ timeout: 60_000 });
+    await page.keyboard.press("Escape");
+    await expect(heading).toHaveCount(0);
+    await expect(
+      page.getByRole("listbox", { name: "Conversations" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^Reading, from .*Field Notes/ }),
+    ).toBeVisible({ timeout: 60_000 });
+
+    await openByLink();
+    await expect(heading).toBeVisible({ timeout: 60_000 });
+    expect(await newsletter.folderOf()).toBe("inbox");
+    await page.keyboard.press("e");
+    // Off the list, the reader moves on to the inbox's own next row.
+    await expect(heading).toHaveCount(0, { timeout: 30_000 });
+    // The newsletter itself left the inbox, not a row the list had focused.
+    await expect
+      .poll(() => newsletter.folderOf(), { timeout: 60_000 })
+      .toBe("archive");
+  } finally {
+    await newsletter.remove();
+  }
+});
+
 test("a first visit shows the inbox from local mail while Today loads", async ({
   page,
 }, testInfo) => {
@@ -72,10 +362,14 @@ test("a first visit shows the inbox from local mail while Today loads", async ({
   const released = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/user/home*", async (route) => {
-    await released;
-    await route.continue();
-  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      await released;
+      await route.continue();
+    },
+  );
 
   await page.goto(`/${emailAccountId}/home`, {
     waitUntil: "domcontentloaded",
@@ -101,6 +395,188 @@ test("a first visit shows the inbox from local mail while Today loads", async ({
     inbox.locator(`[data-today-thread="${ARCHIVE_THREAD}"]`),
   ).toHaveCount(0);
   await expect(inbox.getByRole("option").first()).toBeVisible();
+});
+
+test("Waiting on you lists local mail from someone you write to until Needs reply has its own", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(480_000);
+  const subject = `Dinner plans ${Date.now()}`;
+  const seeded = await seedMailFromContact(page, subject);
+  const other = await seedMailFromContact(page, `Book club ${Date.now()}`);
+  // A new mailbox: Cue hasn't read its mail, so Needs reply has nothing yet.
+  let cueHasRead = false;
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      const response = await route.fetch();
+      const home = await response.json();
+      if (!cueHasRead) {
+        home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+        home.needsYou = [];
+      }
+      await route.fulfill({ response, json: home });
+    },
+  );
+  const waitingOnYou = page.getByRole("listbox", {
+    name: "Waiting on you",
+    exact: true,
+  });
+  const row = waitingOnYou.locator(`[data-today-thread="${seeded.threadId}"]`);
+  try {
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.addInitScript((value) => {
+        localStorage.setItem("theme", value);
+      }, theme);
+      const emailAccountId = await getEmailAccountId(page);
+      await page.goto(`/${emailAccountId}/home`, {
+        waitUntil: "domcontentloaded",
+      });
+      await expect(row).toBeVisible({ timeout: 90_000 });
+      await expect(row).toContainText("May need a reply");
+      await expect(
+        page.getByText("From your mail, not checked by AI"),
+      ).toBeVisible();
+      // Each conversation shows once on Today.
+      await expect(
+        page
+          .getByRole("listbox", { name: "Also in your inbox" })
+          .locator(`[data-today-thread="${seeded.threadId}"]`),
+      ).toHaveCount(0);
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await expect(row).toBeVisible();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-waiting-on-you-${theme}-${size.width}`,
+        );
+      }
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
+
+    // A row opens in the reader, which comes back to Today.
+    await row.getByRole("option").click();
+    await expect(page).toHaveURL(/[?&]from=today/);
+    await expect(page.getByRole("heading", { name: subject })).toBeVisible({
+      timeout: 60_000,
+    });
+    await page.getByRole("button", { name: "Back to inbox" }).click();
+    await expect(page).toHaveURL(/\/home(\?|$)/);
+
+    // Dismissed stays dismissed in this browser.
+    await expect(row).toBeVisible({ timeout: 60_000 });
+    await row.getByRole("option").hover();
+    await row.getByRole("button", { name: "Dismiss" }).first().click();
+    await expect(row).toHaveCount(0);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    // The other conversation shows, so local mail has been read.
+    await expect(
+      waitingOnYou.locator(`[data-today-thread="${other.threadId}"]`),
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(row).toHaveCount(0);
+
+    // Once Needs reply has its own conversations, the group steps aside.
+    cueHasRead = true;
+    const { needsReply } = await openToday(page);
+    await expect(needsReply).toBeVisible();
+    await expect(waitingOnYou).toHaveCount(0);
+  } finally {
+    await seeded.remove();
+    await other.remove();
+  }
+});
+
+test("a new mailbox shows Waiting on you from local mail before Today answers, and it stays put", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000);
+  const seeded = await seedMailFromContact(page, `Ski trip ${Date.now()}`);
+  // A new mailbox: Cue hasn't read it, and Today's answer is held, as Gmail
+  // can take seconds to give it during a first sync.
+  await page.route(
+    (url) => url.pathname === "/api/user/home/cue",
+    (route) => {
+      const ids = new URL(route.request().url()).searchParams.get("ids");
+      return route.fulfill({
+        json: {
+          accounts: (ids ?? "")
+            .split(",")
+            .map((id) => ({ id, hasReadMail: false })),
+        },
+      });
+    },
+  );
+  let release = () => {};
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      await released;
+      // Released as the test ends, the page may already be gone.
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
+      const home = await response.json();
+      home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
+      home.needsYou = [];
+      await route.fulfill({ response, json: home });
+    },
+  );
+  const waitingOnYou = page.getByRole("listbox", {
+    name: "Waiting on you",
+    exact: true,
+  });
+  const row = waitingOnYou.locator(`[data-today-thread="${seeded.threadId}"]`);
+  try {
+    const emailAccountId = await getEmailAccountId(page);
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(row).toBeVisible({ timeout: 90_000 });
+    const status = page.getByRole("main").getByRole("status");
+    // Cue's notice comes with the answer, which hasn't arrived.
+    await expect(status).toHaveCount(0);
+    // The row's wrapper has no box of its own; its option is what shows.
+    const option = row.getByRole("option").first();
+    const before = await option.boundingBox();
+    expect(before).not.toBeNull();
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "today-waiting-on-you-before-answer",
+    );
+
+    release();
+    await expect(status).toContainText("Cue is reading your recent mail.", {
+      timeout: 60_000,
+    });
+    await expect(row).toBeVisible();
+    // The answer's notice lands below the group, so the row doesn't move.
+    expect((await option.boundingBox())?.y).toBeCloseTo(before?.y ?? -1, 0);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "today-waiting-on-you-after-answer",
+    );
+  } finally {
+    // Today refreshes while it loads; one may still be in the route, so it
+    // is let through and finishes before the test does.
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+    await seeded.remove();
+  }
 });
 
 test("replies to a conversation from Today in the reader", async ({ page }) => {
@@ -235,18 +711,22 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
   test.setTimeout(600_000);
   // The real answer, reshaped into each state, so counts and calendar stay real.
   let state: "busy" | "clear" | "new" = "busy";
-  await page.route("**/api/user/home*", async (route) => {
-    const response = await route.fetch();
-    const home = await response.json();
-    // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
-    home.cue = {
-      aiAccess: true,
-      replyTracking: true,
-      hasReadMail: state !== "new",
-    };
-    if (state !== "busy") home.needsYou = [];
-    await route.fulfill({ response, json: home });
-  });
+  await page.route(
+    // Today's own answer only, not its other routes.
+    (url) => url.pathname === "/api/user/home",
+    async (route) => {
+      const response = await route.fetch();
+      const home = await response.json();
+      // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
+      home.cue = {
+        aiAccess: true,
+        replyTracking: true,
+        hasReadMail: state !== "new",
+      };
+      if (state !== "busy") home.needsYou = [];
+      await route.fulfill({ response, json: home });
+    },
+  );
   const main = page.getByRole("main");
 
   for (const theme of ["light", "dark"] as const) {
@@ -303,6 +783,95 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
       }
       await page.setViewportSize({ width: 1280, height: 800 });
     }
+  }
+});
+
+test("While you were away says what Cue did since the last visit, links each count to History, and dismisses", async ({
+  page,
+}, testInfo) => {
+  const emailAccountId = await getEmailAccountId(page);
+  await seedAwayWork(emailAccountId);
+  try {
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    const card = page.getByRole("region", { name: "While you were away" });
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await expect(card).toContainText(
+      /Since [^,]+, Cue sorted 1 email, archived 1 and drafted 1 reply\./,
+    );
+    // The link carries the window it counted, and Cue's own runs only.
+    const href = await card
+      .getByRole("link", { name: "archived 1" })
+      .getAttribute("href");
+    const linked = new URL(href ?? "", "http://localhost");
+    expect(linked.pathname).toBe(`/${emailAccountId}/automation`);
+    expect(Object.fromEntries(linked.searchParams)).toMatchObject({
+      tab: "history",
+      action: "archived",
+      automated: "1",
+    });
+    expect(linked.searchParams.get("since")).toBeTruthy();
+    expect(linked.searchParams.get("until")).toBeTruthy();
+
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-away-${theme}-${size.width}`,
+        );
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.emulateMedia({ colorScheme: "light" });
+
+    await card.getByRole("link", { name: "archived 1" }).click();
+    await expect(page).toHaveURL(
+      (url) =>
+        url.pathname.endsWith("/automation") &&
+        url.searchParams.get("action") === "archived",
+    );
+    await expect(
+      page.getByRole("button", { name: "Archived", exact: true }),
+    ).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      page.getByText("Showing what Cue did while you were away."),
+    ).toBeVisible();
+    await expect(
+      page.getByText(AWAY_RULE_NAME, { exact: true }).first(),
+    ).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("button", { name: "Show all history" }).click();
+    await expect(page).toHaveURL((url) => !url.searchParams.has("since"));
+
+    // Dismissed, it stays hidden on the next load, until the next visit.
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await card.getByRole("button", { name: "Dismiss" }).click();
+    await expect(card).toHaveCount(0);
+    await expect
+      .poll(() => readPreviousVisit(emailAccountId), { timeout: 15_000 })
+      .toBeNull();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("listbox", { name: "Needs reply" }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(card).toHaveCount(0);
+  } finally {
+    await clearAwayWork(emailAccountId);
   }
 });
 
@@ -390,6 +959,155 @@ async function seedNeedsReply(emailAccountId: string, threadIds: string[]) {
       );
     }
   });
+}
+
+/**
+ * An unread newsletter in the inbox, filed under the Newsletter label (an
+ * Outlook category) as Cue's rule would unless `labelled` is false, and what
+ * takes it out again.
+ */
+async function seedNewsletter(
+  page: Page,
+  subject: string,
+  { labelled = true }: { labelled?: boolean } = {},
+) {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    if (labelled) {
+      const category = await page.request.post(
+        `${base}/outlook/masterCategories`,
+        { headers, data: { displayName: "Newsletter" } },
+      );
+      // Already there from an earlier run is as good.
+      expect(category.ok() || category.status() === 409).toBe(true);
+    }
+    const draft = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Three essays on slow travel." },
+        toRecipients: [{ emailAddress: { address: email } }],
+      },
+    });
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const patched = await page.request.patch(`${base}/messages/${draftId}`, {
+      headers,
+      data: {
+        from: {
+          emailAddress: {
+            address: "hello@fieldnotes.example",
+            name: "Field Notes",
+          },
+        },
+        categories: labelled ? ["Newsletter"] : [],
+        isRead: false,
+      },
+    });
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(`${base}/messages/${draftId}/move`, {
+      headers,
+      data: { destinationId: "inbox" },
+    });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+      internetMessageId?: string;
+    };
+    const isThisMessage = (candidate: {
+      internetMessageId?: string;
+      subject?: string;
+    }) =>
+      message.internetMessageId
+        ? candidate.internetMessageId === message.internetMessageId
+        : candidate.subject === subject;
+    // Found by its message identity in the folder itself: archiving moves it,
+    // which in Graph gives it a new id, and a deleted message is in neither.
+    const locate = async () => {
+      for (const folder of ["inbox", "archive"] as const) {
+        const listed = await page.request.get(
+          `${base}/mailFolders/${folder}/messages?$top=500`,
+          { headers },
+        );
+        expect(listed.ok(), await listed.text()).toBe(true);
+        const { value } = (await listed.json()) as {
+          value: { id: string; internetMessageId?: string; subject?: string }[];
+        };
+        const found = value.find(isThisMessage);
+        if (found) return { folder, id: found.id };
+      }
+      return null;
+    };
+    return {
+      threadId: message.conversationId,
+      messageId: message.id,
+      folderOf: async (): Promise<NewsletterFolder> =>
+        (await locate())?.folder ?? "missing",
+      remove: async () => {
+        const current = await locate();
+        await page.request.post(
+          `${base}/messages/${current?.id ?? message.id}/permanentDelete`,
+          { headers },
+        );
+      },
+    };
+  }
+
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const labels = await page.request.get(`${base}/labels`, { headers });
+  expect(labels.ok(), await labels.text()).toBe(true);
+  const existing = (
+    (await labels.json()) as { labels: { id: string; name: string }[] }
+  ).labels.find((label) => label.name === "Newsletter");
+  let labelId = existing?.id;
+  if (labelled && !labelId) {
+    const created = await page.request.post(`${base}/labels`, {
+      headers,
+      data: { name: "Newsletter" },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    labelId = ((await created.json()) as { id: string }).id;
+  }
+  const inserted = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      from: "Field Notes <hello@fieldnotes.example>",
+      to: email,
+      subject,
+      body_text: "Three essays on slow travel.",
+      labelIds: ["INBOX", "UNREAD", ...(labelled && labelId ? [labelId] : [])],
+      internalDate: String(Date.now()),
+    },
+  });
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string; threadId: string };
+  return {
+    threadId: message.threadId,
+    messageId: message.id,
+    folderOf: async (): Promise<NewsletterFolder> => {
+      const current = await page.request.get(`${base}/messages/${message.id}`, {
+        headers,
+      });
+      if (current.status() === 404) return "missing";
+      expect(current.ok(), await current.text()).toBe(true);
+      const { labelIds = [] } = (await current.json()) as {
+        labelIds?: string[];
+      };
+      if (labelIds.includes("TRASH") || labelIds.includes("SPAM"))
+        return "missing";
+      return labelIds.includes("INBOX") ? "inbox" : "archive";
+    },
+    remove: () =>
+      page.request.delete(`${base}/messages/${message.id}`, { headers }),
+  };
 }
 
 async function expectEngineMutation(
@@ -562,5 +1280,189 @@ async function openNeedsReplyTrackers(
       [emailAccountId, threadId],
     );
     return result.rowCount ?? 0;
+  });
+}
+
+/** Runs every cleanup step in turn, then throws the first failure, if any. */
+async function runEach(steps: (() => unknown)[]) {
+  let failure: { error: unknown } | undefined;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failure ??= { error };
+    }
+  }
+  if (failure) throw failure.error;
+}
+
+/**
+ * Takes the Newsletter label (an Outlook category) off the account, and
+ * returns what puts it back, so later tests find the account as it was.
+ */
+async function removeNewsletterLabel(page: Page) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me/outlook/masterCategories`;
+    const listed = await page.request.get(base, { headers });
+    expect(listed.ok(), await listed.text()).toBe(true);
+    const { value } = (await listed.json()) as {
+      value: { id: string; displayName: string }[];
+    };
+    const removed = value.filter(
+      (candidate) => candidate.displayName === "Newsletter",
+    );
+    for (const category of removed) {
+      const deleted = await page.request.delete(`${base}/${category.id}`, {
+        headers,
+      });
+      expect(deleted.ok(), await deleted.text()).toBe(true);
+    }
+    return async () => {
+      if (!removed.length) return;
+      await page.request.post(base, {
+        headers,
+        data: { displayName: "Newsletter" },
+      });
+    };
+  }
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/labels`;
+  const listed = await page.request.get(base, { headers });
+  expect(listed.ok(), await listed.text()).toBe(true);
+  const { labels } = (await listed.json()) as {
+    labels: { id: string; name: string }[];
+  };
+  const removed = labels.filter((candidate) => candidate.name === "Newsletter");
+  for (const label of removed) {
+    const deleted = await page.request.delete(`${base}/${label.id}`, {
+      headers,
+    });
+    expect(deleted.ok(), await deleted.text()).toBe(true);
+  }
+  return async () => {
+    if (!removed.length) return;
+    await page.request.post(base, {
+      headers,
+      data: { name: "Newsletter" },
+    });
+  };
+}
+
+/**
+ * What Cue's Newsletter rule records when it sorts a message without
+ * labelling the mailbox: an applied run of that rule. Returns the cleanup.
+ */
+async function sortAsNewsletter(
+  emailAccountId: string,
+  { threadId, messageId }: { threadId: string; messageId: string },
+) {
+  const runId = `${NEWSLETTER_RUN_PREFIX}${messageId}`;
+  return withClient(async (client) => {
+    const existing = await client.query<{ id: string }>(
+      `SELECT id FROM "Rule"
+       WHERE "emailAccountId" = $1 AND "systemType" = 'NEWSLETTER'`,
+      [emailAccountId],
+    );
+    const ruleId = existing.rows[0]?.id ?? NEWSLETTER_RULE_ID;
+    if (!existing.rows[0]) {
+      await client.query(
+        `INSERT INTO "Rule"
+          (id, name, enabled, automate, "runOnThreads", "systemType",
+           "emailAccountId", "createdAt", "updatedAt")
+         VALUES ($1, 'Today spec Newsletter', true, true, false, 'NEWSLETTER',
+                 $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT DO NOTHING`,
+        [NEWSLETTER_RULE_ID, emailAccountId],
+      );
+    }
+    await client.query(
+      `INSERT INTO "ExecutedRule"
+        (id, "createdAt", "updatedAt", "threadId", "messageId", status,
+         automated, "ruleId", "emailAccountId")
+       VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $2, $3, 'APPLIED',
+               true, $4, $5)
+       ON CONFLICT (id) DO NOTHING`,
+      [runId, threadId, messageId, ruleId, emailAccountId],
+    );
+    return () =>
+      withClient(async (cleanup) => {
+        await cleanup.query(`DELETE FROM "ExecutedRule" WHERE id = $1`, [
+          runId,
+        ]);
+        await cleanup.query(`DELETE FROM "Rule" WHERE id = $1`, [
+          NEWSLETTER_RULE_ID,
+        ]);
+      });
+  });
+}
+
+/** Where a seeded newsletter is: "missing" when deleted, trashed or gone. */
+type NewsletterFolder = "inbox" | "archive" | "missing";
+
+const AWAY_RULE_PREFIX = "playwright-away-";
+const AWAY_RULE_NAME = "Playwright away rule";
+
+/**
+ * A return just now after twenty hours away, during which Cue sorted one
+ * email, archived one and drafted a reply to one. The last login is now, so
+ * this load doesn't count as another return.
+ */
+async function seedAwayWork(emailAccountId: string) {
+  await clearAwayWork(emailAccountId);
+  await withClient(async (client) => {
+    await client.query(
+      `UPDATE "User" SET "lastLogin" = now(), "visitReturnedAt" = now(),
+         "previousVisitAt" = now() - interval '20 hours'
+       WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId],
+    );
+    const ruleId = `${AWAY_RULE_PREFIX}rule`;
+    await client.query(
+      `INSERT INTO "Rule" (id, "updatedAt", name, "emailAccountId")
+       VALUES ($1, now(), $2, $3)`,
+      [ruleId, AWAY_RULE_NAME, emailAccountId],
+    );
+    for (const type of ["LABEL", "ARCHIVE", "DRAFT_EMAIL"]) {
+      const id = `${AWAY_RULE_PREFIX}${type}`;
+      await client.query(
+        `INSERT INTO "ExecutedRule" (id, "createdAt", "updatedAt", "threadId", "messageId", status, automated, "emailAccountId", "ruleId")
+         VALUES ($1, now() - interval '2 hours', now(), $1, $1, 'APPLIED', true, $2, $3)`,
+        [id, emailAccountId, ruleId],
+      );
+      await client.query(
+        `INSERT INTO "ExecutedAction" (id, "updatedAt", type, "executionStatus", "executedRuleId")
+         VALUES ($1, now(), $2::"ActionType", 'SUCCEEDED', $1)`,
+        [id, type],
+      );
+    }
+  });
+}
+
+async function clearAwayWork(emailAccountId: string) {
+  await withClient(async (client) => {
+    await client.query(`DELETE FROM "ExecutedRule" WHERE id LIKE $1`, [
+      `${AWAY_RULE_PREFIX}%`,
+    ]);
+    await client.query(`DELETE FROM "Rule" WHERE id LIKE $1`, [
+      `${AWAY_RULE_PREFIX}%`,
+    ]);
+    await client.query(
+      `UPDATE "User" SET "previousVisitAt" = NULL, "visitReturnedAt" = NULL
+       WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId],
+    );
+  });
+}
+
+async function readPreviousVisit(emailAccountId: string) {
+  return withClient(async (client) => {
+    const result = await client.query<{ previousVisitAt: Date | null }>(
+      `SELECT u."previousVisitAt" FROM "User" u
+       JOIN "EmailAccount" e ON e."userId" = u.id WHERE e.id = $1`,
+      [emailAccountId],
+    );
+    return result.rows[0]?.previousVisitAt ?? null;
   });
 }

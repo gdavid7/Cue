@@ -16,9 +16,13 @@ export type CueFilterValue = z.infer<typeof cueFilterValueSchema>;
 
 /**
  * Provider message ids per sorted value. A conversation belongs to a value when
- * any of its messages is listed.
+ * any of its messages is listed. `threads` names the same conversations by id,
+ * for an engine that can match a whole conversation (missing from a copy
+ * saved before it was added).
  */
-export type CueMembership = Record<CueFilterValue, string[]>;
+export type CueMembership = Record<CueFilterValue, string[]> & {
+  threads?: Record<CueFilterValue, string[]>;
+};
 
 export const CUE_FILTER_NAMES: Record<CueFilterValue, string> = {
   TO_REPLY: "Needs reply",

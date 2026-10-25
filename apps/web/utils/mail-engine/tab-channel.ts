@@ -1,3 +1,8 @@
+import {
+  describeMailEngineCapabilities,
+  parseMailEngineCapabilities,
+  type MailEngineCapabilities,
+} from "@inboxzero/mail-core/capabilities";
 import type { MailClient, WorkAdmission } from "@inboxzero/mail-core/engine";
 import type {
   MailboxView,
@@ -22,7 +27,12 @@ export type TabMailMessage =
       provider?: "google" | "microsoft";
     }
   | { type: "ready" }
-  | { type: "owner"; accountId: string }
+  | {
+      type: "owner";
+      accountId: string;
+      /** The owner's engine report; owners that predate it leave it out. */
+      capabilities?: MailEngineCapabilities;
+    }
   | {
       type: "call";
       id: string;
@@ -42,7 +52,9 @@ export type TabMailMessage =
   | { type: "unobserve"; id: string; handleId: string }
   | { type: "ok"; id: string; value?: unknown }
   | { type: "error"; id: string; message: string }
-  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> };
+  | { type: "snapshot"; handleId: string; snapshot: QuerySnapshot<unknown> }
+  /** A tab changed an Important star; others read stars again. */
+  | { type: "importantPeopleChanged" };
 
 export type TabMailBus = {
   post(message: TabMailMessage): void;
@@ -76,7 +88,11 @@ export function bindTabMailOwner(input: {
   >();
   const unsubscribe = input.bus.subscribe((message) => {
     if (message.type === "hello") {
-      announceOwner(input, message);
+      announceOwner(
+        input,
+        message,
+        tabOwnerMessage(input.client, message.accountId),
+      );
       return;
     }
     if (message.type === "loadMore") {
@@ -163,7 +179,10 @@ export function createTabFollowerClient(input: {
   accountId: string;
   provider?: "google" | "microsoft";
   bus: TabMailBus;
+  /** From the owner message that made this tab a follower. */
+  capabilities?: unknown;
 }): MailClient {
+  let capabilities = parseMailEngineCapabilities(input.capabilities);
   // Each waiter keeps its request so a new owner can answer it. Commands
   // carry their own ids, so the store admits a resent one only once.
   const pending = new Map<
@@ -207,6 +226,11 @@ export function createTabFollowerClient(input: {
       for (const waiter of pending.values()) {
         if (waiter.request) input.bus.post(waiter.request);
       }
+      return;
+    }
+    if (message.type === "owner" && message.accountId === input.accountId) {
+      // A replacement owner may run an older or newer build.
+      capabilities = parseMailEngineCapabilities(message.capabilities);
       return;
     }
     if (message.type === "snapshot") {
@@ -308,13 +332,27 @@ export function createTabFollowerClient(input: {
   }
 
   const client: MailClient = {
+    get capabilities() {
+      return capabilities;
+    },
     // Answered by the tab that owns the engine; it fails over to the
     // provider search if that tab can't.
     searchMessages: (query) => call("searchMessages", [query]) as never,
     queryPersonCard: (query) => call("queryPersonCard", [query]) as never,
+    queryNeverReadSenders: (query) =>
+      call("queryNeverReadSenders", [query]) as never,
+    querySenderHistory: (query) => call("querySenderHistory", [query]) as never,
     queryFiles: (query) => call("queryFiles", [query]) as never,
     queryFileSenders: (accountIds) =>
       call("queryFileSenders", [accountIds]) as never,
+    queryFilesNotOnDevice: (accountIds) =>
+      call("queryFilesNotOnDevice", [accountIds]) as never,
+    queryWaitingOnYou: (query) => call("queryWaitingOnYou", [query]) as never,
+    queryImportantPeople: (accountIds) =>
+      call("queryImportantPeople", [accountIds]) as never,
+    setImportantPerson: async (input) => {
+      await call("setImportantPerson", [input]);
+    },
     searchSemantic: (query) => call("searchSemantic", [query]) as never,
     observeMailbox: (query) => observeRemote("mailbox", [query]),
     observeMailboxCounts: (query) => observeRemote("mailboxCounts", [query]),
@@ -352,6 +390,8 @@ export function createTabFollowerClient(input: {
     async getDiagnostics(accountId) {
       return call("getDiagnostics", [accountId]) as never;
     },
+    getWaitingSummary: (accountIds) =>
+      call("getWaitingSummary", [accountIds]) as never,
     async forgetDeletedDrafts(input) {
       await call("forgetDeletedDrafts", [input]);
     },
@@ -389,6 +429,18 @@ export function createBroadcastTabBus(channel: BroadcastChannel): TabMailBus {
   };
 }
 
+/** What the tab that owns the engine answers a follower's hello with. */
+export function tabOwnerMessage(
+  client: MailClient,
+  accountId: string,
+): Extract<TabMailMessage, { type: "owner" }> {
+  return {
+    type: "owner",
+    accountId,
+    capabilities: client.capabilities ?? describeMailEngineCapabilities(client),
+  };
+}
+
 function announceOwner(
   input: {
     bus: TabMailBus;
@@ -398,9 +450,9 @@ function announceOwner(
     }) => Promise<void>;
   },
   message: Extract<TabMailMessage, { type: "hello" }>,
+  owner: Extract<TabMailMessage, { type: "owner" }>,
 ) {
-  const postOwner = () =>
-    input.bus.post({ type: "owner", accountId: message.accountId });
+  const postOwner = () => input.bus.post(owner);
   if (!message.provider || !input.ensureAccount) {
     postOwner();
     return;

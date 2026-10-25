@@ -33,6 +33,14 @@ export function saveBlob(blob: Blob, filename: string) {
   }
 }
 
+/** Thrown when a download passes its `maxBytes`, so callers can say so. */
+export class AttachmentTooLargeError extends Error {
+  constructor() {
+    super("Attachment exceeds the download size limit");
+    this.name = "AttachmentTooLargeError";
+  }
+}
+
 export async function fetchAttachment({
   url,
   emailAccountId,
@@ -70,8 +78,7 @@ export async function fetchAttachment({
   if (maxBytes === undefined && !onProgress) return response.blob();
 
   const limit = maxBytes ?? Number.POSITIVE_INFINITY;
-  const sizeError = () =>
-    new Error("Attachment exceeds the download size limit");
+  const sizeError = () => new AttachmentTooLargeError();
   if (Number(response.headers.get("content-length")) > limit) {
     await response.body?.cancel().catch(() => undefined);
     throw sizeError();

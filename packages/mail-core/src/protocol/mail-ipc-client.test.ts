@@ -1,5 +1,70 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  BASELINE_MAIL_ENGINE_CAPABILITIES,
+  mailClientSupports,
+} from "../capabilities";
+import { mailIpcRequestSchema } from "./mail-ipc";
 import { createMailIpcClient } from "./mail-ipc-client";
+
+describe("mail IPC capability handshake", () => {
+  it("assumes the baseline when the desktop build predates reporting", async () => {
+    const invoke = vi.fn(async () => ({ status: "ok", result: null }));
+    const client = createMailIpcClient(invoke, {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+    });
+
+    expect(client.capabilities).toBe(BASELINE_MAIL_ENGINE_CAPABILITIES);
+    expect(mailClientSupports(client, "order:newest_first")).toBe(true);
+    expect(mailClientSupports(client, "order:oldest_first")).toBe(false);
+    expect(mailClientSupports(client, "predicate:conversation")).toBe(false);
+    expect(mailClientSupports(client, "method:forgetDeletedDrafts")).toBe(
+      false,
+    );
+    // Learning them costs the old engine no request it would reject.
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("uses what a newer desktop build reported, including features this page doesn't know", () => {
+    const client = createMailIpcClient(vi.fn(), {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+      capabilities: [
+        "order:newest_first",
+        "order:oldest_first",
+        "predicate:conversation",
+        "method:forgetDeletedDrafts",
+        "method:queryWaitingOnYou",
+        "method:setImportantPerson",
+      ],
+    });
+
+    expect(mailClientSupports(client, "order:oldest_first")).toBe(true);
+    expect(mailClientSupports(client, "predicate:conversation")).toBe(true);
+    expect(mailClientSupports(client, "method:forgetDeletedDrafts")).toBe(true);
+    // Reported, but this page's client has no way to ask for it.
+    expect(mailClientSupports(client, "method:queryWaitingOnYou")).toBe(false);
+    // IPC v1 relays no Important stars, so the person card hides its star.
+    expect(mailClientSupports(client, "method:setImportantPerson")).toBe(false);
+  });
+
+  it("keeps sending requests an engine that predates reporting accepts", async () => {
+    const invoke = vi.fn(async (_payload: unknown) => ({
+      status: "ok",
+      result: { status: "scheduled" },
+    }));
+    const client = createMailIpcClient(invoke, {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+      capabilities: ["order:newest_first"],
+    });
+    await client.requestSync(["acc-1"]);
+
+    expect(
+      mailIpcRequestSchema.safeParse(invoke.mock.calls[0]?.[0]).success,
+    ).toBe(true);
+  });
+});
 
 describe("createMailIpcClient", () => {
   it("wraps an ok IPC result and rejects a failed method", async () => {

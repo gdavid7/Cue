@@ -190,6 +190,7 @@ export const createMockEmailProvider = (
   isSentMessage: vi.fn().mockReturnValue(false),
   getThreadsFromSenderWithSubject: vi.fn().mockResolvedValue([]),
   moveThreadToFolder: vi.fn().mockResolvedValue(undefined),
+  moveMessagesToFolder: vi.fn().mockResolvedValue(undefined),
   getOrCreateFolderIdByName: vi.fn().mockResolvedValue("folder1"),
   renameFolder: vi.fn().mockResolvedValue(undefined),
   deleteFolder: vi.fn().mockResolvedValue(undefined),

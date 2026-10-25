@@ -6,6 +6,7 @@ import {
 } from "./identities";
 import {
   inboxSectionSchema,
+  MAX_INTERNET_MESSAGE_ID_LENGTH,
   mailboxRoleSchema,
   type MessageAttachmentDescriptor,
 } from "./messages";
@@ -74,6 +75,18 @@ export const mailPredicateSchema: z.ZodType<MailPredicate> = z.lazy(() =>
       accountId: accountIdSchema.optional(),
     }),
     z.object({
+      kind: z.literal("conversation"),
+      ids: z.array(z.string().min(1).max(512)).max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
+    }),
+    z.object({
+      kind: z.literal("internet_message_id"),
+      ids: z
+        .array(z.string().min(1).max(MAX_INTERNET_MESSAGE_ID_LENGTH))
+        .max(MAX_MESSAGE_PREDICATE_IDS),
+      accountId: accountIdSchema.optional(),
+    }),
+    z.object({
       kind: z.literal("text"),
       field: z.enum(["any", "subject", "body"]),
       value: z.string().min(1).max(4096),
@@ -118,6 +131,22 @@ export type MailPredicate =
   | { kind: "has_attachment"; value: boolean }
   /** These messages, of `accountId` alone when it is set. */
   | { kind: "message"; ids: string[]; accountId?: string }
+  /**
+   * Every message of these conversations, of `accountId` alone when it is
+   * set. Newer than the other kinds: check `predicate:conversation` with
+   * `mailClientSupports` before sending it to an engine.
+   */
+  | { kind: "conversation"; ids: string[]; accountId?: string }
+  /**
+   * Whole conversations whose key is one of these, of `accountId` alone when
+   * it is set. A conversation's key is the Message-ID of its latest message
+   * that isn't a draft or in the trash (sent mail counts), normalised by
+   * normalizeInternetMessageId; the ids are keys as summaries give them
+   * (`latestInternetMessageId`), compared as they are. One message delivered
+   * to several accounts has one key in each. Newer than the other kinds:
+   * check `predicate:internet_message_id` with mailClientSupports first.
+   */
+  | { kind: "internet_message_id"; ids: string[]; accountId?: string }
   | {
       kind: "text";
       field: "any" | "subject" | "body";
@@ -149,7 +178,11 @@ export type MailPredicate =
 export const conversationQuerySchema = z.object({
   accountIds: z.array(accountIdSchema).min(1).max(50),
   predicate: mailPredicateSchema,
-  order: z.literal("newest_first"),
+  /**
+   * Conversations by their latest matching message. Oldest first is newest
+   * first reversed, ties included.
+   */
+  order: z.enum(["newest_first", "oldest_first"]),
   pageSize: z.number().int().min(1).max(100),
   after: z.string().max(512).nullable(),
   /**
@@ -190,7 +223,10 @@ export const conversationSummarySchema = z.object({
   pendingOperationIds: z.array(z.string()),
   /** The newest message that isn't a draft or in the trash. */
   latestMessageId: z.string().optional(),
-  /** That message's Message-ID header, once the store has read it. */
+  /**
+   * That message's Message-ID header, normalised (normalizeInternetMessageId),
+   * once the store has read it: the key one message has in every mailbox.
+   */
   latestInternetMessageId: z.string().optional(),
   hasAttachments: z.boolean().optional(),
 });
@@ -441,6 +477,38 @@ export type PersonCard = {
   history: { syncing: boolean; sinceMs: number | null };
 };
 
+/**
+ * What the local store knows about a sender's name and address, for the
+ * reader's "New address, familiar name" line. Read from the contact index
+ * alone: it never asks the provider.
+ */
+export type SenderHistoryQuery = {
+  /** The open thread's account, or every account All inboxes includes. */
+  accountIds: string[];
+  /** The message's From address. */
+  email: string;
+  /** The message's From display name. */
+  name: string;
+  /** When the open message arrived, so only earlier mail from them counts. */
+  receivedAtMs: number;
+  /** The user's addresses, which never count as someone else's. */
+  ownAddresses: string[];
+};
+
+export type SenderHistory = {
+  /** False until every scope is listed and the contact index has read it. */
+  ready: boolean;
+  /** The user has sent mail to this address. */
+  writtenTo: boolean;
+  /** This address sent the user mail before the open message. */
+  receivedBefore: boolean;
+  /**
+   * The address the user most recently wrote to under the same full name,
+   * other than this one and the user's own; null when there is none.
+   */
+  knownAddress: string | null;
+};
+
 /** One more than the card lists, so it can leave out the open conversation. */
 export const PERSON_CARD_CONVERSATION_LIMIT = 6;
 
@@ -482,6 +550,11 @@ export type FileEntry = {
   receivedAtMs: number;
   kind: FileKind;
   attachment: MessageAttachmentDescriptor;
+  /**
+   * How many messages of this conversation carry this file (same name and
+   * size) among those matching the query. The entry is from the newest.
+   */
+  copies: number;
 };
 
 /** Newest first. */
@@ -489,3 +562,66 @@ export type FilesPage = { files: FileEntry[]; nextPage: string | null };
 
 /** Who sent the files a Files view can list, most files first. */
 export type FileSender = { email: string; name: string | null; files: number };
+
+/**
+ * Conversations that may wait on the user's reply, read from the local store
+ * alone, with no model: the newest message is someone else's, it is in the
+ * inbox's main tab, and nothing the user sent follows it. The sender must be
+ * someone the user has written to, or the user must have written in the
+ * conversation, so mailing lists and strangers stay out.
+ */
+export type WaitingOnYouQuery = {
+  accountIds: string[];
+  /** The user's own addresses: their mail is never waiting on them. */
+  ownAddresses: string[];
+  /** Mail received before this is left out. */
+  receivedSinceMs: number;
+  /** Per account, labels or categories whose mail is left out. */
+  excludedLabelIds?: Record<string, string[]>;
+  limit: number;
+};
+
+/** Newest first; the message is the conversation's newest. */
+export type WaitingOnYouConversation = {
+  accountId: string;
+  conversationId: string;
+  messageId: string;
+  from: string;
+  subject: string;
+  preview: string;
+  receivedAtMs: number;
+  unread: boolean;
+  starred: boolean;
+  /** The newest message's normalised Message-ID, the same in every mailbox it reached. */
+  messageKey: string | null;
+  /** The other accounts holding a conversation whose newest message is this one. */
+  copyAccountIds: string[];
+};
+
+/**
+ * Senders who mail often and are never opened, read from the local store
+ * alone, with no model: mail received since `receivedSinceMs` in each
+ * account, grouped by sender address.
+ */
+export type NeverReadSendersQuery = {
+  accountIds: string[];
+  /** The user's own addresses, which are never listed. */
+  ownAddresses: string[];
+  receivedSinceMs: number;
+  /** The most to list; read past what will show, so hidden ones can be skipped. */
+  limit: number;
+};
+
+/** Most inbox messages first, then the newest. */
+export type NeverReadSender = {
+  accountId: string;
+  email: string;
+  /** The name their newest message is shown with, if any. */
+  name: string | null;
+  /** Their messages in the inbox, none of which, nor any other, was read. */
+  count: number;
+  lastReceivedAtMs: number;
+};
+
+/** Fewer messages than this say little about whether they're wanted. */
+export const NEVER_READ_MIN_MESSAGES = 4;

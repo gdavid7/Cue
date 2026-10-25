@@ -146,12 +146,17 @@ export const SERVER_CACHE_WRITES: Record<
     ],
   },
   "utils/home/next-up.ts": {
-    writes: 2,
+    writes: 4,
     keys: [
       {
         key: "home-deadlines-paused:{app}:{emailAccountId}",
         holds: '"1" while a connected app is down or slow',
-        ttl: "5 min",
+        ttl: "5 min, or 5, 15 or 60 min after timeouts in a row",
+      },
+      {
+        key: "home-deadlines-timeouts:{app}:{emailAccountId}",
+        holds: "how many times in a row the app timed out (a count)",
+        ttl: "24h",
       },
       {
         key: "asana-task-list:{emailAccountId}",
