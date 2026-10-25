@@ -42,6 +42,61 @@ describe("GoogleCalendarEventProvider", () => {
     );
   });
 
+  it("stops after ten pages and says the list is incomplete", async () => {
+    calendarMocks.list.mockImplementation(async ({ pageToken }) => ({
+      data: {
+        items: [
+          googleEvent(`event-${pageToken ?? 0}`, "2026-05-04T09:00:00.000Z"),
+        ],
+        nextPageToken: `${Number(pageToken ?? 0) + 1}`,
+      },
+    }));
+    const onIncomplete = vi.fn();
+
+    const events = await createProvider().fetchEvents({
+      timeMin: new Date("2026-05-04T09:00:00.000Z"),
+      timeMax: new Date("2026-05-04T10:00:00.000Z"),
+      maxResults: 50,
+      onIncomplete,
+    });
+
+    expect(calendarMocks.list).toHaveBeenCalledTimes(10);
+    expect(events).toHaveLength(10);
+    expect(onIncomplete).toHaveBeenCalled();
+  });
+
+  it("keeps the busy copy of an event on two of the account's calendars", async () => {
+    calendarMocks.list
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              ...googleEvent("shared", "2026-05-04T09:00:00.000Z"),
+              iCalUID: "shared-uid",
+              transparency: "transparent",
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              ...googleEvent("shared", "2026-05-04T09:00:00.000Z"),
+              iCalUID: "shared-uid",
+            },
+          ],
+        },
+      });
+
+    const events = await createProvider({
+      calendarIds: ["team", "primary"],
+    }).fetchEvents({ maxResults: 5 });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].markedFree).toBeUndefined();
+  });
+
   it("marks events shown as free", async () => {
     calendarMocks.list.mockResolvedValue({
       data: {

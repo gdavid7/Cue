@@ -19,6 +19,10 @@ import type {
 import { findVideoConferenceLink } from "@/utils/calendar/video-conference-link";
 import type { Logger } from "@/utils/logger";
 
+// A window's events fit in a page or two; past this many pages the read stops
+// and the list is reported as incomplete rather than paging forever.
+const MAX_PAGES_PER_CALENDAR = 10;
+
 export interface GoogleCalendarConnectionParams {
   accessToken: string | null;
   calendarEmail?: string;
@@ -92,6 +96,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
   private async listEvents(
     client: calendar_v3.Calendar,
     params: Omit<calendar_v3.Params$Resource$Events$List, "calendarId">,
+    onIncomplete?: () => void,
   ): Promise<calendar_v3.Schema$Event[]> {
     const calendarIds = this.connection.calendarIds?.length
       ? this.connection.calendarIds
@@ -104,6 +109,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
           // would otherwise pass for the whole calendar.
           const items: calendar_v3.Schema$Event[] = [];
           let pageToken: string | undefined;
+          let pages = 0;
           do {
             const { data } = await client.events.list({
               ...params,
@@ -112,7 +118,14 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
             });
             items.push(...(data.items ?? []));
             pageToken = data.nextPageToken ?? undefined;
-          } while (pageToken && items.length < (params.maxResults ?? 250));
+            pages++;
+          } while (
+            pageToken &&
+            items.length < (params.maxResults ?? 250) &&
+            pages < MAX_PAGES_PER_CALENDAR
+          );
+          if (pageToken && items.length < (params.maxResults ?? 250))
+            onIncomplete?.();
           return items;
         } catch (error) {
           // A calendar removed or unshared since it was synced has no events.
@@ -126,39 +139,48 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
     );
     if (lists.length === 1) return lists[0];
 
-    const seen = new Set<string>();
-    return lists
-      .flat()
-      .filter((event) => {
-        const key = `${event.iCalUID ?? event.id}|${event.start?.dateTime ?? event.start?.date}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => eventStart(a) - eventStart(b));
+    // Of copies on several calendars, the one shown as busy is kept.
+    const byKey = new Map<string, calendar_v3.Schema$Event>();
+    for (const event of lists.flat()) {
+      const key = `${event.iCalUID ?? event.id}|${event.start?.dateTime ?? event.start?.date}`;
+      const kept = byKey.get(key);
+      if (
+        !kept ||
+        (kept.transparency === "transparent" &&
+          event.transparency !== "transparent")
+      )
+        byKey.set(key, event);
+    }
+    return [...byKey.values()].sort((a, b) => eventStart(a) - eventStart(b));
   }
 
   async fetchEvents({
     timeMin = new Date(),
     timeMax,
     maxResults,
+    onIncomplete,
   }: {
     timeMin?: Date;
     timeMax?: Date;
     maxResults?: number;
+    onIncomplete?: () => void;
   }): Promise<CalendarEvent[]> {
     this.logger.trace("Starting Google calendar client setup");
     const client = await this.getClient();
     this.logger.trace("Completed Google calendar client setup");
 
     this.logger.trace("Starting Google calendar events request");
-    const events = await this.listEvents(client, {
-      timeMin: timeMin?.toISOString(),
-      timeMax: timeMax?.toISOString(),
-      maxResults: maxResults || 10,
-      singleEvents: true,
-      orderBy: "startTime",
-    });
+    const events = await this.listEvents(
+      client,
+      {
+        timeMin: timeMin?.toISOString(),
+        timeMax: timeMax?.toISOString(),
+        maxResults: maxResults || 10,
+        singleEvents: true,
+        orderBy: "startTime",
+      },
+      onIncomplete,
+    );
     this.logger.trace("Completed Google calendar events request", {
       eventCount: events.length,
     });

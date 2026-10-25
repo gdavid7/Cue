@@ -84,6 +84,24 @@ describe("fetchCalendarEventsInWindow", () => {
     expect(result.events).toHaveLength(1);
   });
 
+  it("reports incomplete when a provider stopped reading early", async () => {
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      {
+        fetchEvents: vi.fn(
+          async ({ onIncomplete }: { onIncomplete?: () => void }) => {
+            onIncomplete?.();
+            return [makeEvent("first")];
+          },
+        ),
+      } as never,
+    ]);
+
+    const result = await fetchCalendarEventsInWindow(fetchParams);
+
+    expect(result.complete).toBe(false);
+    expect(result.events.map((event) => event.id)).toEqual(["first"]);
+  });
+
   it("reports complete when every connected calendar was fetched", async () => {
     vi.mocked(createCalendarEventProviders).mockResolvedValue([
       fakeProvider([makeEvent("event-1")]),

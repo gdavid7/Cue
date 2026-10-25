@@ -77,6 +77,8 @@ export interface CalendarEventProvider {
     timeMin?: Date;
     timeMax?: Date;
     maxResults?: number;
+    /** Called when the list stopped short of everything in the range. */
+    onIncomplete?: () => void;
   }): Promise<CalendarEvent[]>;
   fetchEventsWithAttendee(options: {
     attendeeEmail: string;

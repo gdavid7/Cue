@@ -89,6 +89,7 @@ export async function fetchCalendarEventsInWindow({
   );
   logger.trace("Counted connected calendars", { connectedCalendars });
 
+  let stoppedEarly = false;
   const results = await Promise.allSettled(
     providers.map(async (provider, providerIndex) => {
       const providerLogger = logger.with({
@@ -101,6 +102,9 @@ export async function fetchCalendarEventsInWindow({
           timeMin,
           timeMax,
           maxResults: maxResultsPerProvider,
+          onIncomplete: () => {
+            stoppedEarly = true;
+          },
         });
 
         providerLogger.trace("Completed calendar provider event fetch", {
@@ -166,6 +170,7 @@ export async function fetchCalendarEventsInWindow({
   const complete =
     failedProviders === 0 &&
     !truncated &&
+    !stoppedEarly &&
     providers.length >= connectedCalendars;
 
   logger.info("Completed calendar event window fetch", {
