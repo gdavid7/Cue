@@ -11,6 +11,22 @@ export function rangesOverlap(a: TimeRange, b: TimeRange) {
 }
 
 /**
+ * Whether every moment of `range` falls inside one of `covers`, so busy time
+ * there is accounted for by events we know about.
+ */
+export function isCovered(range: TimeRange, covers: TimeRange[]) {
+  let coveredUntil = range.start;
+  for (const cover of [...covers].sort(
+    (a, b) => a.start.getTime() - b.start.getTime(),
+  )) {
+    if (cover.start > coveredUntil) break;
+    if (cover.end > coveredUntil) coveredUntil = cover.end;
+    if (coveredUntil >= range.end) return true;
+  }
+  return coveredUntil >= range.end;
+}
+
+/**
  * The instants an invitation occupies, or null when there is nothing worth
  * checking: all-day invitations (they block a date, not a time), ones with no
  * end, ones already over, and ones longer than the check reads.
@@ -34,11 +50,11 @@ export function getInvitationWindow(
  * under a UID the provider rewrote (Exchange does this for outside invites).
  */
 export function isInvitationCopy(
-  event: { title: string; start: string; end: string },
+  event: { title: string | null; start: string; end: string },
   invitation: { title: string } & TimeRange,
 ) {
   return (
-    event.title.trim() === invitation.title.trim() &&
+    event.title?.trim() === invitation.title.trim() &&
     new Date(event.start).getTime() === invitation.start.getTime() &&
     new Date(event.end).getTime() === invitation.end.getTime()
   );

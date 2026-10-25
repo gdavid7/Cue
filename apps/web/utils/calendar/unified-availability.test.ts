@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { getUnifiedCalendarAvailability } from "./unified-availability";
+import {
+  getUnifiedCalendarAvailability,
+  getUnifiedCalendarBusy,
+} from "./unified-availability";
 import prisma from "@/utils/prisma";
 import { createGoogleAvailabilityProvider } from "./providers/google-availability";
 import { createMicrosoftAvailabilityProvider } from "./providers/microsoft-availability";
@@ -492,5 +495,61 @@ describe("getUnifiedCalendarAvailability", () => {
         }),
       ).rejects.toThrow("expired");
     });
+  });
+});
+
+describe("getUnifiedCalendarBusy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads exactly the range asked for, and says how many calendars it read", async () => {
+    vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([
+      getCalendarConnection({ provider: "google", calendarIds: ["cal-1"] }),
+    ]);
+    const mockGoogleProvider = {
+      fetchBusyPeriods: vi.fn().mockResolvedValue([]),
+    };
+    vi.mocked(createGoogleAvailabilityProvider).mockReturnValue(
+      mockGoogleProvider as any,
+    );
+
+    const result = await getUnifiedCalendarBusy({
+      emailAccountId: "test-account-id",
+      range: {
+        start: new Date("2030-03-04T15:00:00Z"),
+        end: new Date("2030-03-04T16:00:00Z"),
+      },
+      logger,
+    });
+
+    expect(mockGoogleProvider.fetchBusyPeriods).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeMin: "2030-03-04T15:00:00.000Z",
+        timeMax: "2030-03-04T16:00:00.000Z",
+      }),
+    );
+    expect(result).toEqual({ busyPeriods: [], readableCalendars: 1 });
+  });
+
+  it("reads nothing when only Google's holiday and birthday calendars are on", async () => {
+    vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([
+      getCalendarConnection({
+        provider: "google",
+        calendarIds: ["en.usa#holiday@group.v.calendar.google.com"],
+      }),
+    ]);
+
+    const result = await getUnifiedCalendarBusy({
+      emailAccountId: "test-account-id",
+      range: {
+        start: new Date("2030-03-04T15:00:00Z"),
+        end: new Date("2030-03-04T16:00:00Z"),
+      },
+      logger,
+      excludeGoogleVirtualCalendars: true,
+    });
+
+    expect(result).toEqual({ busyPeriods: [], readableCalendars: 0 });
   });
 });

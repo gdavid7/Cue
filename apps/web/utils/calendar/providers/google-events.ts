@@ -333,6 +333,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
       startTime,
       endTime,
       ...(allDay ? { allDay } : {}),
+      ...(event.transparency === "transparent" ? { markedFree: true } : {}),
       organizerEmail: event.organizer?.email ?? undefined,
       isOrganizer: event.organizer?.self ?? undefined,
       attendees:

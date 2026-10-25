@@ -1,18 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { calendarConnectionsWhere } from "@/utils/calendar/connections";
 import {
+  isCovered,
   MAX_CONFLICT_WINDOW_MS,
   rangesOverlap,
 } from "@/utils/calendar/conflicts";
+import type { CalendarEvent } from "@/utils/calendar/event-types";
 import { fetchCalendarEventsInWindow } from "@/utils/calendar/fetch-events-in-window";
 import { isDeclinedByUser } from "@/utils/calendar/meeting-rules";
-import { isGoogleVirtualCalendarId } from "@/utils/calendar/providers/google-calendar-id";
-import { getUnifiedCalendarAvailability } from "@/utils/calendar/unified-availability";
-import { isGoogleProvider } from "@/utils/email/provider-types";
+import { getUnifiedCalendarBusy } from "@/utils/calendar/unified-availability";
 import type { Logger } from "@/utils/logger";
 import { withEmailAccount } from "@/utils/middleware";
-import prisma from "@/utils/prisma";
 
 // A window this short holds a handful of events; more than this is a calendar
 // we can't read in one go, and the answer is withheld.
@@ -81,36 +79,14 @@ async function getData({
   uid?: string;
   logger: Logger;
 }) {
-  const enabledCalendars = await prisma.calendar.findMany({
-    where: {
-      isEnabled: true,
-      connection: {
-        ...calendarConnectionsWhere(emailAccountId),
-        isConnected: true,
-      },
-    },
-    select: { calendarId: true, connection: { select: { provider: true } } },
-  });
-  // Holidays and birthdays aren't read for availability, so they can't make
-  // the person busy.
-  const hasReadableCalendar = enabledCalendars.some(
-    (calendar) =>
-      !(
-        isGoogleProvider(calendar.connection.provider) &&
-        isGoogleVirtualCalendarId(calendar.calendarId)
-      ),
-  );
-  if (!hasReadableCalendar) return { status: "no-calendar" as const };
-
   const invitation = { start, end };
-  let busy: Awaited<ReturnType<typeof getUnifiedCalendarAvailability>>;
+  let busy: Awaited<ReturnType<typeof getUnifiedCalendarBusy>>;
   let calendar: Awaited<ReturnType<typeof fetchCalendarEventsInWindow>>;
   try {
     [busy, calendar] = await Promise.all([
-      getUnifiedCalendarAvailability({
+      getUnifiedCalendarBusy({
         emailAccountId,
-        startDate: start.toISOString(),
-        endDate: end.toISOString(),
+        range: invitation,
         logger,
         // A calendar we couldn't read could hide the conflict, and "You're
         // free" would then be wrong.
@@ -131,43 +107,62 @@ async function getData({
     });
     return { status: "unavailable" as const };
   }
-
-  // Busy time is what the calendars themselves count: events marked free,
-  // declined or cancelled don't block it.
-  const busyInWindow = busy
-    .map((period) => ({
-      start: new Date(period.start),
-      end: new Date(period.end),
-    }))
-    .filter((period) => rangesOverlap(period, invitation));
-  if (!busyInWindow.length) return { status: "ok" as const, conflicts: [] };
-  // Busy, but some events weren't read: the busy block may be one of them.
+  if (!busy.readableCalendars) return { status: "no-calendar" as const };
   if (!calendar.complete) return { status: "unavailable" as const };
 
-  const conflicts = calendar.events.filter((event) => {
-    const range = { start: event.startTime, end: event.endTime };
-    return (
-      !event.allDay &&
-      // The invitation itself, already on the calendar.
-      !(uid && event.iCalUid === uid) &&
-      rangesOverlap(range, invitation) &&
-      busyInWindow.some((period) => rangesOverlap(period, range)) &&
-      !isDeclinedByUser(event, ownAddresses(email, event.calendarEmail))
-    );
+  // What takes up the time: everything but events marked free or declined.
+  // An all-day event the calendar returned for this window spans all of it.
+  const blocking = calendar.events.filter(
+    (event) =>
+      !event.markedFree &&
+      !isDeclinedByUser(event, ownAddresses(email, event.calendarEmail)) &&
+      (event.allDay || rangesOverlap(eventRange(event), invitation)),
+  );
+  const isInvitation = (event: CalendarEvent) => !!uid && event.iCalUid === uid;
+  const conflicts = blocking.filter((event) => !isInvitation(event));
+
+  // Every busy moment must belong to an event we can name, or to the
+  // invitation itself; busy time we can't explain makes "free" or a short
+  // list a guess, so the card says nothing.
+  const covers = blocking.map((event) =>
+    event.allDay ? invitation : eventRange(event),
+  );
+  const unexplained = busy.busyPeriods.some((period) => {
+    const clipped = {
+      start: maxDate(new Date(period.start), start),
+      end: minDate(new Date(period.end), end),
+    };
+    return clipped.start < clipped.end && !isCovered(clipped, covers);
   });
   logger.trace("Invitation conflicts", {
     conflictCount: conflicts.length,
-    busyPeriodCount: busyInWindow.length,
+    busyPeriodCount: busy.busyPeriods.length,
+    unexplained,
   });
+  if (unexplained) return { status: "unavailable" as const };
 
   return {
     status: "ok" as const,
     conflicts: conflicts.map((event) => ({
-      title: event.title,
+      // Providers name an untitled event "Untitled"; the card words it itself.
+      title:
+        event.title.trim() && event.title !== "Untitled" ? event.title : null,
       start: event.startTime.toISOString(),
       end: event.endTime.toISOString(),
     })),
   };
+}
+
+function eventRange(event: CalendarEvent) {
+  return { start: event.startTime, end: event.endTime };
+}
+
+function maxDate(a: Date, b: Date) {
+  return a > b ? a : b;
+}
+
+function minDate(a: Date, b: Date) {
+  return a < b ? a : b;
 }
 
 function ownAddresses(email: string, calendarEmail: string | undefined) {

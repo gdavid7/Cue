@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getInvitationWindow,
+  isCovered,
   isInvitationCopy,
   rangesOverlap,
 } from "@/utils/calendar/conflicts";
@@ -61,6 +62,35 @@ describe("rangesOverlap", () => {
         meeting,
         range("2030-03-04T12:00:00+01:00", "2030-03-04T13:00:00+01:00"),
       ),
+    ).toBe(false);
+  });
+});
+
+describe("isCovered", () => {
+  const busy = range("2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z");
+
+  it("is covered by one event or by several that leave no gap", () => {
+    expect(
+      isCovered(busy, [range("2030-03-04T09:00:00Z", "2030-03-04T12:00:00Z")]),
+    ).toBe(true);
+    expect(
+      isCovered(busy, [
+        range("2030-03-04T10:30:00Z", "2030-03-04T11:00:00Z"),
+        range("2030-03-04T10:00:00Z", "2030-03-04T10:30:00Z"),
+      ]),
+    ).toBe(true);
+  });
+
+  it("is not covered when any moment is left over", () => {
+    expect(isCovered(busy, [])).toBe(false);
+    expect(
+      isCovered(busy, [
+        range("2030-03-04T10:00:00Z", "2030-03-04T10:20:00Z"),
+        range("2030-03-04T10:30:00Z", "2030-03-04T11:00:00Z"),
+      ]),
+    ).toBe(false);
+    expect(
+      isCovered(busy, [range("2030-03-04T10:00:00Z", "2030-03-04T10:59:00Z")]),
     ).toBe(false);
   });
 });
@@ -150,6 +180,19 @@ describe("isInvitationCopy", () => {
         invitation,
       ),
     ).toBe(true);
+  });
+
+  it("never matches an untitled event", () => {
+    expect(
+      isInvitationCopy(
+        {
+          title: null,
+          start: "2030-03-04T10:00:00Z",
+          end: "2030-03-04T11:00:00Z",
+        },
+        invitation,
+      ),
+    ).toBe(false);
   });
 
   it("keeps a different meeting at the same time", () => {

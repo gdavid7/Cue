@@ -1,17 +1,15 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import prisma from "@/utils/__mocks__/prisma";
 import type { CalendarEvent } from "@/utils/calendar/event-types";
 
 const mocks = vi.hoisted(() => ({
-  getUnifiedCalendarAvailability: vi.fn(),
+  getUnifiedCalendarBusy: vi.fn(),
   fetchCalendarEventsInWindow: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
-vi.mock("@/utils/prisma");
 vi.mock("@/utils/calendar/unified-availability", () => ({
-  getUnifiedCalendarAvailability: mocks.getUnifiedCalendarAvailability,
+  getUnifiedCalendarBusy: mocks.getUnifiedCalendarBusy,
 }));
 vi.mock("@/utils/calendar/fetch-events-in-window", () => ({
   fetchCalendarEventsInWindow: mocks.fetchCalendarEventsInWindow,
@@ -31,18 +29,12 @@ const END = "2030-03-04T11:00:00.000Z";
 describe("GET /api/user/calendar/conflicts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    prisma.calendar.findMany.mockResolvedValue([
-      { calendarId: "primary", connection: { provider: "google" } },
-    ] as never);
-    mocks.getUnifiedCalendarAvailability.mockResolvedValue([]);
-    mocks.fetchCalendarEventsInWindow.mockResolvedValue({
-      events: [],
-      complete: true,
-    });
+    busy();
+    events([]);
   });
 
   it("names the events that overlap the invitation", async () => {
-    busy("2030-03-04T10:30:00.000Z", "2030-03-04T12:00:00.000Z");
+    busy(["2030-03-04T10:30:00.000Z", "2030-03-04T11:00:00.000Z"]);
     events([
       event({
         title: "Design review",
@@ -71,10 +63,12 @@ describe("GET /api/user/calendar/conflicts", () => {
         },
       ],
     });
-    // Read live from every calendar the person uses, never one that failed.
-    expect(mocks.getUnifiedCalendarAvailability).toHaveBeenCalledWith(
+    // Read live for exactly the invitation's time, never past a calendar
+    // that failed.
+    expect(mocks.getUnifiedCalendarBusy).toHaveBeenCalledWith(
       expect.objectContaining({
         emailAccountId: "email-account-1",
+        range: { start: new Date(START), end: new Date(END) },
         failClosed: true,
       }),
     );
@@ -87,16 +81,15 @@ describe("GET /api/user/calendar/conflicts", () => {
   });
 
   it("is free when nothing on the calendars is busy then", async () => {
-    // Marked free on the calendar, so not busy.
-    events([event({ title: "Focus time" })]);
+    events([event({ title: "Focus time", markedFree: true })]);
 
     const response = await get({ start: START, end: END });
 
     expect(await response.json()).toEqual({ status: "ok", conflicts: [] });
   });
 
-  it("does not count the invitation's own event, matched by its UID", async () => {
-    busy(START, END);
+  it("is free when the only busy time is the invitation's own event", async () => {
+    busy([START, END]);
     events([event({ title: "Project planning", iCalUid: "invite-uid-1" })]);
 
     const response = await get({ start: START, end: END, uid: "invite-uid-1" });
@@ -104,37 +97,93 @@ describe("GET /api/user/calendar/conflicts", () => {
     expect(await response.json()).toEqual({ status: "ok", conflicts: [] });
   });
 
-  it("skips declined and all-day events", async () => {
-    busy(START, END);
+  it("names an all-day out-of-office that blocks the day", async () => {
+    // Merged with the invitation's own busy block on the calendar.
+    busy(["2030-03-04T00:00:00.000Z", "2030-03-05T00:00:00.000Z"]);
+    events([
+      event({
+        title: "Out of office",
+        allDay: true,
+        startTime: new Date("2030-03-04T00:00:00.000Z"),
+        endTime: new Date("2030-03-05T00:00:00.000Z"),
+      }),
+      event({ title: "Project planning", iCalUid: "invite-uid-1" }),
+    ]);
+
+    const response = await get({ start: START, end: END, uid: "invite-uid-1" });
+
+    expect(await response.json()).toEqual({
+      status: "ok",
+      conflicts: [
+        {
+          title: "Out of office",
+          start: "2030-03-04T00:00:00.000Z",
+          end: "2030-03-05T00:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  it("says nothing when busy time isn't explained by any event it can name", async () => {
+    busy([START, END]);
     events([
       event({
         title: "Declined sync",
         attendees: [{ email: "user@example.com", self: true, declined: true }],
       }),
+    ]);
+
+    const response = await get({ start: START, end: END, uid: "invite-uid-1" });
+
+    expect(await response.json()).toEqual({ status: "unavailable" });
+  });
+
+  it("doesn't count events marked free or declined against the invitation's own busy time", async () => {
+    busy([START, END]);
+    events([
+      event({ title: "Project planning", iCalUid: "invite-uid-1" }),
+      event({ title: "Focus time", markedFree: true }),
       event({
-        title: "Offsite",
-        allDay: true,
-        startTime: new Date("2030-03-04T00:00:00.000Z"),
-        endTime: new Date("2030-03-05T00:00:00.000Z"),
+        title: "Declined sync",
+        attendees: [{ email: "user@example.com", self: true, declined: true }],
       }),
     ]);
 
-    const response = await get({ start: START, end: END });
+    const response = await get({ start: START, end: END, uid: "invite-uid-1" });
 
     expect(await response.json()).toEqual({ status: "ok", conflicts: [] });
   });
 
+  it("leaves an untitled event's name to the card", async () => {
+    busy([START, END]);
+    events([event({ title: "Untitled" })]);
+
+    const response = await get({ start: START, end: END });
+
+    expect(await response.json()).toEqual({
+      status: "ok",
+      conflicts: [{ title: null, start: START, end: END }],
+    });
+  });
+
   it("says nothing when no calendar is connected", async () => {
-    prisma.calendar.findMany.mockResolvedValue([]);
+    mocks.getUnifiedCalendarBusy.mockResolvedValue({
+      busyPeriods: [],
+      readableCalendars: 0,
+    });
+    mocks.fetchCalendarEventsInWindow.mockResolvedValue({
+      events: [],
+      complete: false,
+      noCalendarConnected: true,
+    });
 
     const response = await get({ start: START, end: END });
 
     expect(await response.json()).toEqual({ status: "no-calendar" });
-    expect(mocks.getUnifiedCalendarAvailability).not.toHaveBeenCalled();
   });
 
   it("says nothing when a calendar can't be read", async () => {
-    mocks.getUnifiedCalendarAvailability.mockRejectedValue(
+    mocks.getUnifiedCalendarBusy.mockRejectedValue(
       new Error("Calendar read failed"),
     );
 
@@ -143,8 +192,7 @@ describe("GET /api/user/calendar/conflicts", () => {
     expect(await response.json()).toEqual({ status: "unavailable" });
   });
 
-  it("says nothing when busy time can't be matched to every event", async () => {
-    busy(START, END);
+  it("says nothing when some events couldn't be read", async () => {
     mocks.fetchCalendarEventsInWindow.mockResolvedValue({
       events: [],
       complete: false,
@@ -164,7 +212,7 @@ describe("GET /api/user/calendar/conflicts", () => {
     const response = await get(params);
 
     expect(response.status).toBe(400);
-    expect(mocks.getUnifiedCalendarAvailability).not.toHaveBeenCalled();
+    expect(mocks.getUnifiedCalendarBusy).not.toHaveBeenCalled();
   });
 });
 
@@ -177,8 +225,11 @@ function get(params: Record<string, string>) {
   );
 }
 
-function busy(start: string, end: string) {
-  mocks.getUnifiedCalendarAvailability.mockResolvedValue([{ start, end }]);
+function busy(...periods: [string, string][]) {
+  mocks.getUnifiedCalendarBusy.mockResolvedValue({
+    busyPeriods: periods.map(([start, end]) => ({ start, end })),
+    readableCalendars: 1,
+  });
 }
 
 function events(list: CalendarEvent[]) {

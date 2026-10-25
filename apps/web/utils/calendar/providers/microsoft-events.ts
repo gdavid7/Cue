@@ -60,6 +60,7 @@ type MicrosoftEvent = {
   isOnlineMeeting?: boolean;
   onlineMeetingProvider?: string;
   isCancelled?: boolean;
+  showAs?: string;
   singleValueExtendedProperties?: Array<{ id: string; value: string }>;
   responseStatus?: { response?: string };
 };
@@ -468,6 +469,7 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
         ),
       startTime,
       endTime,
+      ...(event.showAs === "free" ? { markedFree: true } : {}),
       organizerEmail: event.organizer?.emailAddress?.address || undefined,
       isOrganizer: event.isOrganizer,
       attendees:

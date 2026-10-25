@@ -75,11 +75,11 @@ export function CalendarInvitation({ messageId }: { messageId: string }) {
                 <p className="font-medium break-words">
                   {formatInvitationTime(invitation, viewerTimeZone)}
                 </p>
-                <ConflictHint invitation={invitation} />
                 <p className="break-words">{invitation.title}</p>
                 <p className="break-all text-sm text-muted-foreground">
                   {invitation.organizer}
                 </p>
+                <ConflictHint invitation={invitation} />
                 {invitation.recurring && (
                   <p className="text-sm text-muted-foreground">
                     Recurring invitation
@@ -140,36 +140,45 @@ export function CalendarInvitation({ messageId }: { messageId: string }) {
 
 type Invitation = NonNullable<CalendarInvitationResponse["invitation"]>;
 
-// Read live from the person's calendars each time the card opens; the line
-// stays away when there is nothing certain to say.
+// Read live from the person's calendars when the card opens, at most once a
+// minute; the line stays away when there is nothing certain to say.
 function ConflictHint({ invitation }: { invitation: Invitation }) {
   const { emailAccountId } = useAccount();
   const slot = getInvitationWindow(invitation, new Date());
+  const params = slot
+    ? new URLSearchParams({
+        start: slot.start.toISOString(),
+        end: slot.end.toISOString(),
+      })
+    : null;
+  if (params && invitation.uid) params.set("uid", invitation.uid);
   const { data } = useSWR<GetCalendarConflictsResponse>(
-    slot
+    params
       ? getAccountScopedKey(
-          `/api/user/calendar/conflicts?${new URLSearchParams({
-            start: slot.start.toISOString(),
-            end: slot.end.toISOString(),
-            uid: invitation.uid,
-          })}`,
+          `/api/user/calendar/conflicts?${params}`,
           emailAccountId,
         )
       : null,
+    // Each read asks every connected calendar, so a glance away and back
+    // doesn't ask again.
+    { revalidateOnFocus: false, dedupingInterval: 60_000 },
   );
   if (!slot || data?.status !== "ok") return null;
 
-  const conflicts = data.conflicts.filter(
+  const [first, ...rest] = data.conflicts.filter(
     (event) => !isInvitationCopy(event, { title: invitation.title, ...slot }),
   );
-  const [first, ...rest] = conflicts;
   return (
     <p className="flex min-w-0 gap-1 text-sm text-muted-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
       {first ? (
         <>
-          <span className="truncate">Conflicts with {first.title}</span>
+          <span className="truncate">
+            {first.title
+              ? `Conflicts with ${first.title}`
+              : "Conflicts with a meeting"}
+          </span>
           {rest.length > 0 && (
-            <span className="shrink-0">+{rest.length} more</span>
+            <span className="shrink-0">and {rest.length} more</span>
           )}
         </>
       ) : (

@@ -52,11 +52,27 @@ describe("CalendarInvitation conflict line", () => {
     expect(
       await screen.findByText("Conflicts with Design review"),
     ).toBeTruthy();
-    expect(screen.getByText("+2 more")).toBeTruthy();
+    expect(screen.getByText("and 2 more")).toBeTruthy();
     const url = new URL(requested.find(isConflictsUrl)!, "http://localhost");
     expect(url.searchParams.get("start")).toBe(invitation.start);
     expect(url.searchParams.get("end")).toBe(invitation.end);
     expect(url.searchParams.get("uid")).toBe("invite-uid-1");
+  });
+
+  it("names an untitled event plainly and never sends a missing UID", async () => {
+    const requested = renderCard({
+      invitation: { ...invitation, uid: undefined as unknown as string },
+      conflicts: {
+        status: "ok",
+        conflicts: [
+          { title: null, start: invitation.start, end: invitation.end },
+        ],
+      },
+    });
+
+    expect(await screen.findByText("Conflicts with a meeting")).toBeTruthy();
+    const url = new URL(requested.find(isConflictsUrl)!, "http://localhost");
+    expect(url.searchParams.has("uid")).toBe(false);
   });
 
   it("is free when the only overlap is the invitation's own copy", async () => {

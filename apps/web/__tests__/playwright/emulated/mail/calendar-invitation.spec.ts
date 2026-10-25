@@ -66,6 +66,8 @@ test("shows inline calendar responses with the current RSVP", async ({
   });
 });
 
+// Client-only: the conflicts route is mocked, so this covers the card's
+// request and wording, not the server's calendar reads.
 test("says what an upcoming invitation conflicts with", async ({
   page,
 }, testInfo) => {
@@ -94,8 +96,14 @@ test("says what an upcoming invitation conflicts with", async ({
     return route.fulfill({
       json: {
         status: "ok",
+        // In start order, as the server sends them.
         conflicts: [
-          // The invitation itself, already on the calendar.
+          {
+            title: "Hiring sync",
+            start: "2030-03-04T14:30:00.000Z",
+            end: "2030-03-04T15:15:00.000Z",
+          },
+          // The invitation itself, on a calendar that rewrote its UID.
           {
             title: "Quarterly review",
             start: "2030-03-04T15:00:00.000Z",
@@ -105,11 +113,6 @@ test("says what an upcoming invitation conflicts with", async ({
             title: "Design review",
             start: "2030-03-04T15:30:00.000Z",
             end: "2030-03-04T16:30:00.000Z",
-          },
-          {
-            title: "Hiring sync",
-            start: "2030-03-04T14:30:00.000Z",
-            end: "2030-03-04T15:15:00.000Z",
           },
         ],
       },
@@ -122,8 +125,8 @@ test("says what an upcoming invitation conflicts with", async ({
   await expect(
     card.getByText("Monday, March 4, 2030 · 3:00 PM – 4:00 PM"),
   ).toBeVisible();
-  await expect(card.getByText("Conflicts with Design review")).toBeVisible();
-  await expect(card.getByText("+1 more")).toBeVisible();
+  await expect(card.getByText("Conflicts with Hiring sync")).toBeVisible();
+  await expect(card.getByText("and 1 more")).toBeVisible();
   expect(conflictRequests[0]?.searchParams.get("start")).toBe(
     "2030-03-04T15:00:00.000Z",
   );
@@ -135,7 +138,7 @@ test("says what an upcoming invitation conflicts with", async ({
     fullPage: true,
   });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(card.getByText("Conflicts with Design review")).toBeVisible();
+  await expect(card.getByText("Conflicts with Hiring sync")).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath("calendar-invitation-conflict-mobile.png"),
     fullPage: true,

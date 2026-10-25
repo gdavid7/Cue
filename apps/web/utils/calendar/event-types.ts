@@ -27,6 +27,8 @@ export interface CalendarEvent {
   // relative to the calendar connection, which is not always the EmailAccount.
   isOrganizer?: boolean;
   location?: string;
+  /** Shown as free on the calendar, so it doesn't block the time. */
+  markedFree?: boolean;
   organizerEmail?: string;
   startTime: Date;
   title: string;
