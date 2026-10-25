@@ -81,9 +81,13 @@ async function getEmailMessages(
       }),
     ),
     timeRequestPhase("filters", () =>
-      runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, () =>
-        getEmailFilters(emailProvider, logger),
-      ),
+      // One sender's lookup backs the reader's skip-inbox toggle, which
+      // stays disabled without the filters, so it waits for them in full.
+      options.search
+        ? getEmailFilters(emailProvider, logger)
+        : runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, () =>
+            getEmailFilters(emailProvider, logger),
+          ),
     ),
     timeRequestPhase("statuses", () =>
       getNewsletterStatuses({ emailAccountId }),

@@ -129,6 +129,24 @@ describe("GET /api/user/stats/newsletters", () => {
     expect(waitBudget).toBeLessThanOrEqual(5000);
   });
 
+  it("waits for the provider filters when one sender is looked up, so their auto-archive status is known", async () => {
+    let waitBudget: number | undefined = 0;
+    mockEmailProvider.getFiltersList.mockImplementation(async () => {
+      waitBudget = currentGmailQuotaContext().maxTotalWaitMs;
+      return [];
+    });
+
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/user/stats/newsletters?search=news%40example.com",
+      ),
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(waitBudget).toBeUndefined();
+  });
+
   it("rejects a limit below 1", async () => {
     await expect(
       GET(
