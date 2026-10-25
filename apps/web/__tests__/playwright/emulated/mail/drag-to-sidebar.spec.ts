@@ -113,38 +113,47 @@ test("drags a conversation into an Outlook folder and Undo puts each message bac
     from: "ada@example.com",
   });
 
-  const { conversations } = await openMail(page);
-  const row = conversationWithSubject(page, conversations, subject);
-  await expect(row).toBeVisible({ timeout: 60_000 });
-  const sidebar = page.getByRole("navigation", { name: "Mailboxes" });
-  const target = sidebar.getByRole("link", {
-    name: new RegExp(`^${folder.displayName}`),
-  });
-  await expect(target).toBeVisible();
+  // The conversation is built in the shared mailbox, so every exit, a failed
+  // assertion included, takes it back out; left behind it would re-sort the
+  // list under the tests that follow.
+  try {
+    const { conversations } = await openMail(page);
+    const row = conversationWithSubject(page, conversations, subject);
+    await expect(row).toBeVisible({ timeout: 60_000 });
+    const sidebar = page.getByRole("navigation", { name: "Mailboxes" });
+    const target = sidebar.getByRole("link", {
+      name: new RegExp(`^${folder.displayName}`),
+    });
+    await expect(target).toBeVisible();
 
-  await dragOver(page, row, target);
-  await expect(target).toHaveAttribute("data-drop", "target");
-  await capturePlaywrightCheckpoint(page, testInfo, "drag-over-folder");
-  await page.mouse.up();
+    await dragOver(page, row, target);
+    await expect(target).toHaveAttribute("data-drop", "target");
+    await capturePlaywrightCheckpoint(page, testInfo, "drag-over-folder");
+    await page.mouse.up();
 
-  const moved = toast(page, `Moved to ${folder.displayName}`);
-  await expect(moved).toBeVisible();
-  await expect(row).toHaveCount(0);
-  await expect
-    .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
-    .toBe(folder.id);
-  // A folder move leaves the user's own Sent copy where it is.
-  expect(await graph.folderOf(sentId)).toBe("sentitems");
+    const moved = toast(page, `Moved to ${folder.displayName}`);
+    await expect(moved).toBeVisible();
+    await expect(row).toHaveCount(0);
+    await expect
+      .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
+      .toBe(folder.id);
+    // A folder move leaves the user's own Sent copy where it is.
+    expect(await graph.folderOf(sentId)).toBe("sentitems");
 
-  await moved.getByRole("button", { name: /^Undo/ }).click();
-  await expect(row).toBeVisible();
-  await expect
-    .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
-    .toBe("inbox");
-  await expect
-    .poll(() => graph.folderOf(sentId), { timeout: 60_000 })
-    .toBe("sentitems");
-  await capturePlaywrightCheckpoint(page, testInfo, "folder-move-undone");
+    await moved.getByRole("button", { name: /^Undo/ }).click();
+    await expect(row).toBeVisible();
+    await expect
+      .poll(() => graph.folderOf(replyId), { timeout: 60_000 })
+      .toBe("inbox");
+    await expect
+      .poll(() => graph.folderOf(sentId), { timeout: 60_000 })
+      .toBe("sentitems");
+    await capturePlaywrightCheckpoint(page, testInfo, "folder-move-undone");
+  } finally {
+    await graph.remove(`/messages/${replyId}`);
+    await graph.remove(`/messages/${sentId}`);
+    await graph.remove(`/mailFolders/${folder.id}`);
+  }
 });
 
 test("opens More while a drag rests on its toggle, and closes it after", async ({
@@ -292,6 +301,9 @@ async function outlookGraph(page: Page) {
       })) as { id: string };
       await post(`/messages/${draft.id}/move`, { destinationId: "sentitems" });
       return draft.id;
+    },
+    async remove(path: string) {
+      await page.request.delete(`${baseUrl}/v1.0/me${path}`, { headers });
     },
     async folderOf(messageId: string) {
       const response = await page.request.get(

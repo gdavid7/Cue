@@ -55,6 +55,8 @@ export function launchHostedElectron(input: {
 export function startHostedElectron(
   input: Parameters<typeof launchHostedElectron>[0],
 ) {
+  let stdout = "";
+  let stderr = "";
   const done = new Promise<HostedElectronPayload>((resolve, reject) => {
     const child = spawn("node", [runner], {
       cwd: join(process.cwd(), "../desktop"),
@@ -86,8 +88,6 @@ export function startHostedElectron(
         ...(input.readyPath ? { ELECTRON_READY_PATH: input.readyPath } : {}),
       },
     });
-    let stdout = "";
-    let stderr = "";
     child.stdout.on("data", (chunk) => {
       stdout += String(chunk);
     });
@@ -120,12 +120,12 @@ export function startHostedElectron(
       }
     });
   });
-  return { done };
+  return { done, output: () => `${stdout}\n${stderr}` };
 }
 
 export async function waitForHostedElectronReady(
   readyPath: string,
-  done: Promise<HostedElectronPayload>,
+  session: ReturnType<typeof startHostedElectron>,
 ) {
   const ready = (async () => {
     // A proof can write ready only after a whole flow (load, full metadata
@@ -135,11 +135,13 @@ export async function waitForHostedElectronReady(
       if (existsSync(readyPath)) return;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    throw new Error(`hosted electron never wrote ${readyPath}`);
+    throw new Error(
+      `hosted electron never wrote ${readyPath}\n${session.output()}`,
+    );
   })();
   const winner = await Promise.race([
     ready.then(() => "ready" as const),
-    done.then((payload) => payload),
+    session.done.then((payload) => payload),
   ]);
   if (winner === "ready") return;
   throw new Error(
