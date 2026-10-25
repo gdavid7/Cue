@@ -711,6 +711,10 @@ export function HomeDashboard() {
         ? () => handlers.setRead(targetKey, false)
         : undefined,
     reply: focusedKey ? () => handlers.reply(focusedKey) : undefined,
+    nudge:
+      focusedKey && lanes?.waiting.some((row) => rowKey(row) === focusedKey)
+        ? () => handlers.reply(focusedKey)
+        : undefined,
     undo: async () => {
       if (await undoLatestToast()) return;
       await undo();
