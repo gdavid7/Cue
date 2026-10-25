@@ -410,7 +410,9 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
     // Today's own answer only, not its other routes.
     (url) => url.pathname === "/api/user/home",
     async (route) => {
-      const response = await route.fetch();
+      // Today refreshes while it loads; the test may end with one in flight.
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
       const home = await response.json();
       if (!cueHasRead) {
         home.cue = { aiAccess: true, replyTracking: true, hasReadMail: false };
@@ -491,6 +493,7 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
     await expect(needsReply).toBeVisible();
     await expect(waitingOnYou).toHaveCount(0);
   } finally {
+    await page.unrouteAll({ behavior: "wait" });
     await seeded.remove();
     await other.remove();
   }
@@ -715,7 +718,8 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
     // Today's own answer only, not its other routes.
     (url) => url.pathname === "/api/user/home",
     async (route) => {
-      const response = await route.fetch();
+      const response = await route.fetch().catch(() => null);
+      if (!response) return;
       const home = await response.json();
       // Cue is checking (the emulated account has no AI plan); only "new" hasn't read mail yet.
       home.cue = {
@@ -784,6 +788,8 @@ test("Today says what needs you in one place: busy, all clear, and new", async (
       await page.setViewportSize({ width: 1280, height: 800 });
     }
   }
+  // Today refreshes while it loads; one may still be in the route.
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("While you were away says what Cue did since the last visit, links each count to History, and dismisses", async ({
