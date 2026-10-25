@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { MAIL_ENGINE_TAB_CHANNEL } from "@/utils/mail-engine/tab-channel";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
@@ -107,8 +108,10 @@ test("stars a sender as Important, marks their mail, and unstars them", async ({
   const card = page.getByTestId("person-card");
   const star = card.getByRole("button", { name: "Important", exact: true });
   await expect(star).toHaveAttribute("aria-pressed", "false");
+  const starSaved = await watchStarSaved(page);
   await star.click();
   await expect(star).toHaveAttribute("aria-pressed", "true");
+  await starSaved();
   await capturePlaywrightCheckpoint(page, testInfo, "person-card-important");
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden();
@@ -129,8 +132,10 @@ test("stars a sender as Important, marks their mail, and unstars them", async ({
   const again = await openThread(page, emailAccountId);
   await again.click();
   await expect(star).toHaveAttribute("aria-pressed", "true");
+  const unstarSaved = await watchStarSaved(page);
   await star.click();
   await expect(star).toHaveAttribute("aria-pressed", "false");
+  await unstarSaved();
   await page.keyboard.press("Escape");
   await page.goto(`/${emailAccountId}/mail`, { waitUntil: "domcontentloaded" });
   await expect(
@@ -258,4 +263,28 @@ async function openThread(page: Page, emailAccountId: string) {
   });
   await expect(sender).toBeVisible();
   return sender;
+}
+
+/**
+ * The card flips its star at once and saves it to the device after, so a
+ * reload right behind the click can beat the save and read the old star.
+ * The app announces a change once it is stored; arm this before the click and
+ * await the returned function before leaving the page.
+ */
+async function watchStarSaved(page: Page) {
+  await page.evaluate((channelName) => {
+    const channel = new BroadcastChannel(channelName);
+    const saved = new Promise<void>((resolve) => {
+      channel.addEventListener("message", (event) => {
+        if (event.data?.type !== "importantPeopleChanged") return;
+        channel.close();
+        resolve();
+      });
+    });
+    (window as unknown as { starSaved: Promise<void> }).starSaved = saved;
+  }, MAIL_ENGINE_TAB_CHANNEL);
+  return () =>
+    page.evaluate(
+      () => (window as unknown as { starSaved: Promise<void> }).starSaved,
+    );
 }

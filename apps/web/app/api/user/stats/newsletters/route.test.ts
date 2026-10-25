@@ -29,7 +29,10 @@ vi.mock("@/utils/middleware", async () => {
   return createWithEmailProviderTestMiddleware(mockEmailProvider);
 });
 
-import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  OPEN_THREAD_GMAIL_WAIT_MS,
+} from "@/utils/gmail/quota";
 import { GET } from "./route";
 
 function sender(from: string) {
@@ -129,10 +132,10 @@ describe("GET /api/user/stats/newsletters", () => {
     expect(waitBudget).toBeLessThanOrEqual(5000);
   });
 
-  it("waits for the provider filters when one sender is looked up, so their auto-archive status is known", async () => {
-    let waitBudget: number | undefined = 0;
+  it("reads the filters of one looked-up sender at interactive priority, since the reader's toggle waits on them", async () => {
+    let quota: ReturnType<typeof currentGmailQuotaContext> | undefined;
     mockEmailProvider.getFiltersList.mockImplementation(async () => {
-      waitBudget = currentGmailQuotaContext().maxTotalWaitMs;
+      quota = currentGmailQuotaContext();
       return [];
     });
 
@@ -144,7 +147,8 @@ describe("GET /api/user/stats/newsletters", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(waitBudget).toBeUndefined();
+    expect(quota?.priority).toBe("interactive");
+    expect(quota?.maxTotalWaitMs).toBe(OPEN_THREAD_GMAIL_WAIT_MS);
   });
 
   it("rejects a limit below 1", async () => {

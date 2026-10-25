@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   toastUndo: vi.fn(),
   setSenderStatusAction: vi.fn(),
   unsubscribeSenderAction: vi.fn(),
+  swrOptions: undefined as
+    | { refreshInterval?: (latest?: { filtersAvailable: boolean }) => number }
+    | undefined,
   stats: {
     newsletters: [] as unknown[],
     searchedSenderStatus: null as string | null,
@@ -28,11 +31,14 @@ vi.mock("sonner", () => ({
   }),
 }));
 vi.mock("swr", () => ({
-  default: () => ({
-    data: mocks.stats,
-    mutate: vi.fn().mockResolvedValue(undefined),
-    isLoading: false,
-  }),
+  default: (_key: unknown, options: typeof mocks.swrOptions) => {
+    mocks.swrOptions = options;
+    return {
+      data: mocks.stats,
+      mutate: vi.fn().mockResolvedValue(undefined),
+      isLoading: false,
+    };
+  },
 }));
 vi.mock("@/components/Toast", () => ({ toastUndo: mocks.toastUndo }));
 vi.mock("@/app/(app)/premium/PremiumModal", () => ({
@@ -67,6 +73,15 @@ describe("useUnsubscribeSender", () => {
     });
   });
   afterEach(cleanup);
+
+  it("asks again while the provider filters could not be read, and stops once they can", () => {
+    renderHook(() => useUnsubscribeSender(message({})));
+    const refreshInterval = mocks.swrOptions?.refreshInterval;
+
+    expect(refreshInterval?.({ filtersAvailable: false })).toBeGreaterThan(0);
+    expect(refreshInterval?.({ filtersAvailable: true })).toBe(0);
+    expect(refreshInterval?.(undefined)).toBe(0);
+  });
 
   it("offers undo after blocking a sender and restores the inbox on undo", async () => {
     const { result } = renderHook(() => useUnsubscribeSender(message({})));

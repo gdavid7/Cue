@@ -5,7 +5,10 @@ import {
   getNewsletterSenderDisplayName,
 } from "@/utils/email";
 import type { EmailProvider } from "@/utils/email/types";
-import { runWithGmailWaitBudget } from "@/utils/gmail/quota";
+import {
+  OPEN_THREAD_GMAIL_WAIT_MS,
+  runWithGmailWaitBudget,
+} from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 import { withEmailProvider } from "@/utils/middleware";
 import { timeRequestPhase } from "@/utils/request-metrics";
@@ -82,9 +85,15 @@ async function getEmailMessages(
     ),
     timeRequestPhase("filters", () =>
       // One sender's lookup backs the reader's skip-inbox toggle, which
-      // stays disabled without the filters, so it waits for them in full.
+      // stays disabled without the filters. A person is waiting on it, so it
+      // reads them ahead of background work, which a syncing account's
+      // budget can hold off for over a minute.
       options.search
-        ? getEmailFilters(emailProvider, logger)
+        ? runWithGmailWaitBudget(
+            OPEN_THREAD_GMAIL_WAIT_MS,
+            () => getEmailFilters(emailProvider, logger),
+            { priority: "interactive" },
+          )
         : runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, () =>
             getEmailFilters(emailProvider, logger),
           ),

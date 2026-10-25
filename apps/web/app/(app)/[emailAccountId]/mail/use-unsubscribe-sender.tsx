@@ -38,6 +38,8 @@ import {
 import type { ParsedMessage } from "@/utils/types";
 import { createSearchParams } from "@/utils/url";
 
+const FILTERS_RETRY_MS = 5000;
+
 /**
  * Sender actions shared by the mail list and reader.
  *
@@ -84,6 +86,10 @@ export function useUnsubscribeSender(
     {
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
+      // Unreadable filters are usually a busy or rate-limited provider that
+      // recovers, and the toggle stays held until they are read.
+      refreshInterval: (latest) =>
+        latest?.filtersAvailable === false ? FILTERS_RETRY_MS : 0,
     },
   );
   const canonicalSenderEmail = canonicalizeEmailAddress(senderEmail);
