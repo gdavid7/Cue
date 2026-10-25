@@ -400,7 +400,7 @@ describe("undo send", () => {
     await expect(undoPendingSend()).resolves.toBe(false);
     expect(restoreComposer).not.toHaveBeenCalled();
     expect(notifications.toastError).toHaveBeenCalledWith({
-      description: "Couldn't undo — it was already sent",
+      description: "Couldn't undo — it's already being sent.",
     });
     await expect(undoPendingSend()).resolves.toBe(false);
   });

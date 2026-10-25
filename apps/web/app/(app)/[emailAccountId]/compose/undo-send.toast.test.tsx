@@ -96,7 +96,7 @@ describe("undo send's toast", () => {
     expect(screen.getByText("Send undone. Draft restored.")).toBeTruthy();
   });
 
-  it("closes the toast when putting the draft back fails", async () => {
+  it("still confirms the undo when putting the draft back fails", async () => {
     const engine = startSend();
     engine.restoreComposer.mockImplementation(() => {
       throw new Error("composer gone");
@@ -105,9 +105,30 @@ describe("undo send's toast", () => {
     fireEvent.click(await undoButton());
     await act(() => delay(400));
 
-    // jsdom never finishes the exit animation, so sonner's list is checked.
-    expect(toast.getToasts()).toEqual([]);
+    expect(
+      screen.getByText(
+        "Send undone. Couldn't reopen the draft — it's saved on this device.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
     await expect(undoLatestToast()).resolves.toBe(false);
+  });
+
+  it("reports a send that went out while an unanswered undo waited", async () => {
+    const engine = startSend({
+      cancel: async () => {
+        await delay(100);
+        return { status: "unavailable" };
+      },
+    });
+
+    fireEvent.click(await undoButton());
+    await act(() => delay(20));
+    engine.setStatus("succeeded");
+    await act(() => delay(300));
+
+    expect(screen.getByText("Sent")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
   });
 });
 
@@ -118,7 +139,7 @@ function startSend({
   holdMs?: number;
   cancel?: () => Promise<unknown>;
 } = {}) {
-  const operation: OperationState = {
+  let operation: OperationState = {
     key: { accountId: "account", operationId: "mutation" },
     status: "executing",
     authority: "backend",
@@ -126,6 +147,7 @@ function startSend({
     nextAttemptAtMs: null,
     error: null,
   };
+  let listener = () => {};
   const cancelOperation = vi.fn(cancel);
   const client = {
     cancelOperation,
@@ -137,7 +159,10 @@ function startSend({
         refreshing: false,
         error: null,
       }),
-      subscribe: () => () => {},
+      subscribe: (next: () => void) => {
+        listener = next;
+        return () => {};
+      },
       close: () => {},
     }),
     readDraft: async () => ({ status: "found" }),
@@ -153,7 +178,14 @@ function startSend({
       restoreComposer,
     });
   });
-  return { cancel: cancelOperation, restoreComposer };
+  return {
+    cancel: cancelOperation,
+    restoreComposer,
+    setStatus(status: OperationState["status"]) {
+      operation = { ...operation, status };
+      listener();
+    },
+  };
 }
 
 function undoButton() {

@@ -142,15 +142,27 @@ export function toastSent(id: string) {
   });
 }
 
-export function toastSendUndone(id: string) {
+/**
+ * `draftReopened: false` is for a composer that couldn't be put back; the
+ * undone send's draft is still kept on this device.
+ */
+export function toastSendUndone(
+  id: string,
+  { draftReopened = true }: { draftReopened?: boolean } = {},
+) {
   releaseUndo(id);
-  return toast.success("Send undone. Draft restored.", {
-    id,
-    icon: null,
-    description: undefined,
-    duration: 4000,
-    action: undefined,
-  });
+  return toast.success(
+    draftReopened
+      ? "Send undone. Draft restored."
+      : "Send undone. Couldn't reopen the draft — it's saved on this device.",
+    {
+      id,
+      icon: null,
+      description: undefined,
+      duration: draftReopened ? 4000 : 8000,
+      action: undefined,
+    },
+  );
 }
 
 /**

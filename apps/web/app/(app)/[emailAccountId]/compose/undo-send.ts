@@ -75,6 +75,8 @@ type TrackedSend = {
   /** Undo is offered only while the send is held. */
   holding: boolean;
   undoing: boolean;
+  /** Reports the send's status, which is held back while an undo runs. */
+  inspect: () => void;
   release: () => void;
 };
 
@@ -186,6 +188,7 @@ function trackSend({
     holdUntil,
     holding: true,
     undoing: false,
+    inspect: () => {},
     release: () => {
       clearTimeout(holdTimeout);
       clearTimeout(settleTimeout);
@@ -228,6 +231,7 @@ function trackSend({
     // Cancelled, uncertain and blocked sends are reported by the composer.
     else settle(() => toast.dismiss(toastId));
   };
+  current.inspect = inspect;
   unsubscribe = handle.subscribe(inspect);
   toastSending({
     id: toastId,
@@ -258,6 +262,9 @@ export async function undoPendingSend() {
     return false;
   } finally {
     current.undoing = false;
+    // A send that settled while the undo ran is reported now, not when the
+    // toast's settle timeout ends it.
+    if (tracked === current) current.inspect();
   }
 }
 
@@ -287,7 +294,12 @@ async function reportUndo(
   }
   if (status === "cancelled") {
     if (tracked === current) stopTracking({ dismiss: false });
-    current.restoreComposer();
+    try {
+      current.restoreComposer();
+    } catch {
+      toastSendUndone(current.toastId, { draftReopened: false });
+      return true;
+    }
     toastSendUndone(current.toastId);
     return true;
   }
@@ -301,7 +313,7 @@ async function reportUndo(
   toastError({
     description:
       status === "too_late"
-        ? "Couldn't undo — it was already sent"
+        ? "Couldn't undo — it's already being sent."
         : "Couldn't undo send",
   });
   return false;

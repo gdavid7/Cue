@@ -837,6 +837,33 @@ describe("cancelHeldEmail", () => {
     expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
     expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
   });
+  it("cancels a hold that was waiting on a reconnect when first looked at", async () => {
+    prisma.scheduledEmail.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    prisma.scheduledEmail.findUnique.mockResolvedValueOnce(
+      row({ heldForUndo: true, status: "BLOCKED_AUTH" }),
+    );
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("cancelled");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
+  });
+  // The hold appears as pending, but delivery claims it before the undo's
+  // second try: the send is under way, so the undo is honestly too late.
+  it("reports too late when delivery claims a hold between the undo's tries", async () => {
+    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 0 });
+    prisma.scheduledEmail.findUnique
+      .mockResolvedValueOnce(row({ heldForUndo: true, status: "PENDING" }))
+      .mockResolvedValueOnce(row({ heldForUndo: true, status: "PROCESSING" }));
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("too_late");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
+  });
   it("reports too late once the hold has started sending", async () => {
     prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 0 });
     prisma.scheduledEmail.findUnique.mockResolvedValue(
