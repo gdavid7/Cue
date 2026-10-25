@@ -27,6 +27,15 @@ const mail = vi.hoisted(() => ({
 }));
 
 const activation = vi.hoisted(() => ({ report: vi.fn() }));
+const muting = vi.hoisted(() => ({
+  mute: vi.fn(),
+  unmute: vi.fn(),
+}));
+
+vi.mock("@/utils/actions/mute", () => ({
+  muteThreadsAction: muting.mute,
+  unmuteThreadsAction: muting.unmute,
+}));
 
 vi.mock("@/hooks/useActivationSignal", () => ({
   reportActivationSignal: activation.report,
@@ -49,6 +58,8 @@ describe("useThreadActions", () => {
     mail.client.ensureConversationMessages.mockResolvedValue({
       status: "complete",
     });
+    muting.mute.mockResolvedValue({ data: { mutedThreadIds: [] } });
+    muting.unmute.mockResolvedValue({ data: { unmutedThreadIds: [] } });
   });
 
   it("archives through the engine with the observed revision", async () => {
@@ -189,6 +200,78 @@ describe("useThreadActions", () => {
       ]);
       expect(changed).toEqual(["one:shown"]);
       expect(notifications.error).not.toHaveBeenCalled();
+    });
+
+    it("mutes every copy in its own account, archives them, and undo reverses both", async () => {
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.mute(["one:shown"]));
+
+      expect(submitted()).toEqual([
+        ["one", ["shown"], "archive"],
+        ["two", ["hidden"], "archive"],
+      ]);
+      expect(muting.mute.mock.calls).toEqual([
+        ["one", { threadIds: ["shown"] }],
+        ["two", { threadIds: ["hidden"] }],
+      ]);
+      expect(toastUndo).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Muted" }),
+      );
+
+      await act(async () => {
+        await result.current.undo();
+      });
+
+      expect(
+        mail.client.cancelOperation.mock.calls.map(([call]) => call.accountId),
+      ).toEqual(["one", "two"]);
+      expect(muting.unmute.mock.calls).toEqual([
+        ["one", { threadIds: ["shown"] }],
+        ["two", { threadIds: ["hidden"] }],
+      ]);
+    });
+
+    it("says new replies still reach the inbox when an account can't save the mute", async () => {
+      muting.mute.mockImplementation(async (accountId: string) =>
+        accountId === "two" ? undefined : { data: { mutedThreadIds: [] } },
+      );
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.mute(["one:shown"]));
+
+      expect(notifications.error).toHaveBeenCalledWith(
+        "Couldn't mute this conversation. New replies will still reach your inbox.",
+      );
+    });
+
+    it("unmutes only the conversation whose archive couldn't be queued", async () => {
+      mail.client.submitConversations.mockImplementation(
+        async (command: { accountId: string }) =>
+          command.accountId === "two"
+            ? { status: "rejected", code: "stale_selection" }
+            : { status: "queued" },
+      );
+      const threads = [
+        { ...createThread(["INBOX"], "a"), account: { id: "one" } },
+        { ...createThread(["INBOX"], "b"), account: { id: "two" } },
+      ] as ListThread[];
+      const { result } = renderActions({ threads });
+
+      let muted: string[] = [];
+      await act(async () => {
+        muted = await result.current.mute(["one:a", "two:b"]);
+      });
+
+      expect(muted).toEqual(["one:a"]);
+      expect(muting.unmute.mock.calls).toEqual([["two", { threadIds: ["b"] }]]);
+    });
+
+    it("unmutes again when nothing could be archived", async () => {
+      mail.started = false;
+      const { result } = renderActions({ threads: [row] });
+      await act(() => result.current.mute(["one:shown"]));
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+      expect(muting.unmute).toHaveBeenCalled();
     });
 
     it("says one conversation was archived, and its undo restores every copy", async () => {
@@ -1083,6 +1166,37 @@ describe("useThreadActions", () => {
         wholeConversation: true,
       }),
     );
+  });
+
+  it("mutes the whole conversation from Sent, as archive does there", async () => {
+    const { result } = renderActions({ wholeConversation: true });
+
+    await act(() => result.current.mute(["thread"]));
+
+    expect(mail.client.submitConversations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        change: { kind: "archive" },
+        wholeConversation: true,
+      }),
+    );
+    expect(muting.mute).toHaveBeenCalledWith("account", {
+      threadIds: ["thread"],
+    });
+  });
+
+  it("undoes a mute of a conversation that was outside the inbox by leaving it out", async () => {
+    mail.client.cancelOperation.mockResolvedValue({ status: "too_late" });
+    const { result } = renderActions({ threads: [createThread(["SENT"])] });
+
+    await act(() => result.current.mute(["thread"]));
+    await act(() => result.current.undo());
+
+    expect(mail.client.submitConversations).toHaveBeenLastCalledWith(
+      expect.objectContaining({ change: { kind: "archive" } }),
+    );
+    expect(muting.unmute).toHaveBeenCalledWith("account", {
+      threadIds: ["thread"],
+    });
   });
 
   it("acts on a conversation listed outside the mailbox and reports what undo restored", async () => {

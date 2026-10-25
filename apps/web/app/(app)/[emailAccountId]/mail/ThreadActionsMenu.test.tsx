@@ -69,6 +69,26 @@ describe("ThreadActionsMenu", () => {
     );
   });
 
+  it("mutes from the menu, showing Gmail's M", async () => {
+    const onMute = vi.fn();
+    render(
+      <ThreadActionsMenu
+        isStarred={false}
+        message={null}
+        onDelete={vi.fn()}
+        onMarkSpam={vi.fn()}
+        onMute={onMute}
+        open
+      />,
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /^Mute/ });
+    expect(item.textContent).toContain("M");
+    fireEvent.click(item);
+
+    expect(onMute).toHaveBeenCalledOnce();
+  });
+
   // On a phone the bottom bar's More opens this menu; its own trigger is
   // hidden, so focus goes back to the button the user pressed.
   it("returns focus to the control that opened it from elsewhere", async () => {

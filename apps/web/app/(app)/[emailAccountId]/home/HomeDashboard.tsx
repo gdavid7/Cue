@@ -474,6 +474,7 @@ export function HomeDashboard() {
     setReadState,
     setStarredState,
     snooze,
+    mute,
     trash,
     undo,
   } = threadActions;
@@ -647,6 +648,7 @@ export function HomeDashboard() {
       archive: (id) => removeRow(id, archive),
       trash: (id) => removeRow(id, trash),
       snooze: (id, until) => removeRow(id, (keys) => snooze(keys, until)),
+      mute: (id) => removeRow(id, mute),
       moveToInbox: (id) =>
         patchRow(id, { inInbox: true }, { inInbox: false }, moveToInbox),
       setRead: (id, read) =>
@@ -669,6 +671,7 @@ export function HomeDashboard() {
       setReadState,
       setStarredState,
       snooze,
+      mute,
       trash,
     ],
   );

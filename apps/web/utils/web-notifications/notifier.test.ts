@@ -8,6 +8,7 @@ import type { TrackedConversation } from "@/utils/web-notifications/new-mail";
 import type { WebNotificationMode } from "@/utils/web-notifications/preference";
 
 const NOW = 1_700_000_000_000;
+const MUTED_THREAD_ID = "thread-muted";
 
 function conversation(
   id: string,
@@ -91,6 +92,7 @@ function createTab({
     notify: (conversations) => sink.push(conversations),
     loadBulkMessageIds: async () => new Set(["bulk"]),
     loadImportantPeople: async () => [],
+    loadMutedThreadIds: async () => new Set([MUTED_THREAD_ID]),
     triageSettleMs: 10_000,
   });
   return {
@@ -119,6 +121,7 @@ describe("notifying with several tabs open", () => {
 
     for (const tab of tabs) tab.notifier.handle([]);
     for (const tab of tabs) tab.notifier.handle([conversation("new")]);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(sink).toHaveLength(1);
     expect(sink[0].map((item) => item.id)).toEqual(["new"]);
@@ -135,6 +138,7 @@ describe("notifying with several tabs open", () => {
     first.close();
     await vi.advanceTimersByTimeAsync(0);
     second.notifier.handle([conversation("after-handover")]);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(sink).toHaveLength(1);
   });
@@ -189,6 +193,24 @@ describe("when to notify", () => {
     expect(sink[0].map((item) => item.id)).toEqual(["person"]);
   });
 
+  it.each([
+    "all",
+    "important",
+  ] as const)("in %s mode leaves out a conversation the reader muted", async (mode) => {
+    const sink: TrackedConversation[][] = [];
+    const tab = createTab({ locks: createFakeLocks(), mode, sink });
+    await vi.advanceTimersByTimeAsync(0);
+
+    tab.notifier.handle([]);
+    tab.notifier.handle([
+      conversation("muted", { threadId: MUTED_THREAD_ID }),
+      conversation("person"),
+    ]);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(sink.flat().map((item) => item.id)).toEqual(["person"]);
+  });
+
   it("in important mode still notifies when triage can't be loaded", async () => {
     const sink: TrackedConversation[][] = [];
     let leader = true;
@@ -201,6 +223,7 @@ describe("when to notify", () => {
       notify: (conversations) => sink.push(conversations),
       loadBulkMessageIds: async () => null,
       loadImportantPeople: async () => [],
+      loadMutedThreadIds: async () => null,
       triageSettleMs: 1000,
     });
 
@@ -231,6 +254,7 @@ describe("while notifications are paused", () => {
     quiet = false;
     tab.notifier.handle([conversation("during")]);
     tab.notifier.handle([conversation("during"), conversation("after")]);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(sink.map((batch) => batch.map((item) => item.id))).toEqual([
       ["after"],
@@ -280,6 +304,7 @@ describe("while notifications are paused", () => {
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 1);
     leader.notifier.handle([conversation("resumed")]);
     other.notifier.handle([conversation("resumed")]);
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(sink.map((batch) => batch.map((item) => item.id))).toEqual([
       ["resumed"],

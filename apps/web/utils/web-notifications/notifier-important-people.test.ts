@@ -34,12 +34,14 @@ function conversation(
 function setup({
   people = [DANA],
   bulk = [] as string[],
+  muted = [] as string[],
   mode = "important" as WebNotificationMode,
   isQuiet = () => false,
   loadImportantPeople,
 }: {
   people?: ImportantPerson[];
   bulk?: string[];
+  muted?: string[];
   mode?: WebNotificationMode;
   isQuiet?: () => boolean;
   loadImportantPeople?: () => Promise<ImportantPerson[] | null>;
@@ -54,6 +56,7 @@ function setup({
     notify: (conversations) => notified.push(conversations.map((c) => c.id)),
     loadBulkMessageIds: async () => new Set(bulk),
     loadImportantPeople: loadImportantPeople ?? (async () => people),
+    loadMutedThreadIds: async () => new Set(muted),
     triageSettleMs: TRIAGE_SETTLE_MS,
   });
   notifier.handle([]);
@@ -93,6 +96,18 @@ describe("mail from an important person", () => {
 
     await vi.advanceTimersByTimeAsync(TRIAGE_SETTLE_MS);
     expect(notified).toEqual([["from-dana"], ["other"]]);
+  });
+
+  it("stays silent for a conversation the reader muted", async () => {
+    const { notifier, notified } = setup({ muted: ["thread-muted-dana"] });
+
+    notifier.handle([
+      conversation("muted-dana", { from: "dana@example.com" }),
+      conversation("dana", { from: "dana@example.com" }),
+    ]);
+    await vi.advanceTimersByTimeAsync(IMPORTANT_BATCH_MS + TRIAGE_SETTLE_MS);
+
+    expect(notified).toEqual([["dana"]]);
   });
 
   it("lands a burst as one batch, still capped at three notifications and a summary", async () => {

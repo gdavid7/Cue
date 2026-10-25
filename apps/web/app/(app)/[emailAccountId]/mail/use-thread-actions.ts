@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { toastUndo } from "@/components/Toast";
 import { getShortcutHint } from "@/lib/shortcuts/registry";
 import { randomUuid } from "@/utils/uuid";
+import { muteThreadsAction, unmuteThreadsAction } from "@/utils/actions/mute";
+import { forgetMutedThreadIds } from "@/utils/web-notifications/muted-thread-ids";
 import {
   type ActionableThread,
   getListThreadEmailAccountId,
@@ -43,6 +45,8 @@ const ENGINE_STARTING = "engine_starting";
 const FOLDER_READ_CONCURRENCY = 4;
 // Well under the engine's 10,000-target cap for one command.
 const MOVE_BACK_TARGETS_PER_COMMAND = 1000;
+// The mute actions' own per-call limit.
+const MUTE_THREADS_PER_CALL = 1000;
 
 const RUM_TRIAGE_ACTIONS: Partial<
   Record<ThreadMutationPayload["kind"], "archive" | "star" | "mark_read">
@@ -126,6 +130,8 @@ type UndoableBatch = {
   // while it is still being admitted waits for it instead of getting lost.
   snapshots: Promise<ThreadSnapshot[]>;
   undone: boolean;
+  /** Reverses what the action changed beyond the mailbox, such as a mute. */
+  undoExtra?: () => Promise<void>;
 };
 
 export function useThreadActions({
@@ -302,7 +308,9 @@ export function useThreadActions({
     if (batch.undone || !client) return [];
     batch.undone = true;
     if (lastAction.current === batch) lastAction.current = null;
+    const extraUndone = batch.undoExtra?.();
     const snapshots = await batch.snapshots;
+    await extraUndone;
     if (!snapshots.length) return [];
 
     const { restore } = batch;
@@ -434,6 +442,7 @@ export function useThreadActions({
       restore,
       copy,
       prepare,
+      undoExtra,
     }: {
       threadKeys: string[];
       payload: ThreadMutationPayload;
@@ -446,6 +455,7 @@ export function useThreadActions({
           prepared: ThreadActionTarget[],
         ) => ReturnType<typeof enqueueTargets>,
       ) => ReturnType<typeof enqueueTargets>;
+      undoExtra?: UndoableBatch["undoExtra"];
     }) => {
       const targets = resolveTargets(threadKeys);
       const enqueued = prepare
@@ -462,6 +472,7 @@ export function useThreadActions({
           () => [],
         ),
         undone: false,
+        undoExtra,
       };
       lastAction.current = batch;
       const { rows, snapshots, refusedAccountIds, rejectionCodes } =
@@ -523,6 +534,49 @@ export function useThreadActions({
       });
     },
     [runUndoable],
+  );
+
+  // Muting archives through the same path, so the row leaves the same way;
+  // the mute itself is kept in Cue's database, never in the mailbox.
+  const mute = useCallback(
+    async (threadKeys: string[]) => {
+      const muted = setMuted(resolveTargets(threadKeys), true);
+      // A conversation that couldn't be archived isn't left muted unseen.
+      const unmuteUnqueued = async (queuedRows: string[]) => {
+        const queued = new Set(queuedRows);
+        const unqueued = (await muted).filter(
+          (target) => !queued.has(target.rowKey ?? target.key),
+        );
+        if (unqueued.length) await setMuted(unqueued, false);
+      };
+      let rows: string[];
+      try {
+        ({ rows } = await runUndoable({
+          threadKeys,
+          payload: { kind: "archive" },
+          // Archiving ends a snooze, as snoozing's own undo has to account
+          // for: the conversation goes back to where it was.
+          restore: {
+            kind: "conversations",
+            compensation: UNDOABLE_COPY.snooze.compensation,
+          },
+          copy: { done: (count) => summarise("Muted", count), noun: "muting" },
+          undoExtra: async () => {
+            const mutedTargets = await muted;
+            if (!mutedTargets.length) return;
+            const unmuted = await setMuted(mutedTargets, false);
+            if (unmuted.length < mutedTargets.length)
+              toast.error("Couldn't unmute this conversation");
+          },
+        }));
+      } catch (error) {
+        await unmuteUnqueued([]);
+        throw error;
+      }
+      await unmuteUnqueued(rows);
+      return rows;
+    },
+    [resolveTargets, runUndoable],
   );
 
   const moveToFolder = useCallback(
@@ -821,6 +875,7 @@ export function useThreadActions({
       [runUndoableAction],
     ),
     moveToFolder,
+    mute,
     markRead: useCallback(
       (threadKeys: string[]) => setReadState(threadKeys, true, false),
       [setReadState],
@@ -907,6 +962,46 @@ function refusedAccounts(
         .map((target) => target.emailAccountId),
     ),
   ];
+}
+
+/**
+ * Mutes (or unmutes) each conversation in the account that owns it, and every
+ * copy of it in the user's other accounts, so the copy's new mail stays out of
+ * All inboxes too. Resolves with the targets whose account took the change.
+ */
+async function setMuted(
+  targets: ThreadActionTarget[],
+  muted: boolean,
+): Promise<ThreadActionTarget[]> {
+  const all = targets.flatMap((target) => [
+    target,
+    ...copyTargets(target, "archive"),
+  ]);
+  const action = muted ? muteThreadsAction : unmuteThreadsAction;
+  const results = await Promise.allSettled(
+    Object.entries(groupBy(all, (target) => target.emailAccountId)).flatMap(
+      ([accountId, accountTargets]) =>
+        chunk(
+          [...new Set(accountTargets.map((target) => target.threadId))],
+          MUTE_THREADS_PER_CALL,
+        ).map(async (threadIds) => {
+          const result = await action(accountId, { threadIds });
+          forgetMutedThreadIds(accountId);
+          if (!result?.data) throw new Error("mute_failed");
+          const done = new Set(threadIds);
+          return accountTargets.filter((target) => done.has(target.threadId));
+        }),
+    ),
+  );
+  const done = results.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
+  if (muted && done.length < all.length) {
+    toast.error(
+      "Couldn't mute this conversation. New replies will still reach your inbox.",
+    );
+  }
+  return done;
 }
 
 /**

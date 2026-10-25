@@ -30,6 +30,7 @@ import {
   MAIL_FILES_TYPE,
   MAIL_SCHEDULED_TYPE,
   MAIL_SNOOZED_TYPE,
+  MAIL_MUTED_TYPE,
 } from "@/app/(app)/[emailAccountId]/mail/MailSidebar";
 import { getMailSidebarFolders } from "@/app/(app)/[emailAccountId]/mail/outlook-folder-list";
 import { useIsLargeScreen } from "@/hooks/use-mobile";
@@ -93,6 +94,7 @@ import { FilesView } from "@/app/(app)/[emailAccountId]/mail/FilesView";
 import { ScheduledEmailList } from "@/app/(app)/[emailAccountId]/mail/ScheduledEmailList";
 import { SampleThread } from "@/app/(app)/[emailAccountId]/mail/SampleThread";
 import { SnoozedThreadList } from "@/app/(app)/[emailAccountId]/mail/SnoozedThreadList";
+import { MutedThreadList } from "@/app/(app)/[emailAccountId]/mail/MutedThreadList";
 import type { MailboxItem } from "@/app/(app)/[emailAccountId]/mail/MailboxItemContextMenu";
 import { ListSenderCommands } from "@/app/(app)/[emailAccountId]/mail/ListSenderCommands";
 import { extractEmailAddress } from "@/utils/email";
@@ -649,12 +651,15 @@ export function MailShell() {
   const isScheduledView = !searchQuery && scopeType === MAIL_SCHEDULED_TYPE;
   // The mailbox doesn't know what's snoozed or until when; our database does.
   const isSnoozedView = !searchQuery && scopeType === MAIL_SNOOZED_TYPE;
+  // Muting is Cue's own, never a mailbox label.
+  const isMutedView = !searchQuery && scopeType === MAIL_MUTED_TYPE;
   // Files are read from the local mailbox's stored attachment details.
   const isFilesView = !searchQuery && scopeType === MAIL_FILES_TYPE;
   // Triage in Sent and Drafts reaches the user's own copies there too.
   const triageWholeConversation =
     !searchQuery && (scopeType === "sent" || scopeType === "draft");
-  const isDatabaseView = isScheduledView || isSnoozedView || isFilesView;
+  const isDatabaseView =
+    isScheduledView || isSnoozedView || isMutedView || isFilesView;
   const allInboxesMailboxType =
     isAllInboxesView &&
     !searchQuery &&
@@ -1317,6 +1322,7 @@ export function MailShell() {
     moveToInbox,
     moveToFolder,
     trash,
+    mute,
     markSpam,
     markNotSpam,
     restoreFromTrash,
@@ -1411,8 +1417,9 @@ export function MailShell() {
       setStarred: (key: string, starred: boolean) =>
         setStarredState([key], starred),
       snooze: (key: string, until: Date) => snooze([key], until),
+      mute: (key: string) => mute([key]),
     }),
-    [archive, moveToInbox, trash, setReadState, setStarredState, snooze],
+    [archive, moveToInbox, trash, setReadState, setStarredState, snooze, mute],
   );
   const composeTargetMessageId = getComposeTargetMessageId(openMessages);
   const requestReaderReply = useCallback(() => {
@@ -1717,6 +1724,7 @@ export function MailShell() {
   const archiveTargets = useStableCallback(() =>
     matching.active ? runMatching("archive") : runOn(archive, true, true),
   );
+  const muteTargets = useStableCallback(() => runOn(mute, true, true));
   const archiveAndOpenPrevious = useStableCallback(async () => {
     const wasReaderOpen = Boolean(openThreadKey);
     const topmostTarget = actionTargets
@@ -1753,6 +1761,12 @@ export function MailShell() {
     actionTargets.every((target) =>
       isThreadOnlyIn(target.messages, GmailLabel.SPAM),
     );
+  // Select-all-matching runs as a server job, which has no mute.
+  const canMute =
+    actionTargets.length > 0 &&
+    !matching.active &&
+    !targetsTrashed &&
+    !targetsSpam;
   const restoreTargets = useCallback(
     () => runOn(restoreFromTrash, true, true),
     [restoreFromTrash, runOn],
@@ -2251,6 +2265,7 @@ export function MailShell() {
       star: matching.active ? undefined : starTargets,
       markSpam: markSpamTargets,
       markUnread: markUnreadTargets,
+      mute: canMute ? muteTargets : undefined,
       delete: trashTargets,
       reply: () => openReply(false),
       replyAll: () => openReply(true),
@@ -2628,6 +2643,13 @@ export function MailShell() {
   else if (isSnoozedView)
     databaseList = (
       <SnoozedThreadList
+        accounts={databaseListAccounts}
+        onOpenThread={openDatabaseThread}
+      />
+    );
+  else if (isMutedView)
+    databaseList = (
+      <MutedThreadList
         accounts={databaseListAccounts}
         onOpenThread={openDatabaseThread}
       />
@@ -3220,6 +3242,7 @@ export function MailShell() {
                     : undefined
                 }
                 onMarkSpam={markSpamTargets}
+                onMute={canMute ? muteTargets : undefined}
                 onDelete={trashTargets}
                 onLabel={canLabel ? openLabelPicker : undefined}
                 onMove={canLabel ? openMovePicker : undefined}

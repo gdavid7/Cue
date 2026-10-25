@@ -27,6 +27,7 @@ function setup() {
     notify: (conversations) => notified.push(conversations),
     loadBulkMessageIds,
     loadImportantPeople: async () => [],
+    loadMutedThreadIds: async () => new Set<string>(),
     triageSettleMs: 15_000,
   });
   return { notifier, notified, loadBulkMessageIds };
