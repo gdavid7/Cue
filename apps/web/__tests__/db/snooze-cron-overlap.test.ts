@@ -29,9 +29,9 @@ vi.mock("@/utils/email/provider", () => ({
 
 const RUN_DB_TESTS = process.env.RUN_DB_TESTS;
 
-// The scheduled-actions cron ticks more often than a run can last, so runs
-// overlap and must never restore a thread twice, and a restore that can't
-// succeed must not be retried at every tick forever.
+// Scheduled-actions runs can overlap (a slow tick, a manual or pinger POST, a
+// duplicate delivery), so they must never restore a thread twice, and a
+// restore that can't succeed must not be retried at every tick forever.
 describe.skipIf(!RUN_DB_TESTS)(
   "snooze wake-ups from frequent cron runs (real database)",
   { timeout: 30_000 },
