@@ -13,6 +13,7 @@ import {
   unsupportedVersionResponse,
 } from "@/utils/mail-api/authorization";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
+import { oldEngineReason } from "@/utils/mail-api/engine-revision";
 
 export const POST = withEmailProvider(
   "mail/v1/enumeration",
@@ -45,6 +46,7 @@ export const POST = withEmailProvider(
       provider: request.emailProvider,
       accountId: request.auth.emailAccountId,
       logger: request.logger,
+      oldEngine: oldEngineReason(request.headers),
     });
     const result = await source.enumerate({
       ...parsed.data,

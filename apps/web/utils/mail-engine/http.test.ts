@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MAIL_ENGINE_REVISION,
+  MAIL_ENGINE_REVISION_HEADER,
+} from "@inboxzero/mail-core/protocol/mail-http";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
 import { SERVER_BUILD_HEADER } from "@/utils/server-build";
 
@@ -48,6 +52,8 @@ describe("createMailHttpRequest", () => {
     expect(init.headers).toMatchObject({
       accept: "application/octet-stream",
       [EMAIL_ACCOUNT_HEADER]: "acc-1",
+      // The server paces background sync for engines below its minimum.
+      [MAIL_ENGINE_REVISION_HEADER]: String(MAIL_ENGINE_REVISION),
     });
   });
 
@@ -74,6 +80,40 @@ describe("createMailHttpRequest", () => {
       signal: new AbortController().signal,
     });
     expect(onServerBuild).toHaveBeenCalledWith("dpl_new");
+  });
+
+  it("stops asking the server for a route it refused as needing a reconnect", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        {
+          error: "Authorization required. Please grant permissions.",
+          errorCode: "NO_REFRESH_TOKEN",
+          isKnownError: true,
+        },
+        { status: 401 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createMailHttpRequest("acc-1", vi.fn());
+    const ask = (route: string) =>
+      request({
+        method: "POST",
+        path: `/api/mail/v1/accounts/acc-1/${route}`,
+        body: {},
+        signal: new AbortController().signal,
+      });
+
+    expect((await ask("changes")).status).toBe(401);
+    const again = await ask("changes");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(again).toMatchObject({
+      status: 401,
+      json: { errorCode: "NO_REFRESH_TOKEN" },
+    });
+    expect(again).not.toHaveProperty("sessionExpired");
+
+    await ask("scopes");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([

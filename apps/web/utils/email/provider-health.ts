@@ -3,6 +3,7 @@ import {
   getErrorMessage,
   isGmailInsufficientPermissionsError,
   isInvalidGrantError,
+  NO_REFRESH_TOKEN_MESSAGE,
 } from "@/utils/error";
 import type { Logger } from "@/utils/logger";
 import {
@@ -38,13 +39,6 @@ export async function recordEmailAccountProviderIssue({
   const issue = classifyEmailAccountProviderIssue({ error, provider });
   if (!issue) return;
 
-  logger.warn("Recording email account provider issue", {
-    emailAccountId,
-    provider,
-    operation,
-    reason: issue.reason,
-  });
-
   const shouldRecord = await claimProviderIssueCleanup({
     emailAccountId,
     provider,
@@ -53,6 +47,13 @@ export async function recordEmailAccountProviderIssue({
     logger,
   });
   if (!shouldRecord) return;
+
+  logger.warn("Recording email account provider issue", {
+    emailAccountId,
+    provider,
+    operation,
+    reason: issue.reason,
+  });
 
   try {
     const result = await cleanupInvalidTokens({
@@ -113,7 +114,10 @@ export function classifyEmailAccountProviderIssue({
     return { reason: "mail_service_not_enabled" };
   }
 
-  if (isInvalidGrantError(error) || message?.includes("No refresh token")) {
+  if (
+    isInvalidGrantError(error) ||
+    message?.includes(NO_REFRESH_TOKEN_MESSAGE)
+  ) {
     return { reason: "invalid_grant" };
   }
 

@@ -19,6 +19,8 @@ export type RequestMetrics = Record<
   gmailDeferred: number;
   pause?: Pause;
   enumeration?: EnumerationPage;
+  /** Wall time of named steps inside the handler; see `timeRequestPhase`. */
+  phases: Record<string, number>;
 };
 
 const metricsContext = new AsyncLocalStorage<RequestMetrics>();
@@ -42,6 +44,7 @@ export function createRequestMetrics(): RequestMetrics {
     gmailBatch: { ms: 0, calls: 0 },
     wait: { ms: 0, calls: 0 },
     gmailDeferred: 0,
+    phases: {},
   };
 }
 
@@ -64,6 +67,27 @@ export async function timeRequestDependency<T>(
   } finally {
     metrics[dependency].ms += performance.now() - startedAt;
     metrics[dependency].calls += 1;
+  }
+}
+
+/**
+ * Times a named step of the handler, so the part of a request that no
+ * dependency bucket explains shows up as `phaseMs.<name>` on its "Request
+ * completed" line. Steps that run together overlap, so they can add up to
+ * more than the request's time; a repeated name adds up.
+ */
+export async function timeRequestPhase<T>(
+  name: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const metrics = metricsContext.getStore();
+  if (!metrics) return operation();
+  const startedAt = performance.now();
+  try {
+    return await operation();
+  } finally {
+    metrics.phases[name] =
+      (metrics.phases[name] ?? 0) + (performance.now() - startedAt);
   }
 }
 
@@ -108,5 +132,13 @@ export function getRequestMetricsFields(metrics: RequestMetrics) {
     phase: metrics.enumeration?.phase,
     gatePriority: metrics.enumeration?.gatePriority,
     promoted: metrics.enumeration?.promoted,
+    phaseMs: Object.keys(metrics.phases).length
+      ? Object.fromEntries(
+          Object.entries(metrics.phases).map(([name, ms]) => [
+            name,
+            Math.round(ms),
+          ]),
+        )
+      : undefined,
   };
 }

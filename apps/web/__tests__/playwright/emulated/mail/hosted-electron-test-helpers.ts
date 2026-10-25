@@ -128,7 +128,10 @@ export async function waitForHostedElectronReady(
   done: Promise<HostedElectronPayload>,
 ) {
   const ready = (async () => {
-    for (let attempt = 0; attempt < 240; attempt += 1) {
+    // A proof can write ready only after a whole flow (load, full metadata
+    // coverage, an archive), which sometimes takes about a minute on CI.
+    // This stays under the runner's own 180 s limit.
+    for (let attempt = 0; attempt < 480; attempt += 1) {
       if (existsSync(readyPath)) return;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }

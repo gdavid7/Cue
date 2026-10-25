@@ -23,6 +23,12 @@ import {
 
 export const mailProtocolVersionSchema = z.literal(MAIL_PROTOCOL_VERSION);
 
+// Sent on every mail/v1 request so the server can tell engine builds apart
+// when a long-lived tab keeps running one from before a deploy. Bump the
+// revision only when the server should treat engines below it differently.
+export const MAIL_ENGINE_REVISION_HEADER = "x-cue-engine-rev";
+export const MAIL_ENGINE_REVISION = 1;
+
 export const mailHttpErrorCodeSchema = z.enum([
   "invalid",
   "unauthorized",

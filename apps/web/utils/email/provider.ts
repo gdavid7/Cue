@@ -10,6 +10,7 @@ import { toRateLimitProvider } from "@/utils/email/rate-limit-mode-error";
 import { recordEmailAccountProviderIssue } from "@/utils/email/provider-health";
 import type { Logger } from "@/utils/logger";
 import { flushLoggerSafely } from "@/utils/logger-flush";
+import { isReconnectRequiredError } from "@/utils/error";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 
 export async function createEmailProvider({
@@ -47,6 +48,9 @@ export async function createEmailProvider({
       logger,
     });
   } catch (error) {
+    // The client already logged it and marked the account for reconnect.
+    if (isReconnectRequiredError(error)) throw error;
+
     logger.warn("Failed to create email provider", {
       error,
       provider: rateLimitProvider,
