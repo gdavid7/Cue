@@ -79,7 +79,9 @@ describe.skipIf(!process.env.RUN_INTEGRATION_TESTS)(
       const search = createLocalMailSearch({
         emailAccountId: ACCOUNT,
         logger: createTestLogger(),
-        pollIntervalMs: 10,
+        // The first read must come after both answers and the expiry check,
+        // or it takes the answer first and the check sees no key.
+        pollIntervalMs: 500,
       });
       search.attach({
         write: (part: { data: { requestId: string } }) => {
