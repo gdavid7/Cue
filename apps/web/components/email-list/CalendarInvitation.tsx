@@ -166,7 +166,7 @@ function ConflictHint({ invitation }: { invitation: Invitation }) {
   if (!slot || data?.status !== "ok") return null;
 
   const [first, ...rest] = data.conflicts.filter(
-    (event) => !isInvitationCopy(event, { title: invitation.title, ...slot }),
+    (event) => !isInvitationCopy(event, { ...invitation, ...slot }),
   );
   return (
     <p className="flex min-w-0 gap-1 text-sm text-muted-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">

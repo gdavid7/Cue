@@ -99,8 +99,21 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
     const lists = await Promise.all(
       calendarIds.map(async (calendarId) => {
         try {
-          const response = await client.events.list({ ...params, calendarId });
-          return response.data.items || [];
+          // Google can end a page short while more events follow, so read on
+          // until it stops or there's as much as was asked for: a short list
+          // would otherwise pass for the whole calendar.
+          const items: calendar_v3.Schema$Event[] = [];
+          let pageToken: string | undefined;
+          do {
+            const { data } = await client.events.list({
+              ...params,
+              calendarId,
+              pageToken,
+            });
+            items.push(...(data.items ?? []));
+            pageToken = data.nextPageToken ?? undefined;
+          } while (pageToken && items.length < (params.maxResults ?? 250));
+          return items;
         } catch (error) {
           // A calendar removed or unshared since it was synced has no events.
           if (isGoneError(error)) {

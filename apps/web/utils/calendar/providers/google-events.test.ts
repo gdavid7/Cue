@@ -18,6 +18,47 @@ describe("GoogleCalendarEventProvider", () => {
     vi.clearAllMocks();
   });
 
+  it("reads past a short page while Google says more events follow", async () => {
+    calendarMocks.list
+      .mockResolvedValueOnce({
+        data: {
+          items: [googleEvent("first", "2026-05-04T09:00:00.000Z")],
+          nextPageToken: "page-2",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: { items: [googleEvent("second", "2026-05-04T09:15:00.000Z")] },
+      });
+
+    const events = await createProvider().fetchEvents({
+      timeMin: new Date("2026-05-04T09:00:00.000Z"),
+      timeMax: new Date("2026-05-04T10:00:00.000Z"),
+      maxResults: 50,
+    });
+
+    expect(events.map((event) => event.id)).toEqual(["first", "second"]);
+    expect(calendarMocks.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pageToken: "page-2" }),
+    );
+  });
+
+  it("marks events shown as free", async () => {
+    calendarMocks.list.mockResolvedValue({
+      data: {
+        items: [
+          {
+            ...googleEvent("focus", "2026-05-04T09:00:00.000Z"),
+            transparency: "transparent",
+          },
+        ],
+      },
+    });
+
+    const [event] = await createProvider().fetchEvents({ maxResults: 5 });
+
+    expect(event.markedFree).toBe(true);
+  });
+
   it("parses the organizer and declined attendees when fetching events", async () => {
     calendarMocks.list.mockResolvedValue({
       data: {
@@ -230,4 +271,13 @@ function createProvider({ calendarIds }: { calendarIds?: string[] } = {}) {
     },
     createTestLogger(),
   );
+}
+
+function googleEvent(id: string, start: string) {
+  return {
+    id,
+    summary: id,
+    start: { dateTime: start },
+    end: { dateTime: new Date(Date.parse(start) + 15 * 60_000).toISOString() },
+  };
 }

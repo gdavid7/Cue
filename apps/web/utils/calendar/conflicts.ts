@@ -46,13 +46,25 @@ export function getInvitationWindow(
 }
 
 /**
- * A calendar event that is the invitation itself, already on the calendar
- * under a UID the provider rewrote (Exchange does this for outside invites).
+ * A calendar event that is the invitation itself: the event with its UID and
+ * organizer, or, where the provider rewrote the UID (Exchange does this for
+ * outside invites), one with its title and instants.
  */
 export function isInvitationCopy(
-  event: { title: string | null; start: string; end: string },
-  invitation: { title: string } & TimeRange,
+  event: {
+    title: string | null;
+    start: string;
+    end: string;
+    uidMatch?: { organizer: string | null };
+  },
+  invitation: { title: string; organizer: string } & TimeRange,
 ) {
+  if (
+    event.uidMatch?.organizer &&
+    event.uidMatch.organizer.toLowerCase() ===
+      invitation.organizer.toLowerCase()
+  )
+    return true;
   return (
     event.title?.trim() === invitation.title.trim() &&
     new Date(event.start).getTime() === invitation.start.getTime() &&

@@ -166,6 +166,7 @@ describe("getInvitationWindow", () => {
 describe("isInvitationCopy", () => {
   const invitation = {
     title: "Project planning",
+    organizer: "organizer@example.com",
     ...range("2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z"),
   };
 
@@ -180,6 +181,33 @@ describe("isInvitationCopy", () => {
         invitation,
       ),
     ).toBe(true);
+  });
+
+  it("matches the event with the invitation's UID only when the organizer matches too", () => {
+    const sameUid = {
+      title: "Something else",
+      start: "2030-03-04T10:00:00Z",
+      end: "2030-03-04T11:00:00Z",
+    };
+    expect(
+      isInvitationCopy(
+        { ...sameUid, uidMatch: { organizer: "organizer@example.com" } },
+        invitation,
+      ),
+    ).toBe(true);
+    // A sender who reuses another meeting's UID can't hide that meeting.
+    expect(
+      isInvitationCopy(
+        { ...sameUid, uidMatch: { organizer: "someone@else.example" } },
+        invitation,
+      ),
+    ).toBe(false);
+    expect(
+      isInvitationCopy(
+        { ...sameUid, uidMatch: { organizer: null } },
+        invitation,
+      ),
+    ).toBe(false);
   });
 
   it("never matches an untitled event", () => {

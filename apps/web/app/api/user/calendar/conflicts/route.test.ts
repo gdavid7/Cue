@@ -88,13 +88,28 @@ describe("GET /api/user/calendar/conflicts", () => {
     expect(await response.json()).toEqual({ status: "ok", conflicts: [] });
   });
 
-  it("is free when the only busy time is the invitation's own event", async () => {
+  it("flags the invitation's own event by UID, with its organizer for the card to check", async () => {
     busy([START, END]);
-    events([event({ title: "Project planning", iCalUid: "invite-uid-1" })]);
+    events([ownCopy()]);
 
     const response = await get({ start: START, end: END, uid: "invite-uid-1" });
 
-    expect(await response.json()).toEqual({ status: "ok", conflicts: [] });
+    expect(await response.json()).toEqual({
+      status: "ok",
+      conflicts: [ownCopyJson],
+    });
+  });
+
+  it("doesn't flag an event whose UID merely matches nothing sent", async () => {
+    busy([START, END]);
+    events([ownCopy()]);
+
+    const response = await get({ start: START, end: END });
+
+    expect(await response.json()).toEqual({
+      status: "ok",
+      conflicts: [{ title: "Project planning", start: START, end: END }],
+    });
   });
 
   it("names an all-day out-of-office that blocks the day", async () => {
@@ -107,7 +122,7 @@ describe("GET /api/user/calendar/conflicts", () => {
         startTime: new Date("2030-03-04T00:00:00.000Z"),
         endTime: new Date("2030-03-05T00:00:00.000Z"),
       }),
-      event({ title: "Project planning", iCalUid: "invite-uid-1" }),
+      ownCopy(),
     ]);
 
     const response = await get({ start: START, end: END, uid: "invite-uid-1" });
@@ -120,6 +135,7 @@ describe("GET /api/user/calendar/conflicts", () => {
           start: "2030-03-04T00:00:00.000Z",
           end: "2030-03-05T00:00:00.000Z",
         },
+        ownCopyJson,
       ],
     });
   });
@@ -141,7 +157,7 @@ describe("GET /api/user/calendar/conflicts", () => {
   it("doesn't count events marked free or declined against the invitation's own busy time", async () => {
     busy([START, END]);
     events([
-      event({ title: "Project planning", iCalUid: "invite-uid-1" }),
+      ownCopy(),
       event({ title: "Focus time", markedFree: true }),
       event({
         title: "Declined sync",
@@ -151,7 +167,10 @@ describe("GET /api/user/calendar/conflicts", () => {
 
     const response = await get({ start: START, end: END, uid: "invite-uid-1" });
 
-    expect(await response.json()).toEqual({ status: "ok", conflicts: [] });
+    expect(await response.json()).toEqual({
+      status: "ok",
+      conflicts: [ownCopyJson],
+    });
   });
 
   it("leaves an untitled event's name to the card", async () => {
@@ -190,6 +209,14 @@ describe("GET /api/user/calendar/conflicts", () => {
     const response = await get({ start: START, end: END });
 
     expect(await response.json()).toEqual({ status: "unavailable" });
+  });
+
+  it("keeps events renamed as cancelled, since free/busy still counts them", async () => {
+    await get({ start: START, end: END });
+
+    expect(mocks.fetchCalendarEventsInWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ includeCancelledTitles: true }),
+    );
   });
 
   it("says nothing when some events couldn't be read", async () => {
@@ -238,6 +265,21 @@ function events(list: CalendarEvent[]) {
     complete: true,
   });
 }
+
+function ownCopy() {
+  return event({
+    title: "Project planning",
+    iCalUid: "invite-uid-1",
+    organizerEmail: "Organizer@Example.com",
+  });
+}
+
+const ownCopyJson = {
+  title: "Project planning",
+  start: START,
+  end: END,
+  uidMatch: { organizer: "organizer@example.com" },
+};
 
 function event(overrides: Partial<CalendarEvent>): CalendarEvent {
   return {

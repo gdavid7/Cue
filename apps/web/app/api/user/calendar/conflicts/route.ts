@@ -98,6 +98,9 @@ async function getData({
         timeMin: start,
         timeMax: end,
         maxResultsPerProvider: MAX_EVENTS_PER_CALENDAR,
+        // Free/busy still counts an event renamed "Cancelled: …" unless it was
+        // marked free, so it is named rather than left as unexplained busy.
+        includeCancelledTitles: true,
         logger,
       }),
     ]);
@@ -118,11 +121,8 @@ async function getData({
       !isDeclinedByUser(event, ownAddresses(email, event.calendarEmail)) &&
       (event.allDay || rangesOverlap(eventRange(event), invitation)),
   );
-  const isInvitation = (event: CalendarEvent) => !!uid && event.iCalUid === uid;
-  const conflicts = blocking.filter((event) => !isInvitation(event));
-
-  // Every busy moment must belong to an event we can name, or to the
-  // invitation itself; busy time we can't explain makes "free" or a short
+  // Every busy moment must belong to an event we can name (the invitation's
+  // own copy among them); busy time we can't explain makes "free" or a short
   // list a guess, so the card says nothing.
   const covers = blocking.map((event) =>
     event.allDay ? invitation : eventRange(event),
@@ -135,7 +135,7 @@ async function getData({
     return clipped.start < clipped.end && !isCovered(clipped, covers);
   });
   logger.trace("Invitation conflicts", {
-    conflictCount: conflicts.length,
+    eventCount: blocking.length,
     busyPeriodCount: busy.busyPeriods.length,
     unexplained,
   });
@@ -143,12 +143,22 @@ async function getData({
 
   return {
     status: "ok" as const,
-    conflicts: conflicts.map((event) => ({
+    conflicts: blocking.map((event) => ({
       // Providers name an untitled event "Untitled"; the card words it itself.
       title:
         event.title.trim() && event.title !== "Untitled" ? event.title : null,
       start: event.startTime.toISOString(),
       end: event.endTime.toISOString(),
+      // Likely the invitation itself. The card drops it only if the organizer
+      // matches too, so a UID copied into another invitation can't hide a
+      // real meeting.
+      ...(uid && event.iCalUid === uid
+        ? {
+            uidMatch: {
+              organizer: event.organizerEmail?.toLowerCase() ?? null,
+            },
+          }
+        : {}),
     })),
   };
 }

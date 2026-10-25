@@ -178,6 +178,36 @@ describe("fetchCalendarEventsInWindow", () => {
     expect(result.events.map((event) => event.id)).toEqual(["gmail-copy"]);
   });
 
+  it("keeps the busy copy of a meeting over one shown as free", async () => {
+    vi.mocked(countConnectedCalendars).mockResolvedValue(2);
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider(
+        [{ ...makeEvent("free-copy"), markedFree: true }],
+        "me@personal.example",
+      ),
+      fakeProvider([makeEvent("busy-copy")], "me@work.example"),
+    ]);
+
+    const result = await fetchCalendarEventsInWindow(fetchParams);
+
+    expect(result.events.map((event) => event.id)).toEqual(["busy-copy"]);
+  });
+
+  it("drops events renamed as cancelled unless asked to keep them", async () => {
+    vi.mocked(createCalendarEventProviders).mockResolvedValue([
+      fakeProvider([makeEvent("cancelled", "Cancelled: Standup")]),
+    ]);
+
+    const dropped = await fetchCalendarEventsInWindow(fetchParams);
+    const kept = await fetchCalendarEventsInWindow({
+      ...fetchParams,
+      includeCancelledTitles: true,
+    });
+
+    expect(dropped.events).toEqual([]);
+    expect(kept.events.map((event) => event.id)).toEqual(["cancelled"]);
+  });
+
   it("says which calendar account each event was read from", async () => {
     vi.mocked(countConnectedCalendars).mockResolvedValue(2);
     vi.mocked(createCalendarEventProviders).mockResolvedValue([

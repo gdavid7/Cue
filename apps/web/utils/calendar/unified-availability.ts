@@ -122,7 +122,12 @@ export async function getUnifiedCalendarBusy(
   );
 
   const promises: Promise<BusyPeriod[]>[] = [];
+  // Counted as calendars answer: one skipped as missing, or that failed,
+  // was not read and can't show the person free.
   let readableCalendars = 0;
+  const onCalendarAnswered = () => {
+    readableCalendars++;
+  };
 
   // Fetch Google calendar availability
   for (const connection of googleConnections) {
@@ -133,7 +138,6 @@ export async function getUnifiedCalendarBusy(
         )
       : calendarIds;
     if (!availabilityCalendarIds.length) continue;
-    readableCalendars += availabilityCalendarIds.length;
 
     const googleAvailabilityProvider = createGoogleAvailabilityProvider(logger);
     const mustRead = mustReadConnection(failClosed, connection);
@@ -150,6 +154,7 @@ export async function getUnifiedCalendarBusy(
           timeMin,
           timeMax,
           failOnCalendarError: mustRead,
+          onCalendarAnswered,
         })
         .catch((error) => {
           logger.error("Error fetching Google calendar availability", {
@@ -173,7 +178,6 @@ export async function getUnifiedCalendarBusy(
       });
       continue;
     }
-    readableCalendars += calendarIds.length;
 
     const microsoftAvailabilityProvider =
       createMicrosoftAvailabilityProvider(logger);
@@ -191,6 +195,7 @@ export async function getUnifiedCalendarBusy(
           timeMin,
           timeMax,
           failOnCalendarError: mustRead,
+          onCalendarAnswered,
         })
         .catch((error) => {
           logger.error("Error fetching Microsoft calendar availability", {

@@ -13,6 +13,7 @@ async function fetchMicrosoftCalendarBusyPeriods({
   timeMax,
   logger,
   failOnCalendarError,
+  onCalendarAnswered,
 }: {
   calendarClient: Client;
   calendarIds: string[];
@@ -20,6 +21,7 @@ async function fetchMicrosoftCalendarBusyPeriods({
   timeMax: string;
   logger: Logger;
   failOnCalendarError?: boolean;
+  onCalendarAnswered?: (calendarId: string) => void;
 }): Promise<BusyPeriod[]> {
   try {
     const allBusyPeriods: BusyPeriod[] = [];
@@ -73,6 +75,7 @@ async function fetchMicrosoftCalendarBusyPeriods({
           // Check for next page
           nextLink = response["@odata.nextLink"];
         } while (nextLink);
+        onCalendarAnswered?.(calendarId);
       } catch (calendarError) {
         const calendarIsMissing = isMissingCalendarError(calendarError);
         if (calendarIsMissing) {
@@ -112,6 +115,7 @@ export function createMicrosoftAvailabilityProvider(
       timeMin,
       timeMax,
       failOnCalendarError,
+      onCalendarAnswered,
     }) {
       const calendarClient = await getCalendarClientWithRefresh({
         accessToken,
@@ -128,6 +132,7 @@ export function createMicrosoftAvailabilityProvider(
         timeMax,
         logger,
         failOnCalendarError,
+        onCalendarAnswered,
       });
     },
   };

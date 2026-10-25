@@ -508,7 +508,16 @@ describe("getUnifiedCalendarBusy", () => {
       getCalendarConnection({ provider: "google", calendarIds: ["cal-1"] }),
     ]);
     const mockGoogleProvider = {
-      fetchBusyPeriods: vi.fn().mockResolvedValue([]),
+      fetchBusyPeriods: vi.fn(
+        async ({
+          onCalendarAnswered,
+        }: {
+          onCalendarAnswered?: (calendarId: string) => void;
+        }) => {
+          onCalendarAnswered?.("cal-1");
+          return [];
+        },
+      ),
     };
     vi.mocked(createGoogleAvailabilityProvider).mockReturnValue(
       mockGoogleProvider as any,
@@ -548,6 +557,27 @@ describe("getUnifiedCalendarBusy", () => {
       },
       logger,
       excludeGoogleVirtualCalendars: true,
+    });
+
+    expect(result).toEqual({ busyPeriods: [], readableCalendars: 0 });
+  });
+
+  it("counts no calendar as read when none of them answered", async () => {
+    vi.mocked(prisma.calendarConnection.findMany).mockResolvedValue([
+      getCalendarConnection({ provider: "google", calendarIds: ["gone"] }),
+    ]);
+    // Google reported the calendar not found, so the provider skipped it.
+    vi.mocked(createGoogleAvailabilityProvider).mockReturnValue({
+      fetchBusyPeriods: vi.fn().mockResolvedValue([]),
+    } as any);
+
+    const result = await getUnifiedCalendarBusy({
+      emailAccountId: "test-account-id",
+      range: {
+        start: new Date("2030-03-04T15:00:00Z"),
+        end: new Date("2030-03-04T16:00:00Z"),
+      },
+      logger,
     });
 
     expect(result).toEqual({ busyPeriods: [], readableCalendars: 0 });

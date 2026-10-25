@@ -75,6 +75,40 @@ describe("CalendarInvitation conflict line", () => {
     expect(url.searchParams.has("uid")).toBe(false);
   });
 
+  it("shows an event that reuses the invitation's UID under another organizer", async () => {
+    renderCard({
+      conflicts: {
+        status: "ok",
+        conflicts: [
+          {
+            ...conflict("Board meeting"),
+            uidMatch: { organizer: "someone@else.example" },
+          },
+        ],
+      },
+    });
+
+    expect(
+      await screen.findByText("Conflicts with Board meeting"),
+    ).toBeTruthy();
+  });
+
+  it("is free when the only overlap is the invitation itself, matched by UID and organizer", async () => {
+    renderCard({
+      conflicts: {
+        status: "ok",
+        conflicts: [
+          {
+            ...conflict("Renamed by the calendar"),
+            uidMatch: { organizer: "Organizer@Example.com" },
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByText("You’re free then")).toBeTruthy();
+  });
+
   it("is free when the only overlap is the invitation's own copy", async () => {
     renderCard({
       conflicts: {
