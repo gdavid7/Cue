@@ -86,11 +86,16 @@ export function useEngineMailThreads({
     client.requestSync(resolvedAccountIds).catch(() => undefined);
   }, [client, enabled, resolvedAccountIds]);
 
-  const { failedAccountIds } = useFailedAccountIds(
+  const failedRead = useFailedAccountIds(
     enabled ? client : null,
     resolvedAccountIds,
     mailbox.data?.connection,
   );
+  // Until the check answers for this connection, every account looks
+  // reachable, rather than the ones an earlier answer named.
+  const failedAccountIds = failedRead.settled
+    ? failedRead.failedAccountIds
+    : NO_ACCOUNT_IDS;
 
   const coverage = mailbox.data?.coverage;
   // Every pushed snapshot carries fresh coverage; keyed so consumers only see
