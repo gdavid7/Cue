@@ -587,3 +587,114 @@ type ReplyHandoffFrame = { composer: boolean; rows: number };
 type ReplyHandoffWindow = {
   __replyHandoff: { frames: ReplyHandoffFrame[]; raf: number };
 };
+
+const KAI = { address: "kai@example.com", name: "Kai Example" };
+
+/**
+ * A conversation the user started with Kai, who answered an hour later: an
+ * inbox reply from someone the user writes to, with nothing sent after it.
+ * Returns its thread and what takes it out again.
+ */
+export async function seedMailFromContact(page: Page, subject: string) {
+  const token = await readProviderAccessToken();
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  const body = "Are we still on for Thursday?";
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    const draft = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Dinner Thursday?" },
+        toRecipients: [
+          { emailAddress: { address: KAI.address, name: KAI.name } },
+        ],
+      },
+    });
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const draftId = ((await draft.json()) as { id: string }).id;
+    const sent = await page.request.post(`${base}/messages/${draftId}/move`, {
+      headers,
+      data: { destinationId: "sentitems" },
+    });
+    expect(sent.ok(), await sent.text()).toBe(true);
+    const sentId = ((await sent.json()) as { id: string }).id;
+    const reply = await page.request.post(
+      `${base}/messages/${sentId}/createReply`,
+      { headers },
+    );
+    expect(reply.ok(), await reply.text()).toBe(true);
+    const replyId = ((await reply.json()) as { id: string }).id;
+    const patched = await page.request.patch(`${base}/messages/${replyId}`, {
+      headers,
+      data: {
+        from: { emailAddress: KAI },
+        toRecipients: [{ emailAddress: { address: email } }],
+        body: { contentType: "text", content: body },
+        isRead: false,
+      },
+    });
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(`${base}/messages/${replyId}/move`, {
+      headers,
+      data: { destinationId: "inbox" },
+    });
+    expect(moved.ok(), await moved.text()).toBe(true);
+    const message = (await moved.json()) as {
+      id: string;
+      conversationId: string;
+    };
+    return {
+      threadId: message.conversationId,
+      subject,
+      remove: async () => {
+        for (const id of [message.id, sentId])
+          await page.request.post(`${base}/messages/${id}/permanentDelete`, {
+            headers,
+          });
+      },
+    };
+  }
+
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const sent = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      from: email,
+      to: `${KAI.name} <${KAI.address}>`,
+      subject,
+      body_text: "Dinner Thursday?",
+      labelIds: ["SENT"],
+      internalDate: String(Date.now() - 2 * 3_600_000),
+    },
+  });
+  expect(sent.ok(), await sent.text()).toBe(true);
+  const first = (await sent.json()) as { id: string; threadId: string };
+  const inserted = await page.request.post(`${base}/messages`, {
+    headers,
+    data: {
+      threadId: first.threadId,
+      from: `${KAI.name} <${KAI.address}>`,
+      to: email,
+      subject,
+      body_text: body,
+      labelIds: ["INBOX", "UNREAD"],
+      internalDate: String(Date.now() - 3_600_000),
+    },
+  });
+  expect(inserted.ok(), await inserted.text()).toBe(true);
+  const message = (await inserted.json()) as { id: string };
+  return {
+    threadId: first.threadId,
+    subject,
+    remove: async () => {
+      for (const id of [message.id, first.id])
+        await page.request.delete(`${base}/messages/${id}`, { headers });
+    },
+  };
+}

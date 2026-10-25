@@ -29,7 +29,11 @@ import type { GetHomeResponse } from "@/app/api/user/home/route";
 import { AllInboxesFailedNotice } from "@/app/(app)/[emailAccountId]/mail/AllInboxesFailedNotice";
 import { getAccountColorClassName } from "@/app/(app)/[emailAccountId]/mail/all-inboxes";
 import { AccountMarker } from "@/app/(app)/[emailAccountId]/mail/ThreadRow";
-import { CatchUpEntry } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import {
+  type CatchUpAccounts,
+  CatchUpEntry,
+} from "@/app/(app)/[emailAccountId]/mail/CatchUp";
+import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
 import {
   type ActionableThread,
   getListThreadKey,
@@ -60,8 +64,10 @@ import { markNoReplyNeededAction } from "@/utils/actions/rule-feedback";
 import { markNeedsReplyAction } from "@/utils/actions/thread-assist";
 import { formatShortDate } from "@/utils/date";
 import { getActionErrorMessage } from "@/utils/error";
-import { isMicrosoftProvider } from "@/utils/email/provider-types";
-import { registerEngineAccounts } from "@/utils/mail-engine/engine-accounts";
+import {
+  engineProvider,
+  registerEngineAccounts,
+} from "@/utils/mail-engine/engine-accounts";
 import type { HomeLane, HomeThread } from "@/utils/home/get-home";
 import type { ThreadsQuery } from "@/utils/threads/validation";
 import {
@@ -92,7 +98,7 @@ import {
 import { useAllAccountsHome, useTodayAccounts } from "./use-all-accounts-home";
 import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
-import { useWaitingOnYou } from "./use-waiting-on-you";
+import { useWaitingOnYou, waitingOnYouScope } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
 import { useImportantPeople } from "@/hooks/useImportantPeople";
 import { useAwaySummary, WhileYouWereAway } from "./WhileYouWereAway";
@@ -101,7 +107,6 @@ const NO_THREADS: ReadonlySet<string> = new Set();
 const INBOX_QUERY: ThreadsQuery = { type: "inbox" };
 const NO_LANES: ReadonlySet<HomeLane> = new Set();
 const SKELETON_ROWS = ["w-3/4", "w-2/3", "w-5/6", "w-1/2"];
-const NO_LABEL_IDS: string[] = [];
 
 /**
  * Today answers "what needs me, and what's next?", then gets out of the way.
@@ -185,9 +190,7 @@ export function HomeDashboard() {
         .filter((account) => account.id !== emailAccountId)
         .map((account) => ({
           accountId: account.id,
-          provider: isMicrosoftProvider(account.provider)
-            ? "microsoft"
-            : "google",
+          provider: engineProvider(account.provider),
         })),
     ).catch(() => undefined);
   }, [allInboxesAccounts, emailAccountId, mailClient]);
@@ -206,19 +209,40 @@ export function HomeDashboard() {
     if (!singleHandledLabelIds) return;
     return { [emailAccountId]: singleHandledLabelIds };
   }, [merged, handledLabelIdsByAccount, emailAccountId, singleHandledLabelIds]);
-  // Before Today's answer, Waiting on you shows from local mail for a mailbox
-  // Cue hasn't read, where that answer can only agree: Needs reply is empty
-  // and Cue has filed nothing. Across accounts it waits for the answer.
-  const earlyCue = useHomeCue(
-    emailAccountId,
-    !data && !allInboxesAccounts && isLoading,
+  // Waiting on you reads only mailboxes Cue hasn't read, and shows before
+  // Today's answer for each: whether Cue has read it is two database reads,
+  // while the answer waits on Gmail. Asked while any account's is coming.
+  const { feeds } = all;
+  const localAccountIds = useMemo(
+    () => localAccounts.map((account) => account.id),
+    [localAccounts],
   );
-  const beforeAnswer = !data && earlyCue?.hasReadMail === false;
-  const waitingOnYouHandledLabelIds = useMemo(
+  const homeCue = useHomeCue(
+    localAccountIds,
+    merged ? localAccountIds.some((id) => !feeds[id]?.data) : !single.data,
+  );
+  const waitingOnYouScopeState = useMemo(
     () =>
-      handledLabelIds ??
-      (beforeAnswer ? { [emailAccountId]: NO_LABEL_IDS } : undefined),
-    [handledLabelIds, beforeAnswer, emailAccountId],
+      waitingOnYouScope(
+        localAccounts,
+        Object.fromEntries(
+          localAccounts.map(({ id }) => {
+            const feed = merged
+              ? feeds[id]
+              : { data: single.data, error: single.error, gaveUp };
+            return [
+              id,
+              {
+                home: feed?.data,
+                gaveUp: feed?.gaveUp,
+                hasReadMail: homeCue?.[id],
+                failed: !feed?.data && feed?.error !== undefined,
+              },
+            ];
+          }),
+        ),
+      ),
+    [localAccounts, merged, feeds, single.data, single.error, gaveUp, homeCue],
   );
   const { newsletterThreadIdsByAccount } = all;
   const singleNewsletterThreadIds = single.data?.newsletterThreadIds;
@@ -242,24 +266,33 @@ export function HomeDashboard() {
   const waitingOnYou = useWaitingOnYou({
     accounts: localAccounts,
     named: Boolean(allInboxesAccounts),
-    handledLabelIds: waitingOnYouHandledLabelIds,
-    // Only for a mailbox Cue hasn't read yet; after that Needs reply is
-    // Cue's answer, and this would second-guess it.
-    enabled: !data || (!data.cue.hasReadMail && !data.needsYou.length),
+    ...waitingOnYouScopeState,
   });
-  // Only beside a Needs reply that is known to be empty, and never a
-  // conversation Today already lists as waiting on someone else.
+  // Each conversation shows once on Today: never one it already lists as
+  // needing a reply or waiting on someone else, in any of the mailboxes.
+  // Across accounts, every account's own lists: the merge caps each lane,
+  // and a copy past the cap is still Cue's to answer.
   const waitingOnYouShown = useMemo(() => {
-    if (!data) return beforeAnswer ? waitingOnYou.threads : [];
-    if (data.cue.hasReadMail || data.needsYou.length) return [];
-    // One account Cue hasn't read has no Needs reply even while it loads;
-    // across accounts, another account's may still bring some.
-    if (merged && data.pending.includes("needsYou")) return [];
-    const waiting = new Set(data.waiting.map(rowKey));
+    if (!data) return waitingOnYou.threads;
+    const listed: TodayThread[] = merged
+      ? localAccounts.flatMap((account) => {
+          const home = feeds[account.id]?.data;
+          return home
+            ? [...home.needsYou, ...home.waiting].map((thread) => ({
+                ...thread,
+                account,
+              }))
+            : [];
+        })
+      : [...data.needsYou, ...data.waiting];
+    const rows = new Set(listed.map(rowKey));
+    const messages = new Set(listed.map(todayConversationKey));
     return waitingOnYou.threads.filter(
-      (thread) => !waiting.has(rowKey(thread)),
+      (thread) =>
+        !rows.has(rowKey(thread)) &&
+        !messages.has(todayConversationKey(thread)),
     );
-  }, [data, beforeAnswer, merged, waitingOnYou.threads]);
+  }, [data, merged, localAccounts, feeds, waitingOnYou.threads]);
   const visibleWaitingOnYou = useMemo(
     () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
     [waitingOnYouShown, hidden],
@@ -282,27 +315,22 @@ export function HomeDashboard() {
     },
   );
   const neverRead = useNeverReadSenders({ accounts: localAccounts });
-  const localAccountIds = useMemo(
-    () => localAccounts.map((account) => account.id),
-    [localAccounts],
-  );
   const { isImportant } = useImportantPeople(localAccountIds);
   const away = useAwaySummary(localAccountIds);
   const alsoInInbox = useMemo(() => {
     // Each conversation shows once on Today, as in the server's answer, and
     // so does a message that reached two mailboxes.
     const shown = new Set(waitingOnYouShown.map(rowKey));
-    if (!localInbox)
-      return (data?.alsoInInbox ?? []).filter(
-        (thread) => !shown.has(rowKey(thread)),
-      );
-    for (const thread of data?.needsYou ?? []) shown.add(rowKey(thread));
-    const needsYouMessages = new Set(data?.needsYou.map(todayConversationKey));
-    return localInbox.filter(
-      (thread) =>
-        !shown.has(rowKey(thread)) &&
-        !needsYouMessages.has(todayConversationKey(thread)),
-    );
+    const shownMessages = new Set(waitingOnYouShown.map(todayConversationKey));
+    const notShown = (thread: TodayThread) =>
+      !shown.has(rowKey(thread)) &&
+      !shownMessages.has(todayConversationKey(thread));
+    if (!localInbox) return (data?.alsoInInbox ?? []).filter(notShown);
+    for (const thread of data?.needsYou ?? []) {
+      shown.add(rowKey(thread));
+      shownMessages.add(todayConversationKey(thread));
+    }
+    return localInbox.filter(notShown);
   }, [data, localInbox, waitingOnYouShown]);
   const visibleAlsoInInbox = useMemo(
     () =>
@@ -418,10 +446,19 @@ export function HomeDashboard() {
         : single.mutate,
     [all.mutateAccount, merged, single.mutate],
   );
+  // Across accounts a Catch up card hides its copies' rows too, and an undo
+  // of the card, which reports only its own key, brings them back.
+  const caughtUpCopyKeys = useRef(new Map<string, string[]>());
   const showThreads = useCallback((threadIds: string[]) => {
+    const keys = new Set(threadIds);
+    for (const threadId of threadIds) {
+      for (const key of caughtUpCopyKeys.current.get(threadId) ?? [])
+        keys.add(key);
+      caughtUpCopyKeys.current.delete(threadId);
+    }
     setHidden((current) => {
       const next = new Set(current);
-      for (const threadId of threadIds) next.delete(threadId);
+      for (const key of keys) next.delete(key);
       return next;
     });
   }, []);
@@ -441,14 +478,35 @@ export function HomeDashboard() {
     undo,
   } = threadActions;
 
-  // Catch up acts in the routed account only, where keys are thread ids, and
-  // reports a conversation once its archive or snooze has been queued.
+  // Catch up reports a conversation once its archive or snooze has been
+  // queued. Across accounts it walks the Inbox tab of All inboxes, keyed as
+  // Today's rows are, and a card acts on every copy of its message; a copy
+  // in an account that refused stays.
+  const catchUpAccounts = useMemo<CatchUpAccounts | undefined>(
+    () => (allInboxesAccounts ? { accounts: allInboxesAccounts } : undefined),
+    [allInboxesAccounts],
+  );
   const hideCaughtUp = useCallback(
-    (threadIds: string[]) => {
-      setHidden((current) => new Set([...current, ...threadIds]));
-      removeFromCachedToday(emailAccountId, threadIds);
+    (item: CatchUpItem, refusedAccountIds: string[]) => {
+      const removed = [
+        { key: item.key, accountId: item.accountId, threadId: item.threadId },
+        ...item.copies.map((copy) => ({
+          key: getListThreadKey({
+            id: copy.threadId,
+            account: { id: copy.accountId },
+          }),
+          accountId: copy.accountId,
+          threadId: copy.threadId,
+        })),
+      ].filter(({ accountId }) => !refusedAccountIds.includes(accountId));
+      const keys = removed.map(({ key }) => key);
+      const copyKeys = keys.filter((key) => key !== item.key);
+      if (copyKeys.length) caughtUpCopyKeys.current.set(item.key, copyKeys);
+      setHidden((current) => new Set([...current, ...keys]));
+      for (const { accountId, threadId } of removed)
+        removeFromCachedToday(accountId, [threadId]);
     },
-    [emailAccountId],
+    [],
   );
 
   const threadHref = useCallback(
@@ -775,17 +833,24 @@ export function HomeDashboard() {
         summary={away.summary}
       />
 
-      {allInboxesAccounts ? null : (
-        <CatchUpEntry
-          actions={threadActions}
-          emailAccountId={emailAccountId}
-          onRemoved={hideCaughtUp}
-          onReply={(item) =>
-            router.push(threadHref({ threadId: item.threadId }, true))
-          }
-          query={INBOX_QUERY}
-        />
-      )}
+      <CatchUpEntry
+        actions={threadActions}
+        allInboxes={catchUpAccounts}
+        emailAccountId={emailAccountId}
+        onRemoved={hideCaughtUp}
+        onReply={(item) =>
+          router.push(
+            threadHref(
+              {
+                threadId: item.threadId,
+                account: catchUpAccounts ? { id: item.accountId } : undefined,
+              },
+              true,
+            ),
+          )
+        }
+        query={INBOX_QUERY}
+      />
 
       <LoadingContent
         hasData={Boolean(data)}

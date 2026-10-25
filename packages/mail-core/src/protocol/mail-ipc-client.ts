@@ -81,6 +81,8 @@ export function createMailIpcClient(
     releaseConversationMessages: (key) =>
       call("releaseConversationMessages", key),
     getDiagnostics: (accountId) => call("getDiagnostics", { accountId }),
+    getWaitingSummary: (accountIds) =>
+      call("getWaitingSummary", { accountIds }),
     forgetDeletedDrafts: (input) => call("forgetDeletedDrafts", input),
     purgeAccount: (accountId) => call("purgeAccount", { accountId }),
     retainAccounts: (accountIds) => call("retainAccounts", { accountIds }),

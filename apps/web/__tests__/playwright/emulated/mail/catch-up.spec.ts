@@ -255,7 +255,7 @@ test("finishes a batch from Today on a phone and counts toward Get started", asy
   await expect(dialog).toBeHidden();
 });
 
-test("works through the All inboxes Inbox tab, acting and undoing in each card's own account", async ({
+test("works through the All inboxes Inbox tab and Today across accounts, acting and undoing in each card's own account", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -353,18 +353,75 @@ test("works through the All inboxes Inbox tab, acting and undoing in each card's
     await expect(unreadTab).toHaveAttribute("aria-current", "true");
     await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
 
-    // Today across accounts keeps its own lanes, without Catch up.
+    // Today across accounts offers the same Catch up, each card acting in
+    // its own account.
     await page.goto(`/${primaryId}/home?accounts=all`);
     await expect(page.locator("[data-today-thread]").first()).toBeVisible({
       timeout: 60_000,
     });
-    await expect(page.locator("[data-catch-up-entry]")).toHaveCount(0);
+    const todayDialog = await openCatchUp(page);
+    const todayCard = await currentCard(todayDialog);
+    const todayAccount = await cardAccount(todayDialog);
+    expect([primaryId, second.id]).toContain(todayAccount);
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "catch-up-today-all-accounts-light",
+    );
+    await page.emulateMedia({ colorScheme: "dark" });
+    await capturePlaywrightCheckpoint(
+      page,
+      testInfo,
+      "catch-up-today-all-accounts-dark",
+    );
+    await page.emulateMedia({ colorScheme: "light" });
+    // Keep cards until one is a conversation Today lists, then archive it:
+    // its row leaves Today, and Z in Catch up brings it back.
+    const todayLeft = await leftCount(todayDialog);
+    let listed:
+      | { card: { messageId: string; threadId: string }; account: string }
+      | undefined;
+    for (let step = 0; step < todayLeft; step++) {
+      const card = step === 0 ? todayCard : await currentCard(todayDialog);
+      const account =
+        step === 0 ? todayAccount : await cardAccount(todayDialog);
+      if (await todayRow(page, account, card.threadId).count()) {
+        listed = { card, account };
+        break;
+      }
+      if (step === todayLeft - 1) break;
+      await press(page, "s", card, "keep", tokens[account]);
+      await expect
+        .poll(
+          async () =>
+            `${await cardAccount(todayDialog)}:${(await currentCard(todayDialog)).threadId}`,
+        )
+        .not.toBe(`${account}:${card.threadId}`);
+    }
+    if (!listed)
+      throw new Error("No Catch up card is a conversation Today lists");
+    const row = todayRow(page, listed.account, listed.card.threadId);
+    const todayBefore = countFor(operations, listed.account);
+    await press(page, "e", listed.card, "archive", tokens[listed.account]);
+    await expect
+      .poll(() => countFor(operations, listed.account), { timeout: 60_000 })
+      .toBeGreaterThan(todayBefore);
+    await expect(row).toHaveCount(0);
+    await page.keyboard.press("z");
+    await expect(row).toHaveCount(1, { timeout: 60_000 });
+    await page.keyboard.press("Escape");
+    await expect(todayDialog).toBeHidden();
   } finally {
     await restoreTouched(touched);
     touched = [];
     await deleteSecondEmailAccount(second.accountId);
   }
 });
+
+/** Today's row for a conversation, keyed across accounts by its account. */
+function todayRow(page: Page, accountId: string, threadId: string) {
+  return page.locator(`[data-today-thread="${accountId}:${threadId}"]`);
+}
 
 async function openCatchUp(page: Page) {
   const entry = page.locator("[data-catch-up-entry]");

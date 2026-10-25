@@ -390,6 +390,8 @@ export function createTabFollowerClient(input: {
     async getDiagnostics(accountId) {
       return call("getDiagnostics", [accountId]) as never;
     },
+    getWaitingSummary: (accountIds) =>
+      call("getWaitingSummary", [accountIds]) as never,
     async forgetDeletedDrafts(input) {
       await call("forgetDeletedDrafts", [input]);
     },

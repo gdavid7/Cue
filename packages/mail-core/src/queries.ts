@@ -592,6 +592,10 @@ export type WaitingOnYouConversation = {
   receivedAtMs: number;
   unread: boolean;
   starred: boolean;
+  /** The newest message's normalised Message-ID, the same in every mailbox it reached. */
+  messageKey: string | null;
+  /** The other accounts holding a conversation whose newest message is this one. */
+  copyAccountIds: string[];
 };
 
 /**

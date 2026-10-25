@@ -120,7 +120,7 @@ import { noteGetStartedStep } from "@/utils/get-started/client-steps";
 import { NotificationsOffHint } from "@/app/(app)/[emailAccountId]/mail/NotificationsOffHint";
 import { TodayIntroLine } from "@/app/(app)/[emailAccountId]/mail/TodayIntroLine";
 import {
-  type CatchUpAllInboxes,
+  type CatchUpAccounts,
   CatchUpEntry,
 } from "@/app/(app)/[emailAccountId]/mail/CatchUp";
 import type { CatchUpItem } from "@/app/(app)/[emailAccountId]/mail/catch-up-queue";
@@ -1443,23 +1443,25 @@ export function MailShell() {
 
   // In All inboxes, Catch up walks every included account's inbox, and names
   // the ones it leaves out the way the list does.
-  const { failedAccountIds: combinedFailedAccountIds } = combinedThreadState;
-  const combinedFirstSyncAccounts = combinedThreadState.firstSyncAccounts;
-  const catchUpAllInboxes = useMemo<CatchUpAllInboxes | undefined>(
+  const {
+    firstSyncAccountIds: combinedFirstSyncAccountIds,
+    failedAccountIds: combinedFailedAccountIds,
+  } = combinedThreadState;
+  const catchUpAccounts = useMemo<CatchUpAccounts | undefined>(
     () =>
       isAllAccounts
         ? {
             accounts: combinedAccounts,
-            waitingAccountIds: combinedFirstSyncAccounts.map(
-              (account) => account.id,
-            ),
-            failedAccountIds: combinedFailedAccountIds,
+            engine: {
+              firstSyncAccountIds: combinedFirstSyncAccountIds,
+              failedAccountIds: combinedFailedAccountIds,
+            },
           }
         : undefined,
     [
       combinedAccounts,
       combinedFailedAccountIds,
-      combinedFirstSyncAccounts,
+      combinedFirstSyncAccountIds,
       isAllAccounts,
     ],
   );
@@ -2967,7 +2969,7 @@ export function MailShell() {
                 (!isAllAccounts || !activeSplit?.filters.length) && (
                   <CatchUpEntry
                     actions={threadActions}
-                    allInboxes={catchUpAllInboxes}
+                    allInboxes={catchUpAccounts}
                     className="mx-3 my-2"
                     emailAccountId={emailAccountId}
                     onReply={replyFromCatchUp}
