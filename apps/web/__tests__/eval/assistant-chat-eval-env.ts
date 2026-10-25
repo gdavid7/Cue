@@ -8,6 +8,8 @@ export function buildAssistantChatEvalEnv(
     NEXT_PUBLIC_EMAIL_SEND_ENABLED: true,
     NEXT_PUBLIC_AUTO_DRAFT_DISABLED: false,
     NEXT_PUBLIC_BASE_URL: "http://localhost:3000",
+    // Keys the matching-action confirm token's HMAC.
+    EMAIL_ENCRYPT_SECRET: "eval-only-secret",
     ...overrides,
   };
 }
