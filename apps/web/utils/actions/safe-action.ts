@@ -25,6 +25,8 @@ import {
   runGmailQuotaRequest,
 } from "@/utils/gmail/quota";
 
+class BackgroundCallSkippedError extends SafeError {}
+
 const baseClient = createSafeActionClient({
   defineMetadataSchema() {
     return z.object({
@@ -34,6 +36,10 @@ const baseClient = createSafeActionClient({
       // senders or settings is sync, so it cannot starve sync and webhooks;
       // work the app fires by itself is background.
       gmailPriority: z.enum(GMAIL_QUOTA_PRIORITIES).optional(),
+      // For actions the app fires by itself, not for something the user did:
+      // an expired session or a stale account there is expected and is logged
+      // at info. The client still gets the same error.
+      backgroundCall: z.boolean().optional(),
     });
   },
   defaultValidationErrorsShape: "flattened",
@@ -66,7 +72,9 @@ const baseClient = createSafeActionClient({
 
     // Expected user-facing rejections are shown to the client and never sent
     // to Sentry.
-    if (error instanceof SafeError || isProviderRateLimit || deferred) {
+    if (error instanceof BackgroundCallSkippedError) {
+      logger.info("Background action skipped: not signed in");
+    } else if (error instanceof SafeError || isProviderRateLimit || deferred) {
       logger.warn("Server action error:", {
         metadata,
         bindArgsClientInputs,
@@ -170,7 +178,11 @@ export const actionClient = baseClient
   .use(async ({ next, metadata, bindArgsClientInputs, ctx }) => {
     const session = await auth(undefined, ACTION_SESSION_CHECK);
 
-    if (!session?.user) throw new SafeError(SESSION_EXPIRED_MESSAGE);
+    if (!session?.user) {
+      if (metadata.backgroundCall)
+        throw new BackgroundCallSkippedError(SESSION_EXPIRED_MESSAGE);
+      throw new SafeError(SESSION_EXPIRED_MESSAGE);
+    }
     const userEmail = session.user.email;
     if (!userEmail) throw new SafeError("Unauthorized");
 
@@ -191,8 +203,11 @@ export const actionClient = baseClient
         },
       },
     });
-    if (!emailAccount || emailAccount?.account.userId !== userId) {
-      // expected with stale client state (e.g. account removed or switched)
+    // expected with stale client state (e.g. account removed or switched)
+    if (!emailAccount && metadata.backgroundCall)
+      throw new BackgroundCallSkippedError("Unauthorized");
+    // Someone else's account is never expected, whatever called the action.
+    if (!emailAccount || emailAccount.account.userId !== userId) {
       ctx.logger.warn("Unauthorized", metadata);
       throw new SafeError("Unauthorized");
     }
@@ -238,6 +253,8 @@ export const actionClientUser = baseClient.use(
 
     if (!session?.user) {
       // expected when the session has expired or the user logged out
+      if (metadata.backgroundCall)
+        throw new BackgroundCallSkippedError(SESSION_EXPIRED_MESSAGE);
       ctx.logger.warn("Unauthorized", metadata);
       throw new SafeError(SESSION_EXPIRED_MESSAGE);
     }

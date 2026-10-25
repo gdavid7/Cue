@@ -117,26 +117,10 @@ export async function getWebhookEmailAccount(
   }
 
   if (!emailAccount) {
-    await logErrorWithDedupe({
-      logger,
-      message: "Account not found",
-      // expected: providers keep sending webhooks for a while after an account is deleted
-      level: "warn",
-      context: {
-        hasSubscriptionIdLookup: "watchEmailsSubscriptionId" in where,
-      },
-      dedupeKeyParts: {
-        scope: "webhook/account-validation",
-        email: "email" in where ? where.email : null,
-        watchEmailsSubscriptionId:
-          "watchEmailsSubscriptionId" in where
-            ? where.watchEmailsSubscriptionId
-            : null,
-        lookupType:
-          "watchEmailsSubscriptionId" in where ? "subscription" : "email",
-      },
-      ttlSeconds: 10 * 60,
-      summaryIntervalSeconds: 2 * 60,
+    // Expected: providers keep pushing for a while after an account is
+    // deleted. The webhook still answers 2xx so they stop retrying.
+    logger.info("Account not found", {
+      hasSubscriptionIdLookup: "watchEmailsSubscriptionId" in where,
     });
   }
 

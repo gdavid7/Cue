@@ -418,40 +418,44 @@ describe("getWebhookEmailAccount", () => {
     vi.clearAllMocks();
   });
 
-  it("logs a deduped account-not-found error for email lookup misses", async () => {
+  it("logs an unknown account at info for an email lookup miss", async () => {
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(null);
+    const testLogger = createTestLogger();
+    const info = vi.spyOn(testLogger, "info");
+    const warn = vi.spyOn(testLogger, "warn");
+    const error = vi.spyOn(testLogger, "error");
 
-    await getWebhookEmailAccount({ email: "user@example.com" }, logger);
-
-    expect(logErrorWithDedupe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Account not found",
-        dedupeKeyParts: expect.objectContaining({
-          lookupType: "email",
-          email: "user@example.com",
-        }),
-      }),
+    const result = await getWebhookEmailAccount(
+      { email: "user@example.com" },
+      testLogger,
     );
+
+    expect(result).toBeNull();
+    expect(info).toHaveBeenCalledWith("Account not found", {
+      hasSubscriptionIdLookup: false,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
   });
 
-  it("logs a deduped account-not-found error for subscription lookup misses", async () => {
+  it("logs an unknown account at info for a subscription lookup miss", async () => {
     vi.mocked(prisma.emailAccount.findFirst).mockResolvedValue(null);
-    vi.mocked(prisma.$queryRaw).mockResolvedValue([]);
+    const testLogger = createTestLogger();
+    const info = vi.spyOn(testLogger, "info");
+    const warn = vi.spyOn(testLogger, "warn");
+    const error = vi.spyOn(testLogger, "error");
 
-    await getWebhookEmailAccount(
+    const result = await getWebhookEmailAccount(
       { watchEmailsSubscriptionId: "sub-123" },
-      logger,
+      testLogger,
     );
 
-    expect(logErrorWithDedupe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Account not found",
-        dedupeKeyParts: expect.objectContaining({
-          lookupType: "subscription",
-          watchEmailsSubscriptionId: "sub-123",
-        }),
-      }),
-    );
+    expect(result).toBeNull();
+    expect(info).toHaveBeenCalledWith("Account not found", {
+      hasSubscriptionIdLookup: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
   });
 
   it("resolves the account when the subscription id only exists in watch history", async () => {

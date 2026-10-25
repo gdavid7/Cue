@@ -15,7 +15,11 @@ const STYLE_SAMPLE_SIZE = 20;
 
 // to help with onboarding and provide the best flow to new users
 export const assessAction = actionClient
-  .metadata({ name: "assessUser", gmailPriority: "background" })
+  .metadata({
+    name: "assessUser",
+    gmailPriority: "background",
+    backgroundCall: true,
+  })
   .action(async ({ ctx: { emailAccountId, provider, logger } }) => {
     const emailProvider = await createEmailProvider({
       emailAccountId,
