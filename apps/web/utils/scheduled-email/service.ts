@@ -19,6 +19,10 @@ import { publishToQstashAt } from "@/utils/upstash";
 const LEASE_MS = 5 * 60 * 1000;
 const RECONNECT_REMINDER_DELAY_MS = 60 * 60 * 1000;
 const HELD_EMAIL_EXECUTE_PATH = "/api/scheduled-emails/execute";
+const CANCELLABLE_HELD_STATUSES: readonly ScheduledEmail["status"][] = [
+  "PENDING",
+  "BLOCKED_AUTH",
+];
 
 export async function scheduleEmail(
   emailAccountId: string,
@@ -188,7 +192,7 @@ export async function cancelHeldEmail(
       emailAccountId,
       clientMutationId,
       heldForUndo: true,
-      status: { in: ["PENDING", "BLOCKED_AUTH"] },
+      status: { in: [...CANCELLABLE_HELD_STATUSES] },
     },
     data: {
       status: "CANCELLED",
@@ -200,9 +204,16 @@ export async function cancelHeldEmail(
   if (cancelled.count) return "cancelled";
   const existing = await findScheduledEmail(emailAccountId, clientMutationId);
   if (existing) {
-    return existing.heldForUndo && existing.status === "CANCELLED"
-      ? "cancelled"
-      : "too_late";
+    if (existing.heldForUndo && existing.status === "CANCELLED")
+      return "cancelled";
+    // The hold was written after the update above found nothing: the send it
+    // carries hasn't started, so the undo still wins.
+    if (
+      existing.heldForUndo &&
+      CANCELLABLE_HELD_STATUSES.includes(existing.status)
+    )
+      return cancelHeldEmail(emailAccountId, clientMutationId);
+    return "too_late";
   }
   try {
     await prisma.scheduledEmail.create({

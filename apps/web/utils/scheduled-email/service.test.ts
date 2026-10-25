@@ -15,6 +15,7 @@ import {
   processDueScheduledEmails,
   releaseHeldEmail,
   holdEmailForUndo,
+  cancelHeldEmail,
 } from "./service";
 import { Prisma, type ScheduledEmail } from "@/generated/prisma/client";
 import type { ParsedMessage } from "@/utils/types";
@@ -815,6 +816,37 @@ describe("holdEmailForUndo", () => {
     ).toBe(cancelled);
     expect(publishToQstashAt).not.toHaveBeenCalled();
     expect(executeDurableEmailSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancelHeldEmail", () => {
+  beforeEach(() => vi.resetAllMocks());
+  // Undo and the send's hold reach the server together: the hold is written
+  // between cancel's update, which found nothing, and its look at the row.
+  it("cancels a hold written while the undo was being recorded", async () => {
+    prisma.scheduledEmail.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    prisma.scheduledEmail.findUnique.mockResolvedValueOnce(
+      row({ heldForUndo: true, status: "PENDING" }),
+    );
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("cancelled");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.scheduledEmail.create).not.toHaveBeenCalled();
+  });
+  it("reports too late once the hold has started sending", async () => {
+    prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 0 });
+    prisma.scheduledEmail.findUnique.mockResolvedValue(
+      row({ heldForUndo: true, status: "PROCESSING" }),
+    );
+
+    await expect(
+      cancelHeldEmail("account", input.clientMutationId),
+    ).resolves.toBe("too_late");
+    expect(prisma.scheduledEmail.updateMany).toHaveBeenCalledOnce();
   });
 });
 

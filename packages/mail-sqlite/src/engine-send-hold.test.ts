@@ -117,6 +117,41 @@ describe("engine undo-window sends", () => {
     await engine.close();
   });
 
+  // Undo pressed while the hold is still being written on the server: the
+  // hold's late answer must not bring the send back, and nothing dispatches it.
+  it("keeps an undo that lands while the server is still taking the send", async () => {
+    const { engine, executor } = await sendHarness({
+      cancel: { status: "cancelled" },
+    });
+    let answerHold: (() => void) | undefined;
+    executor.execute.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerHold = () =>
+            resolve({
+              status: "accepted",
+              receiptId: "receipt-1",
+              retryAfterMs: 0,
+            });
+        }),
+    );
+    const running = engine.runUntil(Date.now() + 300);
+    await vi.waitFor(() => expect(executor.execute).toHaveBeenCalledOnce());
+    expect((await engine.readOperation(SEND_KEY)).status).toBe("executing");
+
+    const result = await engine.cancelOperation(SEND_KEY);
+    answerHold?.();
+    await running;
+    await engine.runUntil(Date.now() + 200);
+
+    expect(result.status).toBe("cancelled");
+    expect(executor.cancel).toHaveBeenCalledOnce();
+    expect((await engine.readOperation(SEND_KEY)).status).toBe("cancelled");
+    expect(executor.inspect).not.toHaveBeenCalled();
+    expect(executor.execute).toHaveBeenCalledOnce();
+    await engine.close();
+  });
+
   it("cancels on the device without the server before the send leaves it", async () => {
     const { engine, executor } = await sendHarness({
       cancel: { status: "cancelled" },
