@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { after } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureException } from "@/utils/error";
 import {
   currentGmailQuotaContext,
@@ -134,5 +134,51 @@ describe("server actions and revoked sessions", () => {
         disableCookieCache: true,
         disableRefresh: true,
       });
+  });
+});
+
+describe("server actions fired by the app with an expired session", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(auth).mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("answers a background action without a warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const run = vi.fn();
+
+    const results = await Promise.all([
+      actionClientUser
+        .metadata({ name: "recordVisit", backgroundCall: true })
+        .action(run)(),
+      actionClient
+        .metadata({ name: "assessUser", backgroundCall: true })
+        .action(run)("account-1"),
+    ]);
+
+    for (const result of results)
+      expect(result?.serverError).toBe(SESSION_EXPIRED_MESSAGE);
+    expect(run).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("keeps the warning for an action the user triggered", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await Promise.all([
+      actionClientUser.metadata({ name: "deleteAccount" }).action(vi.fn())(),
+      actionClient.metadata({ name: "sendEmail" }).action(vi.fn())("account-1"),
+    ]);
+
+    const warnings = warn.mock.calls.map(([line]) => String(line));
+    expect(warnings.some((line) => line.includes("Unauthorized"))).toBe(true);
+    expect(
+      warnings.filter((line) => line.includes("Server action error:")),
+    ).toHaveLength(2);
   });
 });

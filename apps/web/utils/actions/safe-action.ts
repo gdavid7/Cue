@@ -25,6 +25,8 @@ import {
   runGmailQuotaRequest,
 } from "@/utils/gmail/quota";
 
+class BackgroundCallRejectedError extends SafeError {}
+
 const baseClient = createSafeActionClient({
   defineMetadataSchema() {
     return z.object({
@@ -34,6 +36,10 @@ const baseClient = createSafeActionClient({
       // senders or settings is sync, so it cannot starve sync and webhooks;
       // work the app fires by itself is background.
       gmailPriority: z.enum(GMAIL_QUOTA_PRIORITIES).optional(),
+      // For actions the app fires by itself, not for something the user did:
+      // an expired session or a stale account there is expected and is logged
+      // at info. The client still gets the same error.
+      backgroundCall: z.boolean().optional(),
     });
   },
   defaultValidationErrorsShape: "flattened",
@@ -66,7 +72,11 @@ const baseClient = createSafeActionClient({
 
     // Expected user-facing rejections are shown to the client and never sent
     // to Sentry.
-    if (error instanceof SafeError || isProviderRateLimit || deferred) {
+    if (error instanceof BackgroundCallRejectedError) {
+      logger.info("Background action not authorized", {
+        action: metadata?.name,
+      });
+    } else if (error instanceof SafeError || isProviderRateLimit || deferred) {
       logger.warn("Server action error:", {
         metadata,
         bindArgsClientInputs,
@@ -170,7 +180,8 @@ export const actionClient = baseClient
   .use(async ({ next, metadata, bindArgsClientInputs, ctx }) => {
     const session = await auth(undefined, ACTION_SESSION_CHECK);
 
-    if (!session?.user) throw new SafeError(SESSION_EXPIRED_MESSAGE);
+    if (!session?.user)
+      throw rejectUnauthorized(SESSION_EXPIRED_MESSAGE, metadata);
     const userEmail = session.user.email;
     if (!userEmail) throw new SafeError("Unauthorized");
 
@@ -193,8 +204,8 @@ export const actionClient = baseClient
     });
     if (!emailAccount || emailAccount?.account.userId !== userId) {
       // expected with stale client state (e.g. account removed or switched)
-      ctx.logger.warn("Unauthorized", metadata);
-      throw new SafeError("Unauthorized");
+      if (!metadata.backgroundCall) ctx.logger.warn("Unauthorized", metadata);
+      throw rejectUnauthorized("Unauthorized", metadata);
     }
 
     Sentry.setTag("emailAccountId", emailAccountId);
@@ -238,8 +249,8 @@ export const actionClientUser = baseClient.use(
 
     if (!session?.user) {
       // expected when the session has expired or the user logged out
-      ctx.logger.warn("Unauthorized", metadata);
-      throw new SafeError(SESSION_EXPIRED_MESSAGE);
+      if (!metadata.backgroundCall) ctx.logger.warn("Unauthorized", metadata);
+      throw rejectUnauthorized(SESSION_EXPIRED_MESSAGE, metadata);
     }
 
     const userId = session.user.id;
@@ -288,4 +299,13 @@ function runInstrumentedAction<T>({
 }) {
   logger.info("Calling action");
   return withServerActionInstrumentation(actionName, run);
+}
+
+function rejectUnauthorized(
+  message: string,
+  metadata: { backgroundCall?: boolean },
+) {
+  return metadata.backgroundCall
+    ? new BackgroundCallRejectedError(message)
+    : new SafeError(message);
 }

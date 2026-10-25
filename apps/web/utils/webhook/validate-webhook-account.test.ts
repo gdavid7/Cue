@@ -418,40 +418,34 @@ describe("getWebhookEmailAccount", () => {
     vi.clearAllMocks();
   });
 
-  it("logs a deduped account-not-found error for email lookup misses", async () => {
+  it("logs an unknown account at info, never warn or error, and returns null", async () => {
     vi.mocked(prisma.emailAccount.findUnique).mockResolvedValue(null);
-
-    await getWebhookEmailAccount({ email: "user@example.com" }, logger);
-
-    expect(logErrorWithDedupe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Account not found",
-        dedupeKeyParts: expect.objectContaining({
-          lookupType: "email",
-          email: "user@example.com",
-        }),
-      }),
-    );
-  });
-
-  it("logs a deduped account-not-found error for subscription lookup misses", async () => {
     vi.mocked(prisma.emailAccount.findFirst).mockResolvedValue(null);
-    vi.mocked(prisma.$queryRaw).mockResolvedValue([]);
+    const testLogger = createTestLogger();
+    const info = vi.spyOn(testLogger, "info");
+    const warn = vi.spyOn(testLogger, "warn");
+    const error = vi.spyOn(testLogger, "error");
 
-    await getWebhookEmailAccount(
+    const byEmail = await getWebhookEmailAccount(
+      { email: "user@example.com" },
+      testLogger,
+    );
+    const bySubscription = await getWebhookEmailAccount(
       { watchEmailsSubscriptionId: "sub-123" },
-      logger,
+      testLogger,
     );
 
-    expect(logErrorWithDedupe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Account not found",
-        dedupeKeyParts: expect.objectContaining({
-          lookupType: "subscription",
-          watchEmailsSubscriptionId: "sub-123",
-        }),
-      }),
-    );
+    expect(byEmail).toBeNull();
+    expect(bySubscription).toBeNull();
+    expect(info).toHaveBeenCalledWith("Account not found", {
+      hasSubscriptionIdLookup: false,
+    });
+    expect(info).toHaveBeenCalledWith("Account not found", {
+      hasSubscriptionIdLookup: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(logErrorWithDedupe).not.toHaveBeenCalled();
   });
 
   it("resolves the account when the subscription id only exists in watch history", async () => {
