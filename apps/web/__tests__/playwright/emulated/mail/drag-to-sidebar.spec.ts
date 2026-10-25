@@ -183,12 +183,24 @@ test("keeps clicking open and Shift+click selecting on draggable rows", async ({
   const rows = conversations.getByRole("option");
   await expect(rows.nth(2)).toBeVisible();
 
-  await rows.nth(0).getByRole("checkbox", { includeHidden: true }).click();
-  await rows.nth(2).click({ modifiers: ["Shift"] });
-  await expect(page.getByText("3 selected", { exact: true })).toBeVisible();
-  for (const index of [0, 1, 2]) {
-    await expect(rows.nth(index)).toHaveAttribute("aria-selected", "true");
-  }
+  // Mail from an earlier test can still re-sort the list, and a reorder
+  // between the two clicks resets the Shift+click anchor by design, so the
+  // gesture is repeated until it runs on a settled list.
+  await expect(async () => {
+    if (await page.getByText(/^\d+ selected$/).isVisible()) {
+      await page.keyboard.press("Escape");
+    }
+    await rows.nth(0).getByRole("checkbox", { includeHidden: true }).click();
+    await rows.nth(2).click({ modifiers: ["Shift"] });
+    await expect(page.getByText("3 selected", { exact: true })).toBeVisible({
+      timeout: 3000,
+    });
+    for (const index of [0, 1, 2]) {
+      await expect(rows.nth(index)).toHaveAttribute("aria-selected", "true", {
+        timeout: 1000,
+      });
+    }
+  }).toPass({ timeout: 45_000 });
   await page.keyboard.press("Escape");
   await expect(page.getByText("3 selected", { exact: true })).toBeHidden();
 
