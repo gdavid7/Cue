@@ -88,8 +88,6 @@ async function enqueueDueAutomationJobs(logger: Logger) {
     take: BATCH_SIZE,
   });
 
-  logger.info("Found due automation jobs", { due: dueJobs.length });
-
   let claimed = 0;
   let queued = 0;
   let skipped = 0;

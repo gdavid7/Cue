@@ -5,8 +5,11 @@ import type { ScheduledEmail } from "@/generated/prisma/client";
 import prisma from "@/utils/prisma";
 import { isDuplicateError } from "@/utils/prisma-helpers";
 import { isInvalidGrantError, SafeError } from "@/utils/error";
-import { extractErrorInfo as extractGmailErrorInfo } from "@/utils/gmail/retry";
-import { extractErrorInfo as extractOutlookErrorInfo } from "@/utils/outlook/retry";
+import { isMissingConversation } from "@/utils/email/thread-not-found";
+import {
+  getRetryDelayMs,
+  MAX_RETRY_ATTEMPTS,
+} from "@/utils/retry/background-backoff";
 import { scheduleEmailBody } from "@/utils/actions/scheduled-email.validation";
 import { executeDurableEmailSend } from "@/utils/email/durable-email-send";
 import { createEmailProvider } from "@/utils/email/provider";
@@ -542,8 +545,25 @@ async function processReminder(row: ScheduledEmail, logger: Logger, now: Date) {
       });
       return;
     }
-    logger.error("Email reminder failed", { error, scheduledEmailId: row.id });
-    // Retain the lease to avoid tight retries and recover on the next stale scan.
+    const reminderAttempts = row.reminderAttempts + 1;
+    const gaveUp = reminderAttempts >= MAX_RETRY_ATTEMPTS;
+    logger.error(
+      gaveUp ? "Gave up on an email reminder" : "Email reminder failed",
+      { error, scheduledEmailId: row.id, reminderAttempts },
+    );
+    await prisma.scheduledEmail.updateMany({
+      where,
+      data: gaveUp
+        ? { reminderStatus: "CANCELLED", reminderAttempts }
+        : {
+            reminderStatus: "PENDING",
+            reminderStartedAt: null,
+            reminderAttempts,
+            remindAt: new Date(
+              now.getTime() + getRetryDelayMs(reminderAttempts),
+            ),
+          },
+    });
   }
 }
 
@@ -585,13 +605,6 @@ export async function processDueScheduledEmails(
     }
   });
   return { processed: rows.length };
-}
-
-function isMissingConversation(error: unknown) {
-  return (
-    extractGmailErrorInfo(error).status === 404 ||
-    extractOutlookErrorInfo(error).status === 404
-  );
 }
 
 function getSentThreadId(result: unknown) {

@@ -39,7 +39,7 @@
   "crons": [
     {
       "path": "/api/cron/scheduled-actions",
-      "schedule": "0 0 * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/watch/all",
@@ -51,7 +51,7 @@
     },
     {
       "path": "/api/cron/automation-jobs",
-      "schedule": "0 14 * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/cron/reasoning-retention",

@@ -102,7 +102,7 @@ describe("processDueSnoozedThreads", () => {
 
     expect(result).toEqual({ processed: 0, failed: 1, skipped: 0, total: 1 });
     expect(releaseSnoozedThreadForRetry).toHaveBeenCalledWith(
-      "snooze",
+      expect.objectContaining({ id: "snooze" }),
       leaseStartedAt,
     );
   });

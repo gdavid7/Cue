@@ -191,7 +191,6 @@ async function processScheduledMail(logger: Logger) {
     return { scheduledActions, snoozedThreads, scheduledEmails };
   }
 
-  logger.info("QStash configured; checking snoozed thread fallback");
   const [snoozedThreads, scheduledEmails] = await Promise.all([
     processDueSnoozedThreads(logger),
     processDueScheduledEmails(logger),

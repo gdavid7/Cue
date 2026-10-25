@@ -55,7 +55,7 @@ export async function hasPostCronSecret(request: RequestWithLogger) {
 
 /**
  * Runs a cron's work and logs one "Cron finished" line with its duration and
- * counts, so a run with nothing to do still leaves a daily heartbeat, or one
+ * counts, so a run with nothing to do still leaves a heartbeat, or one
  * "Cron failed" line when it throws. The middleware scope on the logger names
  * the cron. The counts are spread into the line, so their keys must be fixed
  * names.

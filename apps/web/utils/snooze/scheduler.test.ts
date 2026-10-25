@@ -302,7 +302,11 @@ describe("snoozed thread scheduler", () => {
     const leaseStartedAt = new Date("2026-08-16T09:30:00.000Z");
     const failedAt = new Date("2026-08-16T09:31:00.000Z");
 
-    await releaseSnoozedThreadForRetry("snooze", leaseStartedAt, failedAt);
+    await releaseSnoozedThreadForRetry(
+      { id: "snooze", restoreAttempts: 0 },
+      leaseStartedAt,
+      failedAt,
+    );
 
     expect(prisma.snoozedThread.updateMany).toHaveBeenCalledWith({
       where: {
@@ -313,6 +317,7 @@ describe("snoozed thread scheduler", () => {
       data: {
         scheduledFor: new Date("2026-08-16T09:36:00.000Z"),
         status: SnoozedThreadStatus.PENDING,
+        restoreAttempts: 1,
       },
     });
   });
