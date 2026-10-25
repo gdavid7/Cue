@@ -455,6 +455,7 @@ export class MicrosoftCalendarEventProvider implements CalendarEventProvider {
     return {
       ...(allDay ? { allDay } : {}),
       id: event.id || "",
+      ...(event.iCalUId ? { iCalUid: event.iCalUId } : {}),
       title: event.subject || "Untitled",
       description: event.bodyPreview || undefined,
       location: event.location?.displayName || undefined,

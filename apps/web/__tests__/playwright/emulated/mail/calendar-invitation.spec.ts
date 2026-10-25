@@ -65,3 +65,79 @@ test("shows inline calendar responses with the current RSVP", async ({
     fullPage: true,
   });
 });
+
+test("says what an upcoming invitation conflicts with", async ({
+  page,
+}, testInfo) => {
+  const conflictRequests: URL[] = [];
+  await page.route("**/api/messages/calendar-invitation?**", (route) =>
+    route.fulfill({
+      json: {
+        invitation: {
+          uid: "playwright-invite@example.com",
+          title: "Quarterly review",
+          organizer: "organizer@example.com",
+          recurring: false,
+          response: null,
+          calendarSynced: true,
+          start: "2030-03-04T15:00:00.000Z",
+          end: "2030-03-04T16:00:00.000Z",
+          allDay: false,
+          location: null,
+          conferenceUrl: null,
+        },
+      },
+    }),
+  );
+  await page.route("**/api/user/calendar/conflicts?**", (route) => {
+    conflictRequests.push(new URL(route.request().url()));
+    return route.fulfill({
+      json: {
+        status: "ok",
+        conflicts: [
+          // The invitation itself, already on the calendar.
+          {
+            title: "Quarterly review",
+            start: "2030-03-04T15:00:00.000Z",
+            end: "2030-03-04T16:00:00.000Z",
+          },
+          {
+            title: "Design review",
+            start: "2030-03-04T15:30:00.000Z",
+            end: "2030-03-04T16:30:00.000Z",
+          },
+          {
+            title: "Hiring sync",
+            start: "2030-03-04T14:30:00.000Z",
+            end: "2030-03-04T15:15:00.000Z",
+          },
+        ],
+      },
+    });
+  });
+  const emailAccountId = await getEmailAccountId(page);
+  await page.goto(`/${emailAccountId}/mail?thread-id=thr_playwright_calendar`);
+  const card = page.getByLabel("Calendar invitation", { exact: true });
+  await expect(card).toBeVisible({ timeout: 60_000 });
+  await expect(
+    card.getByText("Monday, March 4, 2030 · 3:00 PM – 4:00 PM"),
+  ).toBeVisible();
+  await expect(card.getByText("Conflicts with Design review")).toBeVisible();
+  await expect(card.getByText("+1 more")).toBeVisible();
+  expect(conflictRequests[0]?.searchParams.get("start")).toBe(
+    "2030-03-04T15:00:00.000Z",
+  );
+  expect(conflictRequests[0]?.searchParams.get("uid")).toBe(
+    "playwright-invite@example.com",
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("calendar-invitation-conflict-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(card.getByText("Conflicts with Design review")).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("calendar-invitation-conflict-mobile.png"),
+    fullPage: true,
+  });
+});

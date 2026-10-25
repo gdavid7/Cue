@@ -324,6 +324,7 @@ export class GoogleCalendarEventProvider implements CalendarEventProvider {
 
     return {
       id: event.id || "",
+      ...(event.iCalUID ? { iCalUid: event.iCalUID } : {}),
       title: event.summary || "Untitled",
       description: event.description || undefined,
       location: event.location || undefined,

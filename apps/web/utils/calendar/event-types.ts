@@ -20,6 +20,8 @@ export interface CalendarEvent {
   description?: string;
   endTime: Date;
   eventUrl?: string;
+  /** The iCalendar UID shared by every copy of the meeting, when the provider gives one. */
+  iCalUid?: string;
   id: string;
   // True when the connected calendar's own account organizes the event. This is
   // relative to the calendar connection, which is not always the EmailAccount.

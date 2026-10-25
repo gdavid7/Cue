@@ -12,6 +12,11 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { respondToCalendarInvitationAction } from "@/utils/actions/calendar-invitation";
 import { getActionErrorMessage } from "@/utils/error";
 import type { CalendarInvitationResponse } from "@/app/api/messages/calendar-invitation/route";
+import type { GetCalendarConflictsResponse } from "@/app/api/user/calendar/conflicts/route";
+import {
+  getInvitationWindow,
+  isInvitationCopy,
+} from "@/utils/calendar/conflicts";
 import { formatInvitationTime } from "@/utils/calendar/invitations/format-time";
 import type { InvitationResponse } from "@/utils/calendar/invitations/parser";
 
@@ -70,6 +75,7 @@ export function CalendarInvitation({ messageId }: { messageId: string }) {
                 <p className="font-medium break-words">
                   {formatInvitationTime(invitation, viewerTimeZone)}
                 </p>
+                <ConflictHint invitation={invitation} />
                 <p className="break-words">{invitation.title}</p>
                 <p className="break-all text-sm text-muted-foreground">
                   {invitation.organizer}
@@ -129,6 +135,47 @@ export function CalendarInvitation({ messageId }: { messageId: string }) {
         )}
       </LoadingContent>
     </section>
+  );
+}
+
+type Invitation = NonNullable<CalendarInvitationResponse["invitation"]>;
+
+// Read live from the person's calendars each time the card opens; the line
+// stays away when there is nothing certain to say.
+function ConflictHint({ invitation }: { invitation: Invitation }) {
+  const { emailAccountId } = useAccount();
+  const slot = getInvitationWindow(invitation, new Date());
+  const { data } = useSWR<GetCalendarConflictsResponse>(
+    slot
+      ? getAccountScopedKey(
+          `/api/user/calendar/conflicts?${new URLSearchParams({
+            start: slot.start.toISOString(),
+            end: slot.end.toISOString(),
+            uid: invitation.uid,
+          })}`,
+          emailAccountId,
+        )
+      : null,
+  );
+  if (!slot || data?.status !== "ok") return null;
+
+  const conflicts = data.conflicts.filter(
+    (event) => !isInvitationCopy(event, { title: invitation.title, ...slot }),
+  );
+  const [first, ...rest] = conflicts;
+  return (
+    <p className="flex min-w-0 gap-1 text-sm text-muted-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
+      {first ? (
+        <>
+          <span className="truncate">Conflicts with {first.title}</span>
+          {rest.length > 0 && (
+            <span className="shrink-0">+{rest.length} more</span>
+          )}
+        </>
+      ) : (
+        "You’re free then"
+      )}
+    </p>
   );
 }
 

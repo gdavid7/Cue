@@ -154,7 +154,9 @@
   ],
   "cached-settings.spec.ts": ["hooks/useMailSettings.ts"],
   "calendar-invitation.spec.ts": [
-    "components/email-list/CalendarInvitation.tsx"
+    "components/email-list/CalendarInvitation.tsx",
+    "app/api/user/calendar/conflicts/route.ts",
+    "utils/calendar/conflicts.ts"
   ],
   "command-palette.spec.ts": [
     "components/CommandK.tsx",
