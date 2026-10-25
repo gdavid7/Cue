@@ -150,9 +150,9 @@ test("drags a conversation into an Outlook folder and Undo puts each message bac
       .toBe("sentitems");
     await capturePlaywrightCheckpoint(page, testInfo, "folder-move-undone");
   } finally {
-    await graph.remove(`/messages/${replyId}`);
-    await graph.remove(`/messages/${sentId}`);
-    await graph.remove(`/mailFolders/${folder.id}`);
+    await graph.remove(`/messages/${replyId}`).catch(() => undefined);
+    await graph.remove(`/messages/${sentId}`).catch(() => undefined);
+    await graph.remove(`/mailFolders/${folder.id}`).catch(() => undefined);
   }
 });
 

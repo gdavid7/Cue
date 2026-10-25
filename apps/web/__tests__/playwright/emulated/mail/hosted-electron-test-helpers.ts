@@ -136,7 +136,7 @@ export async function waitForHostedElectronReady(
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     throw new Error(
-      `hosted electron never wrote ${readyPath}\n${session.output()}`,
+      `hosted electron never wrote ${readyPath}\n${session.output().slice(-4096)}`,
     );
   })();
   const winner = await Promise.race([
