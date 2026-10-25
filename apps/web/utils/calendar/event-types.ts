@@ -20,11 +20,15 @@ export interface CalendarEvent {
   description?: string;
   endTime: Date;
   eventUrl?: string;
+  /** The iCalendar UID shared by every copy of the meeting, when the provider gives one. */
+  iCalUid?: string;
   id: string;
   // True when the connected calendar's own account organizes the event. This is
   // relative to the calendar connection, which is not always the EmailAccount.
   isOrganizer?: boolean;
   location?: string;
+  /** Shown as free on the calendar, so it doesn't block the time. */
+  markedFree?: boolean;
   organizerEmail?: string;
   startTime: Date;
   title: string;
@@ -73,6 +77,8 @@ export interface CalendarEventProvider {
     timeMin?: Date;
     timeMax?: Date;
     maxResults?: number;
+    /** Called when the list stopped short of everything in the range. */
+    onIncomplete?: () => void;
   }): Promise<CalendarEvent[]>;
   fetchEventsWithAttendee(options: {
     attendeeEmail: string;

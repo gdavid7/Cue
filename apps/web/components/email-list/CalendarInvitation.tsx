@@ -12,6 +12,11 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 import { respondToCalendarInvitationAction } from "@/utils/actions/calendar-invitation";
 import { getActionErrorMessage } from "@/utils/error";
 import type { CalendarInvitationResponse } from "@/app/api/messages/calendar-invitation/route";
+import type { GetCalendarConflictsResponse } from "@/app/api/user/calendar/conflicts/route";
+import {
+  getInvitationWindow,
+  isInvitationCopy,
+} from "@/utils/calendar/conflicts";
 import { formatInvitationTime } from "@/utils/calendar/invitations/format-time";
 import type { InvitationResponse } from "@/utils/calendar/invitations/parser";
 
@@ -74,6 +79,7 @@ export function CalendarInvitation({ messageId }: { messageId: string }) {
                 <p className="break-all text-sm text-muted-foreground">
                   {invitation.organizer}
                 </p>
+                <ConflictHint invitation={invitation} />
                 {invitation.recurring && (
                   <p className="text-sm text-muted-foreground">
                     Recurring invitation
@@ -129,6 +135,56 @@ export function CalendarInvitation({ messageId }: { messageId: string }) {
         )}
       </LoadingContent>
     </section>
+  );
+}
+
+type Invitation = NonNullable<CalendarInvitationResponse["invitation"]>;
+
+// Read live from the person's calendars when the card opens, at most once a
+// minute; the line stays away when there is nothing certain to say.
+function ConflictHint({ invitation }: { invitation: Invitation }) {
+  const { emailAccountId } = useAccount();
+  const slot = getInvitationWindow(invitation, new Date());
+  const params = slot
+    ? new URLSearchParams({
+        start: slot.start.toISOString(),
+        end: slot.end.toISOString(),
+      })
+    : null;
+  if (params && invitation.uid) params.set("uid", invitation.uid);
+  const { data } = useSWR<GetCalendarConflictsResponse>(
+    params
+      ? getAccountScopedKey(
+          `/api/user/calendar/conflicts?${params}`,
+          emailAccountId,
+        )
+      : null,
+    // Each read asks every connected calendar, so a glance away and back
+    // doesn't ask again.
+    { revalidateOnFocus: false, dedupingInterval: 60_000 },
+  );
+  if (!slot || data?.status !== "ok") return null;
+
+  const [first, ...rest] = data.conflicts.filter(
+    (event) => !isInvitationCopy(event, { ...invitation, ...slot }),
+  );
+  return (
+    <p className="flex min-w-0 gap-1 text-sm text-muted-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200">
+      {first ? (
+        <>
+          <span className="truncate">
+            {first.title
+              ? `Conflicts with ${first.title}`
+              : "Conflicts with a meeting"}
+          </span>
+          {rest.length > 0 && (
+            <span className="shrink-0">and {rest.length} more</span>
+          )}
+        </>
+      ) : (
+        "You’re free then"
+      )}
+    </p>
   );
 }
 

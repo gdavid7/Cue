@@ -28,6 +28,7 @@ export async function fetchCalendarEventsInWindow({
   timeMax,
   maxResultsPerProvider,
   ownConnectionsOnly = false,
+  includeCancelledTitles = false,
   selfAddresses,
   logger,
 }: {
@@ -37,6 +38,11 @@ export async function fetchCalendarEventsInWindow({
   maxResultsPerProvider: number;
   /** See `calendarConnectionsWhere`: for automations that act once per calendar. */
   ownConnectionsOnly?: boolean;
+  /**
+   * Keep events renamed "Cancelled: …". Free/busy still counts one that wasn't
+   * marked free, so a caller weighing busy time needs to see it.
+   */
+  includeCancelledTitles?: boolean;
   /**
    * The user's own addresses (`buildSelfAddresses`), so that of a meeting on
    * two calendars the copy they didn't decline is kept by the same rule the
@@ -83,6 +89,7 @@ export async function fetchCalendarEventsInWindow({
   );
   logger.trace("Counted connected calendars", { connectedCalendars });
 
+  let stoppedEarly = false;
   const results = await Promise.allSettled(
     providers.map(async (provider, providerIndex) => {
       const providerLogger = logger.with({
@@ -95,6 +102,9 @@ export async function fetchCalendarEventsInWindow({
           timeMin,
           timeMax,
           maxResults: maxResultsPerProvider,
+          onIncomplete: () => {
+            stoppedEarly = true;
+          },
         });
 
         providerLogger.trace("Completed calendar provider event fetch", {
@@ -143,9 +153,9 @@ export async function fetchCalendarEventsInWindow({
         )
   ).sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
 
-  const filteredEvents = events.filter(
-    (event) => !isCancelledEventTitle(event.title),
-  );
+  const filteredEvents = includeCancelledTitles
+    ? events
+    : events.filter((event) => !isCancelledEventTitle(event.title));
   const skippedCancelledEvents = events.length - filteredEvents.length;
 
   if (skippedCancelledEvents > 0) {
@@ -160,6 +170,7 @@ export async function fetchCalendarEventsInWindow({
   const complete =
     failedProviders === 0 &&
     !truncated &&
+    !stoppedEarly &&
     providers.length >= connectedCalendars;
 
   logger.info("Completed calendar event window fetch", {
@@ -174,8 +185,9 @@ export async function fetchCalendarEventsInWindow({
 
 // One meeting the person was invited to on two of their calendars (say their
 // work and personal accounts) comes back from both, under different ids. The
-// first calendar's copy is kept, unless the person declined it there and not
-// on a later one. Later calendars' copies are matched against the first
+// first calendar's copy is kept, unless a later one blocks the time more
+// truly: one the person didn't decline over one they did, then one shown as
+// busy over one shown as free. Later calendars' copies are matched against the first
 // calendar to hold the meeting; two alike events on that one are both kept.
 function dropCrossCalendarDuplicates(
   eventsByCalendar: CalendarEvent[][],
@@ -189,6 +201,10 @@ function dropCrossCalendarDuplicates(
         ...(event.calendarEmail ? [event.calendarEmail.toLowerCase()] : []),
       ]),
     );
+  const rank = (event: CalendarEvent) => {
+    if (declined(event)) return 2;
+    return event.markedFree ? 1 : 0;
+  };
   const keptAt = new Map<string, number>();
   const kept: CalendarEvent[] = [];
   for (const calendarEvents of eventsByCalendar) {
@@ -199,7 +215,7 @@ function dropCrossCalendarDuplicates(
       if (index === undefined) {
         if (!added.has(key)) added.set(key, kept.length);
         kept.push(event);
-      } else if (declined(kept[index]) && !declined(event)) {
+      } else if (rank(event) < rank(kept[index])) {
         kept[index] = event;
       }
     }

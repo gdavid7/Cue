@@ -31,12 +31,15 @@ describe("createGoogleAvailabilityProvider", () => {
           "cal-1": {
             errors: [{ reason: "notFound" }],
           },
+          "cal-2": { busy: [] },
         },
       },
     });
+    const onCalendarAnswered = vi.fn();
 
     const provider = createGoogleAvailabilityProvider(logger);
     const result = await provider.fetchBusyPeriods({
+      onCalendarAnswered,
       accessToken: "token",
       calendarIds: ["cal-1"],
       connectionId: "connection-id",
@@ -48,6 +51,9 @@ describe("createGoogleAvailabilityProvider", () => {
     });
 
     expect(result).toEqual([]);
+    // A calendar Google couldn't find wasn't read, so it can't prove free.
+    expect(onCalendarAnswered).toHaveBeenCalledTimes(1);
+    expect(onCalendarAnswered).toHaveBeenCalledWith("cal-2");
   });
 
   it("fails closed on individual calendar errors when requested", async () => {

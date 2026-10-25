@@ -305,6 +305,7 @@ describe("createMicrosoftAvailabilityProvider", () => {
     });
 
     it("should ignore a missing calendar when failing closed", async () => {
+      const onCalendarAnswered = vi.fn();
       mockApiResponse.get
         .mockRejectedValueOnce(
           Object.assign(new Error("Calendar not found"), {
@@ -333,8 +334,12 @@ describe("createMicrosoftAvailabilityProvider", () => {
         failOnCalendarError: true,
         timeMin: "2025-11-17T00:00:00Z",
         timeMax: "2025-11-17T23:59:59Z",
+        onCalendarAnswered,
       });
 
+      // Only the calendar that answered counts as read.
+      expect(onCalendarAnswered).toHaveBeenCalledTimes(1);
+      expect(onCalendarAnswered).toHaveBeenCalledWith("connected-calendar");
       expect(result).toEqual([
         {
           start: "2025-11-17T14:00:00.0000000Z",
