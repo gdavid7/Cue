@@ -21,6 +21,17 @@ describe("conversationViewToThreadResponse", () => {
     });
   });
 
+  it("writes the Date header in the sender's offset when it is known", () => {
+    const known = message();
+    known.metadata.senderUtcOffsetMinutes = 60;
+    const [withOffset, withoutOffset] = conversationViewToThreadResponse(
+      view({ messages: [known, message({ messageId: "m-2" })] }),
+    ).thread.messages;
+    expect(withOffset.headers.date).toBe("2023-11-14T23:13:20.000+01:00");
+    expect(Date.parse(withOffset.headers.date)).toBe(1_700_000_000_000);
+    expect(withoutOffset.headers.date).toBe("2023-11-14T22:13:20.000Z");
+  });
+
   it("projects stored attachments and meeting invitations onto the reader", () => {
     const thread = conversationViewToThreadResponse(
       view({

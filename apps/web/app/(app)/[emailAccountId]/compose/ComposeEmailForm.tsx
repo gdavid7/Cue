@@ -203,6 +203,7 @@ import {
 } from "./compose-attachments";
 import { useFileDropTarget } from "./useFileDropTarget";
 import { getAttachmentTotalLimitBytes } from "@/utils/email/draft-attachment-upload";
+import { RecipientLocalTime } from "./RecipientLocalTime";
 import {
   finishComposeDraftMove,
   getMoveErrorMessage,
@@ -239,6 +240,8 @@ export type ReplyingToEmail = {
   quotedContentHtml?: string;
   signatureHtml?: string;
   date?: string;
+  /** Each sender's UTC offset in their latest message in the thread. */
+  senderUtcOffsets?: Record<string, number | null>;
 };
 
 type ComposeEmailFormProps = {
@@ -2399,6 +2402,21 @@ function ComposeEmailFormContent({
             </div>
           </div>
         )}
+        <RecipientLocalTime
+          senderUtcOffsets={replyingToEmail?.senderUtcOffsets}
+          recipientHeaders={[
+            watch("to") ?? replyingToEmail?.to ?? "",
+            watch("cc") ?? replyingToEmail?.cc ?? "",
+            watch("bcc") ?? replyingToEmail?.bcc ?? "",
+          ]}
+          ownEmails={ownEmails}
+          sendAt={sendAt}
+          onSendAt={
+            canScheduleDelivery && !isSubmitting
+              ? handleSendAtChange
+              : undefined
+          }
+        />
       </div>
 
       <EmailEditor

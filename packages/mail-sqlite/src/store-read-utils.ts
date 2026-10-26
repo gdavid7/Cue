@@ -109,6 +109,10 @@ export function metadataFromEffective(
     hasAttachments: Number(row.has_attachments) === 1,
     snoozedUntilMs:
       row.snoozed_until_ms == null ? null : Number(row.snoozed_until_ms),
+    senderUtcOffsetMinutes:
+      row.sender_utc_offset_minutes == null
+        ? undefined
+        : Number(row.sender_utc_offset_minutes),
   };
 }
 
