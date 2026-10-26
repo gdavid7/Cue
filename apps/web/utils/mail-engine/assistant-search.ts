@@ -43,7 +43,10 @@ export type AssistantSearchSyntax =
       readState?: "read" | "unread";
     };
 
-type LocalSearch = { predicate: MailPredicate; fromAddress: string | null };
+export type LocalSearch = {
+  predicate: MailPredicate;
+  fromAddress: string | null;
+};
 
 /**
  * Answers one search the assistant asked this tab for and sends the answer
@@ -123,15 +126,7 @@ export async function searchLocalMail({
 } & AssistantSearchSyntax): Promise<LocalMailSearchResult> {
   if (!client.searchMessages)
     return { status: "unavailable", reason: "no_engine" };
-  const search =
-    syntax.syntax === "outlook"
-      ? outlookQueryToLocalSearch({
-          query,
-          fromEmail: syntax.fromEmail,
-          readState: syntax.readState,
-          timeZone,
-        })
-      : gmailQueryToLocalSearch(query, now);
+  const search = toLocalSearch({ query, now, timeZone, ...syntax });
   if (!search) return { status: "unavailable", reason: "unsupported_query" };
   const after = pageToken ? decodeLocalPageToken(pageToken) : null;
   if (pageToken && after === null)
@@ -149,16 +144,52 @@ export async function searchLocalMail({
   );
   if (!page) return { status: "unavailable", reason: "timeout" };
 
-  const coverage = page.coverage.filter((item) => item.accountId === accountId);
-  if (
-    !isComplete(coverage, "metadata") ||
-    !withinSyncedWindow(coverage, search.predicate)
-  )
-    return { status: "unavailable", reason: "not_synced" };
-  if (hasText(search.predicate) && !isComplete(coverage, "indexedContent"))
-    return { status: "unavailable", reason: "not_indexed" };
+  const problem = coverageProblem(page.coverage, accountId, search.predicate);
+  if (problem) return { status: "unavailable", reason: problem };
 
   return toResult(page);
+}
+
+/** The local search for a chat search in either provider's syntax. */
+export function toLocalSearch({
+  query,
+  now,
+  timeZone,
+  ...syntax
+}: {
+  query: string;
+  now: Date;
+  timeZone: string;
+} & AssistantSearchSyntax): LocalSearch | null {
+  return syntax.syntax === "outlook"
+    ? outlookQueryToLocalSearch({
+        query,
+        fromEmail: syntax.fromEmail,
+        readState: syntax.readState,
+        timeZone,
+      })
+    : gmailQueryToLocalSearch(query, now);
+}
+
+/**
+ * Why the store can't answer a search for an account exactly yet, or null
+ * when it can: its mail isn't fully synced for the dates asked, or a word
+ * search runs before bodies are indexed.
+ */
+export function coverageProblem(
+  allCoverage: Coverage[],
+  accountId: string,
+  predicate: MailPredicate,
+): "not_synced" | "not_indexed" | null {
+  const coverage = allCoverage.filter((item) => item.accountId === accountId);
+  if (
+    !isComplete(coverage, "metadata") ||
+    !withinSyncedWindow(coverage, predicate)
+  )
+    return "not_synced";
+  if (hasText(predicate) && !isComplete(coverage, "indexedContent"))
+    return "not_indexed";
+  return null;
 }
 
 /**
@@ -222,7 +253,7 @@ export function gmailQueryToLocalSearch(
 // leaves out spam and trash (the server asks Graph for `excludeSpamTrash`),
 // and drafts, which the server drops from Graph's answer. Outlook sync never
 // stores those folders, so this only matters for mail just moved there in Cue.
-const OUTLOOK_SEARCH_SCOPE: MailPredicate = {
+export const OUTLOOK_SEARCH_SCOPE: MailPredicate = {
   kind: "all",
   predicates: [
     { kind: "mailbox", mailbox: "all" },
@@ -607,7 +638,10 @@ function withinSyncedWindow(
   );
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     promise,

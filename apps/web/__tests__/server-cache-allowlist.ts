@@ -31,13 +31,24 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/ai/assistant/chat-matching-actions.ts": {
+    writes: 2,
+    keys: [
+      {
+        key: "assistant-matching-confirm:{emailAccountId}:{confirmToken}",
+        holds:
+          "a chat id, tool call id, bulk-action enum, optional label id and an HMAC (server secret) of the search; never the search itself",
+        ttl: "15m, taken once by Confirm or Cancel; put back with its remaining TTL only if the job fails to start",
+      },
+    ],
+  },
   "utils/ai/assistant/local-mail-search.ts": {
     writes: 3,
     keys: [
       {
         key: "assistant-local-search:{emailAccountId}:{requestId}",
         holds:
-          '"pending", then the message and thread ids the browser matched, or an unavailable reason enum',
+          '"pending", then the message and thread ids the browser matched, or for a count per-account totals, top groups (count, newest message id, month/week or label-id key) and the newest message ids; or an unavailable reason enum',
         ttl: "10s, deleted once read",
       },
     ],

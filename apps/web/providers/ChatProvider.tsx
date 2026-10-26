@@ -39,6 +39,7 @@ import {
 import { createClientLogger } from "@/utils/logger-client";
 import { getActiveMailClient } from "@/utils/mail-engine/active-client";
 import { answerAssistantSearch } from "@/utils/mail-engine/assistant-search";
+import { answerAssistantCount } from "@/utils/mail-engine/assistant-count";
 import { LOCAL_MAIL_SEARCH_SYNTAXES } from "@/utils/actions/assistant-chat.validation";
 import { submitLocalMailSearchResult } from "@/utils/actions/assistant-chat";
 import { MAX_CHAT_RUN_MS } from "@/utils/chat/max-run";
@@ -179,6 +180,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const inlineActionsRef = useRef(inlineActions);
   const openThread = useAtomValue(openThreadAtom);
   const openThreadRef = useRef<typeof openThread>(null);
+  // The accounts this browser holds, which alone a local count may read.
+  const ownAccountIdsRef = useRef<string[]>([]);
   const pendingInlineActionsRef = useRef<InlineEmailAction[] | null>(null);
   const pendingRequestRef = useRef<PendingChatRequest | null>(null);
   const pendingRequestContextRef = useRef<MessageContext | null>(null);
@@ -215,6 +218,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  const submitLocalAnswer = async (
+    input: Parameters<typeof submitLocalMailSearchResult>[1],
+  ) => {
+    const result = await submitLocalMailSearchResult(emailAccountId, input);
+    if (result?.serverError || result?.validationErrors)
+      logger.warn("Local mail search answer was not accepted");
+  };
+
   const chat = useAiChat<ChatMessage>({
     id: chatId ?? undefined,
     transport: new DefaultChatTransport({
@@ -233,6 +244,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             openMessageId: openThreadRef.current?.messageId,
             localMailSearch: Boolean(getActiveMailClient()),
             localMailSearchSyntaxes: LOCAL_MAIL_SEARCH_SYNTAXES,
+            localMailCount: Boolean(getActiveMailClient()),
             ...body,
           },
         };
@@ -242,19 +254,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     experimental_throttle: 100,
     generateId: generateUUID,
     onData: (part) => {
+      if (part.type === "data-local-mail-count") {
+        answerAssistantCount({
+          request: part.data,
+          accountIds: ownAccountIdsRef.current,
+          client: getActiveMailClient(),
+          submit: submitLocalAnswer,
+        }).catch((error) => {
+          logger.warn("Local mail count failed", {
+            errorName: error instanceof Error ? error.name : typeof error,
+          });
+        });
+        return;
+      }
       if (part.type !== "data-local-mail-search") return;
       answerAssistantSearch({
         request: part.data,
         accountId: emailAccountId,
         client: getActiveMailClient(),
-        submit: async (input) => {
-          const result = await submitLocalMailSearchResult(
-            emailAccountId,
-            input,
-          );
-          if (result?.serverError || result?.validationErrors)
-            logger.warn("Local mail search answer was not accepted");
-        },
+        submit: submitLocalAnswer,
       }).catch((error) => {
         logger.warn("Local mail search failed", {
           errorName: error instanceof Error ? error.name : typeof error,
@@ -435,6 +453,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     inlineActionsRef.current = inlineActions;
   }, [inlineActions]);
+
+  useEffect(() => {
+    ownAccountIdsRef.current = accountsData?.emailAccounts.map(
+      (account) => account.id,
+    ) ?? [emailAccountId];
+  }, [accountsData, emailAccountId]);
 
   useEffect(() => {
     // A thread from another account means nothing to this account's chat.

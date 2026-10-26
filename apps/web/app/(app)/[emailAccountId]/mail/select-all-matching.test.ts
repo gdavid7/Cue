@@ -1,7 +1,7 @@
+import { getMatchingResultCopy } from "@/components/mail-bulk/follow-matching-jobs";
 import { describe, expect, it } from "vitest";
 import {
   getMatchingBannerCopy,
-  getMatchingResultCopy,
   getMatchingScope,
   needsMatchingConfirm,
   getAccountMatchingScope,

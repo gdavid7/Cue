@@ -1,5 +1,7 @@
 import type { UIMessage } from "ai";
 import type { AssistantSearchRequest } from "@/utils/mail-engine/assistant-search";
+import type { AssistantCountRequest } from "@/utils/mail-engine/assistant-count";
+import type { CountEmailsTool } from "@/utils/ai/assistant/chat-count-tools";
 import type { AddToKnowledgeBaseTool } from "@/utils/ai/assistant/tools/rules/add-to-knowledge-base-tool";
 import type { CreateRuleTool } from "@/utils/ai/assistant/tools/rules/create-rule-tool";
 import type { GetLearnedPatternsTool } from "@/utils/ai/assistant/tools/rules/get-learned-patterns-tool";
@@ -54,6 +56,7 @@ export type ChatTools = {
   getSenderCategorizationStatus: GetSenderCategorizationStatusTool;
   manageSenderCategory: ManageSenderCategoryTool;
   searchInbox: SearchInboxTool;
+  countEmails: CountEmailsTool;
   searchContext: SearchContextTool;
   searchWeb: SearchWebTool;
   readEmail: ReadEmailTool;
@@ -82,6 +85,8 @@ export type ChatTools = {
 export type CustomUIDataTypes = {
   // A search the assistant asks this tab to answer from its local mail.
   "local-mail-search": AssistantSearchRequest;
+  // A count the assistant asks this tab to make from its local mail.
+  "local-mail-count": AssistantCountRequest;
   // textDelta: string;
   // // suggestion: Suggestion;
   // appendMessage: string;

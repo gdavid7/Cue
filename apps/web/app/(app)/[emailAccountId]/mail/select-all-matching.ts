@@ -148,43 +148,6 @@ export function getMatchingConfirmCopy(
   }
 }
 
-/** What the progress toast says while a job runs. */
-export function getMatchingProgressCopy(action: MatchingBulkAction | "undo") {
-  return {
-    archive: "Archiving conversations…",
-    mark_read: "Marking conversations as read…",
-    mark_unread: "Marking conversations as unread…",
-    label: "Labelling conversations…",
-    trash: "Deleting conversations…",
-    spam: "Reporting conversations as spam…",
-    delete_forever: "Deleting conversations forever…",
-    undo: "Restoring conversations…",
-  }[action];
-}
-
-export function getMatchingResultCopy(
-  action: MatchingBulkAction | "undo",
-  conversations: number,
-) {
-  const count = conversationCount(conversations);
-  return {
-    archive: `Archived ${count}`,
-    mark_read: `Marked ${count} as read`,
-    mark_unread: `Marked ${count} as unread`,
-    label: `Labelled ${count}`,
-    trash: `Deleted ${count}`,
-    spam: `Reported ${count} as spam`,
-    delete_forever: `Deleted ${count} forever`,
-    undo: `Restored ${count}`,
-  }[action];
-}
-
-export function isUndoableMatchingAction(action: MatchingBulkAction) {
-  return (
-    action === "archive" || action === "mark_read" || action === "mark_unread"
-  );
-}
-
 function conversationCount(count: number) {
   return `${formatCount(count)} ${count === 1 ? "conversation" : "conversations"}`;
 }

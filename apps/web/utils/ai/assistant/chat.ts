@@ -36,6 +36,7 @@ import {
   startSenderCategorizationTool,
 } from "./chat-inbox-tools";
 import { saveMemoryTool, searchMemoriesTool } from "./chat-memory-tools";
+import { countEmailsTool } from "./chat-count-tools";
 import {
   addToCalendarTool,
   getCalendarEventsTool,
@@ -246,6 +247,8 @@ export async function aiProcessAssistantChat({
     email: user.email,
     emailAccountId,
     localMailSearch,
+    chatId,
+    responseSurface,
     userId: user.userId,
     provider: user.account.provider,
     integrationActionsEnabled,
@@ -380,6 +383,7 @@ export async function aiProcessAssistantChat({
           getSenderCategorizationStatusTool(toolOptions),
         manageSenderCategory: manageSenderCategoryTool(toolOptions),
         searchInbox: searchInboxTool(toolOptions),
+        countEmails: countEmailsTool(toolOptions),
         searchContext: searchContextTool(toolOptions),
         ...(isExaSearchEnabled()
           ? { searchWeb: searchWebTool(toolOptions) }
@@ -1025,7 +1029,6 @@ export function buildResolvedSystemPrompt({
 - Prioritize "To Reply" items as must handle. ${providerPolicy.missingContextPolicy}, infer urgency from sender, subject, and snippet.
 - For retroactive cleanup requests, use the inbox stats in context plus a search sample to understand the scale, read or unread ratio, and clutter, then recommend one next action.
 - For low-priority repeated senders, you may suggest bulk archive by sender as an option, but default to archiving the specific threads shown.
-- For all-matching cleanup, paginate searchInbox until hasMore=false, collect matching threadIds across pages, then write in batches.
 - Do not turn one-time cleanup into a recurring rule unless the user asks for automation.
 - For confirmed multi-batch cleanup, continue search and action batches within the current response until the requested scope is complete. Do not pause merely to provide progress updates or ask the user to trigger the next batch, and never claim work will continue after the response ends.
 - Never claim or report that the inbox is empty, fully caught up, or has no unread emails without first running searchInbox in this turn to confirm — the initial inbox snapshot and prior-turn results can be stale, and earlier search pages or filters may not cover the whole mailbox. Treat zero results from a single narrow query as inconclusive: broaden or re-run searchInbox before asserting absence. If the user signals doubt about a prior conclusion or asks you to re-check, re-run searchInbox with fresh (and broader, if the prior call was narrow) parameters and report the new results rather than rephrasing the prior conclusion.`,

@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  CountEmailsResult,
+  isManageInboxQueryOutput,
+  ManageInboxQueryResult,
+} from "@/components/assistant-chat/matching-tool-results";
 import Image from "next/image";
 import type { ReactNode } from "react";
 import { AssistantInlineEmailResponse } from "@/components/assistant-chat/assistant-inline-email-response";
@@ -315,9 +320,44 @@ export function MessagePart({
     }
   }
 
+  if (part.type === "tool-countEmails") {
+    const { toolCallId, state } = part;
+    if (state === "input-available") {
+      return <BasicToolInfo key={toolCallId} text="Counting emails..." />;
+    }
+    if (state === "output-available") {
+      const { output } = part;
+      if (isOutputWithError(output)) {
+        return renderToolError(toolCallId, output);
+      }
+      return <CountEmailsResult key={toolCallId} output={output} />;
+    }
+  }
+
   if (part.type === "tool-manageInbox") {
     const { toolCallId, state } = part;
     const input = getManageInboxInputForDisplay(part.input);
+    const hasQuery =
+      typeof (part.input as { query?: unknown } | undefined)?.query ===
+      "string";
+
+    if (state === "input-available" && hasQuery) {
+      return (
+        <BasicToolInfo key={toolCallId} text="Checking matching emails..." />
+      );
+    }
+    if (state === "output-available" && isManageInboxQueryOutput(part.output)) {
+      return (
+        <ManageInboxQueryResult
+          key={toolCallId}
+          input={part.input}
+          output={part.output}
+          chatMessageId={messageId}
+          toolCallId={toolCallId}
+          disableConfirm={disableConfirm || !isPersistedMessage}
+        />
+      );
+    }
 
     if (state === "input-available") {
       if (!input) {

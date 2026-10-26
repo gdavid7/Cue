@@ -260,9 +260,24 @@ export type PendingSaveMemoryToolOutput = z.infer<
 >;
 
 export const confirmAssistantSaveMemoryBody = confirmAssistantActionBaseBody;
+
 export type ConfirmAssistantSaveMemoryBody = z.infer<
   typeof confirmAssistantSaveMemoryBody
 >;
+
+// The card's answer to a manageInbox preview over a whole search. The search
+// is sent back so the server can check it against the token's hash; the
+// token itself never holds it.
+export const confirmAssistantMatchingActionBody =
+  confirmAssistantActionBaseBody.extend({
+    confirmToken: z.string().uuid(),
+    query: z.string().max(500),
+  });
+
+export const cancelAssistantMatchingActionBody =
+  confirmAssistantActionBaseBody.extend({
+    confirmToken: z.string().uuid(),
+  });
 
 const assistantChatTextPartSchema = z.object({
   type: z.literal("text"),
@@ -319,6 +334,8 @@ export const assistantInputSchema = z.object({
   // The query syntaxes its local search reads. Tabs from before Outlook
   // support send only `localMailSearch` and read Gmail's syntax alone.
   // Syntaxes this server does not know are dropped rather than refused.
+  // It can also count everything a search matches. Older tabs only search.
+  localMailCount: z.boolean().optional().default(false),
   localMailSearchSyntaxes: z
     .array(z.string().max(32))
     .max(8)

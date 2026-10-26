@@ -49,6 +49,7 @@ import {
 } from "@/utils/ai/assistant/chat-response-guard";
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import { createLocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
+import { withoutConfirmTokens } from "@/utils/ai/assistant/matching-query-actions";
 import {
   isGoogleProvider,
   isMicrosoftProvider,
@@ -231,12 +232,14 @@ export const POST = withEmailAccount("chat", async (request) => {
       ...(hiddenInlineActionMessage ? [hiddenInlineActionMessage] : []),
     ];
 
-    const conversationModelMessages = await convertToModelMessages(
-      conversationUiMessages,
+    // A preview card's confirm token is for its button alone: neither the
+    // model nor memory extraction reads it.
+    const conversationModelMessages = withoutConfirmTokens(
+      await convertToModelMessages(conversationUiMessages),
     );
 
     let modelMessages = hiddenInlineActionMessage
-      ? await convertToModelMessages(uiMessages)
+      ? withoutConfirmTokens(await convertToModelMessages(uiMessages))
       : conversationModelMessages;
 
     if (latestCompaction) {
@@ -358,6 +361,7 @@ export const POST = withEmailAccount("chat", async (request) => {
           data.localMailSearchSyntaxes.includes("outlook")))
         ? createLocalMailSearch({
             emailAccountId,
+            canCount: data.localMailCount,
             logger: runLogger,
             abortSignal: chatRun.abortSignal,
           })

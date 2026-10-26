@@ -37,6 +37,70 @@ import {
   RULE_FINGERPRINT_SELECT,
 } from "@/utils/ai/assistant/tools/rules/update-rule-tool";
 
+/**
+ * Records on a manageInbox preview card what became of it (the job it
+ * started, or that it was cancelled), so a reloaded chat and the model's
+ * later turns see it instead of a live Confirm button. The confirm token is
+ * dropped from the stored result.
+ */
+export async function persistAssistantMatchingActionOutcome({
+  chatId,
+  chatMessageId,
+  toolCallId,
+  emailAccountId,
+  outcome,
+  logger,
+}: {
+  chatId: string;
+  chatMessageId?: string;
+  toolCallId: string;
+  emailAccountId: string;
+  outcome:
+    | { status: "started"; jobId: string; messageCap: number }
+    | { status: "cancelled" };
+  logger: Logger;
+}) {
+  const findPart = (parts: unknown) => {
+    if (!Array.isArray(parts)) return null;
+    const index = parts.findIndex(
+      (part) =>
+        isRecord(part) &&
+        part.type === "tool-manageInbox" &&
+        part.toolCallId === toolCallId &&
+        isRecord(part.output) &&
+        part.output.status === "needs_confirmation",
+    );
+    return index < 0 ? null : { index, parts };
+  };
+  const chatMessage = await findChatMessageForPendingAction({
+    chatId,
+    chatMessageId,
+    emailAccountId,
+    logger,
+    matchParts: (parts) => !!findPart(parts),
+    logPrefix: "Assistant matching action",
+    waitForPersistenceMs: PENDING_ACTION_PERSIST_WAIT_MS,
+  });
+  if (!chatMessage) return;
+  await persistConfirmedAssistantPart({
+    chatMessageId: chatMessage.id,
+    emailAccountId,
+    logger,
+    findPart,
+    buildParts: ({ parts, partIndex }) =>
+      parts.map((part, index) => {
+        if (index !== partIndex || !isRecord(part) || !isRecord(part.output))
+          return part;
+        const {
+          confirmToken: _confirmToken,
+          nextStep: _nextStep,
+          ...output
+        } = part.output;
+        return { ...part, output: { ...output, ...outcome } };
+      }),
+  });
+}
+
 const CONFIRMATION_IN_PROGRESS_ERROR =
   "Email action confirmation already in progress";
 const SAVE_MEMORY_CONFIRMATION_IN_PROGRESS_ERROR =
