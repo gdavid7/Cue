@@ -77,9 +77,28 @@ describe("getEmailFilters", () => {
       filters: [],
       available: false,
       permanent,
+      throttled: !permanent,
     });
     expect(errorSpy).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it("reports a call the Gmail budget deferred as throttled, not permanent", async () => {
+    const logger = createScopedLogger("test");
+    vi.spyOn(logger, "info").mockImplementation(() => {});
+    const provider = {
+      getFiltersList: vi
+        .fn()
+        .mockRejectedValue(
+          new GmailCallDeferredError(88_000, "background", "per_minute_budget"),
+        ),
+    } as unknown as EmailProvider;
+
+    await expect(getEmailFilters(provider, logger)).resolves.toMatchObject({
+      available: false,
+      permanent: false,
+      throttled: true,
+    });
   });
 
   it("still reports a real provider failure as an error", async () => {
@@ -93,6 +112,8 @@ describe("getEmailFilters", () => {
     await expect(getEmailFilters(provider, logger)).resolves.toMatchObject({
       filters: [],
       available: false,
+      permanent: false,
+      throttled: false,
     });
     expect(errorSpy).toHaveBeenCalledWith(
       "Error getting email filters",

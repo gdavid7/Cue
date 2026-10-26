@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { MAIL_ENGINE_TAB_CHANNEL } from "@/utils/mail-engine/tab-channel";
 import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
@@ -13,6 +14,7 @@ import {
   readLatestMailMutation,
 } from "./mail-test-helpers";
 
+const STAR_SAVED_TIMEOUT_MS = 10_000;
 const THREAD_ID = "thr_playwright_reader_html";
 
 test("opens a sender's card and goes from it to a past conversation", async ({
@@ -107,8 +109,10 @@ test("stars a sender as Important, marks their mail, and unstars them", async ({
   const card = page.getByTestId("person-card");
   const star = card.getByRole("button", { name: "Important", exact: true });
   await expect(star).toHaveAttribute("aria-pressed", "false");
+  const starSaved = await watchStarSaved(page);
   await star.click();
   await expect(star).toHaveAttribute("aria-pressed", "true");
+  await starSaved();
   await capturePlaywrightCheckpoint(page, testInfo, "person-card-important");
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden();
@@ -129,8 +133,10 @@ test("stars a sender as Important, marks their mail, and unstars them", async ({
   const again = await openThread(page, emailAccountId);
   await again.click();
   await expect(star).toHaveAttribute("aria-pressed", "true");
+  const unstarSaved = await watchStarSaved(page);
   await star.click();
   await expect(star).toHaveAttribute("aria-pressed", "false");
+  await unstarSaved();
   await page.keyboard.press("Escape");
   await page.goto(`/${emailAccountId}/mail`, { waitUntil: "domcontentloaded" });
   await expect(
@@ -258,4 +264,42 @@ async function openThread(page: Page, emailAccountId: string) {
   });
   await expect(sender).toBeVisible();
   return sender;
+}
+
+/**
+ * The card flips its star at once and saves it to the device after, so a
+ * reload right behind the click can beat the save and read the old star.
+ * The app announces a change once it is stored; arm this before the click and
+ * await the returned function before leaving the page.
+ */
+async function watchStarSaved(page: Page) {
+  await page.evaluate(
+    ({ channelName, timeoutMs }) => {
+      const channel = new BroadcastChannel(channelName);
+      const saved = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          channel.close();
+          reject(
+            new Error(
+              `The app never announced the saved star within ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        channel.addEventListener("message", (event) => {
+          if (event.data?.type !== "importantPeopleChanged") return;
+          clearTimeout(timer);
+          channel.close();
+          resolve();
+        });
+      });
+      // Settled by the caller; a rejection nobody awaited yet is not an error.
+      saved.catch(() => undefined);
+      (window as unknown as { starSaved: Promise<void> }).starSaved = saved;
+    },
+    { channelName: MAIL_ENGINE_TAB_CHANNEL, timeoutMs: STAR_SAVED_TIMEOUT_MS },
+  );
+  return () =>
+    page.evaluate(
+      () => (window as unknown as { starSaved: Promise<void> }).starSaved,
+    );
 }

@@ -140,6 +140,10 @@ test("opening, triaging, switching and searching respond within budget", async (
     const inboxTop = await page.evaluate(topRowSubjects);
 
     for (let run = 0; run < perfRuns; run++) {
+      // Each pass sends about seven changes through one serial queue at the
+      // account's Gmail pace; without this the third pass's undo queues
+      // behind the first two and can miss its 20 s wait.
+      await waitForSentChanges(page);
       // Open the next conversation, then reopen it once it is local.
       await page.keyboard.press("j");
       const subject = await focusedSubject(page);
@@ -195,11 +199,18 @@ test("opening, triaging, switching and searching respond within budget", async (
         await timeSinceInput(page, rowWithSubjectGone, target),
       );
       await page.keyboard.press("z");
-      await page.waitForFunction(
-        rowWithSubjectMatches,
-        { subject: target, text: "", present: true },
-        { timeout: 20_000 },
-      );
+      await page
+        .waitForFunction(
+          rowWithSubjectMatches,
+          { subject: target, text: "", present: true },
+          { timeout: 20_000 },
+        )
+        .catch(async (error: unknown) => {
+          console.log(
+            `PERF-UNDO-FAILED ${JSON.stringify(await describeUndoState(page, target))}`,
+          );
+          throw error;
+        });
 
       // Sent and back to the inbox, each judged by its top rows: the newest
       // conversation can lead both views when the person replied to it last.
@@ -827,6 +838,21 @@ async function describeUndoState(page: Page, subject: string) {
         : null,
     };
   }, subject);
+}
+
+/** Best effort, like `waitForEngineIdle`: a queue still busy is measured as it is. */
+async function waitForSentChanges(page: Page) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const pending = await page.evaluate(async () => {
+      const diagnostics = (await window.__inboxZeroMailInspect
+        ?.read()
+        .catch(() => null)) as { pendingOperations?: number } | null;
+      return diagnostics?.pendingOperations ?? 0;
+    });
+    if (pending === 0) return;
+    await page.waitForTimeout(250);
+  }
 }
 
 async function resetSignature() {
