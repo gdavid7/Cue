@@ -140,6 +140,7 @@ const featureGroups = [
       "mail/triage-actions.spec.ts",
       "mail/assistant-catch-up.spec.ts",
       "mail/snooze-wake-on-reply.spec.ts",
+      "mail/mute.spec.ts",
       "mail/starring.spec.ts",
       "mail/swipe-actions.spec.ts",
       "mail/drag-to-sidebar.spec.ts",
