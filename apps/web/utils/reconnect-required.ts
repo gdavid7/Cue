@@ -23,8 +23,9 @@ if (typeof document !== "undefined") {
 }
 
 const actionListeners = new Set<() => void>();
+let actionRefusalNoticed = false;
 
-/** The page that can send the viewed account to its reconnect flow. */
+/** The page that works out which account to send to its reconnect flow. */
 export function onReconnectRequiredAction(listener: () => void) {
   actionListeners.add(listener);
   return () => {
@@ -33,11 +34,19 @@ export function onReconnectRequiredAction(listener: () => void) {
 }
 
 /**
- * A server action answered that the mailbox grant is gone. Action results
- * carry no account, so the page that registered for the account on screen
- * decides where to send the user.
+ * A server action answered that a mailbox grant is gone. The result names no
+ * account, so the registered page looks up which one. Once per page: a bulk
+ * flow reads every item's error, and on the consent page the user is already
+ * reconnecting.
  */
 export function notifyReconnectRequiredAction() {
+  if (
+    actionRefusalNoticed ||
+    typeof window === "undefined" ||
+    window.location.pathname.endsWith("/permissions/consent")
+  )
+    return;
+  actionRefusalNoticed = true;
   for (const listener of actionListeners) listener();
 }
 

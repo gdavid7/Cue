@@ -10,7 +10,8 @@ import {
 } from "react";
 import { SWRConfig, mutate, useSWRConfig } from "swr";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { promptReconnect, swrFetcher } from "./swr-fetcher";
+import { promptReconnectForDisconnected, swrFetcher } from "./swr-fetcher";
+import { fetchEmailAccounts } from "@/utils/fetch-email-accounts";
 import { onReconnectRequiredAction } from "@/utils/reconnect-required";
 import { isSigningOut } from "@/utils/signing-out";
 import {
@@ -69,9 +70,14 @@ export const SWRProvider = (props: { children: React.ReactNode }) => {
 
   useEffect(() => {
     if (!emailAccountId) return;
-    return onReconnectRequiredAction(() =>
-      promptReconnect(emailAccountId, emailAccountId),
-    );
+    return onReconnectRequiredAction(() => {
+      fetchEmailAccounts()
+        .then(({ emailAccounts }) =>
+          promptReconnectForDisconnected(emailAccounts, emailAccountId),
+        )
+        // The action's caller already shows its own error.
+        .catch(() => undefined);
+    });
   }, [emailAccountId]);
 
   const enhancedFetcher = useCallback(

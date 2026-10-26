@@ -2,8 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { APICallError, NoObjectGeneratedError, RetryError } from "ai";
 import { Gaxios } from "gaxios";
 import { createScopedLogger } from "@/utils/logger";
-import { RECONNECT_REQUIRED_MESSAGE } from "@/utils/config";
-import { onReconnectRequiredAction } from "@/utils/reconnect-required";
 
 const { mockSentryCaptureException, mockSetUser } = vi.hoisted(() => ({
   mockSentryCaptureException: vi.fn(),
@@ -183,25 +181,6 @@ describe("captureException", () => {
         operation: "test",
       },
     });
-  });
-});
-
-describe("getActionErrorMessage reconnect", () => {
-  it("tells the page to prompt a reconnect when the action reports a revoked mailbox", () => {
-    const listener = vi.fn();
-    const stop = onReconnectRequiredAction(listener);
-
-    expect(
-      getActionErrorMessage({ serverError: RECONNECT_REQUIRED_MESSAGE }),
-    ).toBe(RECONNECT_REQUIRED_MESSAGE);
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    getActionErrorMessage({ serverError: "Unable to update sender" });
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    stop();
-    getActionErrorMessage({ serverError: RECONNECT_REQUIRED_MESSAGE });
-    expect(listener).toHaveBeenCalledTimes(1);
   });
 });
 

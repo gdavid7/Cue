@@ -435,6 +435,108 @@ describe("server action errors from a signed-out session", () => {
   });
 });
 
+describe("server action errors from a revoked mailbox", () => {
+  const RECONNECT = "Authorization required. Please grant permissions.";
+  const accounts = (...disconnected: string[]) =>
+    ["acc-1", "acc-2"].map((id) => ({
+      id,
+      account: {
+        disconnectedAt: disconnected.includes(id)
+          ? "2026-10-26T09:00:00.000Z"
+          : null,
+      },
+    }));
+
+  beforeEach(() => {
+    toasts.toastError.mockReset();
+  });
+
+  it("tells the page once when a bulk run's items each report the revoked mailbox", async () => {
+    const { assertActionSucceeded, getActionErrorMessage, ...page } =
+      await loadPage();
+    const listener = vi.fn();
+    page.onReconnectRequiredAction(listener);
+
+    getActionErrorMessage({ serverError: "Unable to update sender" });
+    expect(listener).not.toHaveBeenCalled();
+
+    for (let item = 0; item < 5; item++) {
+      expect(() => assertActionSucceeded({ serverError: RECONNECT })).toThrow(
+        RECONNECT,
+      );
+    }
+    expect(getActionErrorMessage({ serverError: RECONNECT })).toBe(RECONNECT);
+
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("does not tell the page while the user is already on the consent page", async () => {
+    const { assertActionSucceeded, onReconnectRequiredAction } =
+      await loadPage();
+    vi.stubGlobal("window", {
+      location: {
+        ...window.location,
+        pathname: "/acc-1/permissions/consent",
+      },
+      sessionStorage,
+    });
+    const listener = vi.fn();
+    onReconnectRequiredAction(listener);
+
+    expect(() => assertActionSucceeded({ serverError: RECONNECT })).toThrow();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("offers the other account that lost its grant, and keeps the viewed one on screen", async () => {
+    const { promptReconnectForDisconnected } = await loadPage();
+
+    promptReconnectForDisconnected(accounts("acc-2"), "acc-1");
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(toasts.toastError).toHaveBeenCalledOnce();
+    toasts.toastError.mock.calls[0][0].action.onClick();
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-2/permissions/consent?reason=expired",
+    );
+  });
+
+  it("sends the viewed account to its reconnect page when it lost its grant", async () => {
+    const { promptReconnectForDisconnected } = await loadPage();
+
+    promptReconnectForDisconnected(accounts("acc-1"), "acc-1");
+
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-1/permissions/consent?reason=expired",
+    );
+    expect(toasts.toastError).not.toHaveBeenCalled();
+  });
+
+  it("asks instead of leaving while a composer is open, and saves before it leaves", async () => {
+    const { promptReconnectForDisconnected, holdSessionExpiredRedirect } =
+      await loadPage();
+    const beforeRedirect = vi.fn(async () => {
+      expect(assign).not.toHaveBeenCalled();
+    });
+    holdSessionExpiredRedirect({ prompt: vi.fn(), beforeRedirect });
+
+    promptReconnectForDisconnected(accounts("acc-1"), "acc-1");
+    promptReconnectForDisconnected(accounts("acc-1"), "acc-1");
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(toasts.toastError).toHaveBeenCalledOnce();
+    const notice = toasts.toastError.mock.calls[0][0];
+    expect(notice.description).toBe(RECONNECT);
+    notice.action.onClick();
+    await vi.waitFor(() =>
+      expect(assign).toHaveBeenCalledExactlyOnceWith(
+        "/acc-1/permissions/consent?reason=expired",
+      ),
+    );
+    expect(beforeRedirect).toHaveBeenCalledOnce();
+  });
+});
+
 describe("swrFetcher Retry-After", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -513,7 +615,12 @@ async function failure() {
 // copy of the modules that hold that state.
 async function loadPage({ signedIn = true } = {}) {
   vi.resetModules();
-  const { swrFetcher } = await import("./swr-fetcher");
+  const { swrFetcher, promptReconnectForDisconnected } = await import(
+    "./swr-fetcher"
+  );
+  const { onReconnectRequiredAction } = await import(
+    "@/utils/reconnect-required"
+  );
   const { onSWRErrorRetry } = await import("@/utils/swr");
   const { assertActionSucceeded, getActionErrorMessage } = await import(
     "@/utils/error"
@@ -534,6 +641,8 @@ async function loadPage({ signedIn = true } = {}) {
   });
   return {
     swrFetcher,
+    promptReconnectForDisconnected,
+    onReconnectRequiredAction,
     onSWRErrorRetry,
     assertActionSucceeded,
     getActionErrorMessage,

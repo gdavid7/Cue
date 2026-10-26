@@ -133,6 +133,22 @@ export function holdSessionExpiredRedirect(hold: SessionExpiredHold) {
   };
 }
 
+/** Whether an open composer would lose what is being typed if the page left. */
+export function hasSessionExpiredHold() {
+  return holds.size > 0;
+}
+
+/** Saves what every open composer holds, then leaves. */
+export function saveHeldWorkThen(leave: () => void) {
+  if (holds.size === 0) {
+    leave();
+    return;
+  }
+  Promise.allSettled([...holds].map((hold) => hold.beforeRedirect())).finally(
+    leave,
+  );
+}
+
 function redirectToLogin() {
   if (state === "redirected") return;
   state = "redirected";
