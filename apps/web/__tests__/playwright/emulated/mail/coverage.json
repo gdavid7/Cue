@@ -47,6 +47,7 @@
     "app/(app)/[emailAccountId]/home/use-recent-bounces.ts",
     "app/(app)/[emailAccountId]/home/DraftsLeftOpen.tsx",
     "app/(app)/[emailAccountId]/home/use-left-open-drafts.ts",
+    "app/api/user/cue-authored-drafts/route.ts",
     "app/api/user/home/cue/route.ts",
     "app/(app)/[emailAccountId]/mail/ReadingBundle.tsx",
     "app/(app)/[emailAccountId]/mail/reading-lane.ts",

@@ -22,7 +22,7 @@ import { mapWithConcurrency } from "@/utils/async";
 import { MICROSOFT_MAILBOX_CONCURRENCY_LIMIT } from "@/utils/outlook/mailbox-concurrency";
 
 const MESSAGE_SELECT_FIELDS =
-  "id,conversationId,conversationIndex,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,isDraft,isRead,flag,categories,parentFolderId,hasAttachments,webLink,inferenceClassification";
+  "id,conversationId,conversationIndex,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,lastModifiedDateTime,isDraft,isRead,flag,categories,parentFolderId,hasAttachments,webLink,inferenceClassification";
 
 type DeltaMessage = Message & {
   "@removed"?: { reason?: string };
@@ -162,7 +162,11 @@ export function buildOutlookMailboxSyncPage({
     }
     if (!message.conversationId) return [];
 
-    const parsed = convertMessage(message, folderIds, categoryMap);
+    const parsed = convertMessage(
+      draftAtLastSave(message),
+      folderIds,
+      categoryMap,
+    );
     return [
       includeBodies && isBodyCompleteWithoutAttachments(message)
         ? parsed
@@ -322,4 +326,12 @@ function isBodyCompleteWithoutAttachments(message: Message) {
     message.hasAttachments === false &&
     !/\bcid:/i.test(message.body?.content ?? "")
   );
+}
+
+// Graph keeps a draft's receivedDateTime at when it was created, and moves
+// only lastModifiedDateTime as the user saves it, so a draft is dated by its
+// last save, as Gmail dates one.
+function draftAtLastSave(message: DeltaMessage): DeltaMessage {
+  if (!message.isDraft || !message.lastModifiedDateTime) return message;
+  return { ...message, receivedDateTime: message.lastModifiedDateTime };
 }

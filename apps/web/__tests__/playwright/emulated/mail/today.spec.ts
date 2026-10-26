@@ -4,7 +4,9 @@ import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
+  conversationWithSubject,
   openMail,
+  openMailboxFromSidebar,
   readLatestMailMutation,
   readProviderAccessToken,
   seedMailFromContact,
@@ -1039,7 +1041,13 @@ test("Drafts you left open lists a draft left over an hour ago and opens it in t
   // saved just now is still being written, so it isn't listed.
   const fresh = await seedFreshDraft(page, `Still writing ${Date.now()}`);
   try {
-    const emailAccountId = await getEmailAccountId(page);
+    // The fresh draft is in this browser's mail before Today reads it, so
+    // its absence from the lane is the lane leaving it out.
+    const { conversations, emailAccountId } = await openMail(page);
+    await openMailboxFromSidebar(page, "Drafts");
+    await expect(
+      conversationWithSubject(page, conversations, fresh.subject),
+    ).toBeVisible({ timeout: 120_000 });
     await page.goto(`/${emailAccountId}/home`, {
       waitUntil: "domcontentloaded",
     });

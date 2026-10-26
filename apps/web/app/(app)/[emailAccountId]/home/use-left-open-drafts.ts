@@ -13,6 +13,8 @@ import {
   type HiddenDrafts,
   useAllAccountsHiddenDraftMessageIds,
 } from "@/hooks/useHiddenDraftMessageIds";
+import type { CueAuthoredDraftsResponse } from "@/app/api/user/cue-authored-drafts/route";
+import { fetchForAccounts } from "@/utils/fetch-for-accounts";
 import type { TodayAccount } from "@/utils/home/merge-home";
 import { isLocalMailReady } from "./use-local-inbox-rows";
 
@@ -23,14 +25,18 @@ export const LEFT_OPEN_SHOWN_LIMIT = 5;
 // one more says there are more.
 const READ_LIMIT = 20;
 const NO_DRAFTS: LeftOpenDraft[] = [];
+const CUE_AUTHORED_DRAFTS_PATH = "/api/user/cue-authored-drafts";
 
 /**
  * Today's "Drafts you left open": unsent mailbox drafts the user last saved
  * over an hour ago, newest first, read from this browser's local mail with no
- * model and no server. Cue's reply suggestions aren't mailbox drafts until
- * the user edits one, so they never show here. A draft that a send waiting to
- * go out stands in for is the send's, not left open. Once every account's
- * first sync has finished, so a draft isn't shown and then found sent.
+ * model. Cue's reply suggestions aren't mailbox drafts until the user edits
+ * one, so they never show here; the drafts Cue does write into the mailbox,
+ * such as follow-ups, are left out by the ids the server keeps for them, and
+ * a draft shows only once the server has said it isn't one of them. A draft
+ * that a send waiting to go out stands in for is the send's, not left open.
+ * Once every account's first sync has finished, so a draft isn't shown and
+ * then found sent.
  */
 export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
   drafts: LeftOpenDraft[];
@@ -99,12 +105,48 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
   );
 
   const read = ready && data ? data : NO_DRAFTS;
-  return useMemo(() => selectLeftOpenDrafts(read, hidden), [read, hidden]);
+  // Asked again only when the drafts the lane could show change, as each
+  // ask reads Cue's drafts from the mailbox.
+  const candidates = useMemo(
+    () => [...new Set(read.map(draftKey))].sort(),
+    [read],
+  );
+  const { data: cueAuthored } = useSWR(
+    candidates.length
+      ? [CUE_AUTHORED_DRAFTS_PATH, "left-open", ...candidates]
+      : null,
+    async () => {
+      const result = await fetchForAccounts<CueAuthoredDraftsResponse>(
+        CUE_AUTHORED_DRAFTS_PATH,
+        [...new Set(read.map((draft) => draft.accountId))],
+      );
+      return { ...result, checked: new Set(candidates) };
+    },
+    { keepPreviousData: true, revalidateOnFocus: false },
+  );
+
+  return useMemo(() => {
+    if (!cueAuthored) return selectLeftOpenDrafts(NO_DRAFTS, hidden);
+    // A draft the server hasn't answered for, or whose account it couldn't
+    // answer for, may be Cue's.
+    const checked = read.filter(
+      (draft) =>
+        cueAuthored.checked.has(draftKey(draft)) &&
+        !cueAuthored.failedAccountIds.includes(draft.accountId),
+    );
+    return selectLeftOpenDrafts(checked, [
+      ...hidden,
+      ...cueAuthored.byAccount.map(({ accountId, data }) => ({
+        emailAccountId: accountId,
+        messageIds: data.messageIds,
+      })),
+    ]);
+  }, [read, hidden, cueAuthored]);
 }
 
 /**
- * What the lane shows of what the store read: none a send stands in for, up
- * to the lane's cap, and whether there were more.
+ * What the lane shows of what the store read: none a send stands in for or
+ * Cue wrote, up to the lane's cap, and whether there were more.
  */
 export function selectLeftOpenDrafts(
   drafts: LeftOpenDraft[],
@@ -115,11 +157,13 @@ export function selectLeftOpenDrafts(
       messageIds.map((id) => `${emailAccountId}\0${id}`),
     ),
   );
-  const open = drafts.filter(
-    (draft) => !hiddenIds.has(`${draft.accountId}\0${draft.messageId}`),
-  );
+  const open = drafts.filter((draft) => !hiddenIds.has(draftKey(draft)));
   return {
     drafts: open.slice(0, LEFT_OPEN_SHOWN_LIMIT),
     capped: open.length > LEFT_OPEN_SHOWN_LIMIT,
   };
+}
+
+function draftKey(draft: LeftOpenDraft) {
+  return `${draft.accountId}\0${draft.messageId}`;
 }

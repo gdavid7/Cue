@@ -111,6 +111,47 @@ describe("buildOutlookMailboxSyncPage", () => {
     });
   });
 
+  it("dates a draft by its last save and other mail by when it arrived", () => {
+    const page = buildOutlookMailboxSyncPage({
+      response: {
+        value: [
+          {
+            id: "draft-1",
+            conversationId: "thread-1",
+            parentFolderId: "drafts-folder-id",
+            isDraft: true,
+            receivedDateTime: "2026-07-01T09:00:00.000Z",
+            lastModifiedDateTime: "2026-07-03T15:00:00.000Z",
+          },
+          {
+            id: "message-1",
+            conversationId: "thread-2",
+            parentFolderId: "inbox-folder-id",
+            isDraft: false,
+            receivedDateTime: "2026-07-01T09:00:00.000Z",
+            lastModifiedDateTime: "2026-07-03T15:00:00.000Z",
+          },
+        ],
+        "@odata.deltaLink": DELTA_LINK,
+      },
+      after: "2026-07-01T00:00:00.000Z",
+      folderId: "drafts-folder-id",
+      wasSnapshot: false,
+      reset: false,
+      categoryMap: new Map(),
+      folderIds: { inbox: "inbox-folder-id", drafts: "drafts-folder-id" },
+    });
+
+    expect(
+      page.upsertedMessages.map(
+        (message) => parsedMessageMetadata(message).receivedAtMs,
+      ),
+    ).toEqual([
+      Date.parse("2026-07-03T15:00:00.000Z"),
+      Date.parse("2026-07-01T09:00:00.000Z"),
+    ]);
+  });
+
   it("keeps the bodies a delta carried when asked, except where attachments still need listing", () => {
     const page = buildOutlookMailboxSyncPage({
       response: {
