@@ -544,32 +544,36 @@ export async function createSqliteMailStore(
           );
         }
         if (prepared.length > 0) await bumpRevision(tx);
-        const preparingRows = await tx.query(
-          `SELECT o.account_id, o.command_id, o.priority, o.rowid AS operation_rowid,
-                  c.conversation_id, c.resolution_id, c.next_page, a.generation
-           FROM operations o
-           JOIN operation_conversations c
-             ON c.account_id = o.account_id AND c.command_id = o.command_id
-           JOIN accounts a
-             ON a.account_id = o.account_id
-           WHERE o.status = 'preparing' AND c.complete = 0
-             AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
-             AND (o.claimed_by IS NULL OR o.claimed_until_ms IS NULL OR o.claimed_until_ms < ?)
-           ORDER BY o.priority DESC, o.created_at_ms, c.conversation_id
-           LIMIT 20`,
-          [input.nowMs, input.nowMs],
-        );
-        let preparing: (typeof preparingRows)[number] | undefined;
-        for (const row of preparingRows) {
-          // Jumping ahead must not reorder changes to the same conversation.
-          if (
-            Number(row.priority) > 0 &&
-            (await overlapsEarlierPreparation(tx, row))
+        // An interactive command jumps ahead, but never past an earlier one
+        // still preparing on the same conversation. Filtered here so the
+        // limit can't fill with commands that would all be skipped.
+        const preparing = (
+          await tx.query(
+            `SELECT o.account_id, o.command_id, c.conversation_id, c.resolution_id, c.next_page, a.generation
+             FROM operations o
+             JOIN operation_conversations c
+               ON c.account_id = o.account_id AND c.command_id = o.command_id
+             JOIN accounts a
+               ON a.account_id = o.account_id
+             WHERE o.status = 'preparing' AND c.complete = 0
+               AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
+               AND (o.claimed_by IS NULL OR o.claimed_until_ms IS NULL OR o.claimed_until_ms < ?)
+               AND (o.priority = 0 OR NOT EXISTS (
+                 SELECT 1 FROM operation_conversations mine
+                 JOIN operation_conversations other
+                   ON other.account_id = mine.account_id
+                  AND other.conversation_id = mine.conversation_id
+                  AND other.command_id != mine.command_id
+                 JOIN operations e
+                   ON e.account_id = other.account_id AND e.command_id = other.command_id
+                 WHERE mine.account_id = o.account_id AND mine.command_id = o.command_id
+                   AND e.status = 'preparing' AND e.rowid < o.rowid
+               ))
+             ORDER BY o.priority DESC, o.created_at_ms, c.conversation_id
+             LIMIT 1`,
+            [input.nowMs, input.nowMs],
           )
-            continue;
-          preparing = row;
-          break;
-        }
+        )[0];
         if (preparing) {
           const attemptId = runtime.randomId();
           const claimed = await tx.execute(
@@ -622,10 +626,16 @@ export async function createSqliteMailStore(
         for (const row of queued) {
           if (await hasUnsatisfiedDependency(tx, row)) continue;
           const attemptId = runtime.randomId();
+          // Reclaiming a lease, or following an attempt this build didn't
+          // stamp as throttled (an older build's), may mean the provider
+          // already has it.
           const claimed = await tx.execute(
             `UPDATE operations
              SET status = 'executing', attempts = attempts + 1, claimed_by = ?, claimed_until_ms = ?, attempt_id = ?,
-                 may_have_dispatched = CASE WHEN status = 'executing' THEN 1 ELSE may_have_dispatched END
+                 may_have_dispatched = CASE
+                   WHEN status = 'executing'
+                     OR (status = 'retry_wait' AND (throttled_attempt_id IS NULL OR attempt_id IS NOT throttled_attempt_id))
+                   THEN 1 ELSE may_have_dispatched END
              WHERE account_id = ? AND command_id = ?
                AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
                AND (claimed_by IS NULL OR claimed_until_ms IS NULL OR claimed_until_ms < ?)
@@ -3673,28 +3683,6 @@ function roleFlags(roles: MessageMetadata["roles"]) {
     trash: roles.includes("trash") ? 1 : 0,
     spam: roles.includes("spam") ? 1 : 0,
   };
-}
-
-async function overlapsEarlierPreparation(
-  tx: SqlTransaction,
-  row: Record<string, import("./driver").SqlValue>,
-) {
-  const earlier = await tx.query(
-    `SELECT 1
-     FROM operation_conversations mine
-     JOIN operation_conversations other
-       ON other.account_id = mine.account_id
-      AND other.conversation_id = mine.conversation_id
-      AND other.command_id != mine.command_id
-     JOIN operations o
-       ON o.account_id = other.account_id AND o.command_id = other.command_id
-     WHERE mine.account_id = ? AND mine.command_id = ?
-       AND o.status = 'preparing'
-       AND o.rowid < ?
-     LIMIT 1`,
-    [row.account_id, row.command_id, row.operation_rowid],
-  );
-  return earlier.length > 0;
 }
 
 async function hasUnsatisfiedDependency(

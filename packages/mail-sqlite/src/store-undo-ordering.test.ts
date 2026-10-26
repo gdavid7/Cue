@@ -160,6 +160,54 @@ describe("undo of a conversation change", () => {
     await store.close();
   });
 
+  it("keeps a change an older build sent before a later attempt was throttled", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await mailbox(["m1"], { driver });
+    await archive(store, "archive", "m1");
+    const first = await claimCommand(store);
+    await settleNotDispatched(store, first, "throttled");
+    // A tab on a build without the flag claims it, may send it, and leaves
+    // it waiting to retry without a stamp of its own.
+    await driver.write((tx) =>
+      tx.execute(
+        "UPDATE operations SET attempt_id = 'older-build', attempts = attempts + 1 WHERE command_id = 'archive'",
+      ),
+    );
+    const next = await claimCommand(store, Date.now() + 1000);
+    await settleNotDispatched(store, next, "throttled");
+
+    expect(await cancel(store, "archive")).toEqual({ status: "too_late" });
+    await store.close();
+  });
+
+  it("still prepares an earlier change when an interactive undo spans many conversations", async () => {
+    const conversations = Array.from({ length: 25 }, (_, index) => ({
+      accountId: "acc-1",
+      conversationId: `c-${index}`,
+    }));
+    const store = await mailbox([]);
+    await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "archive-bulk",
+      conversations,
+      change: { kind: "archive" },
+      observedRevision: await store.readRevision(),
+    });
+    await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "undo-bulk",
+      conversations,
+      change: { kind: "unarchive" },
+      priority: "interactive",
+      observedRevision: await store.readRevision(),
+    });
+
+    const next = await claimAny(store);
+    if (next?.kind !== "prepare") throw new Error("expected prepare");
+    expect(next.commandId).toBe("archive-bulk");
+    await store.close();
+  });
+
   it("holds an interactive undo behind an earlier conversation change still preparing", async () => {
     const store = await mailbox(["m1"], { complete: false });
     await store.admitConversations({
