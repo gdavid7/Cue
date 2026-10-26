@@ -807,7 +807,7 @@ describe("aiProcessAssistantChat step log", () => {
 });
 
 describe("aiProcessAssistantChat Gmail demand", () => {
-  async function run() {
+  async function run({ provider = "google" }: { provider?: string } = {}) {
     vi.clearAllMocks();
     const { createEmailProvider } = await import("@/utils/email/provider");
     // Each tool's provider makes one Gmail call, then stops the tool.
@@ -821,11 +821,13 @@ describe("aiProcessAssistantChat Gmail demand", () => {
     } as never);
     vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
     const cleanups: Array<() => void> = [];
+    const logger = createTestLogger();
+    const info = vi.spyOn(logger, "info");
     await aiProcessAssistantChat({
       messages: [{ role: "user", content: "what's new?" }],
       emailAccountId: "email-account-id",
-      user: getEmailAccount(),
-      logger: createTestLogger(),
+      user: { ...getEmailAccount(), account: { provider } },
+      logger,
       registerCleanup: (cleanup) => cleanups.push(cleanup),
     });
     const options = vi.mocked(toolCallAgentStream).mock.calls[0][0];
@@ -835,38 +837,83 @@ describe("aiProcessAssistantChat Gmail demand", () => {
         toolCallId: "call",
         messages: [],
       } as never);
-    return { options, cleanups, callGmailTool };
+    const endStep = () =>
+      options.onStepEnd?.({
+        stepNumber: 0,
+        model: { provider: "anthropic.messages", modelId: "claude" },
+        toolCalls: [],
+      } as never);
+    return { options, cleanups, callGmailTool, endStep, info };
   }
 
-  it("holds nothing for a turn that never calls Gmail", async () => {
-    const { options } = await run();
+  it("holds background work back from the start of the turn, before the model asks for any Gmail call", async () => {
+    await run();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
+    const [account, maxMs] = vi.mocked(holdGmailInteractiveDemand).mock
+      .calls[0];
+    expect(account).toBe("email-account-id");
+    // The web tool budget, less the moment the turn took to get here.
+    expect(maxMs).toBeGreaterThan(44_000);
+    expect(maxMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it("holds nothing for an account that is not on Gmail", async () => {
+    const { options } = await run({ provider: "microsoft" });
 
     await options.onEnd?.({} as never);
 
     expect(holdGmailInteractiveDemand).not.toHaveBeenCalled();
-    expect(mockReleaseDemand).not.toHaveBeenCalled();
   });
 
-  it("holds background work back from the first Gmail call, once, capped at the tool budget", async () => {
-    const { callGmailTool } = await run();
+  it("keeps one hold for every Gmail call of the turn", async () => {
+    const { callGmailTool, endStep } = await run();
 
     await callGmailTool();
+    await endStep();
     await callGmailTool();
 
     expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
-    expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
-      "email-account-id",
-      45_000,
-    );
+    expect(mockReleaseDemand).not.toHaveBeenCalled();
   });
 
-  it("lets background work go once the turn ends", async () => {
-    const { options, callGmailTool } = await run();
+  it("lets background work go after a step that made no Gmail call, and holds again, within the tool budget, on a later one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const turnStartedAt = Date.now();
+      const { callGmailTool, endStep } = await run();
+
+      await endStep();
+      await vi.waitFor(() =>
+        expect(mockReleaseDemand).toHaveBeenCalledTimes(1),
+      );
+      vi.setSystemTime(turnStartedAt + 5000);
+      await callGmailTool();
+
+      expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(2);
+      expect(holdGmailInteractiveDemand).toHaveBeenLastCalledWith(
+        "email-account-id",
+        40_000,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets background work go once the turn ends, and logs only counts and times", async () => {
+    const { options, callGmailTool, info } = await run();
+    await callGmailTool();
     await callGmailTool();
 
     await options.onEnd?.({} as never);
 
     await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+    expect(info).toHaveBeenCalledWith("Assistant chat Gmail demand ended", {
+      gmailCalls: 2,
+      holds: 1,
+      heldMs: expect.any(Number),
+      firstGmailCallAfterHoldMs: expect.any(Number),
+    });
   });
 
   it("lets background work go once tools are switched off", async () => {
@@ -884,10 +931,27 @@ describe("aiProcessAssistantChat Gmail demand", () => {
   });
 
   it("lets background work go through the caller's cleanup when the stream fails", async () => {
-    const { cleanups, callGmailTool } = await run();
-    await callGmailTool();
+    const { cleanups } = await run();
 
     for (const cleanup of cleanups) cleanup();
+
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets background work go when the turn's setup fails", async () => {
+    vi.clearAllMocks();
+    mockIsIntegrationActionEnabledForUserId.mockRejectedValueOnce(
+      new Error("db down"),
+    );
+
+    await expect(
+      aiProcessAssistantChat({
+        messages: [{ role: "user", content: "what's new?" }],
+        emailAccountId: "email-account-id",
+        user: getEmailAccount(),
+        logger: createTestLogger(),
+      }),
+    ).rejects.toThrow("db down");
 
     await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
   });

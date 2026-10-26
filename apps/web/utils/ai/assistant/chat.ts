@@ -162,6 +162,19 @@ export async function aiProcessAssistantChat({
     );
   }
 
+  // Someone is waiting on this turn's Gmail calls, so background sync yields
+  // from the moment the turn starts, while the model picks its first lookup,
+  // and the turn's first search finds the second and the bucket clear instead
+  // of waiting behind sync (D-086).
+  const gmailDemand = createTurnGmailDemand({
+    emailAccountId,
+    deadline: startedAt + ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface],
+    enabled: isGoogleProvider(user.account.provider),
+    logger,
+  });
+  abortSignal?.addEventListener("abort", gmailDemand.end, { once: true });
+  registerCleanup?.(gmailDemand.end);
+
   const emailSendToolsEnabled = env.NEXT_PUBLIC_EMAIL_SEND_ENABLED;
   const draftReplyActionsEnabled = !env.NEXT_PUBLIC_AUTO_DRAFT_DISABLED;
   const webhookActionsEnabled =
@@ -216,17 +229,10 @@ export async function aiProcessAssistantChat({
           logger,
         })
       : null,
-  ]);
-  // Someone is waiting on this turn's Gmail calls, so from its first one
-  // background sync yields for as long as tools can run, not just two
-  // seconds per search. A turn that never calls Gmail holds nothing.
-  const gmailDemand = createTurnGmailDemand({
-    emailAccountId,
-    maxMs: ASSISTANT_CHAT_TOOL_BUDGET_MS[responseSurface],
-    enabled: isGoogleProvider(user.account.provider),
+  ]).catch((error) => {
+    gmailDemand.end();
+    throw error;
   });
-  abortSignal?.addEventListener("abort", gmailDemand.end, { once: true });
-  registerCleanup?.(gmailDemand.end);
   let ruleReadState: RuleReadState | null = null;
   const pendingRuleDeletionNames = new Set<string>();
   const memoryConversationMessages = conversationMessagesForMemory ?? messages;
@@ -366,7 +372,7 @@ export async function aiProcessAssistantChat({
 
   const runtimeTools = withChatToolRuntime({
     logger,
-    onGmailCall: gmailDemand.take,
+    onGmailCall: gmailDemand.noteGmailCall,
     // searchInbox may list other accounts' emails; only these read tools
     // follow them there, and every other tool stays in the chat's account.
     tools: withChatAccountScope({
@@ -481,6 +487,7 @@ export async function aiProcessAssistantChat({
         reasoningTokens: step.usage?.outputTokenDetails?.reasoningTokens,
       });
       lastStepEndedAt = now;
+      gmailDemand.endStep();
       logger.trace("Step finished", {
         text: step.text,
         toolCalls: step.toolCalls,
@@ -1145,28 +1152,72 @@ Inline email cards:
 - Only render email widgets when they add clarity, not for every search result.`;
 }
 
+/**
+ * The turn's hold on the account's Gmail demand, which keeps sync and
+ * background yielding while the turn may still call Gmail. It is taken as the
+ * turn starts; a step that made no Gmail call lets it go, so a turn that never
+ * reads mail holds sync back for one model call at most, and a later Gmail
+ * call takes it again. Every hold ends by the turn's tool budget.
+ */
 function createTurnGmailDemand({
   emailAccountId,
-  maxMs,
+  deadline,
   enabled,
+  logger,
 }: {
   emailAccountId: string;
-  maxMs: number;
+  deadline: number;
   enabled: boolean;
+  logger: Logger;
 }) {
   let hold: Promise<() => Promise<void>> | null = null;
   let ended = false;
+  let holds = 0;
+  let heldMs = 0;
+  let heldSince: number | null = null;
+  // How long sync had been yielding when the turn's first Gmail call came.
+  let firstGmailCallAfterHoldMs: number | null = null;
+  let gmailCalls = 0;
+  const take = () => {
+    if (!enabled || hold || ended) return;
+    const now = Date.now();
+    const maxMs = deadline - now;
+    if (maxMs <= 0) return;
+    holds += 1;
+    heldSince = now;
+    hold = holdGmailInteractiveDemand(emailAccountId, maxMs).catch(
+      () => async () => {},
+    );
+  };
+  const release = () => {
+    if (!hold || heldSince === null) return;
+    heldMs += Math.min(Date.now(), deadline) - heldSince;
+    heldSince = null;
+    hold.then((releaseHold) => releaseHold()).catch(() => undefined);
+    hold = null;
+  };
+  take();
   return {
-    take: () => {
-      if (!enabled || hold || ended) return;
-      hold = holdGmailInteractiveDemand(emailAccountId, maxMs).catch(
-        () => async () => {},
-      );
+    noteGmailCall: () => {
+      gmailCalls += 1;
+      take();
+      if (gmailCalls === 1 && heldSince !== null)
+        firstGmailCallAfterHoldMs = Date.now() - heldSince;
+    },
+    endStep: () => {
+      if (gmailCalls === 0) release();
     },
     end: () => {
       if (ended) return;
       ended = true;
-      hold?.then((release) => release()).catch(() => undefined);
+      release();
+      if (!enabled) return;
+      logger.info("Assistant chat Gmail demand ended", {
+        gmailCalls,
+        holds,
+        heldMs,
+        firstGmailCallAfterHoldMs,
+      });
     },
   };
 }

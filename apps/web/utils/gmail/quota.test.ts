@@ -6,6 +6,7 @@ import {
 } from "@/utils/email/rate-limit";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  createGmailQuotaStats,
   currentGmailQuotaContext,
   GmailCallDeferredError,
   GMAIL_USER_UNITS_PER_MINUTE,
@@ -55,6 +56,8 @@ const WAITING_ACCOUNT = "account-waiting";
 const TURN_ACCOUNT = "account-turn";
 const STUCK_TURN_ACCOUNT = "account-stuck-turn";
 const TURN_GAP_ACCOUNT = "account-turn-gap";
+const UNHELD_SEARCH_ACCOUNT = "account-unheld-search";
+const HELD_SEARCH_ACCOUNT = "account-held-search";
 const GIVE_UP_ACCOUNT = "account-give-up";
 const DEADLINE_ACCOUNT = "account-deadline";
 const BACKOFF_ACCOUNT = "account-backoff";
@@ -1391,6 +1394,52 @@ describe("Gmail quota gate", () => {
     await vi.advanceTimersByTimeAsync(1000);
     await scan;
     expect(insight).toBe(true);
+  });
+
+  it("admits a turn's first search at once when the turn held demand while its model ran", async () => {
+    const searchWaitMs = async (
+      account: string,
+      holdFromTurnStart: boolean,
+    ) => {
+      let stop = false;
+      const scan = (async () => {
+        while (!stop)
+          await runWithGmailQuota(
+            { caller: "mail/v1/enumeration", priority: "sync" },
+            () =>
+              meterGmailCall(
+                { emailAccountId: account, cost: 20 },
+                async () => {},
+              ),
+          );
+      })();
+      await vi.advanceTimersByTimeAsync(1000);
+      const release = holdFromTurnStart
+        ? await holdGmailInteractiveDemand(account, 45_000)
+        : async () => {};
+      // The model's first step, which picks the search.
+      await vi.advanceTimersByTimeAsync(1500);
+      const stats = createGmailQuotaStats();
+      const search = runWithGmailQuota(
+        { caller: "chat/searchInbox", priority: "interactive", stats },
+        () =>
+          meterGmailCall(
+            { emailAccountId: account, cost: 500 },
+            async () => {},
+          ),
+      );
+      await vi.advanceTimersByTimeAsync(3000);
+      await search;
+      stop = true;
+      await release();
+      await vi.advanceTimersByTimeAsync(1000);
+      await scan;
+      return stats.waitMs;
+    };
+
+    // Sync fills each second, so the search waits for room in it.
+    expect(await searchWaitMs(UNHELD_SEARCH_ACCOUNT, false)).toBeGreaterThan(0);
+    expect(await searchWaitMs(HELD_SEARCH_ACCOUNT, true)).toBe(0);
   });
 
   it("gives sync its gap after a turn ends before a person's next yield", async () => {
