@@ -91,7 +91,7 @@ function BounceCard({
   const detailId = useId();
   return (
     <li
-      aria-labelledby={titleId}
+      aria-labelledby={`${titleId} ${detailId}`}
       className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200"
       data-bounce={bounce.messageId}
     >
@@ -111,9 +111,12 @@ function BounceCard({
             />
           ) : null}
           <span className="min-w-0 truncate">{bounce.title}</span>
-          <span aria-hidden>·</span>
+          {/* On a phone the subject needs the room more than the time. */}
+          <span aria-hidden className="hidden sm:inline">
+            ·
+          </span>
           <time
-            className="shrink-0"
+            className="hidden shrink-0 sm:inline"
             dateTime={new Date(bounce.receivedAtMs).toISOString()}
           >
             {formatShortDate(new Date(bounce.receivedAtMs))}
