@@ -1167,7 +1167,8 @@ const buildManageInboxTool = ({
         }
 
         if (parsedInput.query) {
-          return await runManageInboxQuery({
+          const startedAt = Date.now();
+          const result = await runManageInboxQuery({
             parsedInput: { ...parsedInput, query: parsedInput.query },
             emailProvider,
             emailAccountId,
@@ -1183,6 +1184,14 @@ const buildManageInboxTool = ({
             abortSignal: callOptions?.abortSignal,
             logger,
           });
+          logger.info("manageInbox query ran", {
+            action: originalAction,
+            result: "status" in result ? result.status : "error",
+            conversations:
+              "conversations" in result ? result.conversations : undefined,
+            durationMs: Date.now() - startedAt,
+          });
+          return result;
         }
 
         const threadIds = parsedInput.threadIds!;

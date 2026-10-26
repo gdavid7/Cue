@@ -198,6 +198,7 @@ export const cancelAssistantMatchingAction = actionClient
         chatId,
         toolCallId,
         confirmToken,
+        logger,
       });
       await persistAssistantMatchingActionOutcome({
         chatId,
