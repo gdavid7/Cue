@@ -19,7 +19,12 @@ const mail = vi.hoisted(() => ({
   client: {} as { capabilities?: string[]; queryLeftOpenDrafts?: unknown },
   // What the server says Cue wrote, per account; a missing account failed.
   cueAuthored: {} as Record<string, string[]>,
-  serverReads: [] as string[][],
+  // The status a failed account's read answers with; 503 if unset.
+  failStatus: {} as Record<string, number>,
+  // Each account the server was asked about, in order.
+  serverReads: [] as string[],
+  // The local store's drafts revision.
+  sequence: 1,
   serverPaths: {} as Record<string, string>,
   // Set to hold the server's answer until released.
   pending: null as Promise<void> | null,
@@ -31,7 +36,7 @@ vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
 vi.mock("@inboxzero/mail-react/use-mailbox-window", () => ({
   useMailboxWindow: (query: { accountIds: string[] }) => ({
     status: "ready",
-    revision: { databaseEpoch: 1, sequence: 1 },
+    revision: { databaseEpoch: 1, sequence: mail.sequence },
     data: {
       conversations: [],
       connection: "ready",
@@ -50,25 +55,21 @@ vi.mock("@/hooks/useHiddenDraftMessageIds", () => ({
   useAllAccountsHiddenDraftMessageIds: () => [],
 }));
 vi.mock("@/utils/fetch-for-accounts", () => ({
-  fetchForAccounts: async (
-    path: (accountId: string) => string,
-    accountIds: string[],
-  ) => {
-    mail.serverReads.push(accountIds);
-    for (const accountId of accountIds)
-      mail.serverPaths[accountId] = path(accountId);
+  fetchForAccounts: async (path: string, accountIds: string[]) => {
+    // The hook asks each account alone.
+    expect(accountIds).toHaveLength(1);
+    const [accountId] = accountIds;
+    mail.serverReads.push(accountId);
+    mail.serverPaths[accountId] = path;
     await mail.pending;
-    if (accountIds.every((accountId) => !mail.cueAuthored[accountId]))
-      throw new Error("every account failed");
+    const messageIds = mail.cueAuthored[accountId];
+    if (!messageIds)
+      throw Object.assign(new Error("failed"), {
+        status: mail.failStatus[accountId] ?? 503,
+      });
     return {
-      byAccount: accountIds.flatMap((accountId) =>
-        mail.cueAuthored[accountId]
-          ? [{ accountId, data: { messageIds: mail.cueAuthored[accountId] } }]
-          : [],
-      ),
-      failedAccountIds: accountIds.filter(
-        (accountId) => !mail.cueAuthored[accountId],
-      ),
+      byAccount: [{ accountId, data: { messageIds } }],
+      failedAccountIds: [],
     };
   },
 }));
@@ -83,6 +84,8 @@ describe("useLeftOpenDrafts", () => {
     mail.drafts = [];
     mail.cueAuthored = {};
     mail.serverReads = [];
+    mail.failStatus = {};
+    mail.sequence = 1;
     mail.serverPaths = {};
     mail.pending = null;
     mail.client = {
@@ -133,7 +136,6 @@ describe("useLeftOpenDrafts", () => {
       "a-thread-2:a-older",
       "a-thread:a-draft",
     ]);
-    expect([a.get("savedFromMs"), a.get("savedToMs")]).toEqual(["500", "1000"]);
     // Each draft's own save time, in the items' order.
     const savedAt = new Map(
       a
@@ -173,7 +175,7 @@ describe("useLeftOpenDrafts", () => {
 
     const { result } = renderLeftOpenDrafts();
 
-    await waitFor(() => expect(mail.serverReads).toHaveLength(1));
+    await waitFor(() => expect(mail.serverReads).toHaveLength(2));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.drafts).toEqual([]);
   });
@@ -206,7 +208,7 @@ describe("useLeftOpenDrafts", () => {
           result.current.drafts.map((item) => item.messageId).sort(),
         ).toEqual(["a-draft", "b-draft"]),
       );
-      expect(mail.serverReads).toEqual([["a", "b"], ["a"]]);
+      expect(mail.serverReads.sort()).toEqual(["a", "a", "b"]);
     });
 
     it("asks again even when every account failed", async () => {
@@ -231,14 +233,84 @@ describe("useLeftOpenDrafts", () => {
 
       const { result } = renderLeftOpenDrafts();
 
-      await waitFor(() => expect(mail.serverReads).toHaveLength(1));
-      for (let i = 0; i < CUE_AUTHORED_RECOVERIES + 3; i++)
-        await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS * 2 ** i);
+      await waitFor(() => expect(mail.serverReads).toHaveLength(2));
+      await waitOutRecoveries();
 
-      expect(mail.serverReads).toHaveLength(1 + CUE_AUTHORED_RECOVERIES);
-      expect(mail.serverReads.slice(1)).toEqual(
-        Array.from({ length: CUE_AUTHORED_RECOVERIES }, () => ["a"]),
-      );
+      expect(readsOf("a")).toBe(1 + CUE_AUTHORED_RECOVERIES);
+      expect(readsOf("b")).toBe(1);
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "b-draft",
+      ]);
+    });
+
+    it("still stops after a few tries when the drafts' revision moves mid-recovery", async () => {
+      mail.drafts = [draft("a", "a-draft"), draft("b", "b-draft")];
+      mail.cueAuthored = { b: [] };
+
+      const { result, rerender } = renderLeftOpenDrafts();
+      await waitFor(() => expect(mail.serverReads).toHaveLength(2));
+
+      // Hold the first retry's answer while the drafts are saved again,
+      // each save a new revision with the same drafts to ask about.
+      let release = () => {};
+      mail.pending = new Promise((resolve) => {
+        release = resolve;
+      });
+      await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS);
+      expect(readsOf("a")).toBe(2);
+      for (let move = 1; move <= 3; move++) {
+        mail.sequence += 1;
+        mail.drafts = mail.drafts.map((d) => ({
+          ...d,
+          subject: `Plans ${move}`,
+        }));
+        rerender();
+        await waitFor(() =>
+          expect(result.current.drafts[0]?.subject).toBe(`Plans ${move}`),
+        );
+      }
+      release();
+      mail.pending = null;
+      await waitOutRecoveries();
+
+      expect(readsOf("a")).toBe(1 + CUE_AUTHORED_RECOVERIES);
+      expect(readsOf("b")).toBe(1);
+    });
+
+    it("neither asks again nor updates once unmounted mid-recovery", async () => {
+      mail.drafts = [draft("a", "a-draft"), draft("b", "b-draft")];
+      mail.cueAuthored = { b: [] };
+
+      const { unmount, cache } = renderLeftOpenDrafts();
+      await waitFor(() => expect(mail.serverReads).toHaveLength(2));
+      const answered = cachedCueAuthored(cache);
+      let release = () => {};
+      mail.pending = new Promise((resolve) => {
+        release = resolve;
+      });
+      await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS);
+      expect(readsOf("a")).toBe(2);
+
+      unmount();
+      mail.cueAuthored = { a: [], b: [] };
+      release();
+      mail.pending = null;
+      await waitOutRecoveries();
+
+      expect(readsOf("a")).toBe(2);
+      expect(cachedCueAuthored(cache)).toBe(answered);
+    });
+
+    it("doesn't ask again for an account with too many of Cue's drafts to check", async () => {
+      mail.drafts = [draft("a", "a-draft"), draft("b", "b-draft")];
+      mail.cueAuthored = { b: [] };
+      mail.failStatus = { a: 409 };
+
+      const { result } = renderLeftOpenDrafts();
+      await waitFor(() => expect(mail.serverReads).toHaveLength(2));
+      await waitOutRecoveries();
+
+      expect(readsOf("a")).toBe(1);
       expect(result.current.drafts.map((item) => item.messageId)).toEqual([
         "b-draft",
       ]);
@@ -308,12 +380,30 @@ describe("selectLeftOpenDrafts", () => {
 });
 
 function renderLeftOpenDrafts() {
-  const cache = new Map();
+  const cache = new Map<string, { data?: unknown }>();
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(SWRConfig, { value: { provider: () => cache } }, children);
-  return renderHook(() => useLeftOpenDrafts({ accounts: ACCOUNTS }), {
-    wrapper,
-  });
+  return {
+    cache,
+    ...renderHook(() => useLeftOpenDrafts({ accounts: ACCOUNTS }), {
+      wrapper,
+    }),
+  };
+}
+
+function cachedCueAuthored(cache: Map<string, { data?: unknown }>) {
+  const key = [...cache.keys()].find((k) => k.includes("cue-authored-drafts"));
+  return key ? cache.get(key)?.data : undefined;
+}
+
+function readsOf(accountId: string) {
+  return mail.serverReads.filter((id) => id === accountId).length;
+}
+
+/** Past every recovery the hook could schedule, and a few more. */
+async function waitOutRecoveries() {
+  for (let i = 0; i < CUE_AUTHORED_RECOVERIES + 3; i++)
+    await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS * 2 ** i);
 }
 
 function draft(

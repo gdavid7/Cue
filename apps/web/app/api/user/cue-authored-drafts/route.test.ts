@@ -219,6 +219,8 @@ describe("GET /api/user/cue-authored-drafts", () => {
       ?.where as MeetingWhere;
     // A year apart, the two saves look up two narrow windows, not one wide one.
     expect(where.OR).toHaveLength(2);
+    // No meeting starting after the newest save's window can match.
+    expect(where.startTime?.lte).toEqual(new Date(recent + 10 * 60_000));
   });
 
   it("names an Outlook meeting draft by its id, edited or not, without reading it", async () => {
@@ -250,7 +252,7 @@ describe("GET /api/user/cue-authored-drafts", () => {
 
     const response = await GET(request(items(["t1", "m1"])), params());
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(provider.getDraft).not.toHaveBeenCalled();
   });
 
@@ -264,7 +266,7 @@ describe("GET /api/user/cue-authored-drafts", () => {
 
     const response = await GET(request(items(["t1", "m1"])), params());
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(provider.getDraft).not.toHaveBeenCalled();
   });
 
@@ -284,13 +286,11 @@ describe("GET /api/user/cue-authored-drafts", () => {
     ["an item with no colon", { items: "t1m1" }],
     ["an item with no conversation", { items: ":m1" }],
     ["an item with no message", { items: "t1:" }],
-    ["no savedFromMs", { savedFromMs: null }],
-    ["no savedToMs", { savedToMs: null }],
-    ["a non-numeric savedFromMs", { savedFromMs: "soon" }],
-    ["savedFromMs after savedToMs", { savedFromMs: "3000", savedToMs: "2000" }],
     ["no savedAtMs", { savedAtMs: null }],
     ["a savedAtMs per item missing", { savedAtMs: "1500" }],
-    ["a savedAtMs outside the range", { savedAtMs: "1500,9000" }],
+    ["more savedAtMs than items", { savedAtMs: "1500,1500,1500" }],
+    ["a non-numeric savedAtMs", { savedAtMs: "1500,soon" }],
+    ["a negative savedAtMs", { savedAtMs: "1500,-1" }],
   ])("rejects %s", async (_, overrides) => {
     const response = await GET(
       request(
@@ -336,12 +336,9 @@ function query(
   drafts: [string, string, number][],
   overrides: Record<string, string | null> = {},
 ) {
-  const savedAt = drafts.map(([, , at]) => at);
   const params = new URLSearchParams({
     items: drafts.map(([t, m]) => `${t}:${m}`).join(","),
-    savedAtMs: savedAt.join(","),
-    savedFromMs: String(Math.min(1000, ...savedAt)),
-    savedToMs: String(Math.max(2000, ...savedAt)),
+    savedAtMs: drafts.map(([, , at]) => at).join(","),
   });
   for (const [key, value] of Object.entries(overrides))
     if (value === null) params.delete(key);
@@ -368,6 +365,7 @@ function meetingsWhere(
 
 type MeetingWhere = {
   followUpDraftId: { in?: string[] };
+  startTime?: { lte: Date };
   OR?: { followUpDraftStartedAt: { gte: Date; lte: Date } }[];
 };
 

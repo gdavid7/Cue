@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type {
@@ -139,27 +139,38 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
     },
   );
 
+  // Read by the recovery below, which mustn't restart when the drafts' text
+  // or revision moves but the requests don't.
+  const requestsRef = useRef(requests);
+  useEffect(() => {
+    requestsRef.current = requests;
+  });
+
   // An account the server couldn't answer for, such as one Gmail deferred,
   // is asked again a few times, further apart each time, while its drafts
   // stay hidden.
   useEffect(() => {
-    if (!cueAuthored?.failedAccountIds.length) return;
+    if (!cueAuthored?.retryAccountIds.length) return;
     if (cueAuthored.recoveries >= CUE_AUTHORED_RECOVERIES) return;
     // Still the previous drafts' answer while theirs loads.
     if (cueAuthored.requestsKey !== requestsKey) return;
-    const failed = new Set(cueAuthored.failedAccountIds);
+    const retry = new Set(cueAuthored.retryAccountIds);
     let cancelled = false;
     const timer = setTimeout(
       async () => {
         const retried = await askCueAuthored(
-          requests.filter((r) => failed.has(r.accountId)),
+          requestsRef.current.filter((r) => retry.has(r.accountId)),
         );
         if (cancelled) return;
         mutateCueAuthored(
           {
             ...cueAuthored,
             byAccount: [...cueAuthored.byAccount, ...retried.byAccount],
-            failedAccountIds: retried.failedAccountIds,
+            failedAccountIds: [
+              ...cueAuthored.failedAccountIds.filter((id) => !retry.has(id)),
+              ...retried.failedAccountIds,
+            ],
+            retryAccountIds: retried.retryAccountIds,
             recoveries: cueAuthored.recoveries + 1,
           },
           { revalidate: false },
@@ -171,7 +182,7 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [cueAuthored, requests, requestsKey, mutateCueAuthored]);
+  }, [cueAuthored, requestsKey, mutateCueAuthored]);
 
   return useMemo(() => {
     if (!cueAuthored) return selectLeftOpenDrafts(NO_DRAFTS, hidden);
@@ -229,14 +240,11 @@ function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
       const sorted = [...accountDrafts].sort((a, b) =>
         a.messageId.localeCompare(b.messageId),
       );
-      const savedAt = sorted.map((draft) => draft.savedAtMs);
       const params = new URLSearchParams({
         items: sorted
           .map((draft) => `${draft.conversationId}:${draft.messageId}`)
           .join(","),
-        savedAtMs: savedAt.join(","),
-        savedFromMs: String(Math.min(...savedAt)),
-        savedToMs: String(Math.max(...savedAt)),
+        savedAtMs: sorted.map((draft) => draft.savedAtMs).join(","),
       });
       return {
         accountId,
@@ -246,16 +254,36 @@ function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
     });
 }
 
-/** Every account's answer; one that failed, even all of them, is listed. */
+/**
+ * Every account's answer, each asked alone so its failure keeps its status.
+ * A failed account is listed, and also listed to retry unless the server
+ * said asking again won't help.
+ */
 async function askCueAuthored(requests: { accountId: string; path: string }[]) {
-  const paths = new Map(requests.map((r) => [r.accountId, r.path]));
-  const accountIds = [...paths.keys()];
-  try {
-    return await fetchForAccounts<CueAuthoredDraftsResponse>(
-      (accountId) => paths.get(accountId) ?? CUE_AUTHORED_DRAFTS_PATH,
-      accountIds,
-    );
-  } catch {
-    return { byAccount: [], failedAccountIds: accountIds };
-  }
+  const results = await Promise.all(
+    requests.map(async ({ accountId, path }) => {
+      try {
+        return {
+          accountId,
+          ...(await fetchForAccounts<CueAuthoredDraftsResponse>(path, [
+            accountId,
+          ])),
+        };
+      } catch (error) {
+        return {
+          accountId,
+          byAccount: [],
+          failedAccountIds: [accountId],
+          retryable: (error as { status?: number })?.status !== 409,
+        };
+      }
+    }),
+  );
+  return {
+    byAccount: results.flatMap((result) => result.byAccount),
+    failedAccountIds: results.flatMap((result) => result.failedAccountIds),
+    retryAccountIds: results.flatMap((result) =>
+      "retryable" in result && result.retryable ? [result.accountId] : [],
+    ),
+  };
 }

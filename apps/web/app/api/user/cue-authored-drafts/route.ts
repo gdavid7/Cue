@@ -39,34 +39,21 @@ const querySchema = z
       .min(1)
       .max(MAX_ITEMS),
     savedAtMs: z.array(msSchema).max(MAX_ITEMS),
-    savedFromMs: msSchema,
-    savedToMs: msSchema,
   })
-  .refine((query) => query.savedFromMs <= query.savedToMs, {
-    message: "savedFromMs must not be after savedToMs",
-  })
-  .refine(
-    (query) =>
-      query.savedAtMs.length === query.items.length &&
-      query.savedAtMs.every(
-        (at) => at >= query.savedFromMs && at <= query.savedToMs,
-      ),
-    {
-      message:
-        "savedAtMs needs one time per item, each within savedFromMs and savedToMs",
-    },
-  );
+  .refine((query) => query.savedAtMs.length === query.items.length, {
+    message: "savedAtMs needs one time per item",
+  });
 
 export type CueAuthoredDraftsResponse = Awaited<ReturnType<typeof getData>>;
 
 /**
  * `?items=threadId:messageId,...` names the drafts the lane would show, each
  * by its conversation and its message (split at the last `:`), and
- * `savedAtMs=...` when each was saved, in the same order; `savedFromMs` and
- * `savedToMs` bound those times. Answers which of those messages are drafts
- * Cue wrote into the mailbox. If any of Cue's drafts there can't be read,
- * or there are more to read than one request may, the request fails rather
- * than answer for some of them.
+ * `savedAtMs=...` when each was saved, in the same order. Answers which of
+ * those messages are drafts Cue wrote into the mailbox. If any of Cue's
+ * drafts there can't be read, the request fails rather than answer for some
+ * of them; if there are more to read than one request may, it fails with
+ * 409, which asking again won't change.
  */
 export const GET = withEmailProvider(
   "user/cue-authored-drafts",
@@ -87,8 +74,6 @@ export const GET = withEmailProvider(
               };
         }),
       savedAtMs: (searchParams.get("savedAtMs") ?? "").split(","),
-      savedFromMs: searchParams.get("savedFromMs") ?? undefined,
-      savedToMs: searchParams.get("savedToMs") ?? undefined,
     });
 
     const data = await runWithGmailWaitBudget(GMAIL_WAIT_MS, () =>
@@ -124,7 +109,6 @@ export const GET = withEmailProvider(
 async function getData({
   items,
   savedAtMs,
-  savedToMs,
   emailAccountId,
   provider,
   logger,
@@ -165,10 +149,13 @@ async function getData({
         : {
             emailAccountId,
             followUpDraftId: { not: null },
-            // Never written before the meeting; lets the account's
-            // (emailAccountId, startTime) index bound the read.
+            // Cue writes a meeting's draft only after the meeting starts, so
+            // no meeting starting after the newest window can match; saying
+            // so lets the (emailAccountId, startTime) index narrow the read.
             startTime: {
-              lte: new Date(savedToMs + MEETING_DRAFT_SAVE_SLACK_MS),
+              lte: new Date(
+                Math.max(...savedAtMs) + MEETING_DRAFT_SAVE_SLACK_MS,
+              ),
             },
             OR: savedWindows(savedAtMs).map(([from, to]) => ({
               followUpDraftStartedAt: {
@@ -215,7 +202,8 @@ async function getData({
       meetings: meetings.length,
       toRead: toRead.length,
     });
-    throw new SafeError("Too many of Cue's drafts to check", 503);
+    // 409: the same drafts would hit the same limit, so not worth retrying.
+    throw new SafeError("Too many of Cue's drafts to check", 409);
   }
 
   // A read that throws, including one deferred at the Gmail gate, fails the
