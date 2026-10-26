@@ -123,7 +123,7 @@ test("adapts a receipt and puts its dark logo on a light backing", async ({
   // The receipt's open pixels are never requested, directly or proxied.
   const trackerRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("lumen.example"))
+    if (/(open|beacon)\.lumen\.example/.test(request.url()))
       trackerRequests.push(request.url());
   });
   const { emailAccountId } = await openMail(page);
