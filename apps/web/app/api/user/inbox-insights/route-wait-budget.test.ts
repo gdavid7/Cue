@@ -68,6 +68,7 @@ import { getInboxInsights } from "@/utils/inbox-insights/get-inbox-insights";
 import { createScopedLogger } from "@/utils/logger";
 import {
   createRequestMetrics,
+  getRequestMetricsFields,
   runWithRequestMetrics,
 } from "@/utils/request-metrics";
 import { sleep } from "@/utils/sleep";
@@ -201,6 +202,30 @@ describe("GET /api/user/inbox-insights with the account's Gmail budget spent", (
     }
     // Sync holds the account's budget, so the rows did wait at the gate.
     expect(Math.max(...gate)).toBeGreaterThan(0);
+  });
+
+  // The gate's own tally must not take the request's: "Request completed"
+  // keeps every wait and Gmail call, so builds before CP-1d still compare.
+  it("still puts every wait and Gmail call on the request's completion fields", async () => {
+    const fields: ReturnType<typeof getRequestMetricsFields>[] = [];
+    await measure(async (request) => {
+      const metrics = createRequestMetrics();
+      const response = await runWithRequestMetrics(metrics, () =>
+        runWithAuditContext({ source: "user/inbox-insights" }, () =>
+          get(items(`fields-${request}`)),
+        ),
+      ).finally(() => fields.push(getRequestMetricsFields(metrics)));
+      return response.json();
+    });
+
+    const sum = (field: "waitMs" | "gmailMs" | "gmailCalls") =>
+      fields.reduce((total, entry) => total + entry[field], 0);
+    expect(sum("gmailCalls")).toBeGreaterThan(0);
+    // Each admitted read held its Gmail round trip.
+    expect(sum("gmailMs")).toBeGreaterThanOrEqual(
+      sum("gmailCalls") * GMAIL_READ_MS,
+    );
+    expect(sum("waitMs")).toBeGreaterThan(0);
   });
 });
 
