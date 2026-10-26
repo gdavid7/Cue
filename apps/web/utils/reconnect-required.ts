@@ -22,6 +22,25 @@ if (typeof document !== "undefined") {
   });
 }
 
+const actionListeners = new Set<() => void>();
+
+/** The page that can send the viewed account to its reconnect flow. */
+export function onReconnectRequiredAction(listener: () => void) {
+  actionListeners.add(listener);
+  return () => {
+    actionListeners.delete(listener);
+  };
+}
+
+/**
+ * A server action answered that the mailbox grant is gone. Action results
+ * carry no account, so the page that registered for the account on screen
+ * decides where to send the user.
+ */
+export function notifyReconnectRequiredAction() {
+  for (const listener of actionListeners) listener();
+}
+
 export function isReconnectRequiredBody(body: unknown) {
   if (!body || typeof body !== "object" || !("errorCode" in body)) return false;
   return (

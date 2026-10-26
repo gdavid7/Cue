@@ -12,10 +12,12 @@ import { isAdmin } from "@/utils/admin";
 import {
   captureException,
   EMAIL_PROVIDER_RATE_LIMIT_MESSAGE,
+  isReconnectRequiredError,
   SafeError,
   UNEXPECTED_ACTION_ERROR_MESSAGE,
 } from "@/utils/error";
 import { env } from "@/env";
+import { RECONNECT_REQUIRED_MESSAGE } from "@/utils/config";
 import { SESSION_EXPIRED_MESSAGE } from "@/utils/session-expired";
 import { runWithAuditContext, setAuditContext } from "@/utils/audit/context";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
@@ -104,6 +106,7 @@ const baseClient = createSafeActionClient({
       return `Gmail is busy for this account. Try again in about ${seconds} ${seconds === 1 ? "second" : "seconds"}.`;
     }
     if (isProviderRateLimit) return EMAIL_PROVIDER_RATE_LIMIT_MESSAGE;
+    if (isReconnectRequiredError(error)) return RECONNECT_REQUIRED_MESSAGE;
     if (error instanceof SafeError) return error.message;
 
     captureException(error, {

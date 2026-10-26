@@ -166,7 +166,7 @@ function leaving(): Promise<never> {
 }
 
 /** Sends the account on screen to its reconnect page; offers it for any other. */
-function promptReconnect(
+export function promptReconnect(
   emailAccountId: string,
   viewedEmailAccountId: string | null | undefined,
 ) {
