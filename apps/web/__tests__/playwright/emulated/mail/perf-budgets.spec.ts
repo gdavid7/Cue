@@ -58,26 +58,41 @@ test("inbox paints its rows quickly on a cold and a warm load", async ({
         // Cold: no HTTP cache, no service worker and no local mailbox.
         const cold = await newPerfPage(context, { network: true });
         await cold.goto(inbox, { waitUntil: "commit" });
-        recorder.add(
-          "cold-inbox-rows",
-          await timeSinceNavigation(
-            cold,
-            firstInboxRowVisible,
-            undefined,
-            180_000,
-          ),
-        );
-        // The server's placeholder rows count above; the engine's own list,
-        // which can select and triage, is timed on its own.
-        recorder.add(
-          "cold-engine-rows",
-          await timeSinceNavigation(
-            cold,
-            firstEngineRowVisible,
-            undefined,
-            180_000,
-          ),
-        );
+        // A cold wait that times out says where it stopped: the engine's
+        // marks and requests are logged before the failure is rethrown.
+        try {
+          recorder.add(
+            "cold-inbox-rows",
+            await timeSinceNavigation(
+              cold,
+              firstInboxRowVisible,
+              undefined,
+              180_000,
+            ),
+          );
+          // The server's placeholder rows count above; the engine's own list,
+          // which can select and triage, is timed on its own.
+          recorder.add(
+            "cold-engine-rows",
+            await timeSinceNavigation(
+              cold,
+              firstEngineRowVisible,
+              undefined,
+              180_000,
+            ),
+          );
+        } catch (error) {
+          await logStalledLoad(cold, "cold", recorder);
+          throw error;
+        }
+        for (const [phase, at] of Object.entries(
+          await readEngineTimeline(cold),
+        )) {
+          recorder.add(`cold-engine-${phase}`, at);
+        }
+        for (const { name, end } of await readAppMeasures(cold)) {
+          recorder.add(`cold-${name}`, end);
+        }
         const coldVitals = await readVitals(cold);
         recorder.add("cold-lcp", coldVitals.lcp);
         recorder.add("cold-ttfb", coldVitals.ttfb);
@@ -91,18 +106,26 @@ test("inbox paints its rows quickly on a cold and a warm load", async ({
       // Warm: the mailbox, scripts and service worker are already local.
       const warm = await newPerfPage(context);
       await warm.goto(inbox, { waitUntil: "commit" });
-      recorder.add(
-        "warm-inbox-rows",
-        await timeSinceNavigation(warm, firstInboxRowVisible, undefined),
-      );
-      recorder.add(
-        "warm-engine-rows",
-        await timeSinceNavigation(warm, firstEngineRowVisible, undefined),
-      );
+      try {
+        recorder.add(
+          "warm-inbox-rows",
+          await timeSinceNavigation(warm, firstInboxRowVisible, undefined),
+        );
+        recorder.add(
+          "warm-engine-rows",
+          await timeSinceNavigation(warm, firstEngineRowVisible, undefined),
+        );
+      } catch (error) {
+        await logStalledLoad(warm, "warm", recorder);
+        throw error;
+      }
       for (const [phase, at] of Object.entries(
         await readEngineTimeline(warm),
       )) {
         recorder.add(`warm-engine-${phase}`, at);
+      }
+      for (const { name, end } of await readAppMeasures(warm)) {
+        recorder.add(`warm-${name}`, end);
       }
       const warmVitals = await readVitals(warm);
       recorder.add("warm-lcp", warmVitals.lcp);
@@ -894,6 +917,36 @@ function alsoInInboxRowVisible() {
     if (row.getBoundingClientRect().height > 0) return performance.now();
   }
   return false;
+}
+
+/**
+ * Prints and records the engine's startup marks, its requests and the app's
+ * own first-row measures for a load that did not paint in time, so a failure
+ * report shows which sub-phase held it up.
+ */
+async function logStalledLoad(
+  page: Page,
+  load: "cold" | "warm",
+  recorder: PerfRecorder,
+) {
+  const timeline = await readEngineTimeline(page).catch(() => ({}));
+  const measures = await readAppMeasures(page).catch(() => []);
+  console.log(`PERF-STALL ${load} ${JSON.stringify({ timeline, measures })}`);
+  for (const [phase, at] of Object.entries(timeline)) {
+    recorder.add(`${load}-stalled-engine-${phase}`, at);
+  }
+}
+
+function readAppMeasures(page: Page) {
+  return page.evaluate(() =>
+    performance
+      .getEntriesByType("measure")
+      .filter((entry) => entry.name.startsWith("cue:"))
+      .map((entry) => ({
+        name: entry.name,
+        end: Math.round(entry.startTime + entry.duration),
+      })),
+  );
 }
 
 function firstEngineRowVisible() {
