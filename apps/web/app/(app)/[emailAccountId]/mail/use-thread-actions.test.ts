@@ -1070,6 +1070,7 @@ describe("useThreadActions", () => {
             { accountId: "account", messageId: "seen" },
             { accountId: "account", messageId: "late" },
           ],
+          priority: "interactive",
         }),
       );
     });
@@ -1151,6 +1152,7 @@ describe("useThreadActions", () => {
       conversations: [{ accountId: "account", conversationId: "thread" }],
       change: { kind: "restore_from_trash" },
       wholeConversation: true,
+      priority: "interactive",
       observedRevision: 1,
     });
   });

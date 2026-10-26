@@ -132,6 +132,8 @@ CREATE TABLE IF NOT EXISTS operations (
   attempt_id TEXT,
   created_at_ms INTEGER NOT NULL,
   sent_message_id TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
+  unsent INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, command_id)
 );
 
@@ -381,6 +383,20 @@ export async function migrateMailbox(
   }
   try {
     await tx.exec("ALTER TABLE operations ADD COLUMN sent_message_id TEXT");
+  } catch {
+    // column already exists on freshly created databases
+  }
+  try {
+    await tx.exec(
+      "ALTER TABLE operations ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+    );
+  } catch {
+    // column already exists on freshly created databases
+  }
+  try {
+    await tx.exec(
+      "ALTER TABLE operations ADD COLUMN unsent INTEGER NOT NULL DEFAULT 0",
+    );
   } catch {
     // column already exists on freshly created databases
   }

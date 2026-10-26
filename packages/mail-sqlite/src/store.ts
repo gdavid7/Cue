@@ -554,7 +554,7 @@ export async function createSqliteMailStore(
            WHERE o.status = 'preparing' AND c.complete = 0
              AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
              AND (o.claimed_by IS NULL OR o.claimed_until_ms IS NULL OR o.claimed_until_ms < ?)
-           ORDER BY o.created_at_ms, c.conversation_id
+           ORDER BY o.priority DESC, o.created_at_ms, c.conversation_id
            LIMIT 1`,
           [input.nowMs, input.nowMs],
         );
@@ -606,7 +606,7 @@ export async function createSqliteMailStore(
                status IN ('queued', 'retry_wait')
                OR status = 'executing'
              )
-           ORDER BY created_at_ms`,
+           ORDER BY priority DESC, created_at_ms, rowid`,
           [input.nowMs, input.nowMs],
         );
         for (const row of queued) {
@@ -614,7 +614,7 @@ export async function createSqliteMailStore(
           const attemptId = runtime.randomId();
           const claimed = await tx.execute(
             `UPDATE operations
-             SET status = 'executing', attempts = attempts + 1, claimed_by = ?, claimed_until_ms = ?, attempt_id = ?
+             SET status = 'executing', attempts = attempts + 1, claimed_by = ?, claimed_until_ms = ?, attempt_id = ?, unsent = 0
              WHERE account_id = ? AND command_id = ?
                AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
                AND (claimed_by IS NULL OR claimed_until_ms IS NULL OR claimed_until_ms < ?)
@@ -1193,11 +1193,14 @@ export async function createSqliteMailStore(
             [input.operation.key.accountId],
           );
         } else {
+          // Only a throttled answer says the provider never started it; a
+          // request that failed mid-flight may still have been applied.
           await tx.execute(
-            `UPDATE operations SET status = 'retry_wait', next_attempt_at_ms = ?, claimed_by = NULL
+            `UPDATE operations SET status = 'retry_wait', next_attempt_at_ms = ?, claimed_by = NULL, unsent = ?
              WHERE account_id = ? AND command_id = ?`,
             [
               Date.now() + (input.result.retryAfterMs ?? 1000),
+              input.result.reason === "throttled" ? 1 : 0,
               input.operation.key.accountId,
               input.operation.key.operationId,
             ],
@@ -1267,11 +1270,14 @@ export async function createSqliteMailStore(
       return driver.write(async (tx) => {
         const current = await loadOperation(tx, key.accountId, key.operationId);
         if (!current) return { status: "not_found" };
-        if (current.status !== "preparing" && current.status !== "queued") {
-          return { status: "too_late" };
-        }
+        const unsent =
+          current.status === "preparing" ||
+          current.status === "queued" ||
+          (current.status === "retry_wait" && Number(current.unsent) === 1);
+        if (!unsent) return { status: "too_late" };
         await tx.execute(
-          `UPDATE operations SET status = 'cancelled' WHERE account_id = ? AND command_id = ?`,
+          `UPDATE operations SET status = 'cancelled', claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL
+           WHERE account_id = ? AND command_id = ?`,
           [key.accountId, key.operationId],
         );
         await unfreezeSendDraft(
@@ -2364,8 +2370,8 @@ async function admitExact(
   await tx.execute(
     `INSERT INTO operations(
        account_id, command_id, status, authority, intent_hash, executable_hash,
-       payload_json, executable_payload_json, attempts, created_at_ms
-     ) VALUES (?, ?, 'queued', 'backend', ?, ?, ?, ?, 0, ?)`,
+       payload_json, executable_payload_json, attempts, created_at_ms, priority
+     ) VALUES (?, ?, 'queued', 'backend', ?, ?, ?, ?, 0, ?, ?)`,
     [
       input.accountId,
       input.commandId,
@@ -2374,6 +2380,7 @@ async function admitExact(
       JSON.stringify(payload),
       JSON.stringify(payload),
       Date.now(),
+      commandPriority(input.priority),
     ],
   );
   for (const target of input.targets) {
@@ -2460,6 +2467,7 @@ async function admitConversations(
           messageId,
         })),
         change: input.change,
+        priority: input.priority,
       },
       maxPendingOperations,
       digest,
@@ -2473,14 +2481,15 @@ async function admitConversations(
   if (full) return full;
   await tx.execute(
     `INSERT INTO operations(
-       account_id, command_id, status, authority, intent_hash, payload_json, attempts, created_at_ms
-     ) VALUES (?, ?, 'preparing', 'backend', ?, ?, 0, ?)`,
+       account_id, command_id, status, authority, intent_hash, payload_json, attempts, created_at_ms, priority
+     ) VALUES (?, ?, 'preparing', 'backend', ?, ?, 0, ?, ?)`,
     [
       input.accountId,
       input.commandId,
       hash,
       JSON.stringify(payload),
       Date.now(),
+      commandPriority(input.priority),
     ],
   );
   for (const conversation of input.conversations) {
@@ -3333,7 +3342,8 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
        JOIN operation_targets t
          ON t.account_id = o.account_id AND t.command_id = o.command_id
        WHERE t.account_id = ? AND t.message_id = ?
-         AND (o.executable_hash IS NOT NULL OR o.status = 'preparing')`,
+         AND (o.executable_hash IS NOT NULL OR o.status = 'preparing')
+       ORDER BY o.created_at_ms, o.rowid`,
       [target.accountId, target.messageId],
     );
     const pending = pendingRows
@@ -4128,3 +4138,8 @@ function sameDraftContent(stored: string, content: SaveDraft["content"]) {
 }
 
 export type { SyncPage, ConversationKey };
+
+// Commands are claimed highest priority first, then in admission order.
+function commandPriority(priority: SubmitMetadataCommand["priority"]) {
+  return priority === "interactive" ? 1 : 0;
+}
