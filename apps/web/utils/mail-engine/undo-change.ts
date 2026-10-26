@@ -4,8 +4,10 @@ import { randomUuid } from "@/utils/uuid";
 
 /**
  * Takes back a conversation change the engine admitted. One still waiting in
- * the engine is cancelled there and never reaches the server; one already
- * sent is followed by each compensation, which the engine runs after it. A
+ * the engine, or one the server refused to start, is cancelled there and
+ * never reaches the server; one already sent is followed by each
+ * compensation, which the engine runs after it but ahead of other queued
+ * changes, since someone is waiting on it (D-086). A
  * command whose conversations were in different places before it needs a
  * different compensation for each, so they come as groups. A change made to
  * the whole conversation, as from Sent or Drafts, is undone the same way.
@@ -36,6 +38,7 @@ export async function undoConversationChange({
       })),
       change,
       ...(wholeConversation ? { wholeConversation: true } : {}),
+      priority: "interactive",
       observedRevision: diagnostics.revision,
     });
     if (admission.status === "rejected") throw new Error(admission.code);

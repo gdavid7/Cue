@@ -133,6 +133,9 @@ CREATE TABLE IF NOT EXISTS operations (
   attempt_id TEXT,
   created_at_ms INTEGER NOT NULL,
   sent_message_id TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
+  may_have_dispatched INTEGER NOT NULL DEFAULT 0,
+  throttled_attempt_id TEXT,
   PRIMARY KEY (account_id, command_id)
 );
 
@@ -382,6 +385,35 @@ export async function migrateMailbox(
   }
   try {
     await tx.exec("ALTER TABLE operations ADD COLUMN sent_message_id TEXT");
+  } catch {
+    // column already exists on freshly created databases
+  }
+  try {
+    await tx.exec(
+      "ALTER TABLE operations ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+    );
+  } catch {
+    // column already exists on freshly created databases
+  }
+  let addedMayHaveDispatched = false;
+  try {
+    await tx.exec(
+      "ALTER TABLE operations ADD COLUMN may_have_dispatched INTEGER NOT NULL DEFAULT 0",
+    );
+    addedMayHaveDispatched = true;
+  } catch {
+    // column already exists on freshly created databases
+  }
+  // Commands attempted before the flag existed may have reached the provider.
+  if (addedMayHaveDispatched) {
+    await tx.exec(
+      "UPDATE operations SET may_have_dispatched = 1 WHERE attempts > 0",
+    );
+  }
+  try {
+    await tx.exec(
+      "ALTER TABLE operations ADD COLUMN throttled_attempt_id TEXT",
+    );
   } catch {
     // column already exists on freshly created databases
   }

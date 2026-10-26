@@ -544,21 +544,37 @@ export async function createSqliteMailStore(
           );
         }
         if (prepared.length > 0) await bumpRevision(tx);
-        const preparing = await tx.query(
-          `SELECT o.account_id, o.command_id, c.conversation_id, c.resolution_id, c.next_page, a.generation
-           FROM operations o
-           JOIN operation_conversations c
-             ON c.account_id = o.account_id AND c.command_id = o.command_id
-           JOIN accounts a
-             ON a.account_id = o.account_id
-           WHERE o.status = 'preparing' AND c.complete = 0
-             AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
-             AND (o.claimed_by IS NULL OR o.claimed_until_ms IS NULL OR o.claimed_until_ms < ?)
-           ORDER BY o.created_at_ms, c.conversation_id
-           LIMIT 1`,
-          [input.nowMs, input.nowMs],
-        );
-        if (preparing[0]) {
+        // An interactive command jumps ahead, but never past an earlier one
+        // still preparing on the same conversation. Filtered here so the
+        // limit can't fill with commands that would all be skipped.
+        const preparing = (
+          await tx.query(
+            `SELECT o.account_id, o.command_id, c.conversation_id, c.resolution_id, c.next_page, a.generation
+             FROM operations o
+             JOIN operation_conversations c
+               ON c.account_id = o.account_id AND c.command_id = o.command_id
+             JOIN accounts a
+               ON a.account_id = o.account_id
+             WHERE o.status = 'preparing' AND c.complete = 0
+               AND (o.next_attempt_at_ms IS NULL OR o.next_attempt_at_ms <= ?)
+               AND (o.claimed_by IS NULL OR o.claimed_until_ms IS NULL OR o.claimed_until_ms < ?)
+               AND (o.priority = 0 OR NOT EXISTS (
+                 SELECT 1 FROM operation_conversations mine
+                 JOIN operation_conversations other
+                   ON other.account_id = mine.account_id
+                  AND other.conversation_id = mine.conversation_id
+                  AND other.command_id != mine.command_id
+                 JOIN operations e
+                   ON e.account_id = other.account_id AND e.command_id = other.command_id
+                 WHERE mine.account_id = o.account_id AND mine.command_id = o.command_id
+                   AND e.status = 'preparing' AND e.rowid < o.rowid
+               ))
+             ORDER BY o.priority DESC, o.created_at_ms, c.conversation_id
+             LIMIT 1`,
+            [input.nowMs, input.nowMs],
+          )
+        )[0];
+        if (preparing) {
           const attemptId = runtime.randomId();
           const claimed = await tx.execute(
             `UPDATE operations
@@ -571,8 +587,8 @@ export async function createSqliteMailStore(
               input.ownerId,
               input.nowMs + input.leaseMs,
               attemptId,
-              preparing[0].account_id,
-              preparing[0].command_id,
+              preparing.account_id,
+              preparing.command_id,
               input.nowMs,
               input.nowMs,
             ],
@@ -581,20 +597,18 @@ export async function createSqliteMailStore(
           return {
             kind: "prepare" as const,
             attemptId,
-            commandId: String(preparing[0].command_id),
-            accountId: String(preparing[0].account_id),
+            commandId: String(preparing.command_id),
+            accountId: String(preparing.account_id),
             session: {
-              accountId: String(preparing[0].account_id),
-              generation: String(preparing[0].generation),
+              accountId: String(preparing.account_id),
+              generation: String(preparing.generation),
             },
             conversation: {
-              accountId: String(preparing[0].account_id),
-              conversationId: String(preparing[0].conversation_id),
+              accountId: String(preparing.account_id),
+              conversationId: String(preparing.conversation_id),
             },
-            resolutionId: String(preparing[0].resolution_id),
-            page: preparing[0].next_page
-              ? String(preparing[0].next_page)
-              : null,
+            resolutionId: String(preparing.resolution_id),
+            page: preparing.next_page ? String(preparing.next_page) : null,
           };
         }
         const queued = await tx.query(
@@ -606,15 +620,22 @@ export async function createSqliteMailStore(
                status IN ('queued', 'retry_wait')
                OR status = 'executing'
              )
-           ORDER BY created_at_ms`,
+           ORDER BY priority DESC, created_at_ms, rowid`,
           [input.nowMs, input.nowMs],
         );
         for (const row of queued) {
           if (await hasUnsatisfiedDependency(tx, row)) continue;
           const attemptId = runtime.randomId();
+          // Reclaiming a lease, or following an attempt this build didn't
+          // stamp as throttled (an older build's), may mean the provider
+          // already has it.
           const claimed = await tx.execute(
             `UPDATE operations
-             SET status = 'executing', attempts = attempts + 1, claimed_by = ?, claimed_until_ms = ?, attempt_id = ?
+             SET status = 'executing', attempts = attempts + 1, claimed_by = ?, claimed_until_ms = ?, attempt_id = ?,
+                 may_have_dispatched = CASE
+                   WHEN status = 'executing'
+                     OR (status = 'retry_wait' AND (throttled_attempt_id IS NULL OR attempt_id IS NOT throttled_attempt_id))
+                   THEN 1 ELSE may_have_dispatched END
              WHERE account_id = ? AND command_id = ?
                AND (next_attempt_at_ms IS NULL OR next_attempt_at_ms <= ?)
                AND (claimed_by IS NULL OR claimed_until_ms IS NULL OR claimed_until_ms < ?)
@@ -1033,6 +1054,18 @@ export async function createSqliteMailStore(
         if (!(await accountGenerationMatches(tx, input.operation.session))) {
           return { status: "stale" };
         }
+        // Only a throttled answer says this attempt never reached the
+        // provider; anything else might have, and that never stops being
+        // true however later attempts end.
+        const throttled =
+          input.result.status === "not_dispatched" &&
+          input.result.reason === "throttled";
+        if (!throttled) {
+          await tx.execute(
+            "UPDATE operations SET may_have_dispatched = 1 WHERE account_id = ? AND command_id = ?",
+            [input.operation.key.accountId, input.operation.key.operationId],
+          );
+        }
         // Stamped with this settle's revision, which a read sent before it
         // can't have reached.
         const confirmedTargets: MessageKey[] = [];
@@ -1194,10 +1227,11 @@ export async function createSqliteMailStore(
           );
         } else {
           await tx.execute(
-            `UPDATE operations SET status = 'retry_wait', next_attempt_at_ms = ?, claimed_by = NULL
+            `UPDATE operations SET status = 'retry_wait', next_attempt_at_ms = ?, claimed_by = NULL, throttled_attempt_id = ?
              WHERE account_id = ? AND command_id = ?`,
             [
               Date.now() + (input.result.retryAfterMs ?? 1000),
+              throttled ? input.attemptId : null,
               input.operation.key.accountId,
               input.operation.key.operationId,
             ],
@@ -1267,11 +1301,20 @@ export async function createSqliteMailStore(
       return driver.write(async (tx) => {
         const current = await loadOperation(tx, key.accountId, key.operationId);
         if (!current) return { status: "not_found" };
-        if (current.status !== "preparing" && current.status !== "queued") {
-          return { status: "too_late" };
-        }
+        // A command waiting to retry is unsent only if no attempt might
+        // have reached the provider and its latest attempt (not one a
+        // build that doesn't stamp this made since) was throttled.
+        const unsent =
+          current.status === "preparing" ||
+          current.status === "queued" ||
+          (current.status === "retry_wait" &&
+            Number(current.may_have_dispatched) === 0 &&
+            current.throttled_attempt_id != null &&
+            current.attempt_id === current.throttled_attempt_id);
+        if (!unsent) return { status: "too_late" };
         await tx.execute(
-          `UPDATE operations SET status = 'cancelled' WHERE account_id = ? AND command_id = ?`,
+          `UPDATE operations SET status = 'cancelled', claimed_by = NULL, claimed_until_ms = NULL, attempt_id = NULL
+           WHERE account_id = ? AND command_id = ?`,
           [key.accountId, key.operationId],
         );
         await unfreezeSendDraft(
@@ -2364,8 +2407,8 @@ async function admitExact(
   await tx.execute(
     `INSERT INTO operations(
        account_id, command_id, status, authority, intent_hash, executable_hash,
-       payload_json, executable_payload_json, attempts, created_at_ms
-     ) VALUES (?, ?, 'queued', 'backend', ?, ?, ?, ?, 0, ?)`,
+       payload_json, executable_payload_json, attempts, created_at_ms, priority
+     ) VALUES (?, ?, 'queued', 'backend', ?, ?, ?, ?, 0, ?, ?)`,
     [
       input.accountId,
       input.commandId,
@@ -2374,6 +2417,7 @@ async function admitExact(
       JSON.stringify(payload),
       JSON.stringify(payload),
       Date.now(),
+      commandPriority(input.priority),
     ],
   );
   for (const target of input.targets) {
@@ -2460,6 +2504,7 @@ async function admitConversations(
           messageId,
         })),
         change: input.change,
+        priority: input.priority,
       },
       maxPendingOperations,
       digest,
@@ -2473,14 +2518,15 @@ async function admitConversations(
   if (full) return full;
   await tx.execute(
     `INSERT INTO operations(
-       account_id, command_id, status, authority, intent_hash, payload_json, attempts, created_at_ms
-     ) VALUES (?, ?, 'preparing', 'backend', ?, ?, 0, ?)`,
+       account_id, command_id, status, authority, intent_hash, payload_json, attempts, created_at_ms, priority
+     ) VALUES (?, ?, 'preparing', 'backend', ?, ?, 0, ?, ?)`,
     [
       input.accountId,
       input.commandId,
       hash,
       JSON.stringify(payload),
       Date.now(),
+      commandPriority(input.priority),
     ],
   );
   for (const conversation of input.conversations) {
@@ -3335,7 +3381,8 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
        JOIN operation_targets t
          ON t.account_id = o.account_id AND t.command_id = o.command_id
        WHERE t.account_id = ? AND t.message_id = ?
-         AND (o.executable_hash IS NOT NULL OR o.status = 'preparing')`,
+         AND (o.executable_hash IS NOT NULL OR o.status = 'preparing')
+       ORDER BY o.rowid`,
       [target.accountId, target.messageId],
     );
     const pending = pendingRows
@@ -3663,7 +3710,7 @@ async function hasUnsatisfiedDependency(
        AND (
          o.status IN ('executing', 'verifying', 'uncertain', 'blocked_auth', 'needs_attention')
          OR (
-           o.status IN ('queued', 'retry_wait')
+           o.status IN ('preparing', 'queued', 'retry_wait')
            AND o.rowid < (
              SELECT rowid FROM operations
              WHERE account_id = mine.account_id AND command_id = mine.command_id
@@ -4136,3 +4183,8 @@ function sameDraftContent(stored: string, content: SaveDraft["content"]) {
 }
 
 export type { SyncPage, ConversationKey };
+
+// Commands are claimed highest priority first, then in admission order.
+function commandPriority(priority: SubmitMetadataCommand["priority"]) {
+  return priority === "interactive" ? 1 : 0;
+}
