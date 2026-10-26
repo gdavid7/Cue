@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
+  createGmailQuotaStats,
   OPEN_THREAD_GMAIL_WAIT_MS,
-  runWithGmailWaitBudget,
+  runWithGmailQuota,
 } from "@/utils/gmail/quota";
 import {
   getInboxInsights,
@@ -87,13 +88,29 @@ export const GET = withEmailProvider("user/inbox-insights", async (request) => {
       emailProvider: request.emailProvider,
       logger: request.logger,
     });
-  const result = isOpenThread
-    ? await runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, load, {
-        priority: "interactive",
-      })
-    : await runWithGmailWaitBudget(BACKGROUND_GMAIL_WAIT_MS, load);
-  request.logger = request.logger.with({
-    deferredCount: result.deferred?.messageIds.length ?? 0,
-  });
-  return NextResponse.json(result satisfies GetInboxInsightsResponse);
+  // `waitMs` on "Request completed" sums the gate's sleeps with the
+  // in-flight slot queue's and retry backoff, across reads that wait side by
+  // side; the gate's own share is logged apart so the two can be told apart
+  // (CP-1d). A deferred request still logs what it waited.
+  const gate = createGmailQuotaStats();
+  try {
+    const result = await runWithGmailQuota(
+      {
+        priority: isOpenThread ? "interactive" : "background",
+        maxTotalWaitMs: isOpenThread
+          ? OPEN_THREAD_GMAIL_WAIT_MS
+          : BACKGROUND_GMAIL_WAIT_MS,
+        stats: gate,
+      },
+      load,
+    );
+    request.logger = request.logger.with({
+      deferredCount: result.deferred?.messageIds.length ?? 0,
+    });
+    return NextResponse.json(result satisfies GetInboxInsightsResponse);
+  } finally {
+    request.logger = request.logger.with({
+      gateWaitMs: Math.round(gate.waitMs),
+    });
+  }
 });
