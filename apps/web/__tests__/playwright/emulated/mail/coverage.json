@@ -490,5 +490,10 @@
     "app/(app)/[emailAccountId]/mail/sidebar-drop.ts",
     "app/(app)/[emailAccountId]/mail/mail-drag.tsx",
     "utils/mail-engine/message-folders.ts"
+  ],
+  "snooze-wake-on-reply.spec.ts": [
+    "utils/snooze/wake-on-reply.ts",
+    "utils/snooze/unsnooze.ts",
+    "utils/webhook/process-history-item.ts"
   ]
 }

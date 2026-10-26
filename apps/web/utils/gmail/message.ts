@@ -173,7 +173,8 @@ export async function getMessageByRfc822Id(
 
   const message = response.data.messages?.[0];
   if (!message?.id) {
-    logger.error("No message found for RFC822 Message-ID", {
+    // A miss is ordinary, such as a reply to mail this mailbox never had.
+    logger.trace("No message found for RFC822 Message-ID", {
       rfc822MessageId,
     });
     return null;

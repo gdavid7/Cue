@@ -31,6 +31,7 @@ import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isTransientMessageProcessingError } from "@/utils/webhook/message-processing-failure";
+import { wakeSnoozedThreadOnReply } from "@/utils/snooze/wake-on-reply";
 
 export type SharedProcessHistoryOptions = {
   provider: EmailProvider;
@@ -364,6 +365,28 @@ export async function processHistoryItem(
       );
     }
 
+    // Mute returned above, so it wins. A wake is new mail like any other: the
+    // push for this message follows the usual rules. Webhooks only reach
+    // premium accounts with AI access and rules or filing, so elsewhere a
+    // snooze runs to its time.
+    if (!options.isUpdate) {
+      try {
+        await wakeSnoozedThreadOnReply({
+          emailAccount,
+          message: parsedMessage,
+          provider,
+          logger,
+        });
+      } catch (error) {
+        // The conversation still comes back when its snooze ends.
+        const throttled =
+          isEmailProviderRateLimitError({ error, provider: provider.name }) ||
+          isGmailCallDeferredError(error);
+        if (throttled)
+          logger.warn("Throttled waking a snoozed conversation", { error });
+        else logger.error("Failed to wake a snoozed conversation", { error });
+      }
+    }
     scheduleWebPush();
 
     // Process attachments for document filing (runs in parallel with rules if both enabled)
