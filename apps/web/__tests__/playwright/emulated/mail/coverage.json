@@ -500,5 +500,15 @@
     "utils/mail-api/new-mail-reactions.ts",
     "app/api/mail/v1/accounts/[accountId]/enumeration/route.ts",
     "utils/mute/archive-muted-message.ts"
+  ],
+  "mute.spec.ts": [
+    "utils/mute/archive-muted-message.ts",
+    "utils/actions/mute.ts",
+    "utils/actions/mute.validation.ts",
+    "app/api/user/muted-threads/route.ts",
+    "app/api/user/muted-threads/ids/route.ts",
+    "app/(app)/[emailAccountId]/mail/MutedThreadList.tsx",
+    "app/(app)/[emailAccountId]/mail/use-thread-actions.ts",
+    "utils/web-notifications/muted-thread-ids.ts"
   ]
 }

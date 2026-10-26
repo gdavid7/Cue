@@ -29,11 +29,20 @@ export const metadataChangeSchema = z.discriminatedUnion("kind", [
 ]);
 export type MetadataChange = z.infer<typeof metadataChangeSchema>;
 
+/**
+ * Someone is waiting on the change, as on an undo: it is sent ahead of queued
+ * changes to other messages, never ahead of earlier ones to the same
+ * messages. Omitted, commands go in the order they were admitted. Engines
+ * that predate it ignore it and send in order.
+ */
+const commandPrioritySchema = z.literal("interactive");
+
 export const submitMetadataCommandSchema = z.object({
   accountId: accountIdSchema,
   commandId: z.string().min(1).max(128),
   targets: z.array(messageKeySchema).min(1).max(10_000),
   change: metadataChangeSchema,
+  priority: commandPrioritySchema.optional(),
 });
 export type SubmitMetadataCommand = z.infer<typeof submitMetadataCommandSchema>;
 
@@ -48,6 +57,7 @@ export const submitConversationCommandSchema = z.object({
    * and already act on every message.
    */
   wholeConversation: z.boolean().optional(),
+  priority: commandPrioritySchema.optional(),
   observedRevision: localRevisionSchema,
 });
 export type SubmitConversationCommand = z.infer<
