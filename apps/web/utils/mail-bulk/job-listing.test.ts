@@ -69,13 +69,19 @@ describe("mailBulkJobListings", () => {
 
   it("sweeps every account's listings untouched for a day", async () => {
     prisma.mailBulkJobListing.deleteMany.mockResolvedValue({ count: 2 });
-    const before = Date.now();
+    // A real clock can tick between reading "now" here and in the sweep.
+    vi.useFakeTimers({ now: new Date("2026-10-26T12:00:00Z"), toFake: ["Date"] });
 
-    await expect(mailBulkJobListings.deleteAbandoned()).resolves.toBe(2);
+    try {
+      await expect(mailBulkJobListings.deleteAbandoned()).resolves.toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const [args] = prisma.mailBulkJobListing.deleteMany.mock.calls[0];
-    const cutoff = (args?.where?.updatedAt as { lt: Date }).lt.getTime();
     expect(Object.keys(args?.where ?? {})).toEqual(["updatedAt"]);
-    expect(before - cutoff).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+    expect((args?.where?.updatedAt as { lt: Date }).lt).toEqual(
+      new Date("2026-10-25T12:00:00Z"),
+    );
   });
 });
