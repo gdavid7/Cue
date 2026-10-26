@@ -3,6 +3,8 @@ import type { MailStore } from "@inboxzero/mail-core/ports/mail-store";
 import type { LeftOpenDraftsQuery } from "@inboxzero/mail-core/queries";
 import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { createNodeSqliteDriver } from "./node-sqlite";
+import type { SqlValue } from "./driver";
+import { readLeftOpenDrafts } from "./left-open-drafts";
 import { createSqliteMailStore } from "./store";
 
 const HOUR = 3_600_000;
@@ -92,46 +94,94 @@ describe("readLeftOpenDrafts", () => {
     expect(await read(store)).toEqual([]);
   });
 
-  it("never lists a Cue suggestion the user hasn't edited, which stays in Cue", async () => {
+  it("is gone once the draft is deleted", async () => {
     const store = await setup();
-    // A composer opened on Cue's reply keeps it on this device only; it
-    // reaches the mailbox as a draft once the user changes it.
-    expect(
-      await store.saveDraft({
-        key: { accountId: "a", draftId: "m1:reply" },
-        expectedRevision: null,
-        content: {
-          to: ["ann@example.com"],
-          cc: [],
-          bcc: [],
-          subject: "Re: Plans",
-          editableHtml: "<p>Sounds good, see you then.</p>",
-          quotedHtml: "",
-          conversationId: "c1",
-          clientState: JSON.stringify({
-            startedFrom: { reply: "Sounds good, see you then." },
-          }),
-        },
-      }),
-    ).toMatchObject({ status: "saved" });
+    await write(store, [draft({ id: "d", at: NOW - DAY })]);
+    expect(await read(store)).toHaveLength(1);
+
     await write(store, [
-      draft({
-        id: "m1",
-        conversationId: "c1",
-        at: NOW - DAY,
-        roles: ["inbox"],
-      }),
+      {
+        kind: "message_deleted",
+        key: { accountId: "a", messageId: "d" },
+        evidence: "test",
+      },
     ]);
 
     expect(await read(store)).toEqual([]);
+  });
 
-    // Edited, it is the user's draft in the mailbox.
+  it("follows a draft saved again under a new message id", async () => {
+    const store = await setup();
     await write(store, [
-      draft({ id: "edited", conversationId: "c1", at: NOW - 2 * HOUR }),
+      draft({ id: "v1", conversationId: "c", at: NOW - DAY }),
     ]);
-    expect((await read(store)).map((item) => item.messageId)).toEqual([
-      "edited",
+
+    // Gmail saves a draft as a new message and drops the old one.
+    await write(store, [
+      draft({ id: "v2", conversationId: "c", at: NOW - 2 * HOUR }),
+      {
+        kind: "message_deleted",
+        key: { accountId: "a", messageId: "v1" },
+        evidence: "test",
+      },
     ]);
+    expect(await read(store)).toMatchObject([
+      { messageId: "v2", savedAtMs: NOW - 2 * HOUR },
+    ]);
+
+    // Saved again just now, it is being written, and the lane leaves it.
+    await write(store, [
+      draft({ id: "v3", conversationId: "c", at: NOW - 60_000 }),
+      {
+        kind: "message_deleted",
+        key: { accountId: "a", messageId: "v2" },
+        evidence: "test",
+      },
+    ]);
+    expect(await read(store)).toEqual([]);
+  });
+
+  it("stops at the limit in the store, past drafts it skips", async () => {
+    const store = await setup();
+    await write(store, [
+      draft({ id: "recent", at: NOW - 60_000 }),
+      draft({ id: "blank", at: NOW - 2 * HOUR, preview: "\u00a0\n" }),
+      draft({ id: "d1", at: NOW - 3 * HOUR }),
+      draft({ id: "d2", at: NOW - 4 * HOUR }),
+      draft({ id: "d3", at: NOW - 5 * HOUR }),
+    ]);
+
+    expect(
+      (await read(store, { limit: 2 })).map((item) => item.messageId),
+    ).toEqual(["d1", "d2"]);
+  });
+
+  it("reads drafts through their own index", async () => {
+    const driver = createNodeSqliteDriver();
+    stores.push(await createSqliteMailStore(driver));
+    const plan = await driver.read(async (tx) => {
+      const statements: { sql: string; params?: readonly SqlValue[] }[] = [];
+      await readLeftOpenDrafts(
+        {
+          exec: (sql) => tx.exec(sql),
+          execute: (sql, params) => tx.execute(sql, params),
+          query: (sql, params) => {
+            statements.push({ sql, params });
+            return tx.query(sql, params);
+          },
+        },
+        { accountIds: ["a"], savedBeforeMs: SAVED_BEFORE, limit: 5 },
+      );
+      const [read] = statements;
+      return tx.query(`EXPLAIN QUERY PLAN ${read?.sql}`, read?.params);
+    });
+    const details = plan.map((row) => String(row.detail));
+
+    expect(details).toContainEqual(
+      expect.stringMatching(
+        /^SEARCH effective_messages USING INDEX effective_drafts_order \(account_id=\?\)/,
+      ),
+    );
   });
 
   it("reads each asked account, newest first across them, up to the limit", async () => {
