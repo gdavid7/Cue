@@ -12,10 +12,15 @@ const mocks = vi.hoisted(() => ({
   toastUndo: vi.fn(),
   setSenderStatusAction: vi.fn(),
   unsubscribeSenderAction: vi.fn(),
+  keys: [] as string[],
+  passiveLoading: false,
+  askedStats: undefined as typeof mocks.stats | undefined,
+  askedMutate: vi.fn(),
   stats: {
     newsletters: [] as unknown[],
     searchedSenderStatus: null as string | null,
     filtersAvailable: true,
+    filtersFailure: undefined as string | undefined,
   },
 }));
 
@@ -28,11 +33,19 @@ vi.mock("sonner", () => ({
   }),
 }));
 vi.mock("swr", () => ({
-  default: () => ({
-    data: mocks.stats,
-    mutate: vi.fn().mockResolvedValue(undefined),
-    isLoading: false,
-  }),
+  default: (key: unknown) => {
+    const interactive =
+      Array.isArray(key) && String(key[0]).includes("interactive=true");
+    if (Array.isArray(key)) mocks.keys.push(String(key[0]));
+    return {
+      data: interactive ? mocks.askedStats : mocks.stats,
+      mutate: interactive
+        ? mocks.askedMutate
+        : vi.fn().mockResolvedValue(undefined),
+      isLoading: interactive ? false : mocks.passiveLoading,
+    };
+  },
+  useSWRConfig: () => ({ mutate: vi.fn() }),
 }));
 vi.mock("@/components/Toast", () => ({ toastUndo: mocks.toastUndo }));
 vi.mock("@/app/(app)/premium/PremiumModal", () => ({
@@ -61,12 +74,66 @@ describe("useUnsubscribeSender", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.stats.searchedSenderStatus = null;
+    mocks.stats.filtersAvailable = true;
+    mocks.stats.filtersFailure = undefined;
+    mocks.keys = [];
+    mocks.passiveLoading = false;
+    mocks.askedStats = undefined;
+    mocks.askedMutate = vi.fn().mockResolvedValue(undefined);
     mocks.setSenderStatusAction.mockResolvedValue({ data: {} });
     mocks.unsubscribeSenderAction.mockResolvedValue({
       data: { unsubscribe: { success: true } },
     });
   });
   afterEach(cleanup);
+
+  it("asks Gmail ahead of background work only when the person asks, and not after a refused grant", () => {
+    mocks.stats.filtersAvailable = false;
+    mocks.stats.filtersFailure = "permanent";
+    const { result } = renderHook(() => useUnsubscribeSender(message({})));
+    act(() => result.current.loadSenderFilters());
+    expect(askedInteractively()).toBe(false);
+
+    mocks.stats.filtersFailure = "throttled";
+    const { result: second } = renderHook(() =>
+      useUnsubscribeSender(message({})),
+    );
+    expect(askedInteractively()).toBe(false);
+    act(() => second.current.loadSenderFilters());
+    expect(askedInteractively()).toBe(true);
+  });
+
+  it("does not ask while the passive read is still loading", () => {
+    mocks.stats.filtersAvailable = false;
+    mocks.stats.filtersFailure = "throttled";
+    mocks.passiveLoading = true;
+    const { result } = renderHook(() => useUnsubscribeSender(message({})));
+
+    act(() => result.current.loadSenderFilters());
+
+    expect(askedInteractively()).toBe(false);
+  });
+
+  it("does not ask Gmail again for 15 seconds after it refused the asked-for read", () => {
+    vi.useFakeTimers();
+    mocks.stats.filtersAvailable = false;
+    mocks.stats.filtersFailure = "throttled";
+    const { result, rerender } = renderHook(() =>
+      useUnsubscribeSender(message({})),
+    );
+    act(() => result.current.loadSenderFilters());
+    mocks.askedStats = { ...mocks.stats };
+    rerender();
+
+    vi.advanceTimersByTime(5000);
+    act(() => result.current.loadSenderFilters());
+    expect(mocks.askedMutate).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(11_000);
+    act(() => result.current.loadSenderFilters());
+    expect(mocks.askedMutate).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
 
   it("offers undo after blocking a sender and restores the inbox on undo", async () => {
     const { result } = renderHook(() => useUnsubscribeSender(message({})));
@@ -138,4 +205,8 @@ function message(headers: Record<string, string>) {
     threadId: "thread-1",
     headers: { from: "News <news@example.com>", ...headers },
   } as Pick<ParsedMessage, "headers" | "threadId">;
+}
+
+function askedInteractively() {
+  return mocks.keys.some((key) => key.includes("interactive=true"));
 }
