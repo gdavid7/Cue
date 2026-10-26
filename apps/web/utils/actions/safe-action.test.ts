@@ -1,7 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { after } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureException } from "@/utils/error";
+import { RECONNECT_REQUIRED_MESSAGE } from "@/utils/config";
+import {
+  captureException,
+  ReconnectRequiredError,
+  SafeError,
+} from "@/utils/error";
 import {
   currentGmailQuotaContext,
   GmailCallDeferredError,
@@ -47,6 +52,24 @@ describe("server actions and the Gmail quota gate", () => {
     expect(result?.serverError).toBe(
       "Gmail is busy for this account. Try again in about 12 seconds.",
     );
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("answers a revoked mailbox with the reconnect message, without reporting it", async () => {
+    const revoked = await actionClientUser
+      .metadata({ name: "archiveThread" })
+      .action(async () => {
+        throw new ReconnectRequiredError();
+      })();
+    const other = await actionClientUser
+      .metadata({ name: "archiveThread" })
+      .action(async () => {
+        throw new SafeError("No refresh token");
+      })();
+
+    expect(revoked?.serverError).toBe(RECONNECT_REQUIRED_MESSAGE);
+    // Only the typed error is mapped, never the message text.
+    expect(other?.serverError).toBe("No refresh token");
     expect(captureException).not.toHaveBeenCalled();
   });
 

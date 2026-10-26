@@ -4,6 +4,7 @@ import {
   EMAIL_ACCOUNT_HEADER,
   MICROSOFT_AUTH_EXPIRED_ERROR_CODE,
   NO_REFRESH_TOKEN_ERROR_CODE,
+  RECONNECT_REQUIRED_MESSAGE,
 } from "@/utils/config";
 import {
   isReconnectRequired,
@@ -18,8 +19,10 @@ import {
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { isSigningOut, withSigningOutSignal } from "@/utils/signing-out";
 import {
+  hasUnsavedWorkHold,
   isSessionExpiredErrorBody,
   notifySessionExpired,
+  saveUnsavedWorkThen,
   SESSION_EXPIRED_MESSAGE,
 } from "@/utils/session-expired";
 import { fetchWithSessionRetry } from "@/utils/session-refresh";
@@ -165,7 +168,27 @@ function leaving(): Promise<never> {
   return new Promise(() => {});
 }
 
-/** Sends the account on screen to its reconnect page; offers it for any other. */
+/**
+ * A server action found a mailbox grant gone, but its result names no account.
+ * The refusal marks the account disconnected, so the account list says which.
+ */
+export function promptReconnectForDisconnected(
+  accounts: ReadonlyArray<{
+    id: string;
+    account: { disconnectedAt: string | null };
+  }>,
+  viewedEmailAccountId: string | null | undefined,
+) {
+  for (const { id, account } of accounts) {
+    if (account.disconnectedAt) promptReconnect(id, viewedEmailAccountId);
+  }
+}
+
+/**
+ * Sends the account on screen to its reconnect page; offers it for any other.
+ * While a composer is open the viewed account is offered too, so leaving never
+ * takes what the user is typing.
+ */
 function promptReconnect(
   emailAccountId: string,
   viewedEmailAccountId: string | null | undefined,
@@ -173,27 +196,42 @@ function promptReconnect(
   const reconnectUrl = getPermissionsConsentPath(emailAccountId, {
     expired: true,
   });
-  if (emailAccountId === viewedEmailAccountId) {
+  const viewed = emailAccountId === viewedEmailAccountId;
+  if (viewed && !hasUnsavedWorkHold()) {
     redirectToSafeUrl(reconnectUrl);
     return true;
   }
-  offerReconnect(emailAccountId, reconnectUrl);
+  offerReconnect(emailAccountId, reconnectUrl, viewed);
   return false;
 }
 
-function offerReconnect(emailAccountId: string, reconnectUrl: string) {
+function offerReconnect(
+  emailAccountId: string,
+  reconnectUrl: string,
+  viewed: boolean,
+) {
   if (reconnectOffered.has(emailAccountId)) return;
   reconnectOffered.add(emailAccountId);
+  const action = {
+    label: "Reconnect",
+    onClick: () => saveUnsavedWorkThen(() => redirectToSafeUrl(reconnectUrl)),
+  };
+  if (viewed) {
+    toastError({
+      id: `reconnect-${emailAccountId}`,
+      description: RECONNECT_REQUIRED_MESSAGE,
+      duration: Number.POSITIVE_INFINITY,
+      action,
+    });
+    return;
+  }
   toastError({
     id: `reconnect-${emailAccountId}`,
     title: "One of your inboxes needs reconnecting",
     description:
       "Cue lost access to it, so its mail may be missing. Your other inboxes still work.",
     duration: 30_000,
-    action: {
-      label: "Reconnect",
-      onClick: () => redirectToSafeUrl(reconnectUrl),
-    },
+    action,
   });
 }
 

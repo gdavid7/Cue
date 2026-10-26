@@ -100,13 +100,18 @@ export async function scheduleGmailHistoryCatchUp({
   );
   // Runs deferred to the same future time, such as a failed message's retry,
   // share one delivery however many pushes defer to it. A delivery that
-  // arrives a little early isn't deferred into its own window, where it would
-  // be dropped as a duplicate.
-  const windowStart =
-    retryAt && retryAt.getTime() > now + RETRY_WINDOW_MARGIN_MS
-      ? retryAt
-      : notBefore;
-  const window = Math.floor(windowStart.getTime() / CATCH_UP_DELAY_MS);
+  // arrives a little early is deferred into a window after its own, where it
+  // would otherwise be dropped as a duplicate.
+  const retryWindow = retryAt
+    ? Math.floor(retryAt.getTime() / CATCH_UP_DELAY_MS)
+    : undefined;
+  const arrivedEarly =
+    retryAt !== undefined && retryAt.getTime() <= now + RETRY_WINDOW_MARGIN_MS;
+  const notBeforeWindow = Math.floor(notBefore.getTime() / CATCH_UP_DELAY_MS);
+  const window =
+    arrivedEarly && retryWindow !== undefined
+      ? Math.max(notBeforeWindow, retryWindow + 1)
+      : (retryWindow ?? notBeforeWindow);
   await raiseGmailHistoryCatchUpTarget(emailAccountId, historyId, logger);
   try {
     const scheduled = await publishToQstashAt({
