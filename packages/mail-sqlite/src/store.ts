@@ -13,6 +13,7 @@ import {
   writeImportantPerson,
 } from "./important-people";
 import { readPersonCard } from "./person-card";
+import { readRecentBounces } from "./recent-bounces";
 import { readWaitingOnYou } from "./waiting-on-you";
 import { readSenderHistory } from "./sender-history";
 import {
@@ -232,6 +233,9 @@ export async function createSqliteMailStore(
     },
     readWaitingOnYou(query) {
       return driver.read((tx) => readWaitingOnYou(tx, query));
+    },
+    readRecentBounces(query) {
+      return driver.read((tx) => readRecentBounces(tx, query));
     },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);

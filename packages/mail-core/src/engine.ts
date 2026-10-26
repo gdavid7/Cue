@@ -62,6 +62,8 @@ import type {
   NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
+  RecentBounce,
+  RecentBouncesQuery,
   SenderHistory,
   SenderHistoryQuery,
   QueryHandle,
@@ -245,6 +247,11 @@ export type MailClient = {
   queryWaitingOnYou?(
     query: WaitingOnYouQuery,
   ): Promise<WaitingOnYouConversation[]>;
+  /**
+   * What Today's "Didn't send" cards show, read once from the local store.
+   * Hosts that can't answer off the UI thread leave it out.
+   */
+  queryRecentBounces?(query: RecentBouncesQuery): Promise<RecentBounce[]>;
   /** The people the user starred as Important in these accounts. */
   queryImportantPeople?(accountIds: string[]): Promise<ImportantPerson[]>;
   /**
@@ -462,6 +469,9 @@ export function createMailEngine(input: {
     },
     queryWaitingOnYou(query) {
       return store.readWaitingOnYou(query);
+    },
+    queryRecentBounces(query) {
+      return store.readRecentBounces(query);
     },
     queryImportantPeople(accountIds) {
       return store.readImportantPeople(accountIds);

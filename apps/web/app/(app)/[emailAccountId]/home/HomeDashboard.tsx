@@ -85,6 +85,7 @@ import {
   replyTrackingOffNotice,
 } from "./CueNotice";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
+import { BounceNotices } from "./BounceNotices";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatSenders, formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
@@ -100,6 +101,7 @@ import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
 import { useWaitingOnYou, waitingOnYouScope } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
+import { bounceConversationKey, useRecentBounces } from "./use-recent-bounces";
 import { useImportantPeople } from "@/hooks/useImportantPeople";
 import { useAwaySummary, WhileYouWereAway } from "./WhileYouWereAway";
 
@@ -268,12 +270,26 @@ export function HomeDashboard() {
     named: Boolean(allInboxesAccounts),
     ...waitingOnYouScopeState,
   });
+  const bounces = useRecentBounces({ accounts: localAccounts });
+  // A bounce's conversation waits on no one: its card says it didn't send.
+  const bounced = bounces.conversations;
+  const isBounced = useCallback(
+    (thread: TodayThread) =>
+      bounced.has(
+        bounceConversationKey(
+          thread.account?.id ?? emailAccountId,
+          thread.threadId,
+        ),
+      ),
+    [bounced, emailAccountId],
+  );
   // Each conversation shows once on Today: never one it already lists as
   // needing a reply or waiting on someone else, in any of the mailboxes.
   // Across accounts, every account's own lists: the merge caps each lane,
   // and a copy past the cap is still Cue's to answer.
   const waitingOnYouShown = useMemo(() => {
-    if (!data) return waitingOnYou.threads;
+    const threads = waitingOnYou.threads.filter((thread) => !isBounced(thread));
+    if (!data) return threads;
     const listed: TodayThread[] = merged
       ? localAccounts.flatMap((account) => {
           const home = feeds[account.id]?.data;
@@ -287,12 +303,12 @@ export function HomeDashboard() {
       : [...data.needsYou, ...data.waiting];
     const rows = new Set(listed.map(rowKey));
     const messages = new Set(listed.map(todayConversationKey));
-    return waitingOnYou.threads.filter(
+    return threads.filter(
       (thread) =>
         !rows.has(rowKey(thread)) &&
         !messages.has(todayConversationKey(thread)),
     );
-  }, [data, merged, localAccounts, feeds, waitingOnYou.threads]);
+  }, [data, merged, localAccounts, feeds, waitingOnYou.threads, isBounced]);
   const visibleWaitingOnYou = useMemo(
     () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
     [waitingOnYouShown, hidden],
@@ -322,16 +338,27 @@ export function HomeDashboard() {
     // so does a message that reached two mailboxes.
     const shown = new Set(waitingOnYouShown.map(rowKey));
     const shownMessages = new Set(waitingOnYouShown.map(todayConversationKey));
+    const shownBounces = new Set(
+      bounces.bounces.map((bounce) =>
+        bounceConversationKey(bounce.accountId, bounce.conversationId),
+      ),
+    );
     const notShown = (thread: TodayThread) =>
       !shown.has(rowKey(thread)) &&
-      !shownMessages.has(todayConversationKey(thread));
+      !shownMessages.has(todayConversationKey(thread)) &&
+      !shownBounces.has(
+        bounceConversationKey(
+          thread.account?.id ?? emailAccountId,
+          thread.threadId,
+        ),
+      );
     if (!localInbox) return (data?.alsoInInbox ?? []).filter(notShown);
     for (const thread of data?.needsYou ?? []) {
       shown.add(rowKey(thread));
       shownMessages.add(todayConversationKey(thread));
     }
     return localInbox.filter(notShown);
-  }, [data, localInbox, waitingOnYouShown]);
+  }, [data, localInbox, waitingOnYouShown, bounces.bounces, emailAccountId]);
   const visibleAlsoInInbox = useMemo(
     () =>
       alsoInInbox
@@ -348,7 +375,7 @@ export function HomeDashboard() {
         isImportant(thread.account?.id ?? emailAccountId, thread.fromEmail),
       ),
       waitingOnYou: visibleWaitingOnYou,
-      waiting: visible(data.waiting),
+      waiting: visible(data.waiting).filter((thread) => !isBounced(thread)),
       alsoInInbox: visibleAlsoInInbox,
       reading: visible(data.reading),
     };
@@ -359,6 +386,7 @@ export function HomeDashboard() {
     visibleAlsoInInbox,
     isImportant,
     emailAccountId,
+    isBounced,
   ]);
   const notice =
     data && lanes && !earlierDay
@@ -830,6 +858,22 @@ export function HomeDashboard() {
           </p>
         ) : null}
       </header>
+
+      {/* First: a message that didn't go out is the day's most urgent news.
+          From local mail, so it shows before Today's answer. */}
+      <BounceNotices
+        accountColorIndexById={accountColorIndexById}
+        accounts={allInboxesAccounts ? localAccounts : undefined}
+        bounces={bounces.bounces}
+        href={(bounce) =>
+          threadHref({
+            threadId: bounce.conversationId,
+            account: allInboxesAccounts ? { id: bounce.accountId } : undefined,
+          })
+        }
+        onDismiss={bounces.dismiss}
+        returnFocusRef={rootRef}
+      />
 
       <GetStartedChecklist />
 
