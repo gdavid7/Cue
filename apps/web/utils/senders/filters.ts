@@ -3,7 +3,10 @@ import { canonicalizeEmailAddress, extractEmailAddress } from "@/utils/email";
 import prisma from "@/utils/prisma";
 import { NewsletterStatus } from "@/generated/prisma/enums";
 import { GmailLabel } from "@/utils/gmail/label";
-import { getGmailCallDeferredError } from "@/utils/gmail/quota";
+import {
+  getGmailCallDeferredError,
+  isGmailQuotaRefusal,
+} from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 import {
   isGmailInsufficientPermissionsError,
@@ -64,11 +67,7 @@ export async function getEmailFilters(
 
 // The provider refused for now; asking again soon only deepens the refusal.
 function isThrottledFiltersError(error: unknown) {
-  return (
-    isGmailRateLimitExceededError(error) ||
-    isGmailQuotaExceededError(error) ||
-    isOutlookThrottlingError(error)
-  );
+  return isGmailQuotaRefusal(error) || isOutlookThrottlingError(error);
 }
 
 // A revoked grant or missing scope needs the user to act; rate limits and

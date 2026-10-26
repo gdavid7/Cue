@@ -13,13 +13,9 @@ const mocks = vi.hoisted(() => ({
   setSenderStatusAction: vi.fn(),
   unsubscribeSenderAction: vi.fn(),
   keys: [] as string[],
-  swrOptions: undefined as
-    | {
-        refreshInterval?: (latest?: {
-          filtersFailure?: "permanent" | "throttled" | "error";
-        }) => number;
-      }
-    | undefined,
+  passiveLoading: false,
+  askedStats: undefined as typeof mocks.stats | undefined,
+  askedMutate: vi.fn(),
   stats: {
     newsletters: [] as unknown[],
     searchedSenderStatus: null as string | null,
@@ -37,16 +33,19 @@ vi.mock("sonner", () => ({
   }),
 }));
 vi.mock("swr", () => ({
-  default: (key: unknown, options: typeof mocks.swrOptions) => {
+  default: (key: unknown) => {
+    const interactive =
+      Array.isArray(key) && String(key[0]).includes("interactive=true");
     if (Array.isArray(key)) mocks.keys.push(String(key[0]));
-    if (Array.isArray(key) && !String(key[0]).includes("interactive"))
-      mocks.swrOptions = options;
     return {
-      data: mocks.stats,
-      mutate: vi.fn().mockResolvedValue(undefined),
-      isLoading: false,
+      data: interactive ? mocks.askedStats : mocks.stats,
+      mutate: interactive
+        ? mocks.askedMutate
+        : vi.fn().mockResolvedValue(undefined),
+      isLoading: interactive ? false : mocks.passiveLoading,
     };
   },
+  useSWRConfig: () => ({ mutate: vi.fn() }),
 }));
 vi.mock("@/components/Toast", () => ({ toastUndo: mocks.toastUndo }));
 vi.mock("@/app/(app)/premium/PremiumModal", () => ({
@@ -78,6 +77,9 @@ describe("useUnsubscribeSender", () => {
     mocks.stats.filtersAvailable = true;
     mocks.stats.filtersFailure = undefined;
     mocks.keys = [];
+    mocks.passiveLoading = false;
+    mocks.askedStats = undefined;
+    mocks.askedMutate = vi.fn().mockResolvedValue(undefined);
     mocks.setSenderStatusAction.mockResolvedValue({ data: {} });
     mocks.unsubscribeSenderAction.mockResolvedValue({
       data: { unsubscribe: { success: true } },
@@ -85,47 +87,52 @@ describe("useUnsubscribeSender", () => {
   });
   afterEach(cleanup);
 
-  it("asks the passive read again a few times with a growing wait for a passing error, then stops", () => {
-    renderHook(() => useUnsubscribeSender(message({})));
-    const refreshInterval = mocks.swrOptions?.refreshInterval;
-    const failed = { filtersFailure: "error" as const };
-
-    expect([0, 1, 2, 3, 4].map(() => refreshInterval?.(failed))).toEqual([
-      5000, 15_000, 45_000, 0, 0,
-    ]);
-  });
-
-  it.each([
-    "permanent",
-    "throttled",
-  ] as const)("does not ask again after a %s refusal", (filtersFailure) => {
-    renderHook(() => useUnsubscribeSender(message({})));
-    const refreshInterval = mocks.swrOptions?.refreshInterval;
-
-    expect(refreshInterval?.({ filtersFailure })).toBe(0);
-    expect(refreshInterval?.(undefined)).toBe(0);
-  });
-
-  it("reads the filters ahead of background work only when asked, and not after a refused grant", () => {
+  it("asks Gmail ahead of background work only when the person asks, and not after a refused grant", () => {
     mocks.stats.filtersAvailable = false;
     mocks.stats.filtersFailure = "permanent";
     const { result } = renderHook(() => useUnsubscribeSender(message({})));
     act(() => result.current.loadSenderFilters());
-    expect(mocks.keys.some((key) => key.includes("interactive=true"))).toBe(
-      false,
-    );
+    expect(askedInteractively()).toBe(false);
 
     mocks.stats.filtersFailure = "throttled";
     const { result: second } = renderHook(() =>
       useUnsubscribeSender(message({})),
     );
-    expect(mocks.keys.some((key) => key.includes("interactive=true"))).toBe(
-      false,
-    );
+    expect(askedInteractively()).toBe(false);
     act(() => second.current.loadSenderFilters());
-    expect(mocks.keys.some((key) => key.includes("interactive=true"))).toBe(
-      true,
+    expect(askedInteractively()).toBe(true);
+  });
+
+  it("does not ask while the passive read is still loading", () => {
+    mocks.stats.filtersAvailable = false;
+    mocks.stats.filtersFailure = "throttled";
+    mocks.passiveLoading = true;
+    const { result } = renderHook(() => useUnsubscribeSender(message({})));
+
+    act(() => result.current.loadSenderFilters());
+
+    expect(askedInteractively()).toBe(false);
+  });
+
+  it("does not ask Gmail again for 15 seconds after it refused the asked-for read", () => {
+    vi.useFakeTimers();
+    mocks.stats.filtersAvailable = false;
+    mocks.stats.filtersFailure = "throttled";
+    const { result, rerender } = renderHook(() =>
+      useUnsubscribeSender(message({})),
     );
+    act(() => result.current.loadSenderFilters());
+    mocks.askedStats = { ...mocks.stats };
+    rerender();
+
+    vi.advanceTimersByTime(5000);
+    act(() => result.current.loadSenderFilters());
+    expect(mocks.askedMutate).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(11_000);
+    act(() => result.current.loadSenderFilters());
+    expect(mocks.askedMutate).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
   it("offers undo after blocking a sender and restores the inbox on undo", async () => {
@@ -198,4 +205,8 @@ function message(headers: Record<string, string>) {
     threadId: "thread-1",
     headers: { from: "News <news@example.com>", ...headers },
   } as Pick<ParsedMessage, "headers" | "threadId">;
+}
+
+function askedInteractively() {
+  return mocks.keys.some((key) => key.includes("interactive=true"));
 }

@@ -125,11 +125,12 @@ export function ThreadActionsMenu({
   } = useSenderCommands(message);
   // The passive read of the sender's filters runs behind other work. Opening
   // the menu is the person asking, so a read it could not give is asked again
-  // ahead of that work.
+  // ahead of that work. It also asks once the passive read comes back while
+  // the menu is open, since the person is waiting on it.
   const askForSenderFilters = useEffectEvent(loadSenderFilters);
   useEffect(() => {
-    if (open) askForSenderFilters();
-  }, [open]);
+    if (open && !isAutoArchiveStatusLoading) askForSenderFilters();
+  }, [open, isAutoArchiveStatusLoading]);
   // The team comment box takes focus, so it opens once the menu has closed:
   // while open, the menu keeps focus inside itself, and on closing it hands
   // focus back to its trigger.

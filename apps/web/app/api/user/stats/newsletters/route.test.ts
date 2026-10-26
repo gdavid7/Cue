@@ -31,6 +31,7 @@ vi.mock("@/utils/middleware", async () => {
 
 import {
   currentGmailQuotaContext,
+  GmailCallDeferredError,
   OPEN_THREAD_GMAIL_WAIT_MS,
 } from "@/utils/gmail/quota";
 import { GET } from "./route";
@@ -196,6 +197,21 @@ describe("GET /api/user/stats/newsletters", () => {
       "permanent",
     ],
     ["a backend error", new Error("Backend Error"), "error"],
+    [
+      "a Gmail rate limit",
+      Object.assign(new Error("User-rate limit exceeded"), { code: 429 }),
+      "throttled",
+    ],
+    [
+      "Outlook throttling",
+      Object.assign(new Error("slow down"), { statusCode: 429 }),
+      "throttled",
+    ],
+    [
+      "a call the Gmail budget deferred",
+      new GmailCallDeferredError(88_000, "background", "per_minute_budget"),
+      "throttled",
+    ],
   ])("says why the filters were unreadable: %s", async (_name, error, failure) => {
     mockEmailProvider.getFiltersList.mockRejectedValue(error);
     vi.spyOn(console, "error").mockImplementation(() => {});

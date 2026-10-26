@@ -66,7 +66,7 @@ async function getEmailMessages(
     logger: Logger;
   } & NewsletterStatsQuery,
 ) {
-  const { emailAccountId, emailProvider, logger } = options;
+  const { emailAccountId, emailProvider } = options;
   const types = getTypeFilters(options.types);
 
   const [senderStats, filtersResult, newsletterStatuses] = await Promise.all([
