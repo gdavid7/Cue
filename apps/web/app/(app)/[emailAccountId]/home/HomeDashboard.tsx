@@ -271,8 +271,20 @@ export function HomeDashboard() {
     ...waitingOnYouScopeState,
   });
   const bounces = useRecentBounces({ accounts: localAccounts });
-  // A bounce's conversation waits on no one: its card says it didn't send.
-  const bounced = bounces.conversations;
+  // While a card says a conversation's mail didn't send, the conversation
+  // waits on no one and shows only as the card. Not once someone else wrote
+  // after the bounce: that conversation is live.
+  const bounced = useMemo(
+    () =>
+      new Set(
+        bounces.bounces
+          .filter((bounce) => !bounce.answeredAfter)
+          .map((bounce) =>
+            bounceConversationKey(bounce.accountId, bounce.conversationId),
+          ),
+      ),
+    [bounces.bounces],
+  );
   const isBounced = useCallback(
     (thread: TodayThread) =>
       bounced.has(
@@ -288,7 +300,7 @@ export function HomeDashboard() {
   // Across accounts, every account's own lists: the merge caps each lane,
   // and a copy past the cap is still Cue's to answer.
   const waitingOnYouShown = useMemo(() => {
-    const threads = waitingOnYou.threads.filter((thread) => !isBounced(thread));
+    const threads = waitingOnYou.threads;
     if (!data) return threads;
     const listed: TodayThread[] = merged
       ? localAccounts.flatMap((account) => {
@@ -308,7 +320,7 @@ export function HomeDashboard() {
         !rows.has(rowKey(thread)) &&
         !messages.has(todayConversationKey(thread)),
     );
-  }, [data, merged, localAccounts, feeds, waitingOnYou.threads, isBounced]);
+  }, [data, merged, localAccounts, feeds, waitingOnYou.threads]);
   const visibleWaitingOnYou = useMemo(
     () => waitingOnYouShown.filter((thread) => !hidden.has(rowKey(thread))),
     [waitingOnYouShown, hidden],
@@ -338,27 +350,17 @@ export function HomeDashboard() {
     // so does a message that reached two mailboxes.
     const shown = new Set(waitingOnYouShown.map(rowKey));
     const shownMessages = new Set(waitingOnYouShown.map(todayConversationKey));
-    const shownBounces = new Set(
-      bounces.bounces.map((bounce) =>
-        bounceConversationKey(bounce.accountId, bounce.conversationId),
-      ),
-    );
     const notShown = (thread: TodayThread) =>
       !shown.has(rowKey(thread)) &&
       !shownMessages.has(todayConversationKey(thread)) &&
-      !shownBounces.has(
-        bounceConversationKey(
-          thread.account?.id ?? emailAccountId,
-          thread.threadId,
-        ),
-      );
+      !isBounced(thread);
     if (!localInbox) return (data?.alsoInInbox ?? []).filter(notShown);
     for (const thread of data?.needsYou ?? []) {
       shown.add(rowKey(thread));
       shownMessages.add(todayConversationKey(thread));
     }
     return localInbox.filter(notShown);
-  }, [data, localInbox, waitingOnYouShown, bounces.bounces, emailAccountId]);
+  }, [data, localInbox, waitingOnYouShown, isBounced]);
   const visibleAlsoInInbox = useMemo(
     () =>
       alsoInInbox

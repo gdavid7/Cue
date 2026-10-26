@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
+import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type {
   ConversationQuery,
   RecentBounce,
@@ -41,18 +42,20 @@ const dismissals = createBrowserCache<true>({
  * isn't shown and then found to have been answered by a later send. A
  * dismissed bounce stays hidden in this browser until a newer one arrives
  * in its conversation.
- *
- * `conversations` keys every recent bounce's conversation, dismissed or
- * not: none of them is waiting on anyone's reply.
  */
 export function useRecentBounces({ accounts }: { accounts: TodayAccount[] }): {
   bounces: TodayBounce[];
-  conversations: ReadonlySet<string>;
   dismiss: (bounce: TodayBounce) => void;
 } {
   const client = useOptionalMailClient();
   const { data: user } = useUser();
-  const queryRecentBounces = client?.queryRecentBounces?.bind(client);
+  // A tab relaying an older engine may not answer it.
+  const queryRecentBounces = mailClientSupports(
+    client,
+    "method:queryRecentBounces",
+  )
+    ? client?.queryRecentBounces?.bind(client)
+    : undefined;
   const active = Boolean(queryRecentBounces) && accounts.length > 0;
   const accountIds = useMemo(
     () => accounts.map((account) => account.id),
@@ -114,7 +117,7 @@ export function useRecentBounces({ accounts }: { accounts: TodayAccount[] }): {
     return recent
       .filter(
         (bounce) =>
-          !dismissedHere.has(`${bounce.accountId}:${dismissalKey(bounce)}`) &&
+          !dismissedHere.has(dismissalKey(bounce)) &&
           !dismissals.get(bounce.accountId, dismissalKey(bounce)),
       )
       .slice(0, SHOWN_LIMIT)
@@ -123,24 +126,12 @@ export function useRecentBounces({ accounts }: { accounts: TodayAccount[] }): {
         title: shownSubject(bounce.sentSubject ?? bounce.subject),
       }));
   }, [recent, dismissedHere, userId]);
-  const conversations = useMemo(
-    () =>
-      new Set(
-        recent.map((bounce) =>
-          bounceConversationKey(bounce.accountId, bounce.conversationId),
-        ),
-      ),
-    [recent],
-  );
-
   const dismiss = useCallback((bounce: TodayBounce) => {
     dismissals.set(bounce.accountId, dismissalKey(bounce), true);
-    setDismissedHere((current) =>
-      new Set(current).add(`${bounce.accountId}:${dismissalKey(bounce)}`),
-    );
+    setDismissedHere((current) => new Set(current).add(dismissalKey(bounce)));
   }, []);
 
-  return { bounces, conversations, dismiss };
+  return { bounces, dismiss };
 }
 
 /** Which account's conversation a bounce is in, as Today's rows compare. */
@@ -153,7 +144,7 @@ export function bounceConversationKey(
 
 // By its newest bounce, so another bounce in the conversation shows again.
 function dismissalKey(bounce: RecentBounce) {
-  return `${bounce.conversationId}:${bounce.messageId}`;
+  return `${bounceConversationKey(bounce.accountId, bounce.conversationId)}\0${bounce.messageId}`;
 }
 
 function shownSubject(subject: string) {

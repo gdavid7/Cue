@@ -210,11 +210,6 @@ vi.mock("./use-recent-bounces", async (importOriginal) => {
           ...bounce,
           title: bounce.sentSubject ?? bounce.subject,
         })),
-      conversations: new Set(
-        mocks.bounces.map((bounce) =>
-          actual.bounceConversationKey(bounce.accountId, bounce.conversationId),
-        ),
-      ),
       dismiss: vi.fn(),
     }),
   };
@@ -1109,6 +1104,7 @@ describe("HomeDashboard Didn't send", () => {
         subject: "Delivery Status Notification (Failure)",
         sentSubject: "Contract draft",
         receivedAtMs: Date.now(),
+        answeredAfter: false,
       },
     ];
   });
@@ -1142,7 +1138,7 @@ describe("HomeDashboard Didn't send", () => {
     ).toBeNull();
   });
 
-  it("once dismissed, the conversation is back in the inbox list but still waits on no one", () => {
+  it("once dismissed, the conversation is back in Waiting on and the inbox list", () => {
     mocks.dismissedBounces = ["sent-bounce"];
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
@@ -1153,10 +1149,47 @@ describe("HomeDashboard Didn't send", () => {
     renderToday();
 
     expect(screen.queryByRole("list", { name: "Didn't send" })).toBeNull();
-    expect(within(lane("Waiting on")).queryByText("Contract draft")).toBeNull();
+    expect(within(lane("Waiting on")).getByText("Contract draft")).toBeTruthy();
     expect(
       within(lane("Also in your inbox")).getByText("Contract draft"),
     ).toBeTruthy();
+  });
+
+  it("leaves a conversation someone else answered after the bounce where it was", () => {
+    mocks.bounces = [{ ...mocks.bounces[0], answeredAfter: true }];
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      waiting: [thread("sent", "Contract draft")],
+      alsoInInbox: [thread("sent", "Contract draft")],
+    };
+
+    renderToday();
+
+    // The bounce is still news; the conversation is live too.
+    expect(screen.getByRole("list", { name: "Didn't send" })).toBeTruthy();
+    expect(within(lane("Waiting on")).getByText("Contract draft")).toBeTruthy();
+    expect(
+      within(lane("Also in your inbox")).getByText("Contract draft"),
+    ).toBeTruthy();
+  });
+
+  it("keeps a real reply after a bounce in Waiting on you", () => {
+    mocks.bounces = [{ ...mocks.bounces[0], answeredAfter: true }];
+    mocks.waitingOnYou = [thread("sent", "Contract draft")];
+    mocks.home.data = {
+      ...homeData([]),
+      cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+    };
+
+    try {
+      renderToday();
+
+      expect(
+        within(lane("Waiting on you")).getByText("Contract draft"),
+      ).toBeTruthy();
+    } finally {
+      mocks.waitingOnYou = [];
+    }
   });
 
   it("opens in the bounce's own account across accounts", () => {

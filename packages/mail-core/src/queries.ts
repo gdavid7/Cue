@@ -628,9 +628,9 @@ export const NEVER_READ_MIN_MESSAGES = 4;
 
 /**
  * Inbox mail saying a message didn't reach someone, read from the local store
- * alone, with no model and no wording: a mail server's own address sent it,
- * or it carries a delivery report. One per conversation, and none once the
- * user has sent in that conversation since.
+ * alone, with no model and no wording: a mail server's own address sent it.
+ * One per conversation, and none once the user has sent in that
+ * conversation since.
  */
 export type RecentBouncesQuery = {
   accountIds: string[];
@@ -650,4 +650,9 @@ export type RecentBounce = {
   /** The subject of what the user sent before it in the conversation, if anything. */
   sentSubject: string | null;
   receivedAtMs: number;
+  /**
+   * Someone else wrote in the conversation after it, as when one recipient
+   * bounced and another replied: the conversation is live, not just bounced.
+   */
+  answeredAfter: boolean;
 };

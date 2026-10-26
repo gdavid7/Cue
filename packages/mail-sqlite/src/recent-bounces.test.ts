@@ -77,6 +77,7 @@ describe("readRecentBounces", () => {
         subject: "Delivery Status Notification (Failure)",
         sentSubject: null,
         receivedAtMs: NOW - HOUR,
+        answeredAfter: false,
       },
       {
         accountId: "a",
@@ -85,23 +86,8 @@ describe("readRecentBounces", () => {
         subject: "Non remis : Lunch",
         sentSubject: null,
         receivedAtMs: NOW - 2 * HOUR,
+        answeredAfter: false,
       },
-    ]);
-  });
-
-  it("lists mail from any sender that carries a delivery report", async () => {
-    const { store } = await setup();
-    await write(
-      store,
-      [
-        mail({ id: "report", from: "Mail System <mx@relay.example>" }),
-        mail({ id: "photo", from: "Mail System <mx@relay.example>" }),
-      ],
-      [body("report", "message/delivery-status"), body("photo", "image/png")],
-    );
-
-    expect((await read(store)).map((bounce) => bounce.messageId)).toEqual([
-      "report",
     ]);
   });
 
@@ -183,6 +169,60 @@ describe("readRecentBounces", () => {
     ]);
   });
 
+  it("says when someone else wrote in the conversation after the bounce", async () => {
+    const { store } = await setup();
+    await write(store, [
+      mail({
+        id: "sent",
+        conversationId: "c1",
+        from: ME,
+        roles: ["sent"],
+        at: NOW - 4 * HOUR,
+      }),
+      mail({
+        id: "bounce",
+        conversationId: "c1",
+        from: "mailer-daemon@x.example",
+        at: NOW - 3 * HOUR,
+      }),
+      mail({
+        id: "reply",
+        conversationId: "c1",
+        from: "Alice <alice@example.com>",
+        at: NOW - HOUR,
+      }),
+      mail({
+        id: "sent2",
+        conversationId: "c2",
+        from: ME,
+        roles: ["sent"],
+        at: NOW - 4 * HOUR,
+      }),
+      mail({
+        id: "before",
+        conversationId: "c2",
+        from: "Bob <bob@example.com>",
+        at: NOW - 3 * HOUR,
+      }),
+      mail({
+        id: "bounce2",
+        conversationId: "c2",
+        from: "postmaster@x.example",
+        at: NOW - 2 * HOUR,
+      }),
+    ]);
+
+    expect(
+      (await read(store)).map((bounce) => [
+        bounce.messageId,
+        bounce.answeredAfter,
+      ]),
+    ).toEqual([
+      ["bounce2", false],
+      ["bounce", true],
+    ]);
+  });
+
   it("leaves a bounce out once the user sent in the conversation since", async () => {
     const { store } = await setup();
     await write(store, [
@@ -202,6 +242,35 @@ describe("readRecentBounces", () => {
     ]);
 
     expect(await read(store)).toEqual([]);
+  });
+
+  it("fills the limit past bounces the user already sent again after", async () => {
+    const { store } = await setup();
+    await write(store, [
+      mail({
+        id: "fixed",
+        conversationId: "c1",
+        from: "postmaster@x.example",
+        at: NOW - HOUR,
+      }),
+      mail({
+        id: "again",
+        conversationId: "c1",
+        from: ME,
+        roles: ["sent"],
+        at: NOW - HOUR / 2,
+      }),
+      mail({
+        id: "open",
+        conversationId: "c2",
+        from: "postmaster@x.example",
+        at: NOW - 2 * HOUR,
+      }),
+    ]);
+
+    expect(
+      (await read(store, { limit: 1 })).map((bounce) => bounce.messageId),
+    ).toEqual(["open"]);
   });
 
   it("only lists recent bounces still in the inbox", async () => {
@@ -273,7 +342,7 @@ describe("readRecentBounces", () => {
 
     expect(details).toContainEqual(
       expect.stringMatching(
-        /^SEARCH b USING INDEX effective_inbox_order \(account_id=\? AND in_inbox=\? AND received_at_ms>\?\)/,
+        /^SEARCH effective_messages USING INDEX effective_inbox_order \(account_id=\? AND in_inbox=\? AND received_at_ms>\?\)/,
       ),
     );
     expect(
@@ -325,24 +394,6 @@ async function write(
       })),
     }),
   ).toMatchObject({ status: "committed" });
-}
-
-function body(messageId: string, mimeType: string): BodyObservation {
-  return {
-    key: { accountId: "a", messageId },
-    version: "1",
-    html: null,
-    text: "",
-    attachments: [
-      {
-        attachmentId: `${messageId}-part`,
-        filename: "",
-        mimeType,
-        size: 400,
-        inline: false,
-      },
-    ],
-  };
 }
 
 function mail({

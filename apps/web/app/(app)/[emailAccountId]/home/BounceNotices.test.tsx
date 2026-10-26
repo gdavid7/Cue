@@ -25,6 +25,7 @@ const PLAN: RecentBounce = {
   subject: "Delivery Status Notification (Failure)",
   sentSubject: "Re: Quarterly plan",
   receivedAtMs: Date.now() - HOUR,
+  answeredAfter: false,
 };
 const LONE: RecentBounce = {
   accountId: "b",
@@ -33,10 +34,12 @@ const LONE: RecentBounce = {
   subject: "Undeliverable: Lunch",
   sentSubject: null,
   receivedAtMs: Date.now() - 2 * DAY,
+  answeredAfter: false,
 };
 
 const mocks = vi.hoisted(() => ({
   queryRecentBounces: vi.fn(),
+  capabilities: ["method:queryRecentBounces"],
   inbox: {
     status: "ready" as "ready" | "loading",
     data: null as MailboxView | null,
@@ -47,6 +50,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/env", () => ({ env: {} }));
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
   useOptionalMailClient: () => ({
+    capabilities: mocks.capabilities,
     queryRecentBounces: mocks.queryRecentBounces,
   }),
 }));
@@ -194,6 +198,17 @@ describe("Didn't send", () => {
     mocks.inbox.data = view({ synced: true });
     rerender(<Harness />);
     expect((await screen.findAllByText("Didn't send")).length).toBe(2);
+  });
+
+  it("doesn't ask an engine that can't answer", async () => {
+    mocks.capabilities = [];
+    try {
+      renderCards();
+      await settle();
+      expect(mocks.queryRecentBounces).not.toHaveBeenCalled();
+    } finally {
+      mocks.capabilities = ["method:queryRecentBounces"];
+    }
   });
 
   it("shows nothing without bounces", async () => {
