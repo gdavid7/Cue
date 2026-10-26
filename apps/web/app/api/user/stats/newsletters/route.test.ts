@@ -130,7 +130,7 @@ describe("GET /api/user/stats/newsletters", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(waitBudget).toBeLessThanOrEqual(5000);
+    expect(waitBudget).toBe(3000);
   });
 
   it("lets a searched list wait for the filters in full at background priority, as the bulk search does", async () => {
@@ -186,7 +186,7 @@ describe("GET /api/user/stats/newsletters", () => {
     );
 
     expect(quota?.priority).toBe("interactive");
-    expect(quota?.maxTotalWaitMs).toBeLessThanOrEqual(5000);
+    expect(quota?.maxTotalWaitMs).toBe(3000);
   });
 
   it("keeps a refresh of the list at background priority", async () => {
@@ -202,6 +202,7 @@ describe("GET /api/user/stats/newsletters", () => {
     );
 
     expect(quota?.priority).toBe("background");
+    expect(quota?.maxTotalWaitMs).toBe(3000);
   });
 
   it.each([

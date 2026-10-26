@@ -58,12 +58,48 @@ describe("useNewsletterStats", () => {
       "unread",
     );
   });
+
+  it("keeps a searched view at the route's full wait, never asking for interactive", async () => {
+    const { requests, wrapper } = setup();
+    const { result } = renderHook(
+      () =>
+        useNewsletterStats(
+          { ...baseParams, search: "news@example.com" },
+          { refreshInterval: 1_000_000 },
+        ),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(requests).toHaveLength(1);
+    expect(isInteractive(requests[0])).toBe(false);
+  });
+
+  it("sends later retries without the flag once a first load has failed", async () => {
+    const { requests, wrapper } = setup({ failFirst: true });
+    const { result } = renderHook(
+      () => useNewsletterStats(baseParams, { refreshInterval: 1_000_000 }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    await waitFor(() => expect(result.current.showSkeleton).toBe(false));
+    expect(isInteractive(requests[0])).toBe(true);
+
+    await act(async () => {
+      await result.current.mutate();
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(isInteractive(requests[1])).toBe(false);
+  });
 });
 
-function setup() {
+function setup({ failFirst = false }: { failFirst?: boolean } = {}) {
   const requests: string[] = [];
   const fetcher = async (url: string) => {
     requests.push(url);
+    if (failFirst && requests.length === 1) throw new Error("Server error");
     return {
       newsletters: [],
       filtersAvailable: true,
@@ -72,7 +108,12 @@ function setup() {
   };
   const wrapper = ({ children }: { children: React.ReactNode }) => (
     <SWRConfig
-      value={{ provider: () => new Map(), fetcher, dedupingInterval: 0 }}
+      value={{
+        provider: () => new Map(),
+        fetcher,
+        dedupingInterval: 0,
+        shouldRetryOnError: false,
+      }}
     >
       {children}
     </SWRConfig>
