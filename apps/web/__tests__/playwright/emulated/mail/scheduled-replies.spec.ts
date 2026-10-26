@@ -78,67 +78,25 @@ test("schedules a reply with a reminder, persists it and cancels both", async ({
 });
 
 test.describe("recipient's local time", () => {
-  test.use({ timezoneId: "UTC" });
+  // Away from UTC, so a UTC Date header differs from the user's own offset.
+  test.use({ timezoneId: "Asia/Tokyo" });
 
-  test("shows their time and fills Send later with their next 8:00", async ({
+  test("stays hidden when the sender's Date header is UTC, as a rewriting server writes it", async ({
     page,
   }, testInfo) => {
-    // Leslie's message was written at UTC+9 (Outlook keeps only UTC). The
-    // latest 18:12 UTC is 03:12 for her, before her day starts.
-    const now = new Date();
-    const theirNight = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate(),
-        18,
-        12,
-      ),
-    );
-    if (theirNight > now) theirNight.setUTCDate(theirNight.getUTCDate() - 1);
-    await page.clock.install({ time: theirNight });
+    // Both emulators write every Date header in UTC (Outlook only has UTC
+    // times), which says nothing reliable about where the sender is. Other
+    // offsets are covered by recipient-local-time and date-header-offset
+    // unit tests.
     await openReply(page);
-    const theirTime = page.getByText(/^\d{1,2}:\d{2} [ap]m their time$/);
-    const sendAtTheirMorning = page.getByRole("button", {
-      name: "Send at 8:00 am their time",
-    });
-    if (isMicrosoftPlaywright()) {
-      await expect(
-        page.getByRole("button", { name: "Send later", exact: true }),
-      ).toBeVisible();
-      await expect(theirTime).toHaveCount(0);
-      await expect(sendAtTheirMorning).toHaveCount(0);
-      return;
-    }
-    await expect(theirTime).toHaveText(/^3:1\d am their time$/);
-    await capturePlaywrightCheckpoint(page, testInfo, "22-their-time");
-    await sendAtTheirMorning.click();
-    const expectedLabel = await page.evaluate(
-      (ms) =>
-        new Date(ms).toLocaleString(undefined, {
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        }),
-      Date.UTC(
-        theirNight.getUTCFullYear(),
-        theirNight.getUTCMonth(),
-        theirNight.getUTCDate(),
-        23,
-      ),
-    );
-    const sendLater = page.getByRole("button", { name: "Send later" });
-    await expect(sendLater).toHaveText(expectedLabel);
-    await expect(sendAtTheirMorning).toHaveCount(0);
-    await expect(theirTime).toBeVisible();
-    await capturePlaywrightCheckpoint(page, testInfo, "23-their-morning-set");
-    await sendLater.click();
-    await page
-      .getByRole("dialog", { name: "Send later" })
-      .getByRole("button", { name: "Clear time" })
-      .click();
-    await expect(sendAtTheirMorning).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Send later", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(/their time$/)).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Send at .+ their time$/ }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "22-no-their-time-utc");
   });
 });
 

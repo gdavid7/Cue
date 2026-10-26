@@ -202,8 +202,6 @@ google:
         - INBOX
         - UNREAD
       internal_date: "1735038000000"
-      # Written at UTC+9, the reply composer's "their time" (FT-27).
-      date: "Tue, 24 Dec 2024 20:00:00 +0900"
     - id: msg_playwright_multi_draft_parent
       thread_id: thr_playwright_multi_draft
       user_email: __PLAYWRIGHT_TEST_EMAIL__
