@@ -1,5 +1,5 @@
 import { asSchema, type ModelMessage, type Tool } from "ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestLogger,
   getEmailAccount,
@@ -39,7 +39,10 @@ const { mockReleaseDemand } = vi.hoisted(() => ({
 }));
 vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
-  holdGmailInteractiveDemand: vi.fn(async () => mockReleaseDemand),
+  holdGmailInteractiveDemand: vi.fn(async () => ({
+    held: true,
+    release: mockReleaseDemand,
+  })),
 }));
 vi.mock("@/utils/integration-action.server", () => ({
   isIntegrationActionEnabledForUserId: mockIsIntegrationActionEnabledForUserId,
@@ -807,7 +810,18 @@ describe("aiProcessAssistantChat step log", () => {
 });
 
 describe("aiProcessAssistantChat Gmail demand", () => {
-  async function run() {
+  // The turn starts at this time; tests move the clock from it.
+  const TURN_START = new Date("2026-10-26T12:00:00Z").getTime();
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(TURN_START);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function run({ provider = "google" }: { provider?: string } = {}) {
     vi.clearAllMocks();
     const { createEmailProvider } = await import("@/utils/email/provider");
     // Each tool's provider makes one Gmail call, then stops the tool.
@@ -821,11 +835,13 @@ describe("aiProcessAssistantChat Gmail demand", () => {
     } as never);
     vi.mocked(toolCallAgentStream).mockResolvedValue({} as never);
     const cleanups: Array<() => void> = [];
+    const logger = createTestLogger();
+    const info = vi.spyOn(logger, "info");
     await aiProcessAssistantChat({
       messages: [{ role: "user", content: "what's new?" }],
       emailAccountId: "email-account-id",
-      user: getEmailAccount(),
-      logger: createTestLogger(),
+      user: { ...getEmailAccount(), account: { provider } },
+      logger,
       registerCleanup: (cleanup) => cleanups.push(cleanup),
     });
     const options = vi.mocked(toolCallAgentStream).mock.calls[0][0];
@@ -835,38 +851,119 @@ describe("aiProcessAssistantChat Gmail demand", () => {
         toolCallId: "call",
         messages: [],
       } as never);
-    return { options, cleanups, callGmailTool };
+    const endStep = () =>
+      options.onStepEnd?.({
+        stepNumber: 0,
+        model: { provider: "anthropic.messages", modelId: "claude" },
+        toolCalls: [],
+      } as never);
+    return { options, cleanups, callGmailTool, endStep, info };
   }
 
-  it("holds nothing for a turn that never calls Gmail", async () => {
-    const { options } = await run();
-
-    await options.onEnd?.({} as never);
-
-    expect(holdGmailInteractiveDemand).not.toHaveBeenCalled();
-    expect(mockReleaseDemand).not.toHaveBeenCalled();
-  });
-
-  it("holds background work back from the first Gmail call, once, capped at the tool budget", async () => {
-    const { callGmailTool } = await run();
-
-    await callGmailTool();
-    await callGmailTool();
+  it("holds background work back briefly from the start of the turn, before the model asks for any Gmail call", async () => {
+    await run();
 
     expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
     expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
       "email-account-id",
-      45_000,
+      8000,
     );
   });
 
-  it("lets background work go once the turn ends", async () => {
-    const { options, callGmailTool } = await run();
-    await callGmailTool();
+  it("holds nothing for an account that is not on Gmail", async () => {
+    const { options } = await run({ provider: "microsoft" });
 
     await options.onEnd?.({} as never);
 
+    expect(holdGmailInteractiveDemand).not.toHaveBeenCalled();
+  });
+
+  it("holds sync back only briefly for a turn that just answers", async () => {
+    const { options, endStep, info } = await run();
+
+    // The answer streams for longer than the brief hold.
+    vi.setSystemTime(TURN_START + 20_000);
+    await endStep();
+    await options.onEnd?.({} as never);
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
+      "email-account-id",
+      8000,
+    );
+    await vi.waitFor(() =>
+      expect(info).toHaveBeenCalledWith("Assistant chat Gmail demand ended", {
+        gmailCalls: 0,
+        holds: 1,
+        heldMs: 8000,
+        firstGmailCallAfterHoldMs: null,
+      }),
+    );
+  });
+
+  it("lengthens the hold to the rest of the tool budget on the first Gmail call, once", async () => {
+    const { options, callGmailTool, endStep, info } = await run();
+
+    vi.setSystemTime(TURN_START + 2000);
+    await callGmailTool();
+    await endStep();
+    await callGmailTool();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(2);
+    expect(holdGmailInteractiveDemand).toHaveBeenLastCalledWith(
+      "email-account-id",
+      43_000,
+    );
+    expect(mockReleaseDemand).not.toHaveBeenCalled();
+
+    vi.setSystemTime(TURN_START + 5000);
+    await options.onEnd?.({} as never);
+
+    // Each hold's release ends only its own, so both are let go.
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(info).toHaveBeenCalledWith("Assistant chat Gmail demand ended", {
+        gmailCalls: 2,
+        holds: 2,
+        heldMs: 5000,
+        firstGmailCallAfterHoldMs: 2000,
+      }),
+    );
+  });
+
+  it("counts only holds the store actually set", async () => {
+    vi.mocked(holdGmailInteractiveDemand).mockResolvedValueOnce({
+      held: false,
+      release: mockReleaseDemand,
+    });
+    const { options, info } = await run();
+
+    vi.setSystemTime(TURN_START + 1000);
+    await options.onEnd?.({} as never);
+
+    await vi.waitFor(() =>
+      expect(info).toHaveBeenCalledWith("Assistant chat Gmail demand ended", {
+        gmailCalls: 0,
+        holds: 0,
+        heldMs: 0,
+        firstGmailCallAfterHoldMs: null,
+      }),
+    );
+  });
+
+  it("lets background work go after a step that made no Gmail call, and holds again, within the tool budget, on a later one", async () => {
+    const { callGmailTool, endStep } = await run();
+
+    await endStep();
     await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+    vi.setSystemTime(TURN_START + 5000);
+    await callGmailTool();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(2);
+    expect(holdGmailInteractiveDemand).toHaveBeenLastCalledWith(
+      "email-account-id",
+      40_000,
+    );
   });
 
   it("lets background work go once tools are switched off", async () => {
@@ -880,14 +977,32 @@ describe("aiProcessAssistantChat Gmail demand", () => {
       model: { provider: "google.generative-ai", modelId: "gemini-3.8-flash" },
     } as never);
 
-    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(2));
   });
 
   it("lets background work go through the caller's cleanup when the stream fails", async () => {
-    const { cleanups, callGmailTool } = await run();
-    await callGmailTool();
+    const { cleanups } = await run();
 
     for (const cleanup of cleanups) cleanup();
+
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
+  });
+
+  it("lets background work go when the turn's setup fails, with no caller cleanup", async () => {
+    vi.clearAllMocks();
+    mockIsIntegrationActionEnabledForUserId.mockRejectedValueOnce(
+      new Error("db down"),
+    );
+
+    await expect(
+      aiProcessAssistantChat({
+        messages: [{ role: "user", content: "what's new?" }],
+        emailAccountId: "email-account-id",
+        user: getEmailAccount(),
+        responseSurface: "messaging",
+        logger: createTestLogger(),
+      }),
+    ).rejects.toThrow("db down");
 
     await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(1));
   });

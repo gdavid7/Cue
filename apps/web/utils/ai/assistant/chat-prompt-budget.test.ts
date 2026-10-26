@@ -33,7 +33,10 @@ vi.mock("@/utils/calendar/event-provider", () => ({
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
 vi.mock("@/utils/gmail/quota", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/utils/gmail/quota")>()),
-  holdGmailInteractiveDemand: vi.fn(async () => async () => {}),
+  holdGmailInteractiveDemand: vi.fn(async () => ({
+    held: true,
+    release: async () => {},
+  })),
 }));
 
 const anthropicModel = { provider: "anthropic.messages", modelId: "claude" };

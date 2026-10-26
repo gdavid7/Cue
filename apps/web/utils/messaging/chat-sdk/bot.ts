@@ -732,35 +732,46 @@ async function processMessagingAssistantMessage({
 
       const inboxStats = await inboxStatsPromise;
       let seenRulesRevision: number | null = null;
-      const result = await aiProcessAssistantChat({
-        messages: await convertToModelMessages([
-          ...existingMessages,
-          modelUserMessage,
-        ]),
-        emailAccountId: context.emailAccountId,
-        user: emailAccountUser,
-        chatId: chat.id,
-        chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
-        chatHasHistory:
-          existingMessages.length > 0 || chat.compactions.length > 0,
-        memories: await memoriesPromise,
-        inboxStats,
-        responseSurface: "messaging",
-        messagingPlatform: context.provider,
-        onRulesStateExposed: (rulesRevision) => {
-          seenRulesRevision = mergeSeenRulesRevision(
-            seenRulesRevision,
-            rulesRevision,
-          );
-        },
-        logger: threadLogger,
-      });
+      // Whatever the turn holds (such as Gmail's demand signal) is let go
+      // once its reply has been read, or reading it failed.
+      const turnCleanups: Array<() => void> = [];
+      let assistantUiMessage: Awaited<
+        ReturnType<typeof collectAssistantUiMessage>
+      > = null;
+      try {
+        const result = await aiProcessAssistantChat({
+          messages: await convertToModelMessages([
+            ...existingMessages,
+            modelUserMessage,
+          ]),
+          emailAccountId: context.emailAccountId,
+          user: emailAccountUser,
+          chatId: chat.id,
+          chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
+          chatHasHistory:
+            existingMessages.length > 0 || chat.compactions.length > 0,
+          memories: await memoriesPromise,
+          inboxStats,
+          responseSurface: "messaging",
+          messagingPlatform: context.provider,
+          registerCleanup: (cleanup) => turnCleanups.push(cleanup),
+          onRulesStateExposed: (rulesRevision) => {
+            seenRulesRevision = mergeSeenRulesRevision(
+              seenRulesRevision,
+              rulesRevision,
+            );
+          },
+          logger: threadLogger,
+        });
 
-      const assistantUiMessage = await collectAssistantUiMessage({
-        result,
-        originalMessages: [...existingMessages, newUserMessage],
-        assistantMessageId,
-      });
+        assistantUiMessage = await collectAssistantUiMessage({
+          result,
+          originalMessages: [...existingMessages, newUserMessage],
+          assistantMessageId,
+        });
+      } finally {
+        for (const cleanup of turnCleanups.splice(0)) cleanup();
+      }
 
       if (!assistantUiMessage) {
         throw new Error(

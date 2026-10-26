@@ -981,32 +981,38 @@ export function gmailBurstUnitsFor(priority: GmailQuotaPriority) {
  * Holds sync and background back, as one large interactive request does for
  * two seconds, for as long as someone waits on a longer piece of work such as
  * an assistant turn, up to `maxMs` so a turn that never ends can't starve
- * sync. Call the returned function when the work ends.
+ * sync. Holding again before the hold ends lengthens it; `release` ends only
+ * the hold its own call set, so it is a no-op once a longer one replaced it.
+ * `held` says whether this call set a hold: not without the store, when it
+ * failed, or when a longer hold was already in place.
  */
 export async function holdGmailInteractiveDemand(
   emailAccountId: string,
   maxMs: number,
-): Promise<() => Promise<void>> {
-  const done = async () => {};
-  if (!isEmailProviderRateLimitRedisConfigured()) return done;
+): Promise<{ held: boolean; release: () => Promise<void> }> {
+  const notHeld = { held: false, release: async () => {} };
+  if (!isEmailProviderRateLimitRedisConfigured()) return notHeld;
   const key = accountKeys(emailAccountId).interactiveDemand;
   forgetLanes(emailAccountId, ["sync", "background"]);
   try {
     const endsAt = await withinStoreTimeout(
       gmailQuotaStore.holdDemand({ key, ms: maxMs, gapMs: DEMAND_GAP_MS }),
     );
-    if (!endsAt) return done;
-    return async () => {
-      forgetLanes(emailAccountId, ["sync", "background"]);
-      await withinStoreTimeout(
-        gmailQuotaStore.releaseDemand({ key, endsAt, gapMs: DEMAND_GAP_MS }),
-      ).catch((error) => {
-        logger.warn("Failed to release Gmail interactive demand", { error });
-      });
+    if (!endsAt) return notHeld;
+    return {
+      held: true,
+      release: async () => {
+        forgetLanes(emailAccountId, ["sync", "background"]);
+        await withinStoreTimeout(
+          gmailQuotaStore.releaseDemand({ key, endsAt, gapMs: DEMAND_GAP_MS }),
+        ).catch((error) => {
+          logger.warn("Failed to release Gmail interactive demand", { error });
+        });
+      },
     };
   } catch (error) {
     logger.warn("Failed to hold Gmail interactive demand", { error });
-    return done;
+    return notHeld;
   }
 }
 

@@ -41,7 +41,7 @@ describe("withChatToolRuntime", () => {
     vi.useRealTimers();
   });
 
-  it("charges a tool's Gmail calls as interactive whatever the surrounding work is", async () => {
+  it("charges a tool's Gmail calls as interactive, within the tool wait budget, whatever the surrounding work is", async () => {
     const tools = withChatToolRuntime({
       logger: createTestLogger(),
       tools: {
@@ -67,6 +67,7 @@ describe("withChatToolRuntime", () => {
       ).resolves.toMatchObject({
         caller: "chat/searchInbox",
         priority: "interactive",
+        maxTotalWaitMs: CHAT_TOOL_GMAIL_WAIT_BUDGET_MS,
       });
     }
   });
