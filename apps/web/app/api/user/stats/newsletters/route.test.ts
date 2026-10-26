@@ -132,7 +132,7 @@ describe("GET /api/user/stats/newsletters", () => {
     expect(waitBudget).toBeLessThanOrEqual(5000);
   });
 
-  it("reads the filters of one looked-up sender at interactive priority, since the reader's toggle waits on them", async () => {
+  it("lets a searched list wait for the filters in full at background priority, as the bulk search does", async () => {
     let quota: ReturnType<typeof currentGmailQuotaContext> | undefined;
     mockEmailProvider.getFiltersList.mockImplementation(async () => {
       quota = currentGmailQuotaContext();
@@ -147,8 +147,67 @@ describe("GET /api/user/stats/newsletters", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(quota?.priority).toBe("background");
+    expect(quota?.maxTotalWaitMs).toBeUndefined();
+  });
+
+  it("reads one sender's filters at interactive priority only when the reader asks for it", async () => {
+    let quota: ReturnType<typeof currentGmailQuotaContext> | undefined;
+    mockEmailProvider.getFiltersList.mockImplementation(async () => {
+      quota = currentGmailQuotaContext();
+      return [];
+    });
+
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/user/stats/newsletters?search=news%40example.com&interactive=true",
+      ),
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
     expect(quota?.priority).toBe("interactive");
     expect(quota?.maxTotalWaitMs).toBe(OPEN_THREAD_GMAIL_WAIT_MS);
+  });
+
+  it("does not raise a list without a searched sender to interactive priority", async () => {
+    let quota: ReturnType<typeof currentGmailQuotaContext> | undefined;
+    mockEmailProvider.getFiltersList.mockImplementation(async () => {
+      quota = currentGmailQuotaContext();
+      return [];
+    });
+
+    await GET(
+      new NextRequest(
+        "http://localhost/api/user/stats/newsletters?interactive=true",
+      ),
+      {} as never,
+    );
+
+    expect(quota?.priority).toBe("background");
+  });
+
+  it.each([
+    [
+      "a revoked grant",
+      Object.assign(new Error("invalid_grant"), {
+        response: { data: { error: "invalid_grant" } },
+      }),
+      "permanent",
+    ],
+    ["a backend error", new Error("Backend Error"), "error"],
+  ])("says why the filters were unreadable: %s", async (_name, error, failure) => {
+    mockEmailProvider.getFiltersList.mockRejectedValue(error);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/user/stats/newsletters"),
+      {} as never,
+    );
+
+    expect((await response.json()).filtersFailure).toBe(failure);
+    vi.restoreAllMocks();
   });
 
   it("rejects a limit below 1", async () => {

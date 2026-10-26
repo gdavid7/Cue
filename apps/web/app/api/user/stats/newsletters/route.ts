@@ -49,6 +49,9 @@ const newsletterStatsQuery = z.object({
     .transform((arr) => arr?.filter(Boolean)),
   includeMissingUnsubscribe: z.boolean().optional(),
   search: z.string().optional(),
+  // Set by the reader when a person's own action needs one sender's filters,
+  // so only that read jumps ahead of background work.
+  interactive: z.boolean().optional(),
 });
 
 export type NewsletterStatsQuery = z.infer<typeof newsletterStatsQuery>;
@@ -83,21 +86,7 @@ async function getEmailMessages(
         cursor: options.cursor,
       }),
     ),
-    timeRequestPhase("filters", () =>
-      // One sender's lookup backs the reader's skip-inbox toggle, which
-      // stays disabled without the filters. A person is waiting on it, so it
-      // reads them ahead of background work, which a syncing account's
-      // budget can hold off for over a minute.
-      options.search
-        ? runWithGmailWaitBudget(
-            OPEN_THREAD_GMAIL_WAIT_MS,
-            () => getEmailFilters(emailProvider, logger),
-            { priority: "interactive" },
-          )
-        : runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, () =>
-            getEmailFilters(emailProvider, logger),
-          ),
-    ),
+    timeRequestPhase("filters", () => readEmailFilters(options)),
     timeRequestPhase("statuses", () =>
       getNewsletterStatuses({ emailAccountId }),
     ),
@@ -145,6 +134,11 @@ async function getEmailMessages(
     // False when the provider filters could not be read, so a missing
     // autoArchived means unknown rather than off.
     filtersAvailable,
+    // Why they could not be read, so a client knows whether asking again can
+    // help: a refused grant needs the person, a refusal for now needs time.
+    filtersFailure: filtersResult.available
+      ? undefined
+      : getFiltersFailure(filtersResult),
   };
 }
 
@@ -167,6 +161,7 @@ export const GET = withEmailProvider(
       includeMissingUnsubscribe:
         searchParams.get("includeMissingUnsubscribe") === "true",
       search: searchParams.get("search") || undefined,
+      interactive: searchParams.get("interactive") === "true",
     });
 
     const result = await getEmailMessages({
@@ -179,6 +174,36 @@ export const GET = withEmailProvider(
     return NextResponse.json(result);
   },
 );
+
+function readEmailFilters({
+  emailProvider,
+  logger,
+  search,
+  interactive,
+}: {
+  emailProvider: EmailProvider;
+  logger: Logger;
+  search?: string;
+  interactive?: boolean;
+}) {
+  const read = () => getEmailFilters(emailProvider, logger);
+  // A person's own action needs one sender's filters, so the read goes ahead
+  // of background work, which a syncing account's budget can hold off for
+  // over a minute.
+  if (interactive && search)
+    return runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, read, {
+      priority: "interactive",
+    });
+  // A searched list waits for the filters in full.
+  if (search) return read();
+  return runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, read);
+}
+
+function getFiltersFailure(result: { permanent: boolean; throttled: boolean }) {
+  if (result.permanent) return "permanent" as const;
+  if (result.throttled) return "throttled" as const;
+  return "error" as const;
+}
 
 function getTypeFilters(types: NewsletterStatsQuery["types"]) {
   const typeMap = Object.fromEntries(types.map((type) => [type, true]));

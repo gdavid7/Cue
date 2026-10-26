@@ -21,6 +21,10 @@ class MockResizeObserver {
 (globalThis as { ResizeObserver?: typeof MockResizeObserver }).ResizeObserver =
   MockResizeObserver;
 
+const { loadSenderFilters } = vi.hoisted(() => ({
+  loadSenderFilters: vi.fn(),
+}));
+
 vi.mock("next-safe-action/hooks", () => ({
   useAction: () => ({ execute: vi.fn() }),
 }));
@@ -48,6 +52,7 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-sender-commands", () => ({
     isAutoArchived: false,
     isAutoArchiveStatusLoading: false,
     isUpdatingAutoArchive: false,
+    loadSenderFilters,
     onToggleAutoArchive: vi.fn(),
     onUnsubscribe: vi.fn(),
     PremiumModal: () => null,
@@ -58,6 +63,35 @@ vi.mock("@/app/(app)/[emailAccountId]/mail/use-sender-commands", () => ({
 afterEach(cleanup);
 
 describe("ThreadActionsMenu", () => {
+  it("asks for the sender's filters when it opens, not when it only mounts", async () => {
+    loadSenderFilters.mockClear();
+    const { rerender } = render(
+      <ThreadActionsMenu
+        isStarred={false}
+        message={null}
+        onDelete={vi.fn()}
+        onMarkSpam={vi.fn()}
+        onToggleStar={vi.fn()}
+        open={false}
+      />,
+    );
+    expect(loadSenderFilters).not.toHaveBeenCalled();
+
+    rerender(
+      <ThreadActionsMenu
+        isStarred={false}
+        message={null}
+        onDelete={vi.fn()}
+        onMarkSpam={vi.fn()}
+        onToggleStar={vi.fn()}
+        open
+      />,
+    );
+    await screen.findByRole("menu");
+
+    expect(loadSenderFilters).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves focus in the comment box that Comment opens", async () => {
     render(<MenuWithCommentBox />);
 

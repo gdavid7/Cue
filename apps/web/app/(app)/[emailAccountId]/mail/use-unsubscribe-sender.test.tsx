@@ -12,13 +12,19 @@ const mocks = vi.hoisted(() => ({
   toastUndo: vi.fn(),
   setSenderStatusAction: vi.fn(),
   unsubscribeSenderAction: vi.fn(),
+  keys: [] as string[],
   swrOptions: undefined as
-    | { refreshInterval?: (latest?: { filtersAvailable: boolean }) => number }
+    | {
+        refreshInterval?: (latest?: {
+          filtersFailure?: "permanent" | "throttled" | "error";
+        }) => number;
+      }
     | undefined,
   stats: {
     newsletters: [] as unknown[],
     searchedSenderStatus: null as string | null,
     filtersAvailable: true,
+    filtersFailure: undefined as string | undefined,
   },
 }));
 
@@ -31,8 +37,10 @@ vi.mock("sonner", () => ({
   }),
 }));
 vi.mock("swr", () => ({
-  default: (_key: unknown, options: typeof mocks.swrOptions) => {
-    mocks.swrOptions = options;
+  default: (key: unknown, options: typeof mocks.swrOptions) => {
+    if (Array.isArray(key)) mocks.keys.push(String(key[0]));
+    if (Array.isArray(key) && !String(key[0]).includes("interactive"))
+      mocks.swrOptions = options;
     return {
       data: mocks.stats,
       mutate: vi.fn().mockResolvedValue(undefined),
@@ -67,6 +75,9 @@ describe("useUnsubscribeSender", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.stats.searchedSenderStatus = null;
+    mocks.stats.filtersAvailable = true;
+    mocks.stats.filtersFailure = undefined;
+    mocks.keys = [];
     mocks.setSenderStatusAction.mockResolvedValue({ data: {} });
     mocks.unsubscribeSenderAction.mockResolvedValue({
       data: { unsubscribe: { success: true } },
@@ -74,13 +85,47 @@ describe("useUnsubscribeSender", () => {
   });
   afterEach(cleanup);
 
-  it("asks again while the provider filters could not be read, and stops once they can", () => {
+  it("asks the passive read again a few times with a growing wait for a passing error, then stops", () => {
+    renderHook(() => useUnsubscribeSender(message({})));
+    const refreshInterval = mocks.swrOptions?.refreshInterval;
+    const failed = { filtersFailure: "error" as const };
+
+    expect([0, 1, 2, 3, 4].map(() => refreshInterval?.(failed))).toEqual([
+      5000, 15_000, 45_000, 0, 0,
+    ]);
+  });
+
+  it.each([
+    "permanent",
+    "throttled",
+  ] as const)("does not ask again after a %s refusal", (filtersFailure) => {
     renderHook(() => useUnsubscribeSender(message({})));
     const refreshInterval = mocks.swrOptions?.refreshInterval;
 
-    expect(refreshInterval?.({ filtersAvailable: false })).toBeGreaterThan(0);
-    expect(refreshInterval?.({ filtersAvailable: true })).toBe(0);
+    expect(refreshInterval?.({ filtersFailure })).toBe(0);
     expect(refreshInterval?.(undefined)).toBe(0);
+  });
+
+  it("reads the filters ahead of background work only when asked, and not after a refused grant", () => {
+    mocks.stats.filtersAvailable = false;
+    mocks.stats.filtersFailure = "permanent";
+    const { result } = renderHook(() => useUnsubscribeSender(message({})));
+    act(() => result.current.loadSenderFilters());
+    expect(mocks.keys.some((key) => key.includes("interactive=true"))).toBe(
+      false,
+    );
+
+    mocks.stats.filtersFailure = "throttled";
+    const { result: second } = renderHook(() =>
+      useUnsubscribeSender(message({})),
+    );
+    expect(mocks.keys.some((key) => key.includes("interactive=true"))).toBe(
+      false,
+    );
+    act(() => second.current.loadSenderFilters());
+    expect(mocks.keys.some((key) => key.includes("interactive=true"))).toBe(
+      true,
+    );
   });
 
   it("offers undo after blocking a sender and restores the inbox on undo", async () => {

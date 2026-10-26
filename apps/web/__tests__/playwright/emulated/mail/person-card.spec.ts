@@ -14,6 +14,7 @@ import {
   readLatestMailMutation,
 } from "./mail-test-helpers";
 
+const STAR_SAVED_TIMEOUT_MS = 10_000;
 const THREAD_ID = "thr_playwright_reader_html";
 
 test("opens a sender's card and goes from it to a past conversation", async ({
@@ -272,17 +273,31 @@ async function openThread(page: Page, emailAccountId: string) {
  * await the returned function before leaving the page.
  */
 async function watchStarSaved(page: Page) {
-  await page.evaluate((channelName) => {
-    const channel = new BroadcastChannel(channelName);
-    const saved = new Promise<void>((resolve) => {
-      channel.addEventListener("message", (event) => {
-        if (event.data?.type !== "importantPeopleChanged") return;
-        channel.close();
-        resolve();
+  await page.evaluate(
+    ({ channelName, timeoutMs }) => {
+      const channel = new BroadcastChannel(channelName);
+      const saved = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          channel.close();
+          reject(
+            new Error(
+              `The app never announced the saved star within ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+        channel.addEventListener("message", (event) => {
+          if (event.data?.type !== "importantPeopleChanged") return;
+          clearTimeout(timer);
+          channel.close();
+          resolve();
+        });
       });
-    });
-    (window as unknown as { starSaved: Promise<void> }).starSaved = saved;
-  }, MAIL_ENGINE_TAB_CHANNEL);
+      // Settled by the caller; a rejection nobody awaited yet is not an error.
+      saved.catch(() => undefined);
+      (window as unknown as { starSaved: Promise<void> }).starSaved = saved;
+    },
+    { channelName: MAIL_ENGINE_TAB_CHANNEL, timeoutMs: STAR_SAVED_TIMEOUT_MS },
+  );
   return () =>
     page.evaluate(
       () => (window as unknown as { starSaved: Promise<void> }).starSaved,

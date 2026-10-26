@@ -38,7 +38,9 @@ import {
 import type { ParsedMessage } from "@/utils/types";
 import { createSearchParams } from "@/utils/url";
 
-const FILTERS_RETRY_MS = 5000;
+// Unreadable filters that look like a passing error are asked for again a few
+// times, then left until the person next asks.
+const FILTERS_RETRY_DELAYS_MS = [5000, 15_000, 45_000];
 
 /**
  * Sender actions shared by the mail list and reader.
@@ -68,29 +70,49 @@ export function useUnsubscribeSender(
   const from = message?.headers.from ?? "";
   const senderEmail = extractEmailAddress(from);
   const senderName = extractNameFromEmail(from);
-  const senderStatsUrl = senderEmail
-    ? `/api/user/stats/newsletters?${createSearchParams({
-        types: [],
-        search: senderEmail,
-        orderBy: "emails",
-        orderDirection: "desc",
-        includeMissingUnsubscribe: true,
-      })}`
-    : null;
+  const senderStatsUrl = senderEmail ? getSenderStatsUrl(senderEmail) : null;
+  const [askedFor, setAskedFor] = useState<string | null>(null);
+  const askedForFilters =
+    senderStatsUrl !== null && askedFor === senderStatsUrl;
+  const retries = useRef({ url: "", count: 0 });
   const {
-    data: senderStats,
-    mutate: refetchSenderStats,
+    data: passiveStats,
+    mutate: refetchPassiveStats,
     isLoading: isSenderStatsLoading,
   } = useSWR<NewsletterStatsResponse>(
     senderStatsUrl ? [senderStatsUrl, emailAccountId] : null,
     {
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
-      // Unreadable filters are usually a busy or rate-limited provider that
-      // recovers, and the toggle stays held until they are read.
-      refreshInterval: (latest) =>
-        latest?.filtersAvailable === false ? FILTERS_RETRY_MS : 0,
+      refreshInterval: (latest) => {
+        if (retries.current.url !== senderStatsUrl)
+          retries.current = { url: senderStatsUrl ?? "", count: 0 };
+        const delay = filtersRetryDelayMs(latest, retries.current.count);
+        if (delay > 0) retries.current.count += 1;
+        return delay;
+      },
     },
+  );
+  // Read only once a person's own action needs the filters the passive read
+  // could not give, so it alone may go ahead of background work.
+  const { data: askedStats, mutate: refetchAskedStats } =
+    useSWR<NewsletterStatsResponse>(
+      askedForFilters && senderEmail
+        ? [getSenderStatsUrl(senderEmail, true), emailAccountId]
+        : null,
+      { revalidateOnFocus: false, revalidateOnReconnect: false },
+    );
+  const senderStats =
+    passiveStats?.filtersAvailable === false
+      ? (askedStats ?? passiveStats)
+      : passiveStats;
+  const refetchSenderStats = useCallback(
+    () =>
+      Promise.all([
+        refetchPassiveStats(),
+        askedForFilters ? refetchAskedStats() : undefined,
+      ]),
+    [askedForFilters, refetchAskedStats, refetchPassiveStats],
   );
   const canonicalSenderEmail = canonicalizeEmailAddress(senderEmail);
   const sender = senderStats?.newsletters.find(
@@ -128,6 +150,15 @@ export function useUnsubscribeSender(
       updatedAutoArchiveEnabled === undefined,
   );
 
+  const loadSenderFilters = useCallback(() => {
+    if (!senderStatsUrl) return;
+    const failure = senderStats?.filtersFailure;
+    if (senderStats && senderStats.filtersAvailable !== false) return;
+    if (failure === "permanent") return;
+    if (askedForFilters) refetchAskedStats().catch(captureException);
+    else setAskedFor(senderStatsUrl);
+  }, [askedForFilters, refetchAskedStats, senderStats, senderStatsUrl]);
+
   // State lags a fast double-click, so a ref decides whether one is in flight.
   const isTogglingAutoArchive = useRef(false);
 
@@ -139,6 +170,11 @@ export function useUnsubscribeSender(
       isTogglingAutoArchive.current
     )
       return;
+
+    if (isAutoArchiveStatusUnknown) {
+      loadSenderFilters();
+      return;
+    }
 
     if (!isAutoArchived && !hasUnsubscribeAccess) {
       openModal();
@@ -223,7 +259,9 @@ export function useUnsubscribeSender(
     hasUnsubscribeAccess,
     isAutoArchived,
     isAutoArchiveStatusLoading,
+    isAutoArchiveStatusUnknown,
     isUpdatingAutoArchive,
+    loadSenderFilters,
     openModal,
     queueArchiveSenders,
     refetchPremium,
@@ -310,6 +348,7 @@ export function useUnsubscribeSender(
     isAutoArchiveStatusLoading,
     isAutoArchiveStatusUnknown,
     isUpdatingAutoArchive,
+    loadSenderFilters,
     onToggleAutoArchive,
     onUnsubscribe,
     PremiumModal,
@@ -409,4 +448,28 @@ export async function unsubscribeAndArchiveSender({
 
 export function openUnsubscribePage(link: string) {
   window.open(link, "_blank", "noopener,noreferrer");
+}
+
+function getSenderStatsUrl(senderEmail: string, interactive = false) {
+  return `/api/user/stats/newsletters?${createSearchParams({
+    types: [],
+    search: senderEmail,
+    orderBy: "emails",
+    orderDirection: "desc",
+    includeMissingUnsubscribe: true,
+    ...(interactive ? { interactive: true } : {}),
+  })}`;
+}
+
+/**
+ * How long until the passive read asks again, or 0 to stop. Only a failure
+ * that looks like a passing error is retried: a refused grant needs the
+ * person, and a refusal for now is only deepened by asking again.
+ */
+export function filtersRetryDelayMs(
+  latest: Pick<NewsletterStatsResponse, "filtersFailure"> | undefined,
+  retriesSoFar: number,
+) {
+  if (latest?.filtersFailure !== "error") return 0;
+  return FILTERS_RETRY_DELAYS_MS[retriesSoFar] ?? 0;
 }
