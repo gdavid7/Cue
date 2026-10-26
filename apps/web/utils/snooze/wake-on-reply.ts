@@ -5,7 +5,6 @@ import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { parsedMessageMetadata } from "@/utils/mail-api/observations";
-import { normalizeInternetMessageId } from "@inboxzero/mail-core/messages";
 import prisma from "@/utils/prisma";
 import { unsnoozeThreads } from "@/utils/snooze/unsnooze";
 import type { ParsedMessage } from "@/utils/types";
@@ -14,6 +13,9 @@ import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
 // Earlier messages of the conversation looked up in each other account, to
 // find that account's copy of it.
 const MAX_COPY_LOOKUPS = 3;
+// A Message-ID's id-left@id-right, with nothing a provider search could read
+// as its own syntax. The sender writes these headers.
+const MESSAGE_ID_SHAPE = /^[^\s<>{}()"]+@[^\s<>{}()"]+$/;
 
 /**
  * Brings a snoozed conversation back early when someone else answers it,
@@ -45,11 +47,11 @@ export async function wakeSnoozedThreadOnReply({
     select: { updatedAt: true },
   });
   if (!snooze || !arrivedAfter(message, snooze.updatedAt)) return;
+  if (await isFromConnectedAccount(emailAccount, message)) return;
 
   const current = await provider.getMessage(message.id);
   if (!isInboxArrival(current)) return;
-  if (await isFromUser({ emailAccount, message: current, provider, logger }))
-    return;
+  if (await isFromAlias({ message: current, provider, logger })) return;
 
   const { unsnoozedThreadIds } = await unsnoozeThreads({
     emailAccountId: emailAccount.id,
@@ -91,6 +93,7 @@ async function wakeCopiesInOtherAccounts({
 
   const byAccount = new Map<string, typeof snoozes>();
   for (const snooze of snoozes) {
+    if (!arrivedAfter(message, snooze.updatedAt)) continue;
     byAccount.set(snooze.emailAccountId, [
       ...(byAccount.get(snooze.emailAccountId) ?? []),
       snooze,
@@ -107,9 +110,7 @@ async function wakeCopiesInOtherAccounts({
       const threadId = await findSnoozedCopy({
         provider,
         earlierMessageIds,
-        snoozes: accountSnoozes.filter((snooze) =>
-          arrivedAfter(message, snooze.updatedAt),
-        ),
+        snoozes: accountSnoozes,
       });
       if (!threadId) continue;
       const muted = await prisma.mutedThread.findUnique({
@@ -143,7 +144,6 @@ async function findSnoozedCopy({
   snoozes: { threadId: string }[];
 }) {
   const snoozed = new Set(snoozes.map((snooze) => snooze.threadId));
-  if (snoozed.size === 0) return null;
   for (const messageId of earlierMessageIds) {
     const copy = await provider.getMessageByRfc822MessageId(messageId);
     if (copy?.threadId && snoozed.has(copy.threadId)) return copy.threadId;
@@ -153,27 +153,30 @@ async function findSnoozedCopy({
 
 /**
  * The user's own mail never wakes a conversation: mail from any of their
- * connected accounts, and on Gmail, from a send-as alias. An unreadable alias
- * list counts as theirs, so the snooze just runs to its time.
+ * connected accounts, or, below, from a Gmail send-as alias.
  */
-async function isFromUser({
-  emailAccount,
+async function isFromConnectedAccount(
+  emailAccount: { email: string; userId: string },
+  message: ParsedMessage,
+) {
+  return isOwnAddress(message.headers.from, [
+    canonicalizeEmailAddress(emailAccount.email),
+    ...(await getUserOwnAddresses(emailAccount.userId)),
+  ]);
+}
+
+/** An unreadable alias list counts as theirs, so the snooze runs to its time. */
+async function isFromAlias({
   message,
   provider,
   logger,
 }: {
-  emailAccount: { email: string; userId: string };
   message: ParsedMessage;
   provider: EmailProvider;
   logger: Logger;
 }) {
-  const ownAddresses = [
-    canonicalizeEmailAddress(emailAccount.email),
-    ...(await getUserOwnAddresses(emailAccount.userId)),
-  ];
-  if (isOwnAddress(message.headers.from, ownAddresses)) return true;
   // Only Gmail lists send-as aliases; Outlook's signatures come from reading
-  // its sent mail, which holds no address the accounts above don't.
+  // its sent mail, which holds no address the connected accounts don't.
   if (provider.name !== "google") return false;
   try {
     const aliases = (await provider.getSignatures()).map((signature) =>
@@ -206,18 +209,17 @@ function arrivedAfter(message: ParsedMessage, snoozedAt: Date) {
   return getMessageTimestamp(message) > snoozedAt.getTime();
 }
 
-/** The conversation's earlier Message-IDs this message answers, newest first. */
+/**
+ * The conversation's earlier Message-IDs this message answers, newest first,
+ * as written: Message-IDs are case-sensitive, so a lookup keeps their case.
+ */
 function conversationMessageIds(message: ParsedMessage) {
-  const referenced = [
-    message.headers["in-reply-to"],
+  const tokens = [
+    ...(message.headers["in-reply-to"] ?? "").split(/\s+/),
     ...(message.headers.references ?? "").split(/\s+/).reverse(),
   ];
-  return [
-    ...new Set(
-      referenced.flatMap((value) => {
-        const id = normalizeInternetMessageId(value);
-        return id ? [id] : [];
-      }),
-    ),
-  ].slice(0, MAX_COPY_LOOKUPS);
+  const ids = tokens
+    .map((token) => token.replace(/^<(.*)>$/, "$1"))
+    .filter((id) => MESSAGE_ID_SHAPE.test(id));
+  return [...new Set(ids)].slice(0, MAX_COPY_LOOKUPS);
 }

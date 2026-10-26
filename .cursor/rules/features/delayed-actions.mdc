@@ -211,6 +211,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "ScheduledAction_executedActionId_key" ON "Sch
 - **Cancellation**: QStash message cancelled, database updated
 - **Retries**: QStash automatically retries failed deliveries
 
+## Snooze wake on reply
+
+Snoozed conversations (`SnoozedThread`, `utils/snooze/`) come back early when
+someone other than the user replies: the shared webhook processor calls
+`wakeSnoozedThreadOnReply` after the message's rules, which unsnoozes the
+conversation and its snoozed copies in the user's other accounts. Mute wins.
+Webhooks only reach premium accounts with AI access and rules or filing, so
+for other accounts a snooze runs to its time.
+
 ## Monitoring
 
 - Database status tracking: PENDING → EXECUTING → COMPLETED/FAILED

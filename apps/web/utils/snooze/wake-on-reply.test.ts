@@ -107,8 +107,11 @@ describe("wakeSnoozedThreadOnReply", () => {
   });
 
   it("doesn't wake for the user's own mail from another connected account", async () => {
-    await wake(reply({ headers: { from: "me.work@example.com" } as never }));
+    const provider = await wake(
+      reply({ headers: { from: "me.work@example.com" } as never }),
+    );
 
+    expect(provider.getMessage).not.toHaveBeenCalled();
     expect(unsnoozeThreads).not.toHaveBeenCalled();
   });
 
@@ -180,6 +183,9 @@ describe("wakeSnoozedThreadOnReply", () => {
     });
 
     beforeEach(() => {
+      vi.mocked(copyProvider.getMessageByRfc822MessageId).mockResolvedValue(
+        getMockParsedMessage({ id: "copy", threadId: "thread-b" }),
+      );
       vi.mocked(createEmailProvider).mockResolvedValue(copyProvider);
       prisma.snoozedThread.findMany.mockResolvedValue([
         {
@@ -212,6 +218,97 @@ describe("wakeSnoozedThreadOnReply", () => {
         provider: copyProvider,
         threadIds: ["thread-b"],
       });
+    });
+
+    function lookups() {
+      return vi
+        .mocked(copyProvider.getMessageByRfc822MessageId)
+        .mock.calls.map(([id]) => id);
+    }
+
+    it("looks up only well-formed Message-IDs, in their own case, from both headers", async () => {
+      vi.mocked(copyProvider.getMessageByRfc822MessageId).mockResolvedValue(
+        null,
+      );
+
+      await wake(
+        reply({
+          headers: {
+            "in-reply-to": "<Parent.A@Example.org> <x{y}@example.org>",
+            references:
+              '<Root@example.org> <a"b@example.org> <no-at-sign> (comment)@x.org',
+          } as never,
+        }),
+      );
+
+      expect(lookups()).toEqual(["Parent.A@Example.org", "Root@example.org"]);
+    });
+
+    it("looks up at most three earlier messages", async () => {
+      vi.mocked(copyProvider.getMessageByRfc822MessageId).mockResolvedValue(
+        null,
+      );
+
+      await wake(
+        reply({
+          headers: {
+            "in-reply-to": "<e@example.org>",
+            references:
+              "<a@example.org> <b@example.org> <c@example.org> <d@example.org>",
+          } as never,
+        }),
+      );
+
+      expect(lookups()).toEqual([
+        "e@example.org",
+        "d@example.org",
+        "c@example.org",
+      ]);
+    });
+
+    it("leaves a copy snoozed after the reply arrived alone", async () => {
+      prisma.snoozedThread.findMany.mockResolvedValue([
+        {
+          threadId: "thread-b",
+          updatedAt: new Date(Number(answeredAt) + 1000),
+          emailAccountId: "account-b",
+          emailAccount: { account: { provider: "microsoft" } },
+        },
+      ] as never);
+
+      await wake(reply());
+
+      expect(createEmailProvider).not.toHaveBeenCalled();
+      expect(unsnoozeThreads).toHaveBeenCalledOnce();
+    });
+
+    it("keeps waking other accounts when one fails", async () => {
+      prisma.snoozedThread.findMany.mockResolvedValue([
+        {
+          threadId: "thread-c",
+          updatedAt: snoozedAt,
+          emailAccountId: "account-c",
+          emailAccount: { account: { provider: "google" } },
+        },
+        {
+          threadId: "thread-b",
+          updatedAt: snoozedAt,
+          emailAccountId: "account-b",
+          emailAccount: { account: { provider: "microsoft" } },
+        },
+      ] as never);
+      vi.mocked(createEmailProvider)
+        .mockRejectedValueOnce(new Error("reconnect"))
+        .mockResolvedValueOnce(copyProvider);
+
+      await wake(reply());
+
+      expect(unsnoozeThreads).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          emailAccountId: "account-b",
+          threadIds: ["thread-b"],
+        }),
+      );
     });
 
     it("leaves a muted copy snoozed", async () => {

@@ -16,6 +16,8 @@ const SUBSCRIPTION_ID = "playwright-snooze-wake-subscription";
 const PREMIUM_ID = "playwright-snooze-wake-premium";
 const SENDER = { name: "Wren Example", address: "wren@example.com" };
 
+// Changes the shared emulator account (premium, filing, watch ids) and puts it
+// back; the emulated suite runs one spec at a time on one worker.
 test("a reply from someone else brings a snoozed conversation back early", async ({
   page,
 }, testInfo) => {
@@ -35,7 +37,8 @@ test("a reply from someone else brings a snoozed conversation back early", async
         `INSERT INTO "Premium"
           (id, "createdAt", "updatedAt", "pendingInvites", tier, "adminGrantTier", "adminGrantExpiresAt")
           VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ARRAY[]::text[],
-            'PLUS_MONTHLY', 'PLUS_MONTHLY', CURRENT_TIMESTAMP + INTERVAL '1 day')`,
+            'PLUS_MONTHLY', 'PLUS_MONTHLY', CURRENT_TIMESTAMP + INTERVAL '1 day')
+          ON CONFLICT (id) DO NOTHING`,
         [PREMIUM_ID],
       );
       await client.query(
@@ -75,7 +78,8 @@ test("a reply from someone else brings a snoozed conversation back early", async
       .toBe(false);
 
     // A reply has to arrive after the snooze to count as an answer.
-    await page.waitForTimeout(1100);
+    const snoozedAt = await readSnoozedAt(emailAccountId, threadId);
+    await expect.poll(() => Date.now() > snoozedAt).toBe(true);
     const historyId = await readGmailHistoryId(page, token);
     if (historyId) {
       await withClient((client) =>
@@ -166,6 +170,20 @@ test("a reply from someone else brings a snoozed conversation back early", async
   }
   expect(cleanupErrors).toEqual([]);
 });
+
+async function readSnoozedAt(emailAccountId: string, threadId: string) {
+  return withClient(async (client) => {
+    // Prisma stores UTC without a zone; the epoch reads it as such.
+    const result = await client.query<{ ms: string }>(
+      `SELECT EXTRACT(EPOCH FROM "updatedAt") * 1000 AS ms FROM "SnoozedThread"
+        WHERE "emailAccountId" = $1 AND "threadId" = $2 AND status = 'PENDING'`,
+      [emailAccountId, threadId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("The snooze isn't pending");
+    return Number(row.ms);
+  });
+}
 
 async function readAccountState(emailAccountId: string) {
   return withClient(async (client) => {

@@ -606,6 +606,10 @@ describe("Provider Edge Cases", () => {
     "google",
     "microsoft",
   ])("Snoozed conversations (%s)", (providerName) => {
+    beforeEach(() => {
+      vi.mocked(runRules).mockResolvedValue([]);
+    });
+
     function arrival(overrides: Record<string, unknown> = {}) {
       const message = getMockParsedMessage({
         id: "reply",
@@ -629,7 +633,14 @@ describe("Provider Edge Cases", () => {
     ) {
       await processHistoryItem(
         { messageId: "reply", threadId: "snoozed-thread" },
-        { ...baseOptions, provider, isNewMessage: true, ...options },
+        {
+          ...baseOptions,
+          provider,
+          isNewMessage: true,
+          hasAutomationRules: true,
+          hasAiAccess: true,
+          ...options,
+        },
       );
     }
 
@@ -652,12 +663,6 @@ describe("Provider Edge Cases", () => {
       expect(vi.mocked(runRules).mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(wakeSnoozedThreadOnReply).mock.invocationCallOrder[0],
       );
-    });
-
-    it("offers it without AI access too", async () => {
-      await processArrival(arrival());
-
-      expect(wakeSnoozedThreadOnReply).toHaveBeenCalledOnce();
     });
 
     it("keeps a muted conversation muted", async () => {
