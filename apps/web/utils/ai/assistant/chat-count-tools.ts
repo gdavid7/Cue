@@ -126,6 +126,7 @@ export async function countEmails({
 }) {
   const { emailAccountId, email, provider, userId, logger, localMailSearch } =
     options;
+  const startedAt = Date.now();
   const groupBy = input.groupBy ?? undefined;
   const chatAccount: CountAccount = { id: emailAccountId, email, provider };
   const chatSearch: AccountSearch = { query: input.query };
@@ -279,7 +280,15 @@ export async function countEmails({
   const counted = perAccount.filter(
     (item): item is Extract<typeof item, { total: number }> => "total" in item,
   );
+  const logUsage = (exact: boolean) =>
+    logger.info("countEmails ran", {
+      tool: "countEmails",
+      exact,
+      accountCount: perAccount.length,
+      durationMs: Date.now() - startedAt,
+    });
   if (!counted.length) {
+    logUsage(false);
     return {
       queryUsed: input.query,
       error:
@@ -372,15 +381,17 @@ export async function countEmails({
   const failed = perAccount.filter(
     (item): item is Extract<typeof item, { error: string }> => "error" in item,
   );
+  const exact =
+    counted.every((entry) => entry.exact) &&
+    failed.length === 0 &&
+    notSearched.length === 0 &&
+    accountsNotSearched === 0;
+  logUsage(exact);
 
   return {
     queryUsed: input.query,
     total: counted.reduce((sum, entry) => sum + entry.total, 0),
-    exact:
-      counted.every((entry) => entry.exact) &&
-      failed.length === 0 &&
-      notSearched.length === 0 &&
-      accountsNotSearched === 0,
+    exact,
     ...(groupBy && groups
       ? {
           groupBy,

@@ -74,6 +74,7 @@ describe("previewMatchingQueryAction", () => {
       chatId: CHAT,
       toolCallId: CALL,
       action: "archive",
+      conversations: 15,
       queryHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
   });
@@ -246,6 +247,7 @@ describe("Confirm and Cancel racing for one token", () => {
         chatId: "chat-2",
         toolCallId: CALL,
         confirmToken: token,
+        logger,
       }),
     ).rejects.toThrow(MATCHING_CONFIRM_EXPIRED);
   });
@@ -270,6 +272,7 @@ function cancel(confirmToken: string) {
     chatId: CHAT,
     toolCallId: CALL,
     confirmToken,
+    logger,
   });
 }
 

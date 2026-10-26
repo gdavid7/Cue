@@ -34,13 +34,15 @@ const FOLDER_OR_CATEGORY_SEARCH =
 const READ_STATE_SEARCH =
   "This search's read state can't be applied to every match; leave it out of the query or use threadIds from searchInbox.";
 
-// Founder rule R-1: the token holds ids, an enum and a keyed hash of the
-// search; the search itself stays in the chat's Postgres history.
+// Founder rule R-1: the token holds ids, an enum, a count and a keyed hash of
+// the search; the search itself stays in the chat's Postgres history.
 const storedConfirmationSchema = z.object({
   chatId: z.string().min(1),
   toolCallId: z.string().min(1),
   action: z.enum(MATCHING_BULK_ACTIONS),
   labelId: z.string().optional(),
+  // Only for the usage log at Confirm or Cancel.
+  conversations: z.number().int().optional(),
   queryHash: z.string().min(1),
 });
 
@@ -125,6 +127,7 @@ export async function previewMatchingQueryAction({
       toolCallId: confirmation.toolCallId,
       action: bulkAction,
       ...(labelId ? { labelId } : {}),
+      conversations: counted.conversations,
       queryHash: hashQuery(emailAccountId, query),
     } satisfies z.infer<typeof storedConfirmationSchema>),
     { ex: CONFIRM_TTL_SECONDS },
@@ -167,7 +170,7 @@ export async function confirmMatchingQueryAction({
 
   const matching = toChatMatchingScope({ query }, provider);
   if (!matching) throw new SafeError(FOLDER_OR_CATEGORY_SEARCH);
-  const { action, labelId } = stored;
+  const { action, labelId, conversations } = stored;
   let jobId: string;
   try {
     jobId = await startMatchingBulkJob({
@@ -185,6 +188,11 @@ export async function confirmMatchingQueryAction({
         .catch(() => undefined);
     throw error;
   }
+  logger.info("Matching action confirmed", {
+    outcome: "confirmed",
+    action,
+    conversations,
+  });
   return {
     jobId,
     action,
@@ -202,17 +210,24 @@ export async function cancelMatchingQueryAction({
   chatId,
   toolCallId,
   confirmToken,
+  logger,
 }: {
   emailAccountId: string;
   chatId: string;
   toolCallId: string;
   confirmToken: string;
+  logger: Logger;
 }) {
   const { stored } = await takeConfirmation(
     confirmationKey(emailAccountId, confirmToken),
     { chatId, toolCallId },
   );
   if (!stored) throw new SafeError(MATCHING_CONFIRM_EXPIRED);
+  logger.info("Matching action cancelled", {
+    outcome: "cancelled",
+    action: stored.action,
+    conversations: stored.conversations,
+  });
 }
 
 /**
