@@ -1090,7 +1090,7 @@ describe("HomeDashboard Your day", () => {
   });
 });
 
-describe("HomeDashboard Didn't send", () => {
+describe("HomeDashboard Didn't reach someone", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
@@ -1124,7 +1124,7 @@ describe("HomeDashboard Didn't send", () => {
     renderToday();
 
     const card = within(
-      screen.getByRole("list", { name: "Didn't send" }),
+      screen.getByRole("list", { name: "Didn't reach someone" }),
     ).getByRole("listitem");
     expect(within(card).getByText("Contract draft")).toBeTruthy();
     expect(
@@ -1169,9 +1169,9 @@ describe("HomeDashboard Didn't send", () => {
       renderToday();
 
       expect(
-        within(screen.getByRole("list", { name: "Didn't send" })).getAllByRole(
-          "listitem",
-        ),
+        within(
+          screen.getByRole("list", { name: "Didn't reach someone" }),
+        ).getAllByRole("listitem"),
       ).toHaveLength(2);
       expect(
         within(lane("Waiting on you")).getByText("Lunch on Friday?"),
@@ -1198,7 +1198,7 @@ describe("HomeDashboard Didn't send", () => {
       renderToday();
 
       const card = within(
-        screen.getByRole("list", { name: "Didn't send" }),
+        screen.getByRole("list", { name: "Didn't reach someone" }),
       ).getByRole("listitem");
       expect(
         within(card).getByRole("link", { name: "Open" }).getAttribute("href"),

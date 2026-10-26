@@ -22,7 +22,7 @@ const READ_LIMIT = 20;
 const NO_BOUNCES: RecentBounce[] = [];
 const NO_KEYS: ReadonlySet<string> = new Set();
 
-/** A bounce as Today's "Didn't send" card shows it. */
+/** A bounce as Today's "Didn't reach someone" card shows it. */
 export type TodayBounce = RecentBounce & {
   /** What the user sent, when the bounce is in its conversation; else its own subject. */
   title: string;
@@ -36,7 +36,7 @@ const dismissals = createBrowserCache<true>({
 });
 
 /**
- * Today's "Didn't send": inbox mail from the last week saying a message
+ * Today's "Didn't reach someone": inbox mail from the last week saying a message
  * didn't reach someone, read from this browser's local mail with no model
  * and no server. Once every account's first sync has finished, so a bounce
  * isn't shown and then found to have been answered by a later send. A
