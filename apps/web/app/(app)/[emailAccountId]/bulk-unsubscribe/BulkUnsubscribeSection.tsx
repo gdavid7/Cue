@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import useSWR from "swr";
 import { subDays } from "date-fns/subDays";
 import { ChevronDown } from "lucide-react";
 import { posthog } from "@/utils/analytics/posthog-client";
@@ -34,7 +33,7 @@ import {
   useBulkUnsubscribeShortcuts,
 } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/hooks";
 import { SenderPanel } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/SenderPanel";
-import { createSearchParams } from "@/utils/url";
+import { useNewsletterStats } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/use-newsletter-stats";
 import type { NewsletterFilterType } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/types";
 import {
   getSuggestedModeRows,
@@ -194,28 +193,10 @@ export function BulkUnsubscribe() {
     ...getDateRangeParams(dateRange),
     ...(search ? { search } : {}),
   };
-  const urlParams = createSearchParams(params);
-  const { data, isLoading, isValidating, error, mutate } = useSWR<
-    NewsletterStatsResponse,
-    { error: string }
-  >(`/api/user/stats/newsletters?${urlParams}`, {
-    refreshInterval,
-    keepPreviousData: true,
-  });
-
-  // Track whether we're switching views (filter, sort, search, date range, expanded)
-  // Show skeleton when validating with different params, not on background refresh
-  const [lastFetchedParams, setLastFetchedParams] = useState<string>("");
-  const currentParamsString = urlParams.toString();
-  const isParamsChanged = lastFetchedParams !== currentParamsString;
-  const showSkeleton = isValidating && isParamsChanged;
-
-  // Update lastFetchedParams when data arrives for new params
-  useEffect(() => {
-    if (!isValidating && data) {
-      setLastFetchedParams(currentParamsString);
-    }
-  }, [isValidating, data, currentParamsString]);
+  const { data, isLoading, error, mutate, showSkeleton } = useNewsletterStats(
+    params,
+    { refreshInterval },
+  );
 
   const { hasUnsubscribeAccess, mutate: refetchPremium } = usePremium();
 

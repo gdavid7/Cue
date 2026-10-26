@@ -130,7 +130,7 @@ describe("GET /api/user/stats/newsletters", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(waitBudget).toBeLessThanOrEqual(5000);
+    expect(waitBudget).toBe(3000);
   });
 
   it("lets a searched list wait for the filters in full at background priority, as the bulk search does", async () => {
@@ -171,7 +171,7 @@ describe("GET /api/user/stats/newsletters", () => {
     expect(quota?.maxTotalWaitMs).toBe(OPEN_THREAD_GMAIL_WAIT_MS);
   });
 
-  it("does not raise a list without a searched sender to interactive priority", async () => {
+  it("reads the list's filters at interactive priority, with the same short wait, when the page asks for it", async () => {
     let quota: ReturnType<typeof currentGmailQuotaContext> | undefined;
     mockEmailProvider.getFiltersList.mockImplementation(async () => {
       quota = currentGmailQuotaContext();
@@ -180,12 +180,29 @@ describe("GET /api/user/stats/newsletters", () => {
 
     await GET(
       new NextRequest(
-        "http://localhost/api/user/stats/newsletters?interactive=true",
+        "http://localhost/api/user/stats/newsletters?limit=50&interactive=true",
       ),
       {} as never,
     );
 
+    expect(quota?.priority).toBe("interactive");
+    expect(quota?.maxTotalWaitMs).toBe(3000);
+  });
+
+  it("keeps a refresh of the list at background priority", async () => {
+    let quota: ReturnType<typeof currentGmailQuotaContext> | undefined;
+    mockEmailProvider.getFiltersList.mockImplementation(async () => {
+      quota = currentGmailQuotaContext();
+      return [];
+    });
+
+    await GET(
+      new NextRequest("http://localhost/api/user/stats/newsletters?limit=50"),
+      {} as never,
+    );
+
     expect(quota?.priority).toBe("background");
+    expect(quota?.maxTotalWaitMs).toBe(3000);
   });
 
   it.each([

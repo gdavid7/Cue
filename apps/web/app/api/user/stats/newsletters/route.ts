@@ -26,9 +26,9 @@ import {
 } from "@/utils/senders/filters";
 
 // The provider filters only mark which senders are auto-archived, and the
-// list answers without them (`filtersAvailable: false`). The read runs at
-// background priority, which can wait 15 s at the Gmail gate behind a sync,
-// so it gets a short wait instead of holding up a list someone is looking at.
+// list answers without them (`filtersAvailable: false`). A busy gate can hold
+// the read for 15 s behind a sync, so it gets a short wait instead of holding
+// up a list someone is looking at.
 const FILTERS_GMAIL_WAIT_MS = 3000;
 
 const newsletterStatsQuery = z.object({
@@ -49,8 +49,9 @@ const newsletterStatsQuery = z.object({
     .transform((arr) => arr?.filter(Boolean)),
   includeMissingUnsubscribe: z.boolean().optional(),
   search: z.string().optional(),
-  // Set by the reader when a person's own action needs one sender's filters,
-  // so only that read jumps ahead of background work.
+  // Set when a person is waiting on this read: the reader acting on one
+  // sender, or the Bulk unsubscribe list loading a view they opened. Refreshes
+  // leave it off, so only those reads jump ahead of background work.
   interactive: z.boolean().optional(),
 });
 
@@ -187,13 +188,15 @@ function readEmailFilters({
   interactive?: boolean;
 }) {
   const read = () => getEmailFilters(emailProvider, logger);
-  // A person's own action needs one sender's filters, so the read goes ahead
-  // of background work, which a syncing account's budget can hold off for
-  // over a minute.
-  if (interactive && search)
-    return runWithGmailWaitBudget(OPEN_THREAD_GMAIL_WAIT_MS, read, {
-      priority: "interactive",
-    });
+  // A person is waiting, so the read goes ahead of background work. At
+  // background it also queues for the account's few background in-flight
+  // slots, which the wait budget does not bound: lists waited 7-13 s there.
+  if (interactive)
+    return runWithGmailWaitBudget(
+      search ? OPEN_THREAD_GMAIL_WAIT_MS : FILTERS_GMAIL_WAIT_MS,
+      read,
+      { priority: "interactive" },
+    );
   // A searched list waits for the filters in full.
   if (search) return read();
   return runWithGmailWaitBudget(FILTERS_GMAIL_WAIT_MS, read);
