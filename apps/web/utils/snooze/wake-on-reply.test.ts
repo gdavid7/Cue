@@ -41,7 +41,10 @@ function reply(overrides: Partial<ParsedMessage> = {}) {
   });
 }
 
-async function wake(message: ParsedMessage, providerName = "google") {
+async function wake(
+  message: ParsedMessage,
+  providerName: "google" | "microsoft" = "google",
+) {
   const provider = createMockEmailProvider({
     name: providerName,
     getMessage: vi.fn().mockResolvedValue(message),
@@ -74,7 +77,7 @@ describe("wakeSnoozedThreadOnReply", () => {
   it.each([
     "google",
     "microsoft",
-  ])("wakes the conversation when someone else replies (%s)", async (name) => {
+  ] as const)("wakes the conversation when someone else replies (%s)", async (name) => {
     const provider = await wake(reply(), name);
 
     expect(prisma.snoozedThread.findFirst).toHaveBeenCalledWith(
