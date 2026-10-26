@@ -70,7 +70,10 @@ describe("mailBulkJobListings", () => {
   it("sweeps every account's listings untouched for a day", async () => {
     prisma.mailBulkJobListing.deleteMany.mockResolvedValue({ count: 2 });
     // A real clock can tick between reading "now" here and in the sweep.
-    vi.useFakeTimers({ now: new Date("2026-10-26T12:00:00Z"), toFake: ["Date"] });
+    vi.useFakeTimers({
+      now: new Date("2026-10-26T12:00:00Z"),
+      toFake: ["Date"],
+    });
 
     try {
       await expect(mailBulkJobListings.deleteAbandoned()).resolves.toBe(2);
