@@ -6,6 +6,7 @@ import {
 } from "@/utils/email/rate-limit";
 import { createScopedLogger } from "@/utils/logger";
 import {
+  createGmailQuotaStats,
   currentGmailQuotaContext,
   GmailCallDeferredError,
   GMAIL_USER_UNITS_PER_MINUTE,
@@ -55,6 +56,9 @@ const WAITING_ACCOUNT = "account-waiting";
 const TURN_ACCOUNT = "account-turn";
 const STUCK_TURN_ACCOUNT = "account-stuck-turn";
 const TURN_GAP_ACCOUNT = "account-turn-gap";
+const UNHELD_SEARCH_ACCOUNT = "account-unheld-search";
+const HELD_SEARCH_ACCOUNT = "account-held-search";
+const EXTEND_ACCOUNT = "account-extend";
 const GIVE_UP_ACCOUNT = "account-give-up";
 const DEADLINE_ACCOUNT = "account-deadline";
 const BACKOFF_ACCOUNT = "account-backoff";
@@ -1362,7 +1366,7 @@ describe("Gmail quota gate", () => {
         }),
       );
     const start = Date.now();
-    const release = await holdGmailInteractiveDemand(TURN_ACCOUNT, 45_000);
+    const { release } = await holdGmailInteractiveDemand(TURN_ACCOUNT, 45_000);
 
     let stop = false;
     const scan = (async () => {
@@ -1393,6 +1397,94 @@ describe("Gmail quota gate", () => {
     expect(insight).toBe(true);
   });
 
+  it("cuts the wait of a turn's first search when the turn held demand while its model ran", async () => {
+    const searchWaitMs = async (
+      account: string,
+      holdFromTurnStart: boolean,
+    ) => {
+      const sync = (cost: number) =>
+        runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall({ emailAccountId: account, cost }, async () => {}),
+        );
+      // Sync has spent the bucket down to its floor and keeps reading.
+      await sync(1200);
+      let stop = false;
+      const scan = (async () => {
+        while (!stop) await sync(20);
+      })();
+      await vi.advanceTimersByTimeAsync(1000);
+      const { release } = holdFromTurnStart
+        ? await holdGmailInteractiveDemand(account, 45_000)
+        : { release: async () => {} };
+      // The model's first step, which picks the search.
+      await vi.advanceTimersByTimeAsync(1500);
+      const stats = createGmailQuotaStats();
+      // The search and its hydration, each at an interactive request's size.
+      const search = runWithGmailQuota(
+        { caller: "chat/searchInbox", priority: "interactive", stats },
+        async () => {
+          for (let request = 0; request < 2; request++)
+            await meterGmailCall(
+              { emailAccountId: account, cost: 350 },
+              async () => {},
+            );
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      await search;
+      stop = true;
+      await release();
+      await vi.advanceTimersByTimeAsync(1000);
+      await scan;
+      return stats.waitMs;
+    };
+
+    const unheld = await searchWaitMs(UNHELD_SEARCH_ACCOUNT, false);
+    const held = await searchWaitMs(HELD_SEARCH_ACCOUNT, true);
+    expect(unheld).toBeGreaterThan(0);
+    // Sync yielding lets the bucket refill for the search; the minute's
+    // budget, not the hold, decides the rest.
+    expect(held).toBeLessThan(unheld);
+  });
+
+  it("says whether a hold was set, and lengthening one leaves only the latest to release", async () => {
+    const admitted: number[] = [];
+    let stop = false;
+    const scan = (async () => {
+      while (!stop)
+        await runWithGmailQuota(
+          { caller: "mail/v1/enumeration", priority: "sync" },
+          () =>
+            meterGmailCall(
+              { emailAccountId: EXTEND_ACCOUNT, cost: 20 },
+              async () => {
+                admitted.push(Date.now());
+              },
+            ),
+        );
+    })();
+    const short = await holdGmailInteractiveDemand(EXTEND_ACCOUNT, 8000);
+    const shorter = await holdGmailInteractiveDemand(EXTEND_ACCOUNT, 4000);
+    const long = await holdGmailInteractiveDemand(EXTEND_ACCOUNT, 45_000);
+    expect([short.held, shorter.held, long.held]).toEqual([true, false, true]);
+
+    // The short hold's release finds a longer one in place and leaves it.
+    await short.release();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const yielding = admitted.filter((at) => at >= Date.now() - 1000).length;
+    expect(yielding * 20).toBeLessThanOrEqual(120);
+
+    await long.release();
+    await vi.advanceTimersByTimeAsync(2000);
+    const after = admitted.filter((at) => at >= Date.now() - 1000).length;
+    expect(after * 20).toBeGreaterThan(120);
+    stop = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await scan;
+  });
+
   it("gives sync its gap after a turn ends before a person's next yield", async () => {
     const admissions: Array<{ at: number; priority: string; cost: number }> =
       [];
@@ -1402,7 +1494,10 @@ describe("Gmail quota gate", () => {
           admissions.push({ at: Date.now(), priority, cost });
         }),
       );
-    const release = await holdGmailInteractiveDemand(TURN_GAP_ACCOUNT, 45_000);
+    const { release } = await holdGmailInteractiveDemand(
+      TURN_GAP_ACCOUNT,
+      45_000,
+    );
     await vi.advanceTimersByTimeAsync(5000);
     await release();
 

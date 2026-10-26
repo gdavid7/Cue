@@ -164,7 +164,7 @@ export async function getHomeData({
   // turn. Its many small reads would otherwise get only what sync leaves.
   const releaseDemand = requested
     ? holdGmailInteractiveDemand(emailAccountId, HOME_BUDGET_MS)
-    : Promise.resolve(() => undefined);
+    : Promise.resolve({ release: async () => {} });
   const priority = requested ? "interactive" : "sync";
   const gmail = <T>(lane: HomeLane | "labels", work: () => Promise<T>) =>
     withinBudget(
@@ -265,7 +265,7 @@ export async function getHomeData({
     getNextUp({ emailAccountId, ownAddresses, timeZone, logger, now }),
     // Only for marking rows with a reply Cue wrote; Today loads without it.
     getSuggestedReplySettings(emailAccountId).catch(() => null),
-  ]).finally(() => releaseDemand.then((release) => release()));
+  ]).finally(() => releaseDemand.then((demand) => demand.release()));
 
   const labels = labelsResult.ok ? labelsResult.value : [];
   const lane = (result: LaneResult<EmailThread[]>) =>

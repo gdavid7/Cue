@@ -125,6 +125,42 @@ describe("processSlackSlashCommand", () => {
     );
   });
 
+  it("lets go of what the turn holds once its reply is read, even when reading it fails", async () => {
+    const cleanup = vi.fn();
+    mockAiProcessAssistantChat.mockImplementation(
+      async ({
+        registerCleanup,
+      }: {
+        registerCleanup?: (cleanup: () => void) => void;
+      }) => {
+        registerCleanup?.(cleanup);
+        return { toUIMessageStream: vi.fn(() => ({})) };
+      },
+    );
+
+    await processSlackSlashCommand({
+      command: "/summary",
+      userId: "slack-user",
+      teamId: "slack-team",
+      responseUrl: "https://hooks.slack.com/commands/response",
+      logger,
+    });
+    expect(cleanup).toHaveBeenCalledTimes(1);
+
+    mockReadUIMessageStream.mockImplementationOnce(async function* () {
+      yield* [];
+      throw new Error("stream failed");
+    });
+    await processSlackSlashCommand({
+      command: "/summary",
+      userId: "slack-user",
+      teamId: "slack-team",
+      responseUrl: "https://hooks.slack.com/commands/response",
+      logger,
+    });
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
   it("answers from the originally connected mailbox, like a Slack DM does", async () => {
     await processSlackSlashCommand({
       command: "/summary",

@@ -203,37 +203,46 @@ async function runSlackSlashCommandAi({
     }),
   ]);
 
-  const result = await aiProcessAssistantChat({
-    messages: await convertToModelMessages([
-      ...existingMessages,
-      newUserMessage,
-    ]),
-    emailAccountId,
-    user: emailAccountUser,
-    chatId: chat.id,
-    chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
-    chatHasHistory: existingMessages.length > 0 || chat.compactions.length > 0,
-    memories,
-    inboxStats,
-    responseSurface: "messaging",
-    messagingPlatform: "slack",
-    onRulesStateExposed: (rulesRevision) => {
-      seenRulesRevision = mergeSeenRulesRevision(
-        seenRulesRevision,
-        rulesRevision,
-      );
-    },
-    logger,
-  });
-
-  const stream = result.toUIMessageStream<UIMessage>({
-    originalMessages: [...existingMessages, newUserMessage],
-    generateMessageId: () => assistantMessageId,
-  });
-
+  // Whatever the turn holds (such as Gmail's demand signal) is let go once
+  // its reply has been read, or reading it failed.
+  const turnCleanups: Array<() => void> = [];
   let assistantMessage: UIMessage | null = null;
-  for await (const message of readUIMessageStream<UIMessage>({ stream })) {
-    if (message.role === "assistant") assistantMessage = message;
+  try {
+    const result = await aiProcessAssistantChat({
+      messages: await convertToModelMessages([
+        ...existingMessages,
+        newUserMessage,
+      ]),
+      emailAccountId,
+      user: emailAccountUser,
+      chatId: chat.id,
+      chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
+      chatHasHistory:
+        existingMessages.length > 0 || chat.compactions.length > 0,
+      memories,
+      inboxStats,
+      responseSurface: "messaging",
+      messagingPlatform: "slack",
+      registerCleanup: (cleanup) => turnCleanups.push(cleanup),
+      onRulesStateExposed: (rulesRevision) => {
+        seenRulesRevision = mergeSeenRulesRevision(
+          seenRulesRevision,
+          rulesRevision,
+        );
+      },
+      logger,
+    });
+
+    const stream = result.toUIMessageStream<UIMessage>({
+      originalMessages: [...existingMessages, newUserMessage],
+      generateMessageId: () => assistantMessageId,
+    });
+
+    for await (const message of readUIMessageStream<UIMessage>({ stream })) {
+      if (message.role === "assistant") assistantMessage = message;
+    }
+  } finally {
+    for (const cleanup of turnCleanups.splice(0)) cleanup();
   }
 
   if (!assistantMessage) {
