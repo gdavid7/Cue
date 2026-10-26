@@ -218,14 +218,15 @@ test.describe("through mail sync, for an account webhooks skip", () => {
         }),
       );
 
-      // No webhook: opening the mailbox syncs the reply in.
+      // No webhook: opening the mailbox syncs the reply in. Each reload
+      // leaves the last sync time to finish, since leaving cancels it.
       await expect
         .poll(
           async () => {
             await openMail(page);
             return activeSnoozeCount(emailAccountId, threadId as string);
           },
-          { timeout: 120_000, intervals: [5000] },
+          { timeout: 180_000, intervals: [15_000] },
         )
         .toBe(0);
       await expect
@@ -302,7 +303,7 @@ test.describe("through mail sync, for an account webhooks skip", () => {
             await openMail(page);
             return messageInInbox(page, token, replyId);
           },
-          { timeout: 120_000, intervals: [5000] },
+          { timeout: 180_000, intervals: [15_000] },
         )
         .toBe(false);
       // Only the new message moves; what the user left in the inbox stays.

@@ -1,4 +1,4 @@
-import type { SyncReadResult } from "@inboxzero/mail-core/ports/mailbox-source";
+import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestLogger } from "@/__tests__/helpers";
 import { getMockParsedMessage } from "@/__tests__/mocks/email-provider.mock";
@@ -57,39 +57,26 @@ function arrival(overrides: Partial<ParsedMessage> = {}) {
 
 function syncPage(
   messages: { id: string; threadId: string; receivedAtMs?: number }[],
-): SyncReadResult[] {
-  return [
-    {
-      status: "page",
-      page: {
-        session: { accountId: emailAccountId, generation: "g" },
-        requestId: "r",
-        from: { streamId: "primary", generation: "g", checkpoint: null },
-        to: { streamId: "primary", generation: "g", checkpoint: "c" },
-        changes: messages.map((message) => ({
-          kind: "message_patch" as const,
-          key: { accountId: emailAccountId, messageId: message.id },
-          reference: {
-            provider: "google" as const,
-            messageId: message.id,
-            conversationId: message.threadId,
-            version: "1",
-          },
-          fields: {
-            roles: ["inbox" as const],
-            receivedAtMs: message.receivedAtMs ?? arrivedAt,
-          },
-        })),
-        requiredHydration: [],
-        roundComplete: true,
-      },
+): ProviderChange[] {
+  return messages.map((message) => ({
+    kind: "message_patch",
+    key: { accountId: emailAccountId, messageId: message.id },
+    reference: {
+      provider: "google",
+      messageId: message.id,
+      conversationId: message.threadId,
+      version: "1",
     },
-  ] as SyncReadResult[];
+    fields: {
+      roles: ["inbox"],
+      receivedAtMs: message.receivedAtMs ?? arrivedAt,
+    },
+  }));
 }
 
 async function react(
   message: ParsedMessage,
-  results = syncPage([message]),
+  changes = syncPage([message]),
   providerName: "google" | "microsoft" = "google",
 ) {
   const provider = createMockEmailProvider({
@@ -97,7 +84,7 @@ async function react(
     getMessage: vi.fn().mockResolvedValue(message),
     isSentMessage: vi.fn().mockReturnValue(false),
   });
-  await reactToSyncedNewMail({ emailAccountId, provider, results, logger });
+  await reactToSyncedNewMail({ emailAccountId, provider, changes, logger });
   return provider;
 }
 

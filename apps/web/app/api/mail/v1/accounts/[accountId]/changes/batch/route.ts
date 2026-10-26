@@ -56,7 +56,9 @@ export const POST = withEmailProvider(
       reactToSyncedNewMail({
         emailAccountId: request.auth.emailAccountId,
         provider: request.emailProvider,
-        results: results,
+        changes: results.flatMap((result) =>
+          result.status === "page" ? result.page.changes : [],
+        ),
         logger: request.logger,
       }),
     );

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackendMailboxSource } from "@inboxzero/mail-core/protocol/backend-adapter";
+import { getMockParsedMessage } from "@/__tests__/mocks/email-provider.mock";
 import { createScopedLogger } from "@/utils/logger";
 import { reactToSyncedNewMail } from "@/utils/mail-api/new-mail-reactions";
 import { POST } from "./route";
@@ -92,7 +93,7 @@ describe("POST /changes/batch", () => {
     getMailboxSyncPage.mockResolvedValue({
       cursor: "next",
       reset: false,
-      upsertedMessages: [],
+      upsertedMessages: [getMockParsedMessage({ id: "reply" })],
       deletedMessageIds: [],
       removedMessageIds: [],
       hasMore: false,
@@ -111,9 +112,15 @@ describe("POST /changes/batch", () => {
     expect(reactToSyncedNewMail).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         emailAccountId: "acc-1",
-        results: [
-          expect.objectContaining({ status: "page" }),
-          expect.objectContaining({ status: "page" }),
+        changes: [
+          expect.objectContaining({
+            kind: "message_patch",
+            key: { accountId: "acc-1", messageId: "reply" },
+          }),
+          expect.objectContaining({
+            kind: "message_patch",
+            key: { accountId: "acc-1", messageId: "reply" },
+          }),
         ],
       }),
     );

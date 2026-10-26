@@ -1,4 +1,4 @@
-import type { SyncReadResult } from "@inboxzero/mail-core/ports/mailbox-source";
+import type { ProviderChange } from "@inboxzero/mail-core/sync";
 import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import type { EmailProvider } from "@/utils/email/types";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
@@ -22,23 +22,23 @@ const MAX_MESSAGES_PER_SYNC = 20;
  * Mute (FT-19) and snooze wake-on-reply (FT-23) for the accounts provider
  * pushes don't process: no premium, no AI access, or nothing to run. Their
  * mail reaches Cue only through the client's mail sync, which every engine
- * (tab, worker, desktop) reads through mail/v1 changes, so this runs after
- * those reads. Accounts the pushes do process are left to them, where mute
+ * (tab, worker, desktop) reads through mail/v1 (a new device's first pages,
+ * then changes), so this runs after those reads. Accounts the pushes do process are left to them, where mute
  * and the wake run around the message's rules.
  */
 export async function reactToSyncedNewMail({
   emailAccountId,
   provider,
-  results,
+  changes,
   logger,
 }: {
   emailAccountId: string;
   provider: EmailProvider;
-  results: ReadonlyArray<SyncReadResult>;
+  changes: ReadonlyArray<ProviderChange>;
   logger: Logger;
 }) {
   try {
-    const arrivals = recentArrivals(results);
+    const arrivals = recentArrivals(changes);
     if (arrivals.length === 0) return;
     const threadIds = [...new Set(arrivals.map((arrival) => arrival.threadId))];
 
@@ -140,15 +140,13 @@ export async function reactToSyncedNewMail({
   }
 }
 
-function recentArrivals(results: ReadonlyArray<SyncReadResult>) {
+function recentArrivals(changes: ReadonlyArray<ProviderChange>) {
   const newMailAfter = Date.now() - NEW_MAIL_WINDOW_MS;
   const arrivals = new Map<
     string,
     { messageId: string; threadId: string; receivedAtMs: number }
   >();
-  for (const change of results.flatMap((result) =>
-    result.status === "page" ? result.page.changes : [],
-  )) {
+  for (const change of changes) {
     if (change.kind !== "message_patch") continue;
     const threadId = change.reference.conversationId;
     const receivedAtMs = change.fields.receivedAtMs ?? 0;

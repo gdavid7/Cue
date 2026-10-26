@@ -498,6 +498,7 @@
     "utils/snooze/unsnooze.ts",
     "utils/webhook/process-history-item.ts",
     "utils/mail-api/new-mail-reactions.ts",
+    "app/api/mail/v1/accounts/[accountId]/enumeration/route.ts",
     "utils/mute/archive-muted-message.ts"
   ]
 }
