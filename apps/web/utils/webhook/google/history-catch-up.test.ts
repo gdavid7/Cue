@@ -97,10 +97,18 @@ describe("scheduleGmailHistoryCatchUp", () => {
     expect(publishToQstashAt).toHaveBeenCalled();
   });
 
-  it("doesn't defer a catch-up that arrived a little early into its own delivery", async () => {
+  // Delivery windows are 90s wide, so where the retry falls in its window
+  // decides whether the early re-run would land in the same one.
+  it.each([
+    ["just after a window boundary", 500],
+    ["mid-window", 45_000],
+  ])("doesn't defer a catch-up that arrived a little early into its own delivery (retry %s)", async (_name, offsetInWindow) => {
+    const retryAt = new Date(
+      Math.floor(Date.UTC(2030, 0, 1) / 90_000) * 90_000 + offsetInWindow,
+    );
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
-      const retryAt = new Date(Date.now() + 10 * 60_000);
+      vi.setSystemTime(retryAt.getTime() - 10 * 60_000);
       await scheduleGmailHistoryCatchUp({
         emailAccountId: "account-1",
         historyId: "1500",
