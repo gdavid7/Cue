@@ -266,6 +266,32 @@ describe("Confirm and Cancel racing for one token", () => {
   });
 });
 
+describe("a token issued before conversations was stored", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store.clear();
+  });
+
+  it("still confirms", async () => {
+    const token = await previewTokenWithoutConversations();
+
+    await expect(confirm({ confirmToken: token })).resolves.toMatchObject({
+      jobId: "job-1",
+      action: "archive",
+    });
+  });
+
+  it("still cancels", async () => {
+    const token = await previewTokenWithoutConversations();
+
+    await expect(cancel(token)).resolves.toBeUndefined();
+    await expect(confirm({ confirmToken: token })).rejects.toThrow(
+      MATCHING_CONFIRM_EXPIRED,
+    );
+    expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
+  });
+});
+
 function cancel(confirmToken: string) {
   return cancelMatchingQueryAction({
     emailAccountId: ACCOUNT,
@@ -296,6 +322,15 @@ async function previewToken() {
   if (!("confirmToken" in result) || !result.confirmToken)
     throw new Error("no token");
   return result.confirmToken;
+}
+
+async function previewTokenWithoutConversations() {
+  const token = await previewToken();
+  const [key, value] = [...store.entries()][0] ?? [];
+  if (!key || !value) throw new Error("no stored token");
+  const { conversations: _conversations, ...legacy } = JSON.parse(value);
+  store.set(key, JSON.stringify(legacy));
+  return token;
 }
 
 function confirm(
