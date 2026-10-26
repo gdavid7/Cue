@@ -4,7 +4,12 @@ import { useEffect, useState } from "react";
 import { ClockIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { extractEmailAddresses } from "@/utils/email";
-import { formatTheirTime, getRecipientLocalTime } from "./recipient-local-time";
+import { formatUtcOffset } from "@/utils/email/date-header-offset";
+import {
+  formatTheirTime,
+  getRecipientLocalTime,
+  type SenderOffsets,
+} from "./recipient-local-time";
 
 const MINUTE_MS = 60_000;
 
@@ -20,7 +25,7 @@ export function RecipientLocalTime({
   sendAt,
   onSendAt,
 }: {
-  senderUtcOffsets: Record<string, number | null> | undefined;
+  senderUtcOffsets: SenderOffsets | undefined;
   recipientHeaders: string[];
   ownEmails: string[];
   sendAt: string;
@@ -41,11 +46,11 @@ export function RecipientLocalTime({
   const theirs = getRecipientLocalTime({
     recipients,
     senderOffsets: senderUtcOffsets,
-    ownOffsetMinutes: -now.getTimezoneOffset(),
+    ownOffsetAt: (ms) => -new Date(ms).getTimezoneOffset(),
     now,
   });
   if (!theirs) return null;
-  const { offsetMinutes, outsideDay, nextMorning } = theirs;
+  const { offsetMinutes, offerMorning, nextMorning } = theirs;
 
   return (
     <div className="flex min-h-6 flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
@@ -56,7 +61,7 @@ export function RecipientLocalTime({
         <ClockIcon aria-hidden className="size-3" />
         {formatTheirTime(now, offsetMinutes)} their time
       </span>
-      {outsideDay && onSendAt && !sendAt && (
+      {offerMorning && onSendAt && !sendAt && (
         <Button
           type="button"
           variant="ghostMuted"
@@ -90,11 +95,4 @@ function useMinuteClock() {
     };
   }, []);
   return now;
-}
-
-function formatUtcOffset(offsetMinutes: number) {
-  const sign = offsetMinutes < 0 ? "-" : "+";
-  const absolute = Math.abs(offsetMinutes);
-  const minutes = absolute % 60;
-  return `UTC${sign}${Math.floor(absolute / 60)}${minutes ? `:${String(minutes).padStart(2, "0")}` : ""}`;
 }

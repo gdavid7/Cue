@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatDateWithUtcOffset,
+  formatUtcOffset,
   parseDateHeaderOffsetMinutes,
 } from "@/utils/email/date-header-offset";
 
@@ -77,5 +78,14 @@ describe("formatDateWithUtcOffset", () => {
     expect(formatDateWithUtcOffset(ms, undefined)).toBe(
       "2026-10-26T02:12:45.000Z",
     );
+  });
+});
+
+describe("formatUtcOffset", () => {
+  it("writes whole and part-hour offsets as people read them", () => {
+    expect(formatUtcOffset(60)).toBe("UTC+1");
+    expect(formatUtcOffset(330)).toBe("UTC+5:30");
+    expect(formatUtcOffset(-210)).toBe("UTC-3:30");
+    expect(formatUtcOffset(-600)).toBe("UTC-10");
   });
 });

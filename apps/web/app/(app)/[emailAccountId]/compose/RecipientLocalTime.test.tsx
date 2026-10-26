@@ -5,12 +5,15 @@ import { RecipientLocalTime } from "./RecipientLocalTime";
 
 const ANA = "ana@example.com";
 // The test machine's own offset never equals Ana's: pick hers from it.
-const ANA_OFFSET =
-  -new Date(Date.UTC(2026, 9, 26, 2, 12)).getTimezoneOffset() === 60 ? 120 : 60;
+const OWN_OFFSETS = [
+  Date.UTC(2026, 9, 26, 2, 12),
+  Date.UTC(2026, 9, 25, 9),
+].map((ms) => -new Date(ms).getTimezoneOffset());
+const ANA_OFFSET = OWN_OFFSETS.includes(60) ? 180 : 60;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
-  // 03:12 or 04:12 for Ana, before her day starts.
+  // 03:12 or 05:12 for Ana, before her day starts.
   vi.setSystemTime(new Date(Date.UTC(2026, 9, 26, 2, 12)));
 });
 afterEach(() => {
@@ -24,7 +27,12 @@ function renderLine(
   const onSendAt = vi.fn();
   render(
     <RecipientLocalTime
-      senderUtcOffsets={{ [ANA]: ANA_OFFSET }}
+      senderUtcOffsets={{
+        [ANA]: {
+          offsetMinutes: ANA_OFFSET,
+          sentAt: Date.UTC(2026, 9, 25, 9),
+        },
+      }}
       recipientHeaders={[`Ana <${ANA}>`, "", ""]}
       ownEmails={["me@example.com"]}
       sendAt=""

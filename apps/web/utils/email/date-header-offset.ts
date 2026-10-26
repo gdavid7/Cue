@@ -45,3 +45,11 @@ export function formatDateWithUtcOffset(
   const minutes = String(absolute % 60).padStart(2, "0");
   return `${local.slice(0, -1)}${sign}${hours}:${minutes}`;
 }
+
+/** An offset as people read it: UTC+1, UTC-3:30. */
+export function formatUtcOffset(offsetMinutes: number) {
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  const minutes = absolute % 60;
+  return `UTC${sign}${Math.floor(absolute / 60)}${minutes ? `:${String(minutes).padStart(2, "0")}` : ""}`;
+}

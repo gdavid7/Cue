@@ -204,6 +204,7 @@ import {
 import { useFileDropTarget } from "./useFileDropTarget";
 import { getAttachmentTotalLimitBytes } from "@/utils/email/draft-attachment-upload";
 import { RecipientLocalTime } from "./RecipientLocalTime";
+import type { SenderOffsets } from "./recipient-local-time";
 import {
   finishComposeDraftMove,
   getMoveErrorMessage,
@@ -241,7 +242,7 @@ export type ReplyingToEmail = {
   signatureHtml?: string;
   date?: string;
   /** Each sender's UTC offset in their latest message in the thread. */
-  senderUtcOffsets?: Record<string, number | null>;
+  senderUtcOffsets?: SenderOffsets;
 };
 
 type ComposeEmailFormProps = {

@@ -34,6 +34,5 @@ export const LOCAL_MIGRATIONS = {
     id: 19,
     name: "0019-operations-account-status-index",
   },
-  // 20 is taken by the drafts-lane index on another branch.
   senderUtcOffsets: { id: 21, name: "0021-sender-utc-offsets" },
 } as const;

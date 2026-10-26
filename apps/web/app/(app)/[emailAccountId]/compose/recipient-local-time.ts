@@ -6,11 +6,14 @@ const DAY_START_HOUR = 8;
 const DAY_END_HOUR = 20;
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
+const MAX_OFFSET_AGE_MS = 30 * DAY_MS;
+const MIN_SCHEDULE_LEAD_MS = 10 * MINUTE_MS;
 
 /**
- * The UTC offset in each sender's latest message in the thread, by lowercase
- * address. A sender whose latest message gave no offset maps to null:
- * an older message's offset may be from before they moved or travelled.
+ * The UTC offset in each sender's latest message in the thread, and when it
+ * was sent, by lowercase address. A sender whose latest message gave no
+ * offset maps to a null offset: an older message's offset may be from before
+ * they moved or travelled.
  */
 export function getLatestSenderOffsets(
   messages: {
@@ -33,36 +36,46 @@ export function getLatestSenderOffsets(
       latest.set(address, { sentAt, date: headers.date });
   }
   return Object.fromEntries(
-    [...latest].map(([address, { date }]) => [
+    [...latest].map(([address, { sentAt, date }]) => [
       address,
-      parseDateHeaderOffsetMinutes(date) ?? null,
+      { offsetMinutes: parseDateHeaderOffsetMinutes(date) ?? null, sentAt },
     ]),
   );
 }
 
+export type SenderOffsets = ReturnType<typeof getLatestSenderOffsets>;
+
 /**
  * The recipient's clock, read from the offset their last message was written
  * in. Null unless the reply goes to exactly one person whose offset is known,
- * differs from the user's, and is not zero: some servers rewrite every Date
- * header to UTC, so zero says nothing reliable about where they are.
+ * is not zero (some servers rewrite every Date header to UTC), was written in
+ * the last month, and differs from the user's own offset both now and when
+ * they sent it: a colleague in the user's zone who wrote before a DST change
+ * would otherwise show an hour off.
  */
 export function getRecipientLocalTime({
   recipients,
   senderOffsets,
-  ownOffsetMinutes,
+  ownOffsetAt,
   now,
 }: {
+  /** Lowercase addresses, without the user's own. */
   recipients: string[];
-  senderOffsets: Record<string, number | null>;
-  ownOffsetMinutes: number;
+  senderOffsets: SenderOffsets;
+  /** The user's UTC offset in minutes at an instant. */
+  ownOffsetAt: (ms: number) => number;
   now: Date;
 }) {
   if (recipients.length !== 1) return null;
-  const offsetMinutes = senderOffsets[recipients[0].toLowerCase()];
+  const sender = senderOffsets[recipients[0]];
+  if (!sender) return null;
+  const { offsetMinutes, sentAt } = sender;
   if (
     offsetMinutes == null ||
     offsetMinutes === 0 ||
-    offsetMinutes === ownOffsetMinutes
+    now.getTime() - sentAt > MAX_OFFSET_AGE_MS ||
+    offsetMinutes === ownOffsetAt(now.getTime()) ||
+    offsetMinutes === ownOffsetAt(sentAt)
   )
     return null;
   // Their wall clock, held in a Date's UTC fields.
@@ -72,11 +85,17 @@ export function getRecipientLocalTime({
   morning.setUTCHours(DAY_START_HOUR, 0, 0, 0);
   if (morning.getTime() <= theirs.getTime())
     morning.setTime(morning.getTime() + DAY_MS);
+  const nextMorning = new Date(morning.getTime() - offsetMinutes * MINUTE_MS);
+  const outsideDay = hour < DAY_START_HOUR || hour >= DAY_END_HOUR;
   return {
     offsetMinutes,
     now,
-    outsideDay: hour < DAY_START_HOUR || hour >= DAY_END_HOUR,
-    nextMorning: new Date(morning.getTime() - offsetMinutes * MINUTE_MS),
+    outsideDay,
+    nextMorning,
+    // Moments before their 8:00, scheduling for it would only delay the send.
+    offerMorning:
+      outsideDay &&
+      nextMorning.getTime() - now.getTime() >= MIN_SCHEDULE_LEAD_MS,
   };
 }
 
