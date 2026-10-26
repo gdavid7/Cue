@@ -118,6 +118,93 @@ describe("undo of a conversation change", () => {
     await store.close();
   });
 
+  it("keeps a change that may have reached the provider even after a later attempt is throttled", async () => {
+    const store = await mailbox(["m1"]);
+    await archive(store, "archive", "m1");
+    const first = await claimCommand(store);
+    // The response was lost after Gmail may have applied it.
+    await settleNotDispatched(store, first, "unavailable");
+    const second = await claimCommand(store, Date.now() + 1000);
+    await settleNotDispatched(store, second, "throttled");
+
+    expect(await cancel(store, "archive")).toEqual({ status: "too_late" });
+    await store.close();
+  });
+
+  it("keeps a change reclaimed from an expired attempt even when the reclaim is throttled", async () => {
+    const store = await mailbox(["m1"]);
+    await archive(store, "archive", "m1");
+    await claimCommand(store);
+    // The first attempt may still be in flight when its lease runs out.
+    const reclaimed = await claimCommand(store, Date.now() + 31_000);
+    await settleNotDispatched(store, reclaimed, "throttled");
+
+    expect(await cancel(store, "archive")).toEqual({ status: "too_late" });
+    await store.close();
+  });
+
+  it("keeps a throttled change once an attempt it did not stamp has been made", async () => {
+    const driver = createNodeSqliteDriver();
+    const store = await mailbox(["m1"], { driver });
+    await archive(store, "archive", "m1");
+    const attempt = await claimCommand(store);
+    await settleNotDispatched(store, attempt, "throttled");
+    // A tab on a build without the stamp claims and settles it again.
+    await driver.write((tx) =>
+      tx.execute(
+        "UPDATE operations SET attempt_id = 'older-build' WHERE command_id = 'archive'",
+      ),
+    );
+
+    expect(await cancel(store, "archive")).toEqual({ status: "too_late" });
+    await store.close();
+  });
+
+  it("holds an interactive undo behind an earlier conversation change still preparing", async () => {
+    const store = await mailbox(["m1"], { complete: false });
+    await store.admitConversations({
+      accountId: "acc-1",
+      commandId: "archive-c-m1",
+      conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+      change: { kind: "archive" },
+      observedRevision: await store.readRevision(),
+    });
+    const preparation = await claimAny(store);
+    expect(preparation?.kind).toBe("prepare");
+    await store.admitMetadata({
+      accountId: "acc-1",
+      commandId: "undo-m1",
+      targets: [{ accountId: "acc-1", messageId: "m1" }],
+      change: { kind: "unarchive" },
+      priority: "interactive",
+    });
+
+    expect(await claimAny(store)).toBeNull();
+    await store.close();
+  });
+
+  it("prepares an interactive undo only after an earlier change to the same conversation", async () => {
+    const store = await mailbox(["m1"], { complete: false });
+    for (const [commandId, change, priority] of [
+      ["archive-c-m1", { kind: "archive" }, undefined],
+      ["undo-c-m1", { kind: "unarchive" }, "interactive"],
+    ] as const) {
+      await store.admitConversations({
+        accountId: "acc-1",
+        commandId,
+        conversations: [{ accountId: "acc-1", conversationId: "c-m1" }],
+        change,
+        ...(priority ? { priority } : {}),
+        observedRevision: await store.readRevision(),
+      });
+    }
+
+    const next = await claimAny(store);
+    if (next?.kind !== "prepare") throw new Error("expected prepare");
+    expect(next.commandId).toBe("archive-c-m1");
+    await store.close();
+  });
+
   it("sends an interactive undo ahead of earlier changes to other mail", async () => {
     const store = await mailbox(["m1", "m2", "m3"]);
     await archive(store, "archive-m1", "m1");
@@ -212,8 +299,17 @@ describe("undo of a conversation change", () => {
   });
 });
 
-async function mailbox(messageIds: string[]) {
-  const store = await createSqliteMailStore(createNodeSqliteDriver());
+async function mailbox(
+  messageIds: string[],
+  {
+    driver = createNodeSqliteDriver(),
+    complete = true,
+  }: {
+    driver?: ReturnType<typeof createNodeSqliteDriver>;
+    complete?: boolean;
+  } = {},
+) {
+  const store = await createSqliteMailStore(driver);
   await store.ensureAccount({
     accountId: "acc-1",
     provider: "google",
@@ -233,7 +329,7 @@ async function mailbox(messageIds: string[]) {
       roundComplete: true,
     },
   });
-  for (const messageId of messageIds) {
+  for (const messageId of complete ? messageIds : []) {
     await store.applyConversationMembership({
       session: { accountId: "acc-1", generation: "g1" },
       page: {
@@ -269,6 +365,22 @@ async function unarchive(
     targets: [{ accountId: "acc-1", messageId }],
     change: { kind: "unarchive" },
   });
+}
+
+async function settleNotDispatched(
+  store: MailStore,
+  work: Extract<ClaimedWork, { kind: "command" }>,
+  reason: "throttled" | "unavailable",
+) {
+  await store.settleAttempt({
+    attemptId: work.attemptId,
+    operation: work.operation,
+    result: { status: "not_dispatched", reason, retryAfterMs: 1 },
+  });
+}
+
+function cancel(store: MailStore, operationId: string) {
+  return store.cancelOperation({ accountId: "acc-1", operationId });
 }
 
 async function claimAny(store: MailStore, nowMs = Date.now()) {
