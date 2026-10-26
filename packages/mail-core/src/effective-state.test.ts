@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyMetadataChange,
+  applyMetadataPatch,
   deriveEffectiveMessage,
   type ConfirmedMessage,
 } from "./effective-state";
@@ -71,6 +72,24 @@ describe("applyMetadataChange", () => {
       applyMetadataChange(snoozed, { kind: "set_spam", spam: false })
         .snoozedUntilMs,
     ).toBe(5);
+  });
+});
+
+describe("applyMetadataPatch", () => {
+  const snoozed = applyMetadataChange(confirmed, {
+    kind: "snooze",
+    untilMs: 5,
+  });
+
+  it("ends a snooze when the provider puts the message back in the inbox", () => {
+    expect(
+      applyMetadataPatch(snoozed, { roles: ["inbox"] }).snoozedUntilMs,
+    ).toBeNull();
+  });
+
+  it("keeps a snooze through a provider copy outside the inbox", () => {
+    expect(applyMetadataPatch(snoozed, { read: true }).snoozedUntilMs).toBe(5);
+    expect(applyMetadataPatch(snoozed, { roles: [] }).snoozedUntilMs).toBe(5);
   });
 });
 

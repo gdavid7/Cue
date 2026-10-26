@@ -31,6 +31,7 @@ import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-limit-error";
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isTransientMessageProcessingError } from "@/utils/webhook/message-processing-failure";
+import { wakeSnoozedThreadOnReply } from "@/utils/snooze/wake-on-reply";
 
 export type SharedProcessHistoryOptions = {
   provider: EmailProvider;
@@ -281,8 +282,26 @@ export async function processHistoryItem(
       );
     };
 
+    // Mute returned above, so it wins. A wake is new mail like any other: the
+    // push for this message follows the usual rules.
+    const wakeSnoozedThread = async () => {
+      if (options.isUpdate) return;
+      try {
+        await wakeSnoozedThreadOnReply({
+          emailAccount,
+          message: parsedMessage,
+          provider,
+          logger,
+        });
+      } catch (error) {
+        // The conversation still comes back when its snooze ends.
+        logger.error("Failed to wake a snoozed conversation", { error });
+      }
+    };
+
     if (!hasAiAccess) {
       logger.info("Skipping. No AI access.");
+      await wakeSnoozedThread();
       scheduleWebPush();
       return;
     }
@@ -364,6 +383,7 @@ export async function processHistoryItem(
       );
     }
 
+    await wakeSnoozedThread();
     scheduleWebPush();
 
     // Process attachments for document filing (runs in parallel with rules if both enabled)
