@@ -33,12 +33,22 @@ const MESSAGE_ID_SHAPE = /^[^\s<>{}()"]+@[^\s<>{}()"]+$/;
 export async function wakeSnoozedThreadOnReply({
   emailAccount,
   message,
+  messageIsCurrent = false,
   provider,
+  withoutClaim,
   logger,
 }: {
   emailAccount: { id: string; email: string; userId: string };
   message: ParsedMessage;
+  /** The message was just read from the provider, so no second read is needed. */
+  messageIsCurrent?: boolean;
   provider: EmailProvider;
+  /**
+   * When Redis can't say whether another path already woke for this reply:
+   * the webhook wakes anyway, as before the claim existed; mail sync, which
+   * runs on every device, leaves it to the snooze's own time.
+   */
+  withoutClaim: "wake" | "skip";
   logger: Logger;
 }): Promise<boolean> {
   if (!message.threadId) return false;
@@ -54,24 +64,33 @@ export async function wakeSnoozedThreadOnReply({
   if (!snooze || !arrivedAfter(message, snooze.updatedAt)) return false;
   if (await isFromConnectedAccount(emailAccount, message)) return false;
 
-  const current = await provider.getMessage(message.id);
+  // The webhook's message predates its rules, which may have filed it away.
+  const current = messageIsCurrent
+    ? message
+    : await provider.getMessage(message.id);
   if (!isInboxArrival(current)) return false;
   if (await isFromAlias({ message: current, provider, logger })) return false;
 
   // The webhook and every device's mail sync can see the same reply.
   const claim = { emailAccountId: emailAccount.id, messageId: message.id };
-  if (!(await claimNewMailReaction({ ...claim, logger }))) return false;
+  const claimed = await claimNewMailReaction({ ...claim, logger });
+  if (claimed === "taken") return false;
+  if (claimed === "unavailable" && withoutClaim === "skip") return false;
+  const release = () =>
+    claimed === "claimed"
+      ? releaseNewMailReaction({ ...claim, logger })
+      : Promise.resolve();
   const { unsnoozedThreadIds } = await unsnoozeThreads({
     emailAccountId: emailAccount.id,
     logger,
     provider,
     threadIds: [message.threadId],
   }).catch(async (error) => {
-    await releaseNewMailReaction({ ...claim, logger });
+    await release();
     throw error;
   });
   if (unsnoozedThreadIds.length === 0) {
-    await releaseNewMailReaction({ ...claim, logger });
+    await release();
     return false;
   }
   logger.info("Woke a snoozed conversation on a reply");

@@ -11,8 +11,8 @@ const CLAIM_TTL_SECONDS = 2 * 24 * 60 * 60;
  * every device's mail sync can each see the same message, and only the first
  * acts. The key holds only the account and message IDs (R-1).
  *
- * Fails closed: without Redis nothing moves, and a snoozed conversation still
- * comes back when its snooze ends.
+ * `taken` means another path already moved it. `unavailable` means Redis
+ * couldn't say, and each caller decides whether to act anyway.
  */
 export async function claimNewMailReaction({
   emailAccountId,
@@ -22,17 +22,17 @@ export async function claimNewMailReaction({
   emailAccountId: string;
   messageId: string;
   logger: Logger;
-}): Promise<boolean> {
+}): Promise<"claimed" | "taken" | "unavailable"> {
   try {
     const result = await redis.set(
       getKey(emailAccountId, messageId),
       "claimed",
       { ex: CLAIM_TTL_SECONDS, nx: true },
     );
-    return result === "OK";
+    return result === "OK" ? "claimed" : "taken";
   } catch (error) {
     logger.warn("Failed to claim a new message's move", { error });
-    return false;
+    return "unavailable";
   }
 }
 

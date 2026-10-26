@@ -210,6 +210,7 @@ export async function processHistoryItem(
           emailAccountId,
           messageId,
           provider,
+          withoutClaim: "archive",
           logger,
         });
         logger.info("Skipping. Muted conversation's new message.", {
@@ -380,6 +381,7 @@ export async function processHistoryItem(
           emailAccount,
           message: parsedMessage,
           provider,
+          withoutClaim: "wake",
           logger,
         });
       } catch (error) {

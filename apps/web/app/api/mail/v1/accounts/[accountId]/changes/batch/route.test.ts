@@ -90,14 +90,16 @@ describe("POST /changes/batch", () => {
   // Mute and snooze wake-on-reply reach accounts provider pushes skip through
   // the mail sync every engine reads here.
   it("hands each synced page to mute and snooze", async () => {
-    getMailboxSyncPage.mockResolvedValue({
-      cursor: "next",
-      reset: false,
-      upsertedMessages: [getMockParsedMessage({ id: "reply" })],
-      deletedMessageIds: [],
-      removedMessageIds: [],
-      hasMore: false,
-    });
+    getMailboxSyncPage.mockImplementation(
+      async ({ folderId }: { folderId: string }) => ({
+        cursor: "next",
+        reset: false,
+        upsertedMessages: [getMockParsedMessage({ id: `${folderId}-reply` })],
+        deletedMessageIds: [],
+        removedMessageIds: [],
+        hasMore: false,
+      }),
+    );
 
     await routeBackedSource().readChangesBatch({
       session: { accountId: "acc-1", generation: "g1" },
@@ -114,12 +116,10 @@ describe("POST /changes/batch", () => {
         emailAccountId: "acc-1",
         changes: [
           expect.objectContaining({
-            kind: "message_patch",
-            key: { accountId: "acc-1", messageId: "reply" },
+            key: { accountId: "acc-1", messageId: "inbox-reply" },
           }),
           expect.objectContaining({
-            kind: "message_patch",
-            key: { accountId: "acc-1", messageId: "reply" },
+            key: { accountId: "acc-1", messageId: "archive-reply" },
           }),
         ],
       }),

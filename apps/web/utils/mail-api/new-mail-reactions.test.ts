@@ -96,7 +96,7 @@ describe("reactToSyncedNewMail", () => {
     prisma.emailAccount.findUnique.mockResolvedValue(
       unprocessedAccount as never,
     );
-    vi.mocked(claimNewMailReaction).mockResolvedValue(true);
+    vi.mocked(claimNewMailReaction).mockResolvedValue("claimed");
     vi.mocked(wakeSnoozedThreadOnReply).mockResolvedValue(true);
   });
 
@@ -109,7 +109,7 @@ describe("reactToSyncedNewMail", () => {
         { threadId: "thread-a", createdAt: mutedAt },
       ] as never);
       prisma.snoozedThread.findMany.mockResolvedValue([
-        { threadId: "thread-a" },
+        { threadId: "thread-a", updatedAt: mutedAt },
       ] as never);
     });
 
@@ -123,7 +123,7 @@ describe("reactToSyncedNewMail", () => {
     });
 
     it("doesn't archive again when the webhook or another device already did", async () => {
-      vi.mocked(claimNewMailReaction).mockResolvedValue(false);
+      vi.mocked(claimNewMailReaction).mockResolvedValue("taken");
 
       const provider = await react(arrival(), undefined, providerName);
 
@@ -157,9 +157,99 @@ describe("reactToSyncedNewMail", () => {
     expect(provider.archiveMessage).not.toHaveBeenCalled();
   });
 
+  // Sync runs on every device, so without Redis to say who moved first it
+  // leaves the move to the webhook or the snooze's own time.
+  it("moves nothing when Redis can't say whether another path already did", async () => {
+    prisma.mutedThread.findMany.mockResolvedValue([
+      { threadId: "thread-a", createdAt: mutedAt },
+    ] as never);
+    vi.mocked(claimNewMailReaction).mockResolvedValue("unavailable");
+
+    const provider = await react(arrival());
+
+    expect(provider.archiveMessage).not.toHaveBeenCalled();
+  });
+
+  it("skips the read for Cue's own archive syncing back", async () => {
+    prisma.mutedThread.findMany.mockResolvedValue([
+      { threadId: "thread-a", createdAt: mutedAt },
+    ] as never);
+    const [change] = syncPage([{ id: "reply", threadId: "thread-a" }]);
+    if (change.kind !== "message_patch") throw new Error("not a patch");
+
+    const provider = await react(arrival(), [
+      { ...change, fields: { ...change.fields, roles: [] } },
+    ]);
+
+    expect(prisma.mutedThread.findMany).not.toHaveBeenCalled();
+    expect(provider.getMessage).not.toHaveBeenCalled();
+  });
+
+  // The client's cursor has moved on, so mail past the cap is never seen
+  // again: the cap counts only mail in muted or snoozed conversations.
+  it("reaches a muted reply behind a page of other new mail", async () => {
+    prisma.mutedThread.findMany.mockResolvedValue([
+      { threadId: "thread-muted", createdAt: mutedAt },
+    ] as never);
+    const others = Array.from({ length: 30 }, (_, index) => ({
+      id: `other-${index}`,
+      threadId: `thread-${index}`,
+      receivedAtMs: arrivedAt + 1000 + index,
+    }));
+    const muted = arrival({ id: "muted-reply", threadId: "thread-muted" });
+
+    const provider = await react(
+      muted,
+      syncPage([
+        ...others,
+        {
+          id: "muted-reply",
+          threadId: "thread-muted",
+          receivedAtMs: arrivedAt,
+        },
+      ]),
+    );
+
+    expect(provider.getMessage).toHaveBeenCalledExactlyOnceWith("muted-reply");
+    expect(provider.archiveMessage).toHaveBeenCalledExactlyOnceWith(
+      "muted-reply",
+    );
+  });
+
+  it("doesn't read mail that was already there when it was snoozed", async () => {
+    prisma.snoozedThread.findMany.mockResolvedValue([
+      { threadId: "thread-a", updatedAt: new Date(arrivedAt + 1000) },
+    ] as never);
+
+    const provider = await react(arrival());
+
+    expect(provider.getMessage).not.toHaveBeenCalled();
+    expect(wakeSnoozedThreadOnReply).not.toHaveBeenCalled();
+  });
+
+  it("tries an older reply on the page when the newest doesn't wake it", async () => {
+    prisma.snoozedThread.findMany.mockResolvedValue([
+      { threadId: "thread-a", updatedAt: mutedAt },
+    ] as never);
+    vi.mocked(wakeSnoozedThreadOnReply)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    await react(
+      arrival(),
+      syncPage([
+        { id: "reply", threadId: "thread-a" },
+        { id: "older", threadId: "thread-a", receivedAtMs: arrivedAt - 1000 },
+        { id: "oldest", threadId: "thread-a", receivedAtMs: arrivedAt - 2000 },
+      ]),
+    );
+
+    expect(wakeSnoozedThreadOnReply).toHaveBeenCalledTimes(2);
+  });
+
   it("wakes a snoozed conversation once for a page of replies", async () => {
     prisma.snoozedThread.findMany.mockResolvedValue([
-      { threadId: "thread-a" },
+      { threadId: "thread-a", updatedAt: mutedAt },
     ] as never);
     const message = arrival();
 
@@ -178,9 +268,12 @@ describe("reactToSyncedNewMail", () => {
         userId: "user",
       }),
       message,
+      messageIsCurrent: true,
       provider,
+      withoutClaim: "skip",
       logger,
     });
+    expect(provider.getMessage).toHaveBeenCalledOnce();
     expect(provider.archiveMessage).not.toHaveBeenCalled();
     expect(notifyMailboxChanged).toHaveBeenCalledOnce();
   });

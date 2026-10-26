@@ -12,29 +12,38 @@ import {
  * drafts, mail they moved back) stays where it is. The webhook and mail sync
  * can both see the message; whichever comes second does nothing, and a failed
  * archive throws for its caller to handle, leaving the message to try again.
+ *
+ * `withoutClaim` is what to do when Redis can't say whether another path
+ * already archived it: the webhook archives anyway, since archiving twice is
+ * harmless and a muted reply left in the inbox is not; mail sync, which runs
+ * on every device, leaves it.
  */
 export async function archiveMutedMessage({
   emailAccountId,
   messageId,
   provider,
+  withoutClaim,
   logger,
 }: {
   emailAccountId: string;
   messageId: string;
   provider: EmailProvider;
+  withoutClaim: "archive" | "skip";
   logger: Logger;
-}): Promise<"archived" | "already_handled"> {
-  const claimed = await claimNewMailReaction({
+}): Promise<"archived" | "already_handled" | "skipped"> {
+  const claim = await claimNewMailReaction({
     emailAccountId,
     messageId,
     logger,
   });
-  if (!claimed) return "already_handled";
+  if (claim === "taken") return "already_handled";
+  if (claim === "unavailable" && withoutClaim === "skip") return "skipped";
   try {
     await provider.archiveMessage(messageId);
     return "archived";
   } catch (error) {
-    await releaseNewMailReaction({ emailAccountId, messageId, logger });
+    if (claim === "claimed")
+      await releaseNewMailReaction({ emailAccountId, messageId, logger });
     throw error;
   }
 }

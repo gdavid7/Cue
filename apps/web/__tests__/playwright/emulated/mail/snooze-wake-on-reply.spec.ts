@@ -173,7 +173,9 @@ test("a reply from someone else brings a snoozed conversation back early", async
 
 // Accounts without premium AI and rules or filing get no webhook processing;
 // their mail reaches Cue through the mail engine's sync, which must apply
-// snooze wake-on-reply and mute too.
+// snooze wake-on-reply and mute too. Each case takes the account's premium
+// away (the emulator stack doesn't bypass premium checks) and delivers no
+// webhook, so only the sync path can pass it.
 test.describe("through mail sync, for an account webhooks skip", () => {
   test("a reply wakes a snoozed conversation", async ({ page }, testInfo) => {
     const subject = `Snooze sync wake ${Date.now()}`;

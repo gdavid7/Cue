@@ -3,6 +3,7 @@ import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import type { EmailProvider } from "@/utils/email/types";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
 import type { Logger } from "@/utils/logger";
+import { isRecentInboxArrival } from "@/utils/mail-api/recent-inbox-arrival";
 import { notifyMailboxChanged } from "@/utils/mailbox-push";
 import { archiveMutedMessage } from "@/utils/mute/archive-muted-message";
 import { premiumEntitlementSelect } from "@/utils/premium";
@@ -13,9 +14,8 @@ import {
 } from "@/utils/snooze/wake-on-reply";
 import { getWebhookProcessing } from "@/utils/webhook/validate-webhook-account";
 
-// Older changes are reads, archives and moves, not mail arriving.
-const NEW_MAIL_WINDOW_MS = 24 * 60 * 60 * 1000;
-// Bounds the provider reads one sync can cost; the rest wait for the next.
+// Bounds the provider reads one sync can cost. Only mail in muted or snoozed
+// conversations counts toward it.
 const MAX_MESSAGES_PER_SYNC = 20;
 
 /**
@@ -23,8 +23,14 @@ const MAX_MESSAGES_PER_SYNC = 20;
  * pushes don't process: no premium, no AI access, or nothing to run. Their
  * mail reaches Cue only through the client's mail sync, which every engine
  * (tab, worker, desktop) reads through mail/v1 (a new device's first pages,
- * then changes), so this runs after those reads. Accounts the pushes do process are left to them, where mute
- * and the wake run around the message's rules.
+ * then changes), so this runs after those reads. Accounts the pushes do
+ * process are left to them, where mute and the wake run around the message's
+ * rules.
+ *
+ * Best effort: the client's cursor has already moved past these changes, so
+ * nothing here is retried (only the webhook path retries). A message it
+ * misses stays in the inbox, and a snoozed conversation still comes back when
+ * its snooze ends.
  */
 export async function reactToSyncedNewMail({
   emailAccountId,
@@ -53,10 +59,24 @@ export async function reactToSyncedNewMail({
           threadId: { in: threadIds },
           status: SnoozedThreadStatus.PENDING,
         },
-        select: { threadId: true },
+        select: { threadId: true, updatedAt: true },
       }),
     ]);
-    if (mutes.length === 0 && snoozes.length === 0) return;
+    const mutedAt = latestByThread(
+      mutes.map((mute) => [mute.threadId, mute.createdAt]),
+    );
+    const snoozedAt = latestByThread(
+      snoozes.map((snooze) => [snooze.threadId, snooze.updatedAt]),
+    );
+
+    // Mail already in the conversation when it was muted or snoozed is what
+    // the user muted or snoozed, not an arrival. Mute wins over snooze.
+    const candidates = arrivals.filter((arrival) => {
+      const since =
+        mutedAt.get(arrival.threadId) ?? snoozedAt.get(arrival.threadId);
+      return since !== undefined && arrival.receivedAtMs > since;
+    });
+    if (candidates.length === 0) return;
 
     const emailAccount = await prisma.emailAccount.findUnique({
       where: { id: emailAccountId },
@@ -77,31 +97,24 @@ export async function reactToSyncedNewMail({
     });
     if (!emailAccount || !getWebhookProcessing(emailAccount).skip) return;
 
-    const mutedAt = new Map(
-      mutes.map((mute) => [mute.threadId, mute.createdAt.getTime()]),
-    );
-    const snoozed = new Set(snoozes.map((snooze) => snooze.threadId));
+    const woken = new Set<string>();
     let changed = false;
 
-    for (const arrival of arrivals.slice(0, MAX_MESSAGES_PER_SYNC)) {
-      const muteTime = mutedAt.get(arrival.threadId);
+    for (const arrival of candidates.slice(0, MAX_MESSAGES_PER_SYNC)) {
+      const muted = mutedAt.has(arrival.threadId);
+      if (!muted && woken.has(arrival.threadId)) continue;
       try {
-        // Mute wins: a muted conversation's mail never wakes it.
-        if (muteTime !== undefined) {
-          // Mail already in the conversation when it was muted is what the
-          // user muted, not an arrival.
-          if (arrival.receivedAtMs <= muteTime) continue;
-          const message = await provider.getMessage(arrival.messageId);
-          if (
-            !isInboxArrival(message) ||
-            provider.isSentMessage(message) ||
-            isIgnoredSender(message.headers.from)
-          )
+        const message = await provider.getMessage(arrival.messageId);
+        if (provider.isSentMessage(message)) continue;
+
+        if (muted) {
+          if (!isInboxArrival(message) || isIgnoredSender(message.headers.from))
             continue;
           const outcome = await archiveMutedMessage({
             emailAccountId,
             messageId: message.id,
             provider,
+            withoutClaim: "skip",
             logger,
           });
           if (outcome === "archived") {
@@ -111,24 +124,23 @@ export async function reactToSyncedNewMail({
           continue;
         }
 
-        if (!snoozed.has(arrival.threadId)) continue;
-        // Newest first, so one reply wakes the conversation for the page.
-        snoozed.delete(arrival.threadId);
-        const message = await provider.getMessage(arrival.messageId);
-        if (provider.isSentMessage(message)) continue;
         const woke = await wakeSnoozedThreadOnReply({
           emailAccount,
           message,
+          messageIsCurrent: true,
           provider,
+          withoutClaim: "skip",
           logger,
         });
-        if (woke) changed = true;
+        // Otherwise an older reply on the page may still answer it.
+        if (woke) {
+          woken.add(arrival.threadId);
+          changed = true;
+        }
       } catch (error) {
-        // A muted message stays in the inbox and a snoozed conversation comes
-        // back when its snooze ends.
         logger.warn("Failed to apply mute or snooze to a synced message", {
           error,
-          muted: muteTime !== undefined,
+          muted,
         });
       }
     }
@@ -140,24 +152,32 @@ export async function reactToSyncedNewMail({
   }
 }
 
+/** Newest first, one entry per message. */
 function recentArrivals(changes: ReadonlyArray<ProviderChange>) {
-  const newMailAfter = Date.now() - NEW_MAIL_WINDOW_MS;
+  const now = Date.now();
   const arrivals = new Map<
     string,
     { messageId: string; threadId: string; receivedAtMs: number }
   >();
   for (const change of changes) {
-    if (change.kind !== "message_patch") continue;
+    if (!isRecentInboxArrival(change, now)) continue;
     const threadId = change.reference.conversationId;
-    const receivedAtMs = change.fields.receivedAtMs ?? 0;
-    if (!threadId || receivedAtMs < newMailAfter) continue;
+    if (!threadId) continue;
     const roles = change.fields.roles ?? [];
     if (roles.includes("sent") || roles.includes("draft")) continue;
     arrivals.set(change.key.messageId, {
       messageId: change.key.messageId,
       threadId,
-      receivedAtMs,
+      receivedAtMs: change.fields.receivedAtMs ?? 0,
     });
   }
   return [...arrivals.values()].sort((a, b) => b.receivedAtMs - a.receivedAtMs);
+}
+
+function latestByThread(rows: [threadId: string, at: Date][]) {
+  const latest = new Map<string, number>();
+  for (const [threadId, at] of rows) {
+    latest.set(threadId, Math.max(latest.get(threadId) ?? 0, at.getTime()));
+  }
+  return latest;
 }
