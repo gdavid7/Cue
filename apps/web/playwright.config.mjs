@@ -833,6 +833,8 @@ function createDarkModeReceiptHtml() {
       </table>
       <p style="margin:20px 0 0;font-size:13px"><a href="https://example.com/receipt" style="color:#0645ad">View receipt online</a></p>
     </td></tr></table>
+    <img src="https://open.lumen.example/o/LC-20931.gif" width="1" height="1" alt="" border="0">
+    <img src="https://beacon.lumen.example/e/LC-20931" style="display:none">
   </body></html>`;
 }
 
