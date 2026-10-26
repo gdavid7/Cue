@@ -44,6 +44,21 @@ describe("rewriteHtmlForImageProxy", () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("drops tracking pixels instead of minting proxy URLs for them", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { rewriteHtmlForImageProxy } = await loadModule({
+      NEXT_PUBLIC_IMAGE_PROXY_BASE_URL: "https://proxy.example.com/image",
+    });
+
+    const result = await rewriteHtmlForImageProxy(
+      '<img src="https://cdn.example.com/photo.png" /><img src="https://news.example.com/o.gif" width="1" height="1" />',
+      createTestLogger(),
+    );
+
+    expect(result.html).toContain("cdn.example.com%2Fphoto.png");
+    expect(result.html).not.toContain("news.example.com");
+  });
+
   it("rewrites remote assets with signed proxy URLs when a signing secret is configured", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { rewriteHtmlForImageProxy } = await loadModule({
