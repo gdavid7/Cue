@@ -85,14 +85,16 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("Didn't send", () => {
+describe("Didn't reach someone", () => {
   it("shows a card per bounce, named for what was sent when it can be", async () => {
     renderCards();
 
-    const list = await screen.findByRole("list", { name: "Didn't send" });
+    const list = await screen.findByRole("list", {
+      name: "Didn't reach someone",
+    });
     const cards = within(list).getAllByRole("listitem");
     expect(cards).toHaveLength(2);
-    expect(within(cards[0]).getByText("Didn't send")).toBeTruthy();
+    expect(within(cards[0]).getByText("Didn't reach someone")).toBeTruthy();
     // The sent message's subject, without its reply prefix.
     expect(within(cards[0]).getByText("Quarterly plan")).toBeTruthy();
     expect(within(cards[0]).queryByText(PLAN.subject)).toBeNull();
@@ -109,7 +111,9 @@ describe("Didn't send", () => {
   it("opens each bounce's conversation in its own account", async () => {
     renderCards({ named: true });
 
-    const list = await screen.findByRole("list", { name: "Didn't send" });
+    const list = await screen.findByRole("list", {
+      name: "Didn't reach someone",
+    });
     const [plan, lone] = within(list).getAllByRole("listitem");
     expect(
       within(plan).getByRole("link", { name: "Open" }).getAttribute("href"),
@@ -125,7 +129,9 @@ describe("Didn't send", () => {
 
   it("stays dismissed in this browser, until a newer bounce in the conversation", async () => {
     const { unmount } = renderCards();
-    const list = await screen.findByRole("list", { name: "Didn't send" });
+    const list = await screen.findByRole("list", {
+      name: "Didn't reach someone",
+    });
     const [plan] = within(list).getAllByRole("listitem");
     within(plan).getByRole("link", { name: "Open" }).focus();
 
@@ -160,7 +166,9 @@ describe("Didn't send", () => {
 
     fireEvent.click(dismiss);
 
-    expect(screen.queryByRole("list", { name: "Didn't send" })).toBeNull();
+    expect(
+      screen.queryByRole("list", { name: "Didn't reach someone" }),
+    ).toBeNull();
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByTestId("today")),
     );
@@ -177,7 +185,9 @@ describe("Didn't send", () => {
     );
     renderCards();
 
-    const list = await screen.findByRole("list", { name: "Didn't send" });
+    const list = await screen.findByRole("list", {
+      name: "Didn't reach someone",
+    });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(
       within(list).getAllByRole("button", { name: "Dismiss" })[0],
@@ -191,11 +201,11 @@ describe("Didn't send", () => {
     const { rerender } = renderCards();
     await settle();
     expect(mocks.queryRecentBounces).not.toHaveBeenCalled();
-    expect(screen.queryByText("Didn't send")).toBeNull();
+    expect(screen.queryByText("Didn't reach someone")).toBeNull();
 
     mocks.inbox.data = view({ synced: true });
     rerender(<Harness />);
-    expect((await screen.findAllByText("Didn't send")).length).toBe(2);
+    expect((await screen.findAllByText("Didn't reach someone")).length).toBe(2);
   });
 
   it("doesn't ask an engine that can't answer", async () => {
@@ -213,7 +223,9 @@ describe("Didn't send", () => {
     mocks.queryRecentBounces.mockResolvedValue([]);
     renderCards();
     await settle();
-    expect(screen.queryByRole("list", { name: "Didn't send" })).toBeNull();
+    expect(
+      screen.queryByRole("list", { name: "Didn't reach someone" }),
+    ).toBeNull();
   });
 });
 

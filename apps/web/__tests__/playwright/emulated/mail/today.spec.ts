@@ -502,7 +502,7 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
   }
 });
 
-test("Didn't send: a bounce shows on Today named for what was sent, opens its conversation and stays dismissed", async ({
+test("Didn't reach someone: a bounce shows on Today named for what was sent, opens its conversation and stays dismissed", async ({
   page,
 }, testInfo) => {
   test.setTimeout(480_000);
@@ -525,7 +525,7 @@ test("Didn't send: a bounce shows on Today named for what was sent, opens its co
     from: bounceFrom,
     subject: `Undeliverable: ${otherSubject}`,
   });
-  const cards = page.getByRole("list", { name: "Didn't send" });
+  const cards = page.getByRole("list", { name: "Didn't reach someone" });
   const card = cards.getByRole("listitem").filter({ hasText: subject });
   try {
     const emailAccountId = await getEmailAccountId(page);
@@ -538,7 +538,7 @@ test("Didn't send: a bounce shows on Today named for what was sent, opens its co
         waitUntil: "domcontentloaded",
       });
       await expect(card).toBeVisible({ timeout: 120_000 });
-      await expect(card).toContainText("Didn't send");
+      await expect(card).toContainText("Didn't reach someone");
       // Named for what the user sent, not the bounce's own subject.
       await expect(card).not.toContainText("Undeliverable");
       for (const size of [
