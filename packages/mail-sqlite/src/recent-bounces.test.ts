@@ -7,7 +7,11 @@ import type {
 } from "@inboxzero/mail-core/sync";
 import type { SqliteDriver } from "./driver";
 import { createNodeSqliteDriver } from "./node-sqlite";
-import { BOUNCE_CANDIDATES_SQL, isBounceSender } from "./recent-bounces";
+import {
+  BOUNCE_CANDIDATES_SQL,
+  isBounceSender,
+  LAST_SENT_SQL,
+} from "./recent-bounces";
 import { createSqliteMailStore } from "./store";
 
 const HOUR = 3_600_000;
@@ -77,7 +81,6 @@ describe("readRecentBounces", () => {
         subject: "Delivery Status Notification (Failure)",
         sentSubject: null,
         receivedAtMs: NOW - HOUR,
-        answeredAfter: false,
       },
       {
         accountId: "a",
@@ -86,7 +89,6 @@ describe("readRecentBounces", () => {
         subject: "Non remis : Lunch",
         sentSubject: null,
         receivedAtMs: NOW - 2 * HOUR,
-        answeredAfter: false,
       },
     ]);
   });
@@ -166,60 +168,6 @@ describe("readRecentBounces", () => {
 
     expect((await read(store)).map((bounce) => bounce.messageId)).toEqual([
       "failure",
-    ]);
-  });
-
-  it("says when someone else wrote in the conversation after the bounce", async () => {
-    const { store } = await setup();
-    await write(store, [
-      mail({
-        id: "sent",
-        conversationId: "c1",
-        from: ME,
-        roles: ["sent"],
-        at: NOW - 4 * HOUR,
-      }),
-      mail({
-        id: "bounce",
-        conversationId: "c1",
-        from: "mailer-daemon@x.example",
-        at: NOW - 3 * HOUR,
-      }),
-      mail({
-        id: "reply",
-        conversationId: "c1",
-        from: "Alice <alice@example.com>",
-        at: NOW - HOUR,
-      }),
-      mail({
-        id: "sent2",
-        conversationId: "c2",
-        from: ME,
-        roles: ["sent"],
-        at: NOW - 4 * HOUR,
-      }),
-      mail({
-        id: "before",
-        conversationId: "c2",
-        from: "Bob <bob@example.com>",
-        at: NOW - 3 * HOUR,
-      }),
-      mail({
-        id: "bounce2",
-        conversationId: "c2",
-        from: "postmaster@x.example",
-        at: NOW - 2 * HOUR,
-      }),
-    ]);
-
-    expect(
-      (await read(store)).map((bounce) => [
-        bounce.messageId,
-        bounce.answeredAfter,
-      ]),
-    ).toEqual([
-      ["bounce2", false],
-      ["bounce", true],
     ]);
   });
 
@@ -348,6 +296,24 @@ describe("readRecentBounces", () => {
     expect(
       details.some((detail) => /^SCAN (b|effective_messages)\b/.test(detail)),
     ).toBe(false);
+  });
+  it("finds what the user last sent through the conversation index", async () => {
+    const { driver } = await setup();
+    const plan = await driver.read((tx) =>
+      tx.query(`EXPLAIN QUERY PLAN ${LAST_SENT_SQL}`, ["a", "c1"]),
+    );
+    const details = plan.map((row) => String(row.detail));
+
+    expect(details).toContainEqual(
+      expect.stringMatching(
+        /^SEARCH effective_messages USING INDEX effective_conversation \(account_id=\? AND conversation_id=\?\)/,
+      ),
+    );
+    expect(details.some((detail) => detail.startsWith("SCAN"))).toBe(false);
+    // Read newest first along the index, not sorted after.
+    expect(details.some((detail) => detail.includes("TEMP B-TREE"))).toBe(
+      false,
+    );
   });
 });
 

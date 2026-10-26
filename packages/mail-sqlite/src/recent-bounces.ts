@@ -18,18 +18,11 @@ WHERE account_id = ? AND in_inbox = 1 AND received_at_ms >= ?
 ORDER BY received_at_ms DESC`;
 
 /** What the user last sent in a conversation, on the conversation index. */
-const LAST_SENT_SQL = `SELECT subject, received_at_ms
+export const LAST_SENT_SQL = `SELECT subject, received_at_ms
 FROM effective_messages
 WHERE account_id = ? AND conversation_id = ?
   AND in_sent = 1 AND in_draft = 0 AND in_trash = 0
 ORDER BY received_at_ms DESC
-LIMIT 1`;
-
-/** Whether anyone else's mail arrived in a conversation after a time. */
-const RECEIVED_AFTER_SQL = `SELECT 1
-FROM effective_messages
-WHERE account_id = ? AND conversation_id = ? AND received_at_ms > ?
-  AND in_sent = 0 AND in_draft = 0 AND in_trash = 0 AND in_spam = 0
 LIMIT 1`;
 
 /**
@@ -60,11 +53,6 @@ export async function readRecentBounces(
       const receivedAtMs = Number(row.received_at_ms);
       const [sent] = await tx.query(LAST_SENT_SQL, [accountId, conversationId]);
       if (sent && Number(sent.received_at_ms) > receivedAtMs) continue;
-      const answered = await tx.query(RECEIVED_AFTER_SQL, [
-        accountId,
-        conversationId,
-        receivedAtMs,
-      ]);
       bounces.push({
         accountId,
         conversationId,
@@ -72,7 +60,6 @@ export async function readRecentBounces(
         subject: String(row.subject),
         sentSubject: sent && String(sent.subject) ? String(sent.subject) : null,
         receivedAtMs,
-        answeredAfter: answered.length > 0,
       });
       found++;
     }

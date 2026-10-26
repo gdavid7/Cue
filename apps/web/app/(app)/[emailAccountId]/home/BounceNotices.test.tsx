@@ -25,7 +25,6 @@ const PLAN: RecentBounce = {
   subject: "Delivery Status Notification (Failure)",
   sentSubject: "Re: Quarterly plan",
   receivedAtMs: Date.now() - HOUR,
-  answeredAfter: false,
 };
 const LONE: RecentBounce = {
   accountId: "b",
@@ -34,7 +33,6 @@ const LONE: RecentBounce = {
   subject: "Undeliverable: Lunch",
   sentSubject: null,
   receivedAtMs: Date.now() - 2 * DAY,
-  answeredAfter: false,
 };
 
 const mocks = vi.hoisted(() => ({

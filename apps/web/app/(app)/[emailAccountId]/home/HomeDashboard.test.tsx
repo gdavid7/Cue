@@ -1104,7 +1104,6 @@ describe("HomeDashboard Didn't send", () => {
         subject: "Delivery Status Notification (Failure)",
         sentSubject: "Contract draft",
         receivedAtMs: Date.now(),
-        answeredAfter: false,
       },
     ];
   });
@@ -1115,7 +1114,7 @@ describe("HomeDashboard Didn't send", () => {
     mocks.dismissedBounces = [];
   });
 
-  it("shows the card first, and its conversation leaves Waiting on and the inbox list", () => {
+  it("adds a card first and leaves the bounced conversation's rows where they are", () => {
     mocks.home.data = {
       ...homeData([thread("a", "Quarterly numbers")]),
       waiting: [thread("sent", "Contract draft"), thread("w", "Intro to Sam")],
@@ -1131,62 +1130,53 @@ describe("HomeDashboard Didn't send", () => {
     expect(
       within(card).getByRole("link", { name: "Open" }).getAttribute("href"),
     ).toBe("/mail/u/0/inbox/sent?from=today");
-    expect(within(lane("Waiting on")).queryByText("Contract draft")).toBeNull();
-    expect(within(lane("Waiting on")).getByText("Intro to Sam")).toBeTruthy();
-    expect(
-      within(lane("Also in your inbox")).queryByText("Contract draft"),
-    ).toBeNull();
-  });
-
-  it("once dismissed, the conversation is back in Waiting on and the inbox list", () => {
-    mocks.dismissedBounces = ["sent-bounce"];
-    mocks.home.data = {
-      ...homeData([thread("a", "Quarterly numbers")]),
-      waiting: [thread("sent", "Contract draft"), thread("w", "Intro to Sam")],
-      alsoInInbox: [thread("sent", "Contract draft")],
-    };
-
-    renderToday();
-
-    expect(screen.queryByRole("list", { name: "Didn't send" })).toBeNull();
+    // A bounce's From isn't authenticated: it never hides or moves a row.
     expect(within(lane("Waiting on")).getByText("Contract draft")).toBeTruthy();
     expect(
       within(lane("Also in your inbox")).getByText("Contract draft"),
     ).toBeTruthy();
   });
 
-  it("leaves a conversation someone else answered after the bounce where it was", () => {
-    mocks.bounces = [{ ...mocks.bounces[0], answeredAfter: true }];
-    mocks.home.data = {
-      ...homeData([thread("a", "Quarterly numbers")]),
-      waiting: [thread("sent", "Contract draft")],
-      alsoInInbox: [thread("sent", "Contract draft")],
-    };
-
-    renderToday();
-
-    // The bounce is still news; the conversation is live too.
-    expect(screen.getByRole("list", { name: "Didn't send" })).toBeTruthy();
-    expect(within(lane("Waiting on")).getByText("Contract draft")).toBeTruthy();
-    expect(
-      within(lane("Also in your inbox")).getByText("Contract draft"),
-    ).toBeTruthy();
-  });
-
-  it("keeps a real reply after a bounce in Waiting on you", () => {
-    mocks.bounces = [{ ...mocks.bounces[0], answeredAfter: true }];
-    mocks.waitingOnYou = [thread("sent", "Contract draft")];
+  it("never removes a Waiting on or Waiting on you row, even a forged bounce threaded after a real reply", () => {
+    // A postmaster@ message anyone could send, threaded into two
+    // conversations after their real replies.
+    mocks.bounces = [
+      {
+        accountId: "account",
+        conversationId: "asked",
+        messageId: "forged-1",
+        subject: "Undeliverable",
+        sentSubject: "Lunch on Friday?",
+        receivedAtMs: Date.now(),
+      },
+      {
+        accountId: "account",
+        conversationId: "w",
+        messageId: "forged-2",
+        subject: "Undeliverable",
+        sentSubject: "Intro to Sam",
+        receivedAtMs: Date.now(),
+      },
+    ];
+    mocks.waitingOnYou = [thread("asked", "Lunch on Friday?")];
     mocks.home.data = {
       ...homeData([]),
       cue: { aiAccess: true, replyTracking: true, hasReadMail: false },
+      waiting: [thread("w", "Intro to Sam")],
     };
 
     try {
       renderToday();
 
       expect(
-        within(lane("Waiting on you")).getByText("Contract draft"),
+        within(screen.getByRole("list", { name: "Didn't send" })).getAllByRole(
+          "listitem",
+        ),
+      ).toHaveLength(2);
+      expect(
+        within(lane("Waiting on you")).getByText("Lunch on Friday?"),
       ).toBeTruthy();
+      expect(within(lane("Waiting on")).getByText("Intro to Sam")).toBeTruthy();
     } finally {
       mocks.waitingOnYou = [];
     }

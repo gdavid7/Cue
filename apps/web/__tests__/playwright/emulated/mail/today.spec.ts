@@ -541,12 +541,6 @@ test("Didn't send: a bounce shows on Today named for what was sent, opens its co
       await expect(card).toContainText("Didn't send");
       // Named for what the user sent, not the bounce's own subject.
       await expect(card).not.toContainText("Undeliverable");
-      // Each conversation shows once on Today.
-      await expect(
-        page
-          .getByRole("listbox", { name: "Also in your inbox" })
-          .locator(`[data-today-thread="${seeded.threadId}"]`),
-      ).toHaveCount(0);
       for (const size of [
         { width: 1280, height: 800 },
         { width: 390, height: 844 },

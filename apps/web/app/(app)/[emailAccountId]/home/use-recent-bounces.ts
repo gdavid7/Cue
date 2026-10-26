@@ -134,17 +134,9 @@ export function useRecentBounces({ accounts }: { accounts: TodayAccount[] }): {
   return { bounces, dismiss };
 }
 
-/** Which account's conversation a bounce is in, as Today's rows compare. */
-export function bounceConversationKey(
-  accountId: string,
-  conversationId: string,
-) {
-  return `${accountId}\0${conversationId}`;
-}
-
 // By its newest bounce, so another bounce in the conversation shows again.
 function dismissalKey(bounce: RecentBounce) {
-  return `${bounceConversationKey(bounce.accountId, bounce.conversationId)}\0${bounce.messageId}`;
+  return `${bounce.accountId}\0${bounce.conversationId}\0${bounce.messageId}`;
 }
 
 function shownSubject(subject: string) {

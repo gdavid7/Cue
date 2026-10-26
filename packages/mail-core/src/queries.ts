@@ -650,9 +650,4 @@ export type RecentBounce = {
   /** The subject of what the user sent before it in the conversation, if anything. */
   sentSubject: string | null;
   receivedAtMs: number;
-  /**
-   * Someone else wrote in the conversation after it, as when one recipient
-   * bounced and another replied: the conversation is live, not just bounced.
-   */
-  answeredAfter: boolean;
 };
