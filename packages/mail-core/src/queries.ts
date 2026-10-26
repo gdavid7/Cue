@@ -625,3 +625,29 @@ export type NeverReadSender = {
 
 /** Fewer messages than this say little about whether they're wanted. */
 export const NEVER_READ_MIN_MESSAGES = 4;
+
+/**
+ * Inbox mail saying a message didn't reach someone, read from the local store
+ * alone, with no model and no wording: a mail server's own address sent it.
+ * One per conversation, and none once the user has sent in that
+ * conversation since.
+ */
+export type RecentBouncesQuery = {
+  accountIds: string[];
+  /** Bounces received before this are left out. */
+  receivedSinceMs: number;
+  limit: number;
+};
+
+/** Newest first. */
+export type RecentBounce = {
+  accountId: string;
+  conversationId: string;
+  /** The conversation's newest bounce. */
+  messageId: string;
+  /** The bounce's own subject. */
+  subject: string;
+  /** The subject of what the user sent before it in the conversation, if anything. */
+  sentSubject: string | null;
+  receivedAtMs: number;
+};
