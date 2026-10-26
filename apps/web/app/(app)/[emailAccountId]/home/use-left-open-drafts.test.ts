@@ -3,9 +3,11 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { SWRConfig } from "swr";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LeftOpenDraft } from "@inboxzero/mail-core/queries";
 import {
+  CUE_AUTHORED_RECOVERIES,
+  CUE_AUTHORED_RECOVERY_MS,
   LEFT_OPEN_SHOWN_LIMIT,
   selectLeftOpenDrafts,
   useLeftOpenDrafts,
@@ -132,6 +134,15 @@ describe("useLeftOpenDrafts", () => {
       "a-thread:a-draft",
     ]);
     expect([a.get("savedFromMs"), a.get("savedToMs")]).toEqual(["500", "1000"]);
+    // Each draft's own save time, in the items' order.
+    const savedAt = new Map(
+      a
+        .get("items")
+        ?.split(",")
+        .map((item, i) => [item, a.get("savedAtMs")?.split(",")[i]]),
+    );
+    expect(savedAt.get("a-thread:a-draft")).toBe("1000");
+    expect(savedAt.get("a-thread-2:a-older")).toBe("500");
     expect(
       new URL(mail.serverPaths.b, "http://x").searchParams.get("items"),
     ).toBe("b-thread:b-draft");
@@ -165,6 +176,73 @@ describe("useLeftOpenDrafts", () => {
     await waitFor(() => expect(mail.serverReads).toHaveLength(1));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.drafts).toEqual([]);
+  });
+
+  describe("when an account couldn't be answered for", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("asks again for only that account and shows its drafts once it answers", async () => {
+      mail.drafts = [draft("a", "a-draft"), draft("b", "b-draft")];
+      // Gmail deferred account a's read.
+      mail.cueAuthored = { b: [] };
+
+      const { result } = renderLeftOpenDrafts();
+
+      await waitFor(() =>
+        expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+          "b-draft",
+        ]),
+      );
+      mail.cueAuthored = { a: [], b: [] };
+      await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS);
+
+      await waitFor(() =>
+        expect(
+          result.current.drafts.map((item) => item.messageId).sort(),
+        ).toEqual(["a-draft", "b-draft"]),
+      );
+      expect(mail.serverReads).toEqual([["a", "b"], ["a"]]);
+    });
+
+    it("asks again even when every account failed", async () => {
+      mail.drafts = [draft("a", "a-draft")];
+
+      const { result } = renderLeftOpenDrafts();
+
+      await waitFor(() => expect(mail.serverReads).toHaveLength(1));
+      mail.cueAuthored = { a: [] };
+      await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS);
+
+      await waitFor(() =>
+        expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+          "a-draft",
+        ]),
+      );
+    });
+
+    it("stops asking after a few tries", async () => {
+      mail.drafts = [draft("a", "a-draft"), draft("b", "b-draft")];
+      mail.cueAuthored = { b: [] };
+
+      const { result } = renderLeftOpenDrafts();
+
+      await waitFor(() => expect(mail.serverReads).toHaveLength(1));
+      for (let i = 0; i < CUE_AUTHORED_RECOVERIES + 3; i++)
+        await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS * 2 ** i);
+
+      expect(mail.serverReads).toHaveLength(1 + CUE_AUTHORED_RECOVERIES);
+      expect(mail.serverReads.slice(1)).toEqual(
+        Array.from({ length: CUE_AUTHORED_RECOVERIES }, () => ["a"]),
+      );
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "b-draft",
+      ]);
+    });
   });
 
   it("asks the server nothing when there are no drafts to show", async () => {

@@ -190,6 +190,125 @@ describe("GET /api/user/cue-authored-drafts", () => {
     expect(provider.getDraft).not.toHaveBeenCalled();
   });
 
+  it("reads a Gmail meeting draft only if Cue started it within ten minutes of a given draft's save", async () => {
+    const year = 365 * 24 * 60 * 60_000;
+    const recent = 2 * year;
+    prisma.meeting.findMany.mockImplementation(
+      meetingsWhere([
+        { followUpDraftId: "r-near", startedAtMs: recent - 5 * 60_000 },
+        { followUpDraftId: "r-late", startedAtMs: recent - 11 * 60_000 },
+        // Between two drafts saved a year apart: no draft's window holds it.
+        { followUpDraftId: "r-between", startedAtMs: year * 1.5 },
+      ]) as never,
+    );
+    provider.getDraft.mockImplementation(async (draftId: string) =>
+      draft(`message-of-${draftId}`, "Thanks for meeting."),
+    );
+
+    const body = await read(
+      query([
+        ["t1", "message-of-r-near", recent],
+        ["t2", "message-of-r-late", year],
+        ["t3", "message-of-r-between", year],
+      ]),
+    );
+
+    expect(body.messageIds).toEqual(["message-of-r-near"]);
+    expect(provider.getDraft).toHaveBeenCalledTimes(1);
+    const where = prisma.meeting.findMany.mock.calls[0][0]
+      ?.where as MeetingWhere;
+    // A year apart, the two saves look up two narrow windows, not one wide one.
+    expect(where.OR).toHaveLength(2);
+  });
+
+  it("names an Outlook meeting draft by its id, edited or not, without reading it", async () => {
+    provider.name = "microsoft";
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "developer@example.com",
+      account: { provider: "microsoft" },
+    } as never);
+    prisma.meeting.findMany.mockImplementation(
+      meetingsWhere([
+        { followUpDraftId: "m-meeting", startedAtMs: 0 },
+        { followUpDraftId: "m-other-meeting", startedAtMs: 0 },
+      ]) as never,
+    );
+
+    const body = await read(items(["c1", "m-meeting"], ["c2", "m-users-own"]));
+
+    expect(body.messageIds).toEqual(["m-meeting"]);
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
+  it("fails without reading the mailbox when there are more meeting drafts than one request reads", async () => {
+    prisma.meeting.findMany.mockResolvedValue(
+      Array.from({ length: 21 }, (_, i) => ({
+        followUpDraftId: `r${i}`,
+      })) as never,
+    );
+
+    const response = await GET(request(items(["t1", "m1"])), params());
+
+    expect(response.status).toBe(503);
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
+  it("fails without reading the mailbox when there are more of Cue's drafts than one request reads", async () => {
+    prisma.executedAction.findMany.mockResolvedValue(
+      Array.from({ length: 41 }, (_, i) => ({
+        draftId: `r${i}`,
+        content: "Sounds good.",
+      })) as never,
+    );
+
+    const response = await GET(request(items(["t1", "m1"])), params());
+
+    expect(response.status).toBe(503);
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
+  it("splits each item at its last colon", async () => {
+    await read(items(["conversation:with:colons", "m1"]));
+
+    expect(prisma.threadTracker.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          threadId: { in: ["conversation:with:colons"] },
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["an item with no colon", { items: "t1m1" }],
+    ["an item with no conversation", { items: ":m1" }],
+    ["an item with no message", { items: "t1:" }],
+    ["no savedFromMs", { savedFromMs: null }],
+    ["no savedToMs", { savedToMs: null }],
+    ["a non-numeric savedFromMs", { savedFromMs: "soon" }],
+    ["savedFromMs after savedToMs", { savedFromMs: "3000", savedToMs: "2000" }],
+    ["no savedAtMs", { savedAtMs: null }],
+    ["a savedAtMs per item missing", { savedAtMs: "1500" }],
+    ["a savedAtMs outside the range", { savedAtMs: "1500,9000" }],
+  ])("rejects %s", async (_, overrides) => {
+    const response = await GET(
+      request(
+        query(
+          [
+            ["t1", "m1", 1500],
+            ["t2", "m2", 1500],
+          ],
+          overrides,
+        ),
+      ),
+      params(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
   it("rejects more drafts than the lane reads", async () => {
     const many = Array.from(
       { length: 21 },
@@ -210,12 +329,47 @@ async function read(query: string) {
 }
 
 function items(...pairs: [string, string][]) {
-  return new URLSearchParams({
-    items: pairs.map(([t, m]) => `${t}:${m}`).join(","),
-    savedFromMs: "1000",
-    savedToMs: "2000",
-  }).toString();
+  return query(pairs.map(([t, m]) => [t, m, 1500]));
 }
+
+function query(
+  drafts: [string, string, number][],
+  overrides: Record<string, string | null> = {},
+) {
+  const savedAt = drafts.map(([, , at]) => at);
+  const params = new URLSearchParams({
+    items: drafts.map(([t, m]) => `${t}:${m}`).join(","),
+    savedAtMs: savedAt.join(","),
+    savedFromMs: String(Math.min(1000, ...savedAt)),
+    savedToMs: String(Math.max(2000, ...savedAt)),
+  });
+  for (const [key, value] of Object.entries(overrides))
+    if (value === null) params.delete(key);
+    else params.set(key, value);
+  return params.toString();
+}
+
+/** Meetings as the database would answer the route's lookup. */
+function meetingsWhere(
+  meetings: { followUpDraftId: string; startedAtMs: number }[],
+) {
+  return async ({ where }: { where: MeetingWhere }) =>
+    meetings
+      .filter(({ followUpDraftId, startedAtMs }) => {
+        if (where.followUpDraftId.in)
+          return where.followUpDraftId.in.includes(followUpDraftId);
+        return (where.OR ?? []).some(
+          ({ followUpDraftStartedAt: { gte, lte } }) =>
+            startedAtMs >= gte.getTime() && startedAtMs <= lte.getTime(),
+        );
+      })
+      .map(({ followUpDraftId }) => ({ followUpDraftId }));
+}
+
+type MeetingWhere = {
+  followUpDraftId: { in?: string[] };
+  OR?: { followUpDraftStartedAt: { gte: Date; lte: Date } }[];
+};
 
 function params() {
   return { params: Promise.resolve({}) };

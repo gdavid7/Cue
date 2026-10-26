@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import useSWR from "swr";
 import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type {
@@ -26,6 +26,10 @@ export const LEFT_OPEN_SHOWN_LIMIT = 5;
 const READ_LIMIT = 20;
 const NO_DRAFTS: LeftOpenDraft[] = [];
 const CUE_AUTHORED_DRAFTS_PATH = "/api/user/cue-authored-drafts";
+// How often, and from how long after, an account the server couldn't answer
+// for is asked again: past a typical Gmail deferral, then doubling.
+export const CUE_AUTHORED_RECOVERIES = 3;
+export const CUE_AUTHORED_RECOVERY_MS = 30_000;
 
 /**
  * Today's "Drafts you left open": unsent mailbox drafts the user last saved
@@ -109,32 +113,65 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
   // again only when those change, as each ask may read Cue's drafts from
   // the mailbox.
   const requests = useMemo(() => cueAuthoredRequests(read), [read]);
-  const { data: cueAuthored } = useSWR(
+  const requestsKey = requests.map((r) => r.path).join("\n");
+  const { data: cueAuthored, mutate: mutateCueAuthored } = useSWR(
     requests.length
       ? [
           CUE_AUTHORED_DRAFTS_PATH,
           ...requests.flatMap((r) => [r.accountId, r.path]),
         ]
       : null,
-    async () => {
-      const paths = new Map(requests.map((r) => [r.accountId, r.path]));
-      const result = await fetchForAccounts<CueAuthoredDraftsResponse>(
-        (accountId) => paths.get(accountId) ?? CUE_AUTHORED_DRAFTS_PATH,
-        [...paths.keys()],
-      );
-      return {
-        ...result,
-        checked: new Set(requests.flatMap((r) => r.draftKeys)),
-      };
-    },
+    async () => ({
+      ...(await askCueAuthored(requests)),
+      requestsKey,
+      checked: new Set(requests.flatMap((r) => r.draftKeys)),
+      recoveries: 0,
+    }),
     {
       keepPreviousData: true,
       revalidateOnFocus: false,
       // The key changes whenever the drafts do; a mount with the same ones
       // needn't read the mailbox again.
       revalidateIfStale: false,
+      // Recovery below asks again, only for the accounts that failed and
+      // only a few times, so a busy Gmail account isn't asked without end.
+      shouldRetryOnError: false,
     },
   );
+
+  // An account the server couldn't answer for, such as one Gmail deferred,
+  // is asked again a few times, further apart each time, while its drafts
+  // stay hidden.
+  useEffect(() => {
+    if (!cueAuthored?.failedAccountIds.length) return;
+    if (cueAuthored.recoveries >= CUE_AUTHORED_RECOVERIES) return;
+    // Still the previous drafts' answer while theirs loads.
+    if (cueAuthored.requestsKey !== requestsKey) return;
+    const failed = new Set(cueAuthored.failedAccountIds);
+    let cancelled = false;
+    const timer = setTimeout(
+      async () => {
+        const retried = await askCueAuthored(
+          requests.filter((r) => failed.has(r.accountId)),
+        );
+        if (cancelled) return;
+        mutateCueAuthored(
+          {
+            ...cueAuthored,
+            byAccount: [...cueAuthored.byAccount, ...retried.byAccount],
+            failedAccountIds: retried.failedAccountIds,
+            recoveries: cueAuthored.recoveries + 1,
+          },
+          { revalidate: false },
+        );
+      },
+      CUE_AUTHORED_RECOVERY_MS * 2 ** cueAuthored.recoveries,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [cueAuthored, requests, requestsKey, mutateCueAuthored]);
 
   return useMemo(() => {
     if (!cueAuthored) return selectLeftOpenDrafts(NO_DRAFTS, hidden);
@@ -197,6 +234,7 @@ function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
         items: sorted
           .map((draft) => `${draft.conversationId}:${draft.messageId}`)
           .join(","),
+        savedAtMs: savedAt.join(","),
         savedFromMs: String(Math.min(...savedAt)),
         savedToMs: String(Math.max(...savedAt)),
       });
@@ -206,4 +244,18 @@ function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
         draftKeys: sorted.map(draftKey),
       };
     });
+}
+
+/** Every account's answer; one that failed, even all of them, is listed. */
+async function askCueAuthored(requests: { accountId: string; path: string }[]) {
+  const paths = new Map(requests.map((r) => [r.accountId, r.path]));
+  const accountIds = [...paths.keys()];
+  try {
+    return await fetchForAccounts<CueAuthoredDraftsResponse>(
+      (accountId) => paths.get(accountId) ?? CUE_AUTHORED_DRAFTS_PATH,
+      accountIds,
+    );
+  } catch {
+    return { byAccount: [], failedAccountIds: accountIds };
+  }
 }
