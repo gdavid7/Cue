@@ -51,7 +51,10 @@ vi.mock("@/utils/middleware", async () => {
 });
 
 import { runWithAuditContext } from "@/utils/audit/context";
-import { currentGmailQuotaContext } from "@/utils/gmail/quota";
+import {
+  currentGmailQuotaContext,
+  GmailCallDeferredError,
+} from "@/utils/gmail/quota";
 import { GET } from "./route";
 
 describe("GET /api/user/inbox-insights", () => {
@@ -190,6 +193,32 @@ describe("GET /api/user/inbox-insights", () => {
       expect(line).toContain('"itemCount": 1');
       expect(line).toContain('"newCount": 1');
       expect(line).toContain('"priority": "interactive"');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  // CP-1d: a request whose reads all wait out the budget and defer is the
+  // one with the longest wait, so its gate wait must still be on its line.
+  it("logs the gate's wait on a request that ends deferred", async () => {
+    mocks.rateLimitCount.mockResolvedValue(1);
+    mocks.getMessage.mockImplementation(async () => {
+      const stats = currentGmailQuotaContext().stats;
+      if (stats) stats.waitMs += 9400;
+      throw new GmailCallDeferredError(5000, "background", "per_minute_budget");
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      // The real middleware answers it 503 with its Retry-After; this
+      // test's stand-in rethrows it.
+      await expect(
+        runWithAuditContext({ source: "user/inbox-insights" }, () => get()),
+      ).rejects.toBeInstanceOf(GmailCallDeferredError);
+
+      const line = logSpy.mock.calls
+        .map((args) => String(args[0]))
+        .find((entry) => entry.includes("Request completed"));
+      expect(line).toContain('"gateWaitMs": 9400');
     } finally {
       logSpy.mockRestore();
     }

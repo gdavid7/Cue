@@ -35,10 +35,25 @@ vi.mock("@/utils/middleware", async () => {
   const { createWithEmailProviderTestMiddleware } = await vi.importActual<
     typeof import("@/__tests__/helpers")
   >("@/__tests__/helpers");
-  return createWithEmailProviderTestMiddleware(
+  const { withEmailProvider } = createWithEmailProviderTestMiddleware(
     { getMessage: mocks.getMessage },
     { handleSafeErrors: true },
   );
+  // The real middleware logs "Request completed" from the request's logger
+  // once the handler returns, however it ended.
+  return {
+    withEmailProvider: (
+      scope: string,
+      handler: (request: any, ...context: any[]) => Promise<Response>,
+    ) =>
+      withEmailProvider(scope, async (request, ...context) => {
+        try {
+          return await handler(request, ...context);
+        } finally {
+          (request as any).logger.info("Request completed");
+        }
+      }),
+  };
 });
 
 import { runWithAuditContext } from "@/utils/audit/context";
@@ -51,6 +66,10 @@ import {
 } from "@/utils/gmail/quota";
 import { getInboxInsights } from "@/utils/inbox-insights/get-inbox-insights";
 import { createScopedLogger } from "@/utils/logger";
+import {
+  createRequestMetrics,
+  runWithRequestMetrics,
+} from "@/utils/request-metrics";
 import { sleep } from "@/utils/sleep";
 import { GET } from "./route";
 
@@ -139,6 +158,49 @@ describe("GET /api/user/inbox-insights with the account's Gmail budget spent", (
       (REQUESTS - after.wholeDeferrals) * NEW_PER_REQUEST,
     );
     expect(after.built).toBeGreaterThan(0);
+  });
+
+  // CP-1d: `waitMs` sums the gate's sleeps with the in-flight slot queue's,
+  // across reads that wait side by side, so it read as tens of seconds on a
+  // request that waited a few. The gate's own share is logged apart.
+  it("logs the gate's share of the request's wait apart from the rest", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const lines: { waitMs: number; gateWaitMs: number; wallMs: number }[] = [];
+    try {
+      await measure(async (request) => {
+        const metrics = createRequestMetrics();
+        const startedAt = Date.now();
+        const response = await runWithRequestMetrics(metrics, () =>
+          runWithAuditContext({ source: "user/inbox-insights" }, () =>
+            get(items(`gate-${request}`)),
+          ),
+        );
+        const line = logSpy.mock.calls
+          .map((args) => String(args[0]))
+          .findLast((entry) => entry.includes("Request completed"));
+        lines.push({
+          waitMs: metrics.wait.ms,
+          gateWaitMs: Number(line?.match(/"gateWaitMs": (\d+)/)?.[1]),
+          wallMs: Date.now() - startedAt,
+        });
+        return response.json();
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
+
+    const gate = lines.map((line) => line.gateWaitMs);
+    const wall = lines.map((line) => line.wallMs);
+    console.info(
+      `CP-1d saturated limiter: gateWaitMs p95 ${percentile(gate, 95)} ms, ` +
+        `request p95 ${percentile(wall, 95)} ms`,
+    );
+    for (const line of lines) {
+      expect(Number.isInteger(line.gateWaitMs)).toBe(true);
+      expect(line.gateWaitMs).toBeLessThanOrEqual(Math.round(line.waitMs) + 1);
+    }
+    // Sync holds the account's budget, so the rows did wait at the gate.
+    expect(Math.max(...gate)).toBeGreaterThan(0);
   });
 });
 
