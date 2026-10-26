@@ -1,0 +1,42 @@
+feature: bounce-card
+thoroughness: low
+scenarios:
+  sent-mail-bounced: The user emailed Kai "Quarterly plan" and a mail server answered in that conversation that it wasn't delivered; the user also emailed Kai "Lunch order" and Kai replied normally
+claims:
+  - id: c1
+    summary: Today shows a "Didn't reach someone" card named for what was sent
+    group: Today says when a message didn't go out
+    criterion: core-behavior
+    given: sent-mail-bounced
+    when: Sign in with Google as groundtruth-test@gmail.com and go to Today
+    then:
+      kind: visible
+      what: A "Didn't reach someone" card names "Quarterly plan" (not "Undeliverable")
+  - id: c2
+    summary: Open goes to the bounced conversation
+    group: Today says when a message didn't go out
+    criterion: core-behavior
+    given: sent-mail-bounced
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Today and click Open on the "Didn't reach someone" card for "Quarterly plan"
+    then:
+      kind: visible
+      what: The "Quarterly plan" conversation opens, showing the mail server's message that it wasn't delivered
+  - id: c3
+    summary: A dismissed card stays gone
+    group: Today says when a message didn't go out
+    criterion: data-integrity
+    given: sent-mail-bounced
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Today, click Dismiss on the "Didn't reach someone" card for "Quarterly plan", then reload the page
+    then:
+      kind: visible
+      what: The card disappears at once and is still gone after the reload
+  - id: c4
+    summary: A normal reply gets no card
+    group: Today says when a message didn't go out
+    criterion: edge-cases
+    given: sent-mail-bounced
+    when: Sign in with Google as groundtruth-test@gmail.com and go to Today
+    then:
+      kind: visible
+      what: No "Didn't reach someone" card names "Lunch order", which Kai answered normally
+    added_by_lead: true

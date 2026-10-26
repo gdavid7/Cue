@@ -25,6 +25,10 @@ const SCENARIOS = {
   "signed-in": async () => {},
   "muted-conversation-with-reply": seedMutedConversationWithReply,
   "team-workspace": seedTeamWorkspace,
+  "sent-mail-bounced": async () => {
+    await seedSentConversation("Quarterly plan", { from: "Mail Delivery Subsystem <MAILER-DAEMON@googlemail.com>", subject: "Undeliverable: Quarterly plan", body: "Your message wasn't delivered to kai@example.com." });
+    await seedSentConversation("Lunch order", { from: "Kai Example <kai@example.com>", subject: "Re: Lunch order", body: "Two salads, please." });
+  },
   // Google sign-in always connects the mailbox's calendar, so "no calendar" is the user's calendar switched
   // off on the Calendars page: none left to read.
   "invite-no-calendar": async () => {
@@ -189,6 +193,28 @@ async function seedMutedConversationWithReply() {
     await new Promise((r) => setTimeout(r, 1000));
   }
   console.warn("scenario: the reply is still in the inbox after 60 s");
+}
+
+// A conversation the user started with Kai, answered an hour later, as the CI suite's seedMailFromContact does:
+// the answer comes from Kai or, for a bounce, from a mail server's own address.
+async function seedSentConversation(subject, reply) {
+  const sent = await google("POST", "/gmail/v1/users/me/messages", {
+    from: EMAIL,
+    to: "Kai Example <kai@example.com>",
+    subject,
+    body_text: "Can you look at this before Thursday?",
+    labelIds: ["SENT"],
+    internalDate: String(Date.now() - 2 * 60 * 60_000),
+  });
+  await google("POST", "/gmail/v1/users/me/messages", {
+    threadId: sent.threadId,
+    from: reply.from,
+    to: EMAIL,
+    subject: reply.subject,
+    body_text: reply.body,
+    labelIds: ["INBOX", "UNREAD"],
+    internalDate: String(Date.now() - 60 * 60_000),
+  });
 }
 
 // A team of two (the user and one teammate), so team comments are available.

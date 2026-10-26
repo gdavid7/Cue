@@ -34,6 +34,10 @@
       "description": "Like signed-in, and the user is in a team with one teammate (Sam Teammate), so team comments are available",
       "run": "node .groundtruth/cue/scenario.mjs team-workspace"
     },
+    "sent-mail-bounced": {
+      "description": "Like signed-in. Two hours ago the user emailed Kai Example \"Quarterly plan\" and a mail server (Mail Delivery Subsystem) answered an hour later in that conversation that it wasn't delivered; the user also emailed Kai \"Lunch order\", and Kai replied normally. After sign-in the browser's first copy of the mailbox takes up to a minute to finish, and Today's local-mail parts appear once it has",
+      "run": "node .groundtruth/cue/scenario.mjs sent-mail-bounced"
+    },
     "invite-no-calendar": {
       "description": "Like signed-in, with no calendar to read (the user's Google calendar is switched off on the Calendars page). The inbox holds the meeting invitation \"Calendar Invitation Message\" (Project planning, about two hours from now)",
       "run": "node .groundtruth/cue/scenario.mjs invite-no-calendar"

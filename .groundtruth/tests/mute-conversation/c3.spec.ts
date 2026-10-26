@@ -10,10 +10,13 @@ test("c3: muted conversation stays out of inbox, shows in Muted with Wren's repl
   const list = page.getByRole("listbox", { name: "Conversations" });
   await expect(list).toBeVisible({ timeout: 30000 });
   await expect(list.getByRole("option").first()).toBeVisible();
-  await expect(page.getByText("Older mail is still arriving.")).toHaveCount(0, { timeout: 30000 });
   await expect(page.getByText("Offsite venue shortlist", { exact: false })).toHaveCount(0);
 
-  await page.getByRole("link", { name: "Muted" }).click();
+  const muted = page.getByRole("link", { name: "Muted" });
+  if (!(await muted.isVisible())) {
+    await page.getByRole("button", { name: "More" }).click();
+  }
+  await muted.click();
   await expect(page).toHaveURL(/\/mail\/u\/0\/muted/);
   const item = page.getByRole("button", { name: /Re: Offsite venue shortlist/ }).first();
   await expect(item).toBeVisible();

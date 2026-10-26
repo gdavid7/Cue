@@ -37,7 +37,7 @@ claims:
       kind: visible
       what: The inbox does not list "Offsite venue shortlist", while the Muted view lists it, and the opened conversation includes Wren's reply about the lakeside venue
     test: tests/mute-conversation/c3.spec.ts
-    checked: The inbox lacks the conversation (checked after older mail finishes loading), Muted lists it, and the opened thread-reader shows Wren's lakeside reply. After returning to the inbox, it is still absent.
+    checked: The inbox lacks the muted conversation, the Muted view (opened via More) lists it, and the opened thread shows Wren's lakeside reply. The inbox check is repeated after returning.
   - id: c4
     summary: Undo brings it back to the inbox
     group: Undo and unmute
