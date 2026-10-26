@@ -926,7 +926,7 @@ const outlookManageInboxInputSchema = z
         "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
     query: matchingQuerySchema.describe(
-      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches. This changes nothing: it returns how many conversations would change, and the user starts the change with the Confirm button on the result. Tell them the count; calling again does not start it.",
+      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches once the user presses Confirm. Tell them how many conversations would change; calling again does not start it.",
     ),
     categoryName: z
       .string()
@@ -970,7 +970,7 @@ const gmailManageInboxInputSchema = z
         "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
     query: matchingQuerySchema.describe(
-      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches. This changes nothing: it returns how many conversations would change, and the user starts the change with the Confirm button on the result. Tell them the count; calling again does not start it.",
+      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches once the user presses Confirm. Tell them how many conversations would change; calling again does not start it.",
     ),
     labelName: z
       .string()
@@ -1071,7 +1071,7 @@ const buildManageInboxTool = ({
 
   return tool({
     description:
-      "Run inbox actions on threads or senders. For emails already shown or found in this turn, prefer thread actions with threadIds. To act on everything a search matches, use query instead of collecting threadIds page by page. Use archive_threads for ordinary inbox cleanup; only use trash_threads when the user explicitly asks to delete or trash. Do not widen a limited thread-level request into sender-wide cleanup. Only use sender-wide cleanup with fromEmails when the user clearly wants all mail from that sender, and get confirmation before doing broad sender-wide cleanup. Only use unsubscribe_senders for an explicit unsubscribe request.",
+      "Run inbox actions on threads or senders. For emails already shown or found in this turn, prefer thread actions with threadIds. To act on everything a search matches, call it with query directly instead of searching, counting or collecting threadIds first: a query call changes nothing and shows the user the count with a Confirm button. Use archive_threads for ordinary inbox cleanup; only use trash_threads when the user explicitly asks to delete or trash. Do not widen a limited thread-level request into sender-wide cleanup. Only use sender-wide cleanup with fromEmails when the user clearly wants all mail from that sender, and get confirmation before doing broad sender-wide cleanup. Only use unsubscribe_senders for an explicit unsubscribe request.",
     inputSchema,
     toModelOutput: manageInboxModelOutput,
     execute: async (input, callOptions) => {
