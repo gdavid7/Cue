@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { withEmailProvider } from "@/utils/middleware";
 import {
   enumerationRequestSchema,
@@ -14,6 +14,7 @@ import {
 } from "@/utils/mail-api/authorization";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
 import { oldEngineReason } from "@/utils/mail-api/engine-revision";
+import { reactToSyncedNewMail } from "@/utils/mail-api/new-mail-reactions";
 
 export const POST = withEmailProvider(
   "mail/v1/enumeration",
@@ -58,6 +59,17 @@ export const POST = withEmailProvider(
     if (result.status !== "ok") {
       return sourceFailureResponse(result, requestId);
     }
+    // A new device's first pages can be the only read of mail that arrived
+    // while no other device synced.
+    const { changes } = result.value;
+    after(() =>
+      reactToSyncedNewMail({
+        emailAccountId: request.auth.emailAccountId,
+        provider: request.emailProvider,
+        changes,
+        logger: request.logger,
+      }),
+    );
     return NextResponse.json(
       enumerationResultSchema.parse({
         protocolVersion: parsed.data.protocolVersion,

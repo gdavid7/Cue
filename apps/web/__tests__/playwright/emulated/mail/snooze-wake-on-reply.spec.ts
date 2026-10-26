@@ -171,6 +171,178 @@ test("a reply from someone else brings a snoozed conversation back early", async
   expect(cleanupErrors).toEqual([]);
 });
 
+// Accounts without premium AI and rules or filing get no webhook processing;
+// their mail reaches Cue through the mail engine's sync, which must apply
+// snooze wake-on-reply and mute too. Each case takes the account's premium
+// away (the emulator stack doesn't bypass premium checks) and delivers no
+// webhook, so only the sync path can pass it.
+test.describe("through mail sync, for an account webhooks skip", () => {
+  test("a reply wakes a snoozed conversation", async ({ page }, testInfo) => {
+    const subject = `Snooze sync wake ${Date.now()}`;
+    const { emailAccountId } = await openMail(page);
+    const token = await readProviderAccessToken();
+    const account = await readAccountState(emailAccountId);
+    const inserted: string[] = [];
+    const cleanupErrors: unknown[] = [];
+    let threadId: string | undefined;
+
+    try {
+      await setPremium(emailAccountId, null);
+      const original = await insertInboxThread(page, {
+        subject,
+        body: "Can you look at the plan?",
+        from: SENDER,
+      });
+      threadId = original.threadId;
+      inserted.push(original.messageId);
+
+      const snoozed = await page.request.post("/api/user/snoozed-threads", {
+        headers: { "X-Email-Account-ID": emailAccountId },
+        data: {
+          threadIds: [threadId],
+          snoozedUntil: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+        },
+      });
+      expect(snoozed.ok(), await snoozed.text()).toBe(true);
+      await expect
+        .poll(() => messageInInbox(page, token, original.messageId), {
+          timeout: 30_000,
+        })
+        .toBe(false);
+
+      const snoozedAt = await readSnoozedAt(emailAccountId, threadId);
+      await expect.poll(() => Date.now() > snoozedAt).toBe(true);
+      inserted.push(
+        await insertReply(page, token, {
+          threadId,
+          messageId: original.messageId,
+          subject: `Re: ${subject}`,
+        }),
+      );
+
+      // No webhook: opening the mailbox syncs the reply in. Each reload
+      // leaves the last sync time to finish, since leaving cancels it.
+      await expect
+        .poll(
+          async () => {
+            await openMail(page);
+            return activeSnoozeCount(emailAccountId, threadId as string);
+          },
+          { timeout: 180_000, intervals: [15_000] },
+        )
+        .toBe(0);
+      await expect
+        .poll(() => messageInInbox(page, token, original.messageId), {
+          timeout: 60_000,
+        })
+        .toBe(true);
+      await capturePlaywrightCheckpoint(page, testInfo, "snooze-sync-wake");
+    } finally {
+      if (threadId) {
+        await withClient((client) =>
+          client.query(
+            `UPDATE "SnoozedThread" SET status = 'CANCELLED'
+              WHERE "emailAccountId" = $1 AND "threadId" = $2
+                AND status IN ('PREPARING', 'PENDING', 'EXECUTING')`,
+            [emailAccountId, threadId],
+          ),
+        ).catch((error) => cleanupErrors.push(error));
+      }
+      for (const messageId of inserted) {
+        await deleteProviderMessage(page, token, messageId).catch((error) =>
+          cleanupErrors.push(error),
+        );
+      }
+      await setPremium(emailAccountId, account.premiumId).catch((error) =>
+        cleanupErrors.push(error),
+      );
+    }
+    expect(cleanupErrors).toEqual([]);
+  });
+
+  test("a reply to a muted conversation stays out of the inbox", async ({
+    page,
+  }, testInfo) => {
+    const subject = `Mute sync ${Date.now()}`;
+    const { emailAccountId } = await openMail(page);
+    const token = await readProviderAccessToken();
+    const account = await readAccountState(emailAccountId);
+    const inserted: string[] = [];
+    const cleanupErrors: unknown[] = [];
+    let threadId: string | undefined;
+
+    try {
+      await setPremium(emailAccountId, null);
+      const original = await insertInboxThread(page, {
+        subject,
+        body: "Weekly thread",
+        from: SENDER,
+      });
+      threadId = original.threadId;
+      inserted.push(original.messageId);
+
+      const mutedAt = await withClient(async (client) => {
+        const result = await client.query<{ ms: string }>(
+          `INSERT INTO "MutedThread" (id, "createdAt", "threadId", "emailAccountId")
+            VALUES ($1, CURRENT_TIMESTAMP, $2, $3)
+            RETURNING EXTRACT(EPOCH FROM "createdAt") * 1000 AS ms`,
+          [`playwright-mute-sync-${Date.now()}`, threadId, emailAccountId],
+        );
+        return Number(result.rows[0]?.ms);
+      });
+      await expect.poll(() => Date.now() > mutedAt + 1000).toBe(true);
+      const replyId = await insertReply(page, token, {
+        threadId,
+        messageId: original.messageId,
+        subject: `Re: ${subject}`,
+      });
+      inserted.push(replyId);
+      expect(await messageInInbox(page, token, replyId)).toBe(true);
+
+      await expect
+        .poll(
+          async () => {
+            await openMail(page);
+            return messageInInbox(page, token, replyId);
+          },
+          { timeout: 180_000, intervals: [15_000] },
+        )
+        .toBe(false);
+      // Only the new message moves; what the user left in the inbox stays.
+      expect(await messageInInbox(page, token, original.messageId)).toBe(true);
+      await capturePlaywrightCheckpoint(page, testInfo, "mute-sync-archive");
+    } finally {
+      if (threadId) {
+        await withClient((client) =>
+          client.query(
+            `DELETE FROM "MutedThread" WHERE "emailAccountId" = $1 AND "threadId" = $2`,
+            [emailAccountId, threadId],
+          ),
+        ).catch((error) => cleanupErrors.push(error));
+      }
+      for (const messageId of inserted) {
+        await deleteProviderMessage(page, token, messageId).catch((error) =>
+          cleanupErrors.push(error),
+        );
+      }
+      await setPremium(emailAccountId, account.premiumId).catch((error) =>
+        cleanupErrors.push(error),
+      );
+    }
+    expect(cleanupErrors).toEqual([]);
+  });
+});
+
+async function setPremium(emailAccountId: string, premiumId: string | null) {
+  await withClient((client) =>
+    client.query(
+      `UPDATE "User" SET "premiumId" = $2
+        WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId, premiumId],
+    ),
+  );
+}
+
 async function readSnoozedAt(emailAccountId: string, threadId: string) {
   return withClient(async (client) => {
     // Prisma stores UTC without a zone; the epoch reads it as such.

@@ -6,6 +6,10 @@ import type { EmailProvider } from "@/utils/email/types";
 import type { Logger } from "@/utils/logger";
 import { parsedMessageMetadata } from "@/utils/mail-api/observations";
 import prisma from "@/utils/prisma";
+import {
+  claimNewMailReaction,
+  releaseNewMailReaction,
+} from "@/utils/redis/new-mail-reaction";
 import { unsnoozeThreads } from "@/utils/snooze/unsnooze";
 import type { ParsedMessage } from "@/utils/types";
 import { getUserOwnAddresses, isOwnAddress } from "@/utils/user/own-addresses";
@@ -19,24 +23,35 @@ const MESSAGE_ID_SHAPE = /^[^\s<>{}()"]+@[^\s<>{}()"]+$/;
 
 /**
  * Brings a snoozed conversation back early when someone else answers it,
- * through the same path as unsnoozing it by hand. Runs after the message's
- * rules, so mail they filed away, and mail now in spam or trash, isn't an
- * answer to wake for. Mute is handled before this and wins: a muted
+ * through the same path as unsnoozing it by hand. Where rules run (the
+ * webhook path), it runs after them, so mail they filed away, and mail now in
+ * spam or trash, isn't an answer to wake for; mail sync runs it for accounts
+ * without rules. Mute is handled before this and wins: a muted
  * conversation's mail never gets here. Snoozing reaches every copy of a
  * conversation in the user's other accounts, so waking does too.
  */
 export async function wakeSnoozedThreadOnReply({
   emailAccount,
   message,
+  messageIsCurrent = false,
   provider,
+  withoutClaim,
   logger,
 }: {
   emailAccount: { id: string; email: string; userId: string };
   message: ParsedMessage;
+  /** The message was just read from the provider, so no second read is needed. */
+  messageIsCurrent?: boolean;
   provider: EmailProvider;
+  /**
+   * When Redis can't say whether another path already woke for this reply:
+   * the webhook wakes anyway, as before the claim existed; mail sync, which
+   * runs on every device, leaves it to the snooze's own time.
+   */
+  withoutClaim: "wake" | "skip";
   logger: Logger;
-}) {
-  if (!message.threadId) return;
+}): Promise<boolean> {
+  if (!message.threadId) return false;
   const snooze = await prisma.snoozedThread.findFirst({
     where: {
       emailAccountId: emailAccount.id,
@@ -46,23 +61,42 @@ export async function wakeSnoozedThreadOnReply({
     orderBy: { updatedAt: "desc" },
     select: { updatedAt: true },
   });
-  if (!snooze || !arrivedAfter(message, snooze.updatedAt)) return;
-  if (await isFromConnectedAccount(emailAccount, message)) return;
+  if (!snooze || !arrivedAfter(message, snooze.updatedAt)) return false;
+  if (await isFromConnectedAccount(emailAccount, message)) return false;
 
-  const current = await provider.getMessage(message.id);
-  if (!isInboxArrival(current)) return;
-  if (await isFromAlias({ message: current, provider, logger })) return;
+  // The webhook's message predates its rules, which may have filed it away.
+  const current = messageIsCurrent
+    ? message
+    : await provider.getMessage(message.id);
+  if (!isInboxArrival(current)) return false;
+  if (await isFromAlias({ message: current, provider, logger })) return false;
 
+  // The webhook and every device's mail sync can see the same reply.
+  const claim = { emailAccountId: emailAccount.id, messageId: message.id };
+  const claimed = await claimNewMailReaction({ ...claim, logger });
+  if (claimed === "taken") return false;
+  if (claimed === "unavailable" && withoutClaim === "skip") return false;
+  const release = () =>
+    claimed === "claimed"
+      ? releaseNewMailReaction({ ...claim, logger })
+      : Promise.resolve();
   const { unsnoozedThreadIds } = await unsnoozeThreads({
     emailAccountId: emailAccount.id,
     logger,
     provider,
     threadIds: [message.threadId],
+  }).catch(async (error) => {
+    await release();
+    throw error;
   });
-  if (unsnoozedThreadIds.length === 0) return;
+  if (unsnoozedThreadIds.length === 0) {
+    await release();
+    return false;
+  }
   logger.info("Woke a snoozed conversation on a reply");
 
   await wakeCopiesInOtherAccounts({ emailAccount, message: current, logger });
+  return true;
 }
 
 async function wakeCopiesInOtherAccounts({
@@ -189,7 +223,8 @@ async function isFromAlias({
   }
 }
 
-function isInboxArrival(message: ParsedMessage) {
+/** In the inbox, and not the user's own sent mail, a draft, spam or trash. */
+export function isInboxArrival(message: ParsedMessage) {
   const { roles } = parsedMessageMetadata(message);
   return (
     roles.includes("inbox") &&
