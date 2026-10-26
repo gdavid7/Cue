@@ -68,7 +68,7 @@ export async function createInTabEngine(
   const client: BrowserMailEngine = {
     ...engine,
     // Local autocomplete, the person card, the sender check, the Files view,
-    // Today's Waiting on you, "Mail you never read" and "Didn't reach someone", and the assistant's
+    // Today's Waiting on you, "Mail you never read", "Didn't reach someone" and "Drafts you left open", and the assistant's
     // message search stay off the UI thread if dedicated workers fail; before
     // indexing completes a search can scan the mailbox, so the assistant
     // searches Gmail instead.
@@ -82,6 +82,7 @@ export async function createInTabEngine(
     queryFilesNotOnDevice: undefined,
     queryWaitingOnYou: undefined,
     queryRecentBounces: undefined,
+    queryLeftOpenDrafts: undefined,
     ensureAccount,
     requestSync: (accountIds) =>
       requestSyncUnlessOffline(pageConnectivityOnline(), () =>

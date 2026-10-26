@@ -64,6 +64,8 @@ import type {
   PersonCardQuery,
   RecentBounce,
   RecentBouncesQuery,
+  LeftOpenDraft,
+  LeftOpenDraftsQuery,
   SenderHistory,
   SenderHistoryQuery,
   QueryHandle,
@@ -252,6 +254,11 @@ export type MailClient = {
    * Hosts that can't answer off the UI thread leave it out.
    */
   queryRecentBounces?(query: RecentBouncesQuery): Promise<RecentBounce[]>;
+  /**
+   * What Today's "Drafts you left open" lists, read once from the local
+   * store. Hosts that can't answer off the UI thread leave it out.
+   */
+  queryLeftOpenDrafts?(query: LeftOpenDraftsQuery): Promise<LeftOpenDraft[]>;
   /** The people the user starred as Important in these accounts. */
   queryImportantPeople?(accountIds: string[]): Promise<ImportantPerson[]>;
   /**
@@ -472,6 +479,9 @@ export function createMailEngine(input: {
     },
     queryRecentBounces(query) {
       return store.readRecentBounces(query);
+    },
+    queryLeftOpenDrafts(query) {
+      return store.readLeftOpenDrafts(query);
     },
     queryImportantPeople(accountIds) {
       return store.readImportantPeople(accountIds);

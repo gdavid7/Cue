@@ -14,6 +14,7 @@ import {
 } from "./important-people";
 import { readPersonCard } from "./person-card";
 import { readRecentBounces } from "./recent-bounces";
+import { readLeftOpenDrafts } from "./left-open-drafts";
 import { readWaitingOnYou } from "./waiting-on-you";
 import { readSenderHistory } from "./sender-history";
 import {
@@ -236,6 +237,9 @@ export async function createSqliteMailStore(
     },
     readRecentBounces(query) {
       return driver.read((tx) => readRecentBounces(tx, query));
+    },
+    readLeftOpenDrafts(query) {
+      return driver.read((tx) => readLeftOpenDrafts(tx, query));
     },
     indexContactBacklog() {
       return driver.write(indexContactBacklog);

@@ -651,3 +651,27 @@ export type RecentBounce = {
   sentSubject: string | null;
   receivedAtMs: number;
 };
+
+/**
+ * Unsent mailbox drafts the user left, read from the local store alone, with
+ * no model. A conversation counts once, by its newest draft, and only once
+ * that draft has gone unsaved since `savedBeforeMs`: one saved after is still
+ * being written. A draft with no body is left out, as nothing was written.
+ */
+export type LeftOpenDraftsQuery = {
+  accountIds: string[];
+  savedBeforeMs: number;
+  limit: number;
+};
+
+/** Newest first. */
+export type LeftOpenDraft = {
+  accountId: string;
+  conversationId: string;
+  /** The conversation's newest draft. */
+  messageId: string;
+  subject: string;
+  to: string[];
+  /** When the draft was last saved. */
+  savedAtMs: number;
+};

@@ -80,6 +80,7 @@ const OPTIONAL_METHODS = {
   queryNeverReadSenders: true,
   queryWaitingOnYou: true,
   queryRecentBounces: true,
+  queryLeftOpenDrafts: true,
   querySenderHistory: true,
   queryFiles: true,
   queryFileSenders: true,

@@ -43,6 +43,8 @@ import type {
   PersonCardQuery,
   RecentBounce,
   RecentBouncesQuery,
+  LeftOpenDraft,
+  LeftOpenDraftsQuery,
   WaitingOnYouConversation,
   WaitingOnYouQuery,
   SenderHistory,
@@ -505,6 +507,7 @@ export interface MailStore {
    */
   readHeldSend(key: OperationKey): Promise<PreparedOperation | null>;
   readImportantPeople(accountIds: string[]): Promise<ImportantPerson[]>;
+  readLeftOpenDrafts(query: LeftOpenDraftsQuery): Promise<LeftOpenDraft[]>;
   readMailboxCounts(query: MailboxCountsQuery): Promise<{
     revision: LocalRevision;
     view: MailboxCountsView;
