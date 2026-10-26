@@ -361,6 +361,7 @@ export function useThreadActions({
                       messageId,
                     })),
                     change,
+                    priority: "interactive",
                   }),
                 ),
               );
