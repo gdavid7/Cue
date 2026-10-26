@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { stripTrackingImages } from "./tracking-images";
+/** @vitest-environment jsdom */
 
-describe("stripTrackingImages", () => {
+import { describe, expect, it } from "vitest";
+import { isTrackingImage } from "./tracking-images";
+
+describe("isTrackingImage", () => {
   it.each([
     [
       "1x1 attributes",
@@ -22,43 +24,44 @@ describe("stripTrackingImages", () => {
     ],
     ["zero height only", '<img src="https://e.example.com/p" height="0">'],
     [
-      "display none without a size",
-      '<img src="https://e.example.com/p" style="display: none">',
+      "a 1px width with no height",
+      '<img src="https://e.example.com/p" width="1">',
     ],
     [
-      "visibility hidden",
-      '<img src="https://e.example.com/p" style="visibility:hidden">',
+      "a hidden 1x1",
+      '<img src="https://e.example.com/p" width="1" height="1" style="display:none">',
     ],
-    ["opacity zero", '<img src="https://e.example.com/p" style="opacity:0">'],
-    ["hidden attribute", '<img src="https://e.example.com/p" hidden>'],
     [
       "protocol-relative 1x1",
       '<img src="//e.example.com/p" width="1" height="1">',
+    ],
+    [
+      "a 1x1 with only a srcset",
+      '<img srcset="https://t.example.com/o.gif 1x" width="1" height="1">',
     ],
     [
       "Mailchimp open path",
       '<img src="https://acme.us1.list-manage.com/track/open.php?u=1&amp;id=2">',
     ],
     [
+      "Mandrill open path",
+      '<img src="https://mandrillapp.com/track/open.php?u=1">',
+    ],
+    [
       "SendGrid open path",
-      '<img src="https://u123.ct.example.com/wf/open?upn=x">',
+      '<img src="https://u123.ct.sendgrid.net/wf/open?upn=x">',
+    ],
+    [
+      "Salesforce Marketing Cloud open path",
+      '<img src="https://cl.s7.exct.net/open.aspx?ffcb10-x">',
     ],
     [
       "Amazon SES open host",
       '<img src="https://abc.r.us-east-1.awstrack.me/I0/0100/xyz/1" alt="">',
     ],
     ["Mailtrack host", '<img src="https://mailtrack.io/trace/mail/abc.png">'],
-    [
-      "Salesforce Marketing Cloud open path",
-      '<img src="https://cl.s7.exct.net/open.aspx?ffcb10-x" width="0">',
-    ],
-    [
-      "quoted > inside another attribute",
-      '<img alt="a > b" src="https://e.example.com/p" width="1" height="1">',
-    ],
-  ])("removes %s", (_name, tag) => {
-    const result = stripTrackingImages(`<p>Hi</p>${tag}<p>Bye</p>`);
-    expect(result).toEqual({ html: "<p>Hi</p><p>Bye</p>", hiddenCount: 1 });
+  ])("flags %s", (_name, tag) => {
+    expect(isTracker(tag)).toBe(true);
   });
 
   it.each([
@@ -84,6 +87,26 @@ describe("stripTrackingImages", () => {
       '<img src="https://e.example.com/hero-m.jpg" width="600" style="display:none;max-height:0">',
     ],
     [
+      "a hidden mobile-only hero with no size",
+      '<img src="https://cdn.example/hero-mobile.jpg" class="show-mobile" style="display:none;mso-hide:all">',
+    ],
+    [
+      "an invisible image with no size",
+      '<img src="https://e.example.com/p" style="visibility:hidden;opacity:0" hidden>',
+    ],
+    [
+      "a sized image on a tracking-like path of another host",
+      '<img src="https://shop.example/track/open" width="300" height="200">',
+    ],
+    [
+      "an unsized image on a tracking-like path of another host",
+      '<img src="https://shop.example/wf/open">',
+    ],
+    [
+      "a sized image on a platform's open path",
+      '<img src="https://acme.us1.list-manage.com/track/open.php?u=1" width="300" height="200">',
+    ],
+    [
       "an inline cid image",
       '<img src="cid:logo@example" width="1" height="1">',
     ],
@@ -93,27 +116,22 @@ describe("stripTrackingImages", () => {
     ],
     ["an image with no src", '<img width="1" height="1">'],
     [
+      "a sized image with only a srcset",
+      '<img srcset="https://e.example.com/a.jpg 1x, https://e.example.com/b.jpg 2x" width="300">',
+    ],
+    [
       "a 1px max-width that does not set the size",
       '<img src="https://e.example.com/p.png" style="max-width:1px">',
     ],
   ])("keeps %s", (_name, tag) => {
-    const html = `<p>Hi</p>${tag}`;
-    expect(stripTrackingImages(html)).toEqual({ html, hiddenCount: 0 });
-  });
-
-  it("counts every tracker in a message", () => {
-    const html = [
-      '<img src="https://e.example.com/logo.png" width="120" height="40">',
-      '<img src="https://e.example.com/a" width="1" height="1">',
-      '<img src="https://mailtrack.io/trace/mail/x.png">',
-    ].join("");
-    expect(stripTrackingImages(html)).toEqual({
-      html: '<img src="https://e.example.com/logo.png" width="120" height="40">',
-      hiddenCount: 2,
-    });
-  });
-
-  it("returns empty html unchanged", () => {
-    expect(stripTrackingImages("")).toEqual({ html: "", hiddenCount: 0 });
+    expect(isTracker(tag)).toBe(false);
   });
 });
+
+function isTracker(tag: string) {
+  const template = document.createElement("template");
+  template.innerHTML = tag;
+  const image = template.content.querySelector("img");
+  if (!image) throw new Error(`No image in ${tag}`);
+  return isTrackingImage((name) => image.getAttribute(name));
+}

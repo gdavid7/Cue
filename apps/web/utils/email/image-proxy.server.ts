@@ -1,30 +1,31 @@
 import "server-only";
 import { DEFAULT_ASSET_PROXY_TTL_SECONDS } from "@inboxzero/image-proxy/proxy-url";
-import { stripTrackingImages } from "@inboxzero/mail-ui/tracking-images";
+import { isTrackingImage } from "@inboxzero/mail-ui/tracking-images";
 import { env } from "@/env";
 import type { Logger } from "@/utils/logger";
-import { stripSentMessageOpenPixels } from "@/utils/email/sent-message-open/sent-message-open";
+import { isSentMessageOpenPixelUrl } from "@/utils/email/sent-message-open/sent-message-open";
 import { getImageProxyBaseUrl } from "./image-proxy-config";
-import { rewriteHtmlRemoteAssetUrls } from "./rewrite-html";
+import { removeHtmlImages, rewriteHtmlRemoteAssetUrls } from "./rewrite-html";
 
 let hasWarnedAboutUnsignedImageProxy = false;
 let hasWarnedAboutDisabledAppRouteImageProxy = false;
 let hasWarnedAboutDisabledProductionImageProxy = false;
 
 export async function rewriteHtmlForImageProxy(html: string, logger: Logger) {
-  // The reader strips trackers before it gets here; repeating it means no
-  // caller can have the proxy fetch one.
-  const displayHtml = stripTrackingImages(
-    stripSentMessageOpenPixels(html),
-  ).html;
   const config = getImageProxyConfig(logger);
-  if (!config || !displayHtml) {
-    return {
-      html: displayHtml,
-      remoteAssetsProxied: false,
-      proxyBaseUrl: null,
-    };
+  if (!config || !html) {
+    return { html, remoteAssetsProxied: false, proxyBaseUrl: null };
   }
+
+  // The reader already removed these on its sanitized DOM. The composer sends
+  // bare image sources, so this keeps the proxy from ever fetching the user's
+  // own open pixel (which would count as an open) or a known tracker.
+  const displayHtml = removeHtmlImages(
+    html,
+    (getAttribute) =>
+      isSentMessageOpenPixelUrl(getAttribute("src")?.trim() ?? "") ||
+      isTrackingImage(getAttribute),
+  );
 
   return {
     html: await rewriteHtmlRemoteAssetUrls(displayHtml, {

@@ -8,7 +8,6 @@ import {
 } from "react";
 import { linkifyPlainText } from "./linkify";
 import { sanitizeMailHtml } from "./sanitize-html";
-import { stripTrackingImages } from "./tracking-images";
 import {
   adaptMailDocumentForDarkMode,
   DARK_MAIL_SURFACE,
@@ -64,7 +63,7 @@ export function MailMessageBody({
 }) {
   const document = useMemo(() => {
     if (!html) return null;
-    const sanitizedHtml = stripTrackingImages(sanitizeMailHtml(html)).html;
+    const sanitizedHtml = sanitizeMailHtml(html).html;
     const darkTreatment = getMailDarkTreatment(sanitizedHtml, {
       isDarkMode,
       adaptDesignedEmails: false,

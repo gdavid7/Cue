@@ -1,8 +1,7 @@
 import { sanitizeMailHtml } from "@inboxzero/mail-ui/sanitize-html";
-import { stripTrackingImages } from "@inboxzero/mail-ui/tracking-images";
 import { env } from "@/env";
 import { getImageProxyBaseUrl } from "@/utils/email/image-proxy-config";
-import { stripSentMessageOpenPixels } from "@/utils/email/sent-message-open/sent-message-open";
+import { isSentMessageOpenPixelUrl } from "@/utils/email/sent-message-open/sent-message-open";
 
 export const IMAGE_PROXY_BASE_URL = getImageProxyBaseUrl({
   baseUrl: env.NEXT_PUBLIC_BASE_URL,
@@ -30,9 +29,9 @@ const inFlightPreparation = new Map<
  * dropped and counted so the reader can say how many it hid.
  */
 export function sanitizeEmailHtml(html: string) {
-  const { html: sanitizedHtml, hiddenCount } = stripTrackingImages(
-    sanitizeMailHtml(stripSentMessageOpenPixels(html)),
-  );
+  const { html: sanitizedHtml, hiddenCount } = sanitizeMailHtml(html, {
+    dropImage: isSentMessageOpenPixelUrl,
+  });
   return { html: sanitizedHtml, hiddenTrackerCount: hiddenCount };
 }
 

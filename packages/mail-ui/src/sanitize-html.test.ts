@@ -14,7 +14,7 @@ describe("sanitizeMailHtml", () => {
           <a href="javascript:alert('unsafe')">bad link</a>
         </body>
       </html>
-    `);
+    `).html;
 
     const parsedDocument = new DOMParser().parseFromString(
       sanitized,
@@ -34,7 +34,7 @@ describe("sanitizeMailHtml", () => {
       <section data-testid="message">
         <p>Readable <strong>content</strong></p>
       </section>
-    `);
+    `).html;
     const document = buildMailHtmlDocument({
       html: sanitized,
       darkTreatment: "theme",
@@ -75,7 +75,7 @@ describe("sanitizeMailHtml", () => {
         </head>
         <body bgcolor="#ffffff">Styled content</body>
       </html>
-    `);
+    `).html;
     const document = buildMailHtmlDocument({
       html: sanitized,
       darkTreatment: "light",
@@ -108,7 +108,7 @@ describe("sanitizeMailHtml", () => {
     const sanitized = sanitizeMailHtml(`
       <div onclick="alert('unsafe')">Readable content</div>
       <script>alert("unsafe")</script>
-    `);
+    `).html;
     const document = buildMailHtmlDocument({
       html: sanitized,
       darkTreatment: "light",
@@ -165,7 +165,7 @@ describe("sanitizeMailHtml links bare URLs", () => {
   it("turns a long bare URL in a text node into a link that opens a new tab", () => {
     const html = sanitizeMailHtml(
       `<div><p>Confirm here: ${LONG_TRACKING_URL} before Friday.</p></div>`,
-    );
+    ).html;
     const links = parse(html).querySelectorAll("a");
 
     expect(links).toHaveLength(1);
@@ -180,7 +180,9 @@ describe("sanitizeMailHtml links bare URLs", () => {
 
   it("links a URL wrapped onto several lines inside angle brackets", () => {
     const wrapped = `${LONG_TRACKING_URL.slice(0, 70)}\n${LONG_TRACKING_URL.slice(70)}`;
-    const html = sanitizeMailHtml(`<pre>Open &lt;${wrapped}&gt; now</pre>`);
+    const html = sanitizeMailHtml(
+      `<pre>Open &lt;${wrapped}&gt; now</pre>`,
+    ).html;
     const links = parse(html).querySelectorAll("a");
 
     expect(links).toHaveLength(1);
@@ -192,7 +194,7 @@ describe("sanitizeMailHtml links bare URLs", () => {
       <style>a { background: url(https://example.com/bg.png); }</style>
       <a href="https://example.com/real">https://example.com/shown</a>
       <p>javascript:alert(1) and ftp://example.com/file</p>
-    `);
+    `).html;
     const document = parse(html);
 
     expect(document.querySelectorAll("a")).toHaveLength(1);
@@ -207,7 +209,7 @@ describe("sanitizeMailHtml links bare URLs", () => {
   it("keeps markup-like text in a URL as text instead of elements", () => {
     const html = sanitizeMailHtml(
       `<p>https://example.com/a?b=1&amp;c="&gt;&lt;img src=x onerror=alert(1)&gt;</p>`,
-    );
+    ).html;
     const document = parse(html);
 
     expect(document.querySelector("img")).toBeNull();
@@ -222,11 +224,63 @@ describe("sanitizeMailHtml links bare URLs", () => {
     const filler = `<p>${"version 1.2.3 ".repeat(400)}</p>`.repeat(30);
     const html = sanitizeMailHtml(
       `<p>https://first.example.com</p>${filler}<p>https://last.example.com</p>`,
-    );
+    ).html;
 
     expect(
       Array.from(parse(html).querySelectorAll("a"), (a) => a.href),
     ).toEqual(["https://first.example.com/"]);
+  });
+});
+
+describe("sanitizeMailHtml hides tracking images", () => {
+  it("removes and counts trackers but keeps visible images", () => {
+    const { html, hiddenCount } = sanitizeMailHtml(`
+      <p>Hi</p>
+      <img src="https://cdn.example.com/logo.png" width="120" height="40">
+      <img src="https://e.example.com/a" width="1" height="1">
+      <img src="https://mailtrack.io/trace/mail/x.png">
+    `);
+
+    expect(hiddenCount).toBe(2);
+    expect(
+      Array.from(parse(html).querySelectorAll("img"), (image) =>
+        image.getAttribute("src"),
+      ),
+    ).toEqual(["https://cdn.example.com/logo.png"]);
+  });
+
+  it("drops images matched by dropImage without counting them", () => {
+    const { html, hiddenCount } = sanitizeMailHtml(
+      '<p>Hi</p><img src="https://app.example.com/own" width="1" height="1"><img src="https://e.example.com/a" width="1" height="1">',
+      { dropImage: (src) => src === "https://app.example.com/own" },
+    );
+
+    expect(hiddenCount).toBe(1);
+    expect(parse(html).querySelectorAll("img")).toHaveLength(0);
+    expect(parse(html).body.textContent).toBe("Hi");
+  });
+
+  it("does not revive markup the sanitizer removed when an attribute holds a fake image tag", () => {
+    const { html, hiddenCount } = sanitizeMailHtml(
+      `<a title="<img src=//t/ width=1 height=1 alt='">x'</a><span title="x href=javascript:alert(document.domain) target=_blank style=display:block;position:fixed;inset:0 z">Click</span>`,
+    );
+    const document = parse(html);
+    const anchor = document.querySelector("a");
+
+    expect(hiddenCount).toBe(0);
+    expect(anchor?.hasAttribute("href")).toBe(false);
+    expect(anchor?.hasAttribute("style")).toBe(false);
+    expect(anchor?.getAttribute("title")).toBe(
+      "<img src=//t/ width=1 height=1 alt='",
+    );
+    expect(document.querySelector("[href^='javascript' i]")).toBeNull();
+    expect(document.querySelector("span")?.getAttribute("title")).toContain(
+      "href=javascript:alert",
+    );
+  });
+
+  it("returns an empty document with nothing hidden for empty html", () => {
+    expect(sanitizeMailHtml("").hiddenCount).toBe(0);
   });
 });
 

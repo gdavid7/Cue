@@ -8,7 +8,6 @@ import {
   isSentMessageOpenToken,
   mergeSentMessageOpenResponses,
   sentMessageOpenPath,
-  stripSentMessageOpenPixels,
 } from "./sent-message-open";
 
 const token = "abcdefghijklmnopqrstuvwxyz012345";
@@ -58,32 +57,6 @@ describe("appendSentMessageOpenPixel", () => {
   it("appends to html fragments", () => {
     expect(appendSentMessageOpenPixel("<p>Hi</p>", pixelUrl)).toBe(
       `<p>Hi</p><img src="${pixelUrl}" width="1" height="1" alt="" style="display:none!important;width:1px;height:1px;border:0;outline:none" />`,
-    );
-  });
-});
-
-describe("stripSentMessageOpenPixels", () => {
-  it("removes tracking pixels from displayed html", () => {
-    const html = appendSentMessageOpenPixel("<p>Hi</p>", pixelUrl);
-    expect(stripSentMessageOpenPixels(html)).toBe("<p>Hi</p>");
-  });
-
-  it("leaves other images in place", () => {
-    const html = `<p>Hi</p><img src="https://cdn.example.com/photo.png" alt="Photo">`;
-    expect(stripSentMessageOpenPixels(html)).toBe(html);
-  });
-
-  it("strips quoted and unquoted tracking pixels from reply html", () => {
-    const html = [
-      "<p>Thanks</p>",
-      "<blockquote>",
-      `<img width=1 height=1 src=${pixelUrl} alt="">`,
-      "</blockquote>",
-      `<img src="https://cdn.example.com/logo.png">`,
-    ].join("");
-
-    expect(stripSentMessageOpenPixels(html)).toBe(
-      '<p>Thanks</p><blockquote></blockquote><img src="https://cdn.example.com/logo.png">',
     );
   });
 });

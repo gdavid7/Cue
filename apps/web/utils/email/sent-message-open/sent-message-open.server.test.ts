@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import prisma from "@/utils/__mocks__/prisma";
 import { createTestLogger } from "@/__tests__/helpers";
-import { sendHtmlEmailWithOpenTracking } from "./sent-message-open.server";
+import { appendSentMessageOpenPixel } from "./sent-message-open";
+import {
+  sendHtmlEmailWithOpenTracking,
+  stripSentMessageOpenPixels,
+} from "./sent-message-open.server";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/utils/prisma");
@@ -310,6 +314,34 @@ describe("sendHtmlEmailWithOpenTracking", () => {
       expect.objectContaining({
         data: { messageId: "sent-1", threadId: "thread-1" },
       }),
+    );
+  });
+});
+
+describe("stripSentMessageOpenPixels", () => {
+  const pixelUrl = "https://app.example.com/t/abcdefghijklmnopqrstuvwxyz012345";
+
+  it("removes tracking pixels from displayed html", () => {
+    const html = appendSentMessageOpenPixel("<p>Hi</p>", pixelUrl);
+    expect(stripSentMessageOpenPixels(html)).toBe("<p>Hi</p>");
+  });
+
+  it("leaves other images in place", () => {
+    const html = `<p>Hi</p><img src="https://cdn.example.com/photo.png" alt="Photo">`;
+    expect(stripSentMessageOpenPixels(html)).toBe(html);
+  });
+
+  it("strips quoted and unquoted tracking pixels from reply html", () => {
+    const html = [
+      "<p>Thanks</p>",
+      "<blockquote>",
+      `<img width=1 height=1 src=${pixelUrl} alt="">`,
+      "</blockquote>",
+      `<img src="https://cdn.example.com/logo.png">`,
+    ].join("");
+
+    expect(stripSentMessageOpenPixels(html)).toBe(
+      '<p>Thanks</p><blockquote></blockquote><img src="https://cdn.example.com/logo.png">',
     );
   });
 });

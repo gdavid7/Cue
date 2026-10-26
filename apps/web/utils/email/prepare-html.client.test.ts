@@ -88,7 +88,8 @@ describe("sanitizeEmailHtml", () => {
       <p>Hi</p>
       <img src="https://cdn.example.com/logo.png" width="24" height="24" alt="Logo">
       <img src="https://news.example.com/open/abc.gif" width="1" height="1" alt="">
-      <img src="https://news.example.com/beacon" style="display:none">
+      <img src="https://news.example.com/beacon" style="display:none;width:1px;height:1px">
+      <img src="https://cdn.example.com/hero-mobile.jpg" class="show-mobile" style="display:none;mso-hide:all">
     `);
     const parsedDocument = new DOMParser().parseFromString(html, "text/html");
 
@@ -97,6 +98,9 @@ describe("sanitizeEmailHtml", () => {
       [...parsedDocument.querySelectorAll("img")].map((image) =>
         image.getAttribute("src"),
       ),
-    ).toEqual(["https://cdn.example.com/logo.png"]);
+    ).toEqual([
+      "https://cdn.example.com/logo.png",
+      "https://cdn.example.com/hero-mobile.jpg",
+    ]);
   });
 });
