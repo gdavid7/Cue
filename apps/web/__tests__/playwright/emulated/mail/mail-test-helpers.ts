@@ -706,3 +706,119 @@ export async function seedMailFromContact(
     },
   };
 }
+
+export async function setPremium(
+  emailAccountId: string,
+  premiumId: string | null,
+) {
+  await withClient((client) =>
+    client.query(
+      `UPDATE "User" SET "premiumId" = $2
+        WHERE id = (SELECT "userId" FROM "EmailAccount" WHERE id = $1)`,
+      [emailAccountId, premiumId],
+    ),
+  );
+}
+
+/** A reply from someone other than the user, in the snoozed conversation. */
+export async function insertReply(
+  page: Page,
+  token: string,
+  input: { threadId: string; messageId: string; subject: string },
+  sender: { name: string; address: string },
+) {
+  const email = process.env.PLAYWRIGHT_TEST_EMAIL;
+  if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const baseUrl = process.env.MICROSOFT_BASE_URL;
+    const draft = await page.request.post(
+      `${baseUrl}/v1.0/me/messages/${input.messageId}/createReply`,
+      { headers },
+    );
+    expect(draft.ok(), await draft.text()).toBe(true);
+    const { id } = (await draft.json()) as { id: string };
+    const patched = await page.request.patch(
+      `${baseUrl}/v1.0/me/messages/${id}`,
+      {
+        headers,
+        data: {
+          subject: input.subject,
+          from: { emailAddress: sender },
+          body: { contentType: "text", content: "Here is my answer." },
+          isRead: false,
+        },
+      },
+    );
+    expect(patched.ok(), await patched.text()).toBe(true);
+    const moved = await page.request.post(
+      `${baseUrl}/v1.0/me/messages/${id}/move`,
+      { headers, data: { destinationId: "inbox" } },
+    );
+    expect(moved.ok(), await moved.text()).toBe(true);
+    return ((await moved.json()) as { id: string }).id;
+  }
+  const created = await page.request.post(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages`,
+    {
+      headers,
+      data: {
+        threadId: input.threadId,
+        from: `${sender.name} <${sender.address}>`,
+        to: email,
+        subject: input.subject,
+        body_text: "Here is my answer.",
+        labelIds: ["INBOX", "UNREAD"],
+        internalDate: String(Date.now()),
+      },
+    },
+  );
+  expect(created.ok(), await created.text()).toBe(true);
+  return ((await created.json()) as { id: string }).id;
+}
+
+export async function messageInInbox(
+  page: Page,
+  token: string,
+  messageId: string,
+) {
+  const headers = { Authorization: `Bearer ${token}` };
+  if (!isMicrosoftPlaywright()) {
+    const response = await page.request.get(
+      `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/${messageId}`,
+      { headers },
+    );
+    expect(response.ok(), await response.text()).toBe(true);
+    return ((await response.json()).labelIds ?? []).includes("INBOX");
+  }
+  const base = process.env.MICROSOFT_BASE_URL;
+  const message = await page.request.get(
+    `${base}/v1.0/me/messages/${messageId}`,
+    {
+      headers,
+    },
+  );
+  expect(message.ok(), await message.text()).toBe(true);
+  const inbox = await page.request.get(`${base}/v1.0/me/mailFolders/inbox`, {
+    headers,
+  });
+  expect(inbox.ok()).toBe(true);
+  return (await message.json()).parentFolderId === (await inbox.json()).id;
+}
+
+export async function deleteProviderMessage(
+  page: Page,
+  token: string,
+  messageId: string,
+) {
+  const url = isMicrosoftPlaywright()
+    ? `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages/${messageId}`
+    : `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/messages/${messageId}`;
+  const response = await page.request.delete(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(response.ok()).toBe(true);
+}
