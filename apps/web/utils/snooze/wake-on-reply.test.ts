@@ -5,6 +5,10 @@ import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import { createMockEmailProvider } from "@/utils/__mocks__/email-provider";
 import prisma from "@/utils/__mocks__/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
+import {
+  claimNewMailReaction,
+  releaseNewMailReaction,
+} from "@/utils/redis/new-mail-reaction";
 import { unsnoozeThreads } from "@/utils/snooze/unsnooze";
 import type { ParsedMessage } from "@/utils/types";
 import { wakeSnoozedThreadOnReply } from "./wake-on-reply";
@@ -12,6 +16,10 @@ import { wakeSnoozedThreadOnReply } from "./wake-on-reply";
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/snooze/unsnooze", () => ({ unsnoozeThreads: vi.fn() }));
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
+vi.mock("@/utils/redis/new-mail-reaction", () => ({
+  claimNewMailReaction: vi.fn(),
+  releaseNewMailReaction: vi.fn(),
+}));
 
 const logger = createTestLogger();
 const emailAccount = {
@@ -53,7 +61,13 @@ async function wake(
       { email: "alias@example.net", signature: "", isDefault: false },
     ]),
   });
-  await wakeSnoozedThreadOnReply({ emailAccount, message, provider, logger });
+  await wakeSnoozedThreadOnReply({
+    emailAccount,
+    message,
+    provider,
+    withoutClaim: "wake",
+    logger,
+  });
   return provider;
 }
 
@@ -72,6 +86,80 @@ describe("wakeSnoozedThreadOnReply", () => {
     vi.mocked(unsnoozeThreads).mockResolvedValue({
       unsnoozedThreadIds: ["thread-a"],
     });
+    vi.mocked(claimNewMailReaction).mockResolvedValue("claimed");
+  });
+
+  // The webhook and each device's mail sync can all see the same reply.
+  it("wakes once when another path already woke for this reply", async () => {
+    vi.mocked(claimNewMailReaction).mockResolvedValue("taken");
+
+    await wake(reply());
+
+    expect(claimNewMailReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailAccountId: "account-a",
+        messageId: "reply",
+      }),
+    );
+    expect(unsnoozeThreads).not.toHaveBeenCalled();
+  });
+
+  // Before the claim existed the webhook always woke; a Redis outage mustn't
+  // change that. Mail sync runs on every device, so it waits instead.
+  it.each([
+    ["wake", 1],
+    ["skip", 0],
+  ] as const)("with Redis down, %s", async (withoutClaim, wakes) => {
+    vi.mocked(claimNewMailReaction).mockResolvedValue("unavailable");
+    const message = reply();
+    const provider = createMockEmailProvider({
+      getMessage: vi.fn().mockResolvedValue(message),
+      getSignatures: vi.fn().mockResolvedValue([]),
+    });
+
+    await wakeSnoozedThreadOnReply({
+      emailAccount,
+      message,
+      provider,
+      withoutClaim,
+      logger,
+    });
+
+    expect(unsnoozeThreads).toHaveBeenCalledTimes(wakes);
+    expect(releaseNewMailReaction).not.toHaveBeenCalled();
+  });
+
+  it("doesn't read the message again when the caller just read it", async () => {
+    const message = reply();
+    const provider = createMockEmailProvider({
+      getMessage: vi.fn(),
+      getSignatures: vi.fn().mockResolvedValue([]),
+    });
+
+    await wakeSnoozedThreadOnReply({
+      emailAccount,
+      message,
+      messageIsCurrent: true,
+      provider,
+      withoutClaim: "skip",
+      logger,
+    });
+
+    expect(provider.getMessage).not.toHaveBeenCalled();
+    expect(unsnoozeThreads).toHaveBeenCalledOnce();
+  });
+
+  it("lets a later run try again when nothing woke", async () => {
+    vi.mocked(unsnoozeThreads).mockResolvedValue({ unsnoozedThreadIds: [] });
+
+    await wake(reply());
+
+    expect(releaseNewMailReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailAccountId: "account-a",
+        messageId: "reply",
+      }),
+    );
   });
 
   it.each([
@@ -131,7 +219,13 @@ describe("wakeSnoozedThreadOnReply", () => {
       getSignatures: vi.fn().mockRejectedValue(new Error("offline")),
     });
 
-    await wakeSnoozedThreadOnReply({ emailAccount, message, provider, logger });
+    await wakeSnoozedThreadOnReply({
+      emailAccount,
+      message,
+      provider,
+      withoutClaim: "wake",
+      logger,
+    });
 
     expect(unsnoozeThreads).not.toHaveBeenCalled();
   });
@@ -159,6 +253,7 @@ describe("wakeSnoozedThreadOnReply", () => {
       emailAccount,
       message: arrival,
       provider,
+      withoutClaim: "wake",
       logger,
     });
 

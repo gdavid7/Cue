@@ -1,10 +1,19 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBackendMailboxSource } from "@inboxzero/mail-core/protocol/backend-adapter";
+import { getMockParsedMessage } from "@/__tests__/mocks/email-provider.mock";
 import { createScopedLogger } from "@/utils/logger";
+import { reactToSyncedNewMail } from "@/utils/mail-api/new-mail-reactions";
 import { POST } from "./route";
 
 vi.mock("server-only", () => ({}));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (task: () => unknown) => task(),
+}));
+vi.mock("@/utils/mail-api/new-mail-reactions", () => ({
+  reactToSyncedNewMail: vi.fn(),
+}));
 
 const getMailboxSyncPage = vi.fn();
 
@@ -77,6 +86,44 @@ describe("POST /changes/batch", () => {
       },
       { status: "paused", reason: "throttled" },
     ]);
+  });
+  // Mute and snooze wake-on-reply reach accounts provider pushes skip through
+  // the mail sync every engine reads here.
+  it("hands each synced page to mute and snooze", async () => {
+    getMailboxSyncPage.mockImplementation(
+      async ({ folderId }: { folderId: string }) => ({
+        cursor: "next",
+        reset: false,
+        upsertedMessages: [getMockParsedMessage({ id: `${folderId}-reply` })],
+        deletedMessageIds: [],
+        removedMessageIds: [],
+        hasMore: false,
+      }),
+    );
+
+    await routeBackedSource().readChangesBatch({
+      session: { accountId: "acc-1", generation: "g1" },
+      reads: ["inbox", "archive"].map((streamId, index) => ({
+        requestId: `r${index}`,
+        position: { streamId, generation: "g1", checkpoint: "c" },
+      })),
+      pageSize: 20,
+      signal: new AbortController().signal,
+    });
+
+    expect(reactToSyncedNewMail).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        emailAccountId: "acc-1",
+        changes: [
+          expect.objectContaining({
+            key: { accountId: "acc-1", messageId: "inbox-reply" },
+          }),
+          expect.objectContaining({
+            key: { accountId: "acc-1", messageId: "archive-reply" },
+          }),
+        ],
+      }),
+    );
   });
 });
 

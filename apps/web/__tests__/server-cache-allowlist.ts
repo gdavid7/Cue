@@ -408,6 +408,17 @@ export const SERVER_CACHE_WRITES: Record<
       },
     ],
   },
+  "utils/redis/new-mail-reaction.ts": {
+    writes: 1,
+    keys: [
+      {
+        key: "new-mail-reaction:v1:{emailAccountId}:{messageId}",
+        holds:
+          '"claimed", marking that Cue archived (mute) or woke (snooze) for one new message',
+        ttl: "2 days",
+      },
+    ],
+  },
   "utils/redis/public-contact-context-lock.ts": {
     writes: 1,
     keys: [

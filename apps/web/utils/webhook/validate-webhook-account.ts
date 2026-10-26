@@ -69,6 +69,10 @@ const webhookEmailAccountSelect = {
   },
 } satisfies Prisma.EmailAccountSelect;
 
+type WebhookPremium = Prisma.PremiumGetPayload<{
+  select: typeof premiumEntitlementSelect;
+}>;
+
 type WebhookEmailAccount = Prisma.EmailAccountGetPayload<{
   select: typeof webhookEmailAccountSelect;
 }>;
@@ -214,7 +218,7 @@ export async function validateWebhookAccount(
     return { success: false, response: NextResponse.json({ ok: true }) };
   }
 
-  const premium = getWebhookAccountPremium(emailAccount);
+  const access = getWebhookProcessing(emailAccount);
 
   const provider = await createEmailProvider({
     emailAccountId: emailAccount.id,
@@ -222,7 +226,7 @@ export async function validateWebhookAccount(
     logger,
   });
 
-  if (!premium) {
+  if (access.skip === "not_premium") {
     logger.info("Account not premium", {
       lemonSqueezyRenewsAt: emailAccount.user.premium?.lemonSqueezyRenewsAt,
       appleExpiresAt: emailAccount.user.premium?.appleExpiresAt,
@@ -239,12 +243,9 @@ export async function validateWebhookAccount(
     return { success: false, response: NextResponse.json({ ok: true }) };
   }
 
-  const tier = getUserTier(premium);
-  const userHasAiAccess = hasAiAccess(tier, !!emailAccount.user.aiApiKey);
-
-  if (!userHasAiAccess) {
+  if (access.skip === "no_ai_access") {
     logger.info("Does not have ai access - unwatching", {
-      tier,
+      tier: access.tier,
       hasApiKey: !!emailAccount.user.aiApiKey,
     });
     await unwatchEmails({
@@ -256,11 +257,7 @@ export async function validateWebhookAccount(
     return { success: false, response: NextResponse.json({ ok: true }) };
   }
 
-  const hasAutomationRules = emailAccount.rules.length > 0;
-  const hasFilingEnabled =
-    emailAccount.filingEnabled && !!emailAccount.filingPrompt;
-
-  if (!hasAutomationRules && !hasFilingEnabled) {
+  if (access.skip === "no_rules_or_filing") {
     logger.info("Has no rules enabled and filing not configured");
     // Rules used to be added only when the person answered the inbox style
     // card, so mailboxes linked before every new one started with them can
@@ -302,15 +299,46 @@ export async function validateWebhookAccount(
     success: true,
     data: {
       emailAccount,
-      hasAutomationRules,
-      hasAiAccess: userHasAiAccess,
+      hasAutomationRules: access.hasAutomationRules,
+      hasAiAccess: true,
     },
   };
 }
 
-function getWebhookAccountPremium(
-  emailAccount: NonNullable<ValidatedWebhookAccountData>,
-) {
+/**
+ * Whether provider pushes (and the Gmail catch-up that stands in for them)
+ * run Cue's processing for an account: premium, with AI access, and rules or
+ * filing to run. Mail sync reacts to new mail itself for the accounts they
+ * skip, so the two must agree.
+ */
+export function getWebhookProcessing(emailAccount: {
+  filingEnabled: boolean;
+  filingPrompt: string | null;
+  rules: unknown[];
+  user: {
+    aiApiKey: string | null;
+    premium: WebhookPremium | null;
+  };
+}) {
+  const premium = getWebhookAccountPremium(emailAccount);
+  if (!premium) return { skip: "not_premium" } as const;
+
+  const tier = getUserTier(premium);
+  if (!hasAiAccess(tier, !!emailAccount.user.aiApiKey))
+    return { skip: "no_ai_access", tier } as const;
+
+  const hasAutomationRules = emailAccount.rules.length > 0;
+  const hasFilingEnabled =
+    emailAccount.filingEnabled && !!emailAccount.filingPrompt;
+  if (!hasAutomationRules && !hasFilingEnabled)
+    return { skip: "no_rules_or_filing" } as const;
+
+  return { skip: null, hasAutomationRules } as const;
+}
+
+function getWebhookAccountPremium(emailAccount: {
+  user: { premium: WebhookPremium | null };
+}) {
   return env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS
     ? {
         tier: "PROFESSIONAL_ANNUALLY" as const,

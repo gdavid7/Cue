@@ -6,9 +6,17 @@ import {
   MAIL_ENGINE_REVISION_HEADER,
 } from "@inboxzero/mail-core/protocol/mail-http";
 import { createScopedLogger } from "@/utils/logger";
+import { reactToSyncedNewMail } from "@/utils/mail-api/new-mail-reactions";
 import { POST } from "./route";
 
 vi.mock("server-only", () => ({}));
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: (task: () => unknown) => task(),
+}));
+vi.mock("@/utils/mail-api/new-mail-reactions", () => ({
+  reactToSyncedNewMail: vi.fn(),
+}));
 
 const getMessagesWithPagination = vi.fn();
 const enumerated = vi.hoisted(() => ({
@@ -128,6 +136,29 @@ describe("POST /enumeration", () => {
     expect(result).toMatchObject({ status: "ok", value: { nextPage: "next" } });
     expect(result.status === "ok" && "retryAfterMs" in result.value).toBe(
       false,
+    );
+  });
+
+  // A new device's first pages can be the only read of a muted or snoozed
+  // conversation's new mail for accounts provider pushes skip.
+  it("hands each page's changes to mute and snooze", async () => {
+    const change = {
+      kind: "message_patch",
+      key: { accountId: "acc-1", messageId: "reply" },
+      reference: {
+        provider: "microsoft",
+        messageId: "reply",
+        conversationId: "thread",
+        version: null,
+      },
+      fields: { roles: ["inbox"], receivedAtMs: Date.now() },
+    };
+    enumerated.page = { ...pagedResult(), changes: [change] };
+
+    await routeBackedSource().enumerate(enumerationInput());
+
+    expect(reactToSyncedNewMail).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ emailAccountId: "acc-1", changes: [change] }),
     );
   });
 
