@@ -85,6 +85,7 @@ import {
   replyTrackingOffNotice,
 } from "./CueNotice";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
+import { BounceNotices } from "./BounceNotices";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatSenders, formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
@@ -100,6 +101,7 @@ import { useLocalInboxRows } from "./use-local-inbox-rows";
 import { YourDay } from "./YourDay";
 import { useWaitingOnYou, waitingOnYouScope } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
+import { useRecentBounces } from "./use-recent-bounces";
 import { useImportantPeople } from "@/hooks/useImportantPeople";
 import { useAwaySummary, WhileYouWereAway } from "./WhileYouWereAway";
 
@@ -268,6 +270,9 @@ export function HomeDashboard() {
     named: Boolean(allInboxesAccounts),
     ...waitingOnYouScopeState,
   });
+  // Only ever adds cards: a bounce's From isn't authenticated, so it never
+  // hides or moves another row on Today.
+  const bounces = useRecentBounces({ accounts: localAccounts });
   // Each conversation shows once on Today: never one it already lists as
   // needing a reply or waiting on someone else, in any of the mailboxes.
   // Across accounts, every account's own lists: the merge caps each lane,
@@ -830,6 +835,22 @@ export function HomeDashboard() {
           </p>
         ) : null}
       </header>
+
+      {/* First: a message that didn't go out is the day's most urgent news.
+          From local mail, so it shows before Today's answer. */}
+      <BounceNotices
+        accountColorIndexById={accountColorIndexById}
+        accounts={allInboxesAccounts ? localAccounts : undefined}
+        bounces={bounces.bounces}
+        href={(bounce) =>
+          threadHref({
+            threadId: bounce.conversationId,
+            account: allInboxesAccounts ? { id: bounce.accountId } : undefined,
+          })
+        }
+        onDismiss={bounces.dismiss}
+        returnFocusRef={rootRef}
+      />
 
       <GetStartedChecklist />
 

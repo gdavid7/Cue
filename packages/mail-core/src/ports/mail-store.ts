@@ -41,6 +41,8 @@ import type {
   NeverReadSendersQuery,
   PersonCard,
   PersonCardQuery,
+  RecentBounce,
+  RecentBouncesQuery,
   WaitingOnYouConversation,
   WaitingOnYouQuery,
   SenderHistory,
@@ -527,6 +529,7 @@ export interface MailStore {
     operation: OperationState | null;
   }>;
   readPersonCard(query: PersonCardQuery): Promise<PersonCard>;
+  readRecentBounces(query: RecentBouncesQuery): Promise<RecentBounce[]>;
   /**
    * The store's current revision. Taken just before a provider read is sent
    * and passed back as that read's `requestedAt`, it orders the read against

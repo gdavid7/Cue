@@ -593,9 +593,16 @@ const KAI = { address: "kai@example.com", name: "Kai Example" };
 /**
  * A conversation the user started with Kai, who answered an hour later: an
  * inbox reply from someone the user writes to, with nothing sent after it.
+ * `reply` sends the answer from someone else, as a mail server's bounce.
  * Returns its thread and what takes it out again.
  */
-export async function seedMailFromContact(page: Page, subject: string) {
+export async function seedMailFromContact(
+  page: Page,
+  subject: string,
+  reply: { from?: { name: string; address: string }; subject?: string } = {},
+) {
+  const replyFrom = reply.from ?? KAI;
+  const replySubject = reply.subject ?? subject;
   const token = await readProviderAccessToken();
   const email = process.env.PLAYWRIGHT_TEST_EMAIL;
   if (!email) throw new Error("PLAYWRIGHT_TEST_EMAIL is missing");
@@ -633,7 +640,8 @@ export async function seedMailFromContact(page: Page, subject: string) {
     const patched = await page.request.patch(`${base}/messages/${replyId}`, {
       headers,
       data: {
-        from: { emailAddress: KAI },
+        from: { emailAddress: replyFrom },
+        ...(reply.subject ? { subject: replySubject } : {}),
         toRecipients: [{ emailAddress: { address: email } }],
         body: { contentType: "text", content: body },
         isRead: false,
@@ -679,9 +687,9 @@ export async function seedMailFromContact(page: Page, subject: string) {
     headers,
     data: {
       threadId: first.threadId,
-      from: `${KAI.name} <${KAI.address}>`,
+      from: `${replyFrom.name} <${replyFrom.address}>`,
       to: email,
-      subject,
+      subject: replySubject,
       body_text: body,
       labelIds: ["INBOX", "UNREAD"],
       internalDate: String(Date.now() - 3_600_000),
