@@ -13,6 +13,7 @@ import {
   isBulkArchiveSendersInput,
   isManageInboxThreadActionInput,
   judgeSearchInboxQuery,
+  mockEnqueueMailBulkJob,
   mockSearchMessages,
   runAssistantChat,
   setupInboxWorkflowEval,
@@ -209,7 +210,32 @@ describe.runIf(shouldRunEval)(
             archiveCalls.flatMap((call) => call.threadIds),
           );
 
-          const pass =
+          // Archiving everything a search matches can instead count it and
+          // ask first (manageInbox with query), starting nothing this turn.
+          const searchWidePreview = toolCalls.find(
+            (toolCall) =>
+              toolCall.toolName === "manageInbox" &&
+              (toolCall.input as { action?: unknown }).action ===
+                "archive_threads" &&
+              typeof (toolCall.input as { query?: unknown }).query ===
+                "string" &&
+              (toolCall.output as { status?: unknown } | undefined)?.status ===
+                "needs_confirmation",
+          );
+          const asksBeforeArchivingAll =
+            !!searchWidePreview &&
+            isBulkArchiveSearchQuery(
+              {
+                query: String(
+                  (searchWidePreview.input as { query: string }).query,
+                ),
+              },
+              provider,
+            ) &&
+            mockEnqueueMailBulkJob.mock.calls.length === 0 &&
+            archiveCalls.length === 0;
+
+          const pagesThroughAll =
             !!bulkSearchCall &&
             isBulkArchiveSearchQuery(bulkSearchCall, provider) &&
             hasSearchBeforeFirstWrite(toolCalls) &&
@@ -229,6 +255,7 @@ describe.runIf(shouldRunEval)(
                 toolCall.toolName === "manageInbox" &&
                 isBulkArchiveSendersInput(toolCall.input),
             );
+          const pass = pagesThroughAll || asksBeforeArchivingAll;
 
           evalReporter.record({
             testName: `bulk archive paginates across all matches (${label})`,

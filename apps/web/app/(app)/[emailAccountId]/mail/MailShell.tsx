@@ -1,5 +1,6 @@
 "use client";
 
+import { getMatchingResultCopy } from "@/components/mail-bulk/follow-matching-jobs";
 import type { ListThread } from "./types";
 
 import { MailPanelErrorBoundary } from "@/app/(app)/[emailAccountId]/mail/MailPanelErrorBoundary";
@@ -44,7 +45,6 @@ import { MatchingConfirmDialog } from "@/app/(app)/[emailAccountId]/mail/Matchin
 import { TrashNotice } from "@/app/(app)/[emailAccountId]/mail/TrashNotice";
 import { useSelectAllMatching } from "@/app/(app)/[emailAccountId]/mail/use-select-all-matching";
 import {
-  getMatchingResultCopy,
   getAccountMatchingScope,
   needsMatchingConfirm,
 } from "@/app/(app)/[emailAccountId]/mail/select-all-matching";

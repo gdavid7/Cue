@@ -16,6 +16,7 @@ import type { getEmailAccount } from "@/__tests__/helpers";
 import { FOLDER_SEPARATOR } from "@/utils/outlook/folders";
 import prisma from "@/utils/__mocks__/prisma";
 import { createScopedLogger } from "@/utils/logger";
+import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
 
 export const shouldRunEval = shouldRunEvalTests();
 export const TIMEOUT = 120_000;
@@ -67,6 +68,8 @@ const hoisted = vi.hoisted(() => ({
   mockGetFolders: vi.fn(),
   mockGetOrCreateFolderIdByName: vi.fn(),
   mockMoveThreadToFolder: vi.fn(),
+  mockListMatchingMessages: vi.fn(),
+  mockEnqueueMailBulkJob: vi.fn(),
 }));
 
 const {
@@ -89,6 +92,9 @@ export const mockGetFolders = hoisted.mockGetFolders;
 export const mockGetOrCreateFolderIdByName =
   hoisted.mockGetOrCreateFolderIdByName;
 export const mockMoveThreadToFolder = hoisted.mockMoveThreadToFolder;
+export const mockListMatchingMessages = hoisted.mockListMatchingMessages;
+// Called once a select-all job over a search is started.
+export const mockEnqueueMailBulkJob = hoisted.mockEnqueueMailBulkJob;
 
 vi.mock("@/utils/rule/rule", () => ({
   createRule: hoisted.mockCreateRule,
@@ -118,6 +124,22 @@ vi.mock("@/utils/senders/unsubscribe", () => ({
 }));
 
 vi.mock("@/utils/prisma");
+
+vi.mock("@/utils/mail-bulk/run-matching-job", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/utils/mail-bulk/run-matching-job")
+  >()),
+  enqueueMailBulkJob: hoisted.mockEnqueueMailBulkJob,
+}));
+
+vi.mock("@/utils/redis/mail-bulk-job", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/redis/mail-bulk-job")>()),
+  mailBulkJobStore: {
+    create: vi.fn(),
+    transition: vi.fn(),
+    get: vi.fn(),
+  },
+}));
 
 vi.mock("@/env", async () => {
   const { buildAssistantChatEvalEnv } = await vi.importActual<
@@ -197,7 +219,45 @@ export function setupInboxWorkflowEval() {
       getMessageById(messageId),
     );
 
+    hoisted.mockEnqueueMailBulkJob.mockResolvedValue(undefined);
+    // A search's every match, as the select-all job lists it: the same mail
+    // the case's searchMessages fixture returns, page by page.
+    hoisted.mockListMatchingMessages.mockImplementation(
+      async ({
+        scope,
+        pageToken,
+      }: {
+        scope: { q?: string };
+        pageToken?: string;
+      }) => {
+        const page = await mockSearchMessages({
+          query: scope.q ?? "",
+          maxResults: 500,
+          pageToken,
+        });
+        return {
+          messages: (page?.messages ?? []).map(
+            (message: { id: string; threadId: string }) => ({
+              id: message.id,
+              threadId: message.threadId,
+            }),
+          ),
+          nextPageToken: page?.nextPageToken,
+        };
+      },
+    );
+
     mockCreateEmailProvider.mockResolvedValue({
+      listMatchingMessages: hoisted.mockListMatchingMessages,
+      getMessagesBatch: vi.fn(async (ids: string[]) =>
+        Promise.all(ids.map((id) => mockGetMessage(id))),
+      ),
+      getLabelByName: vi.fn(
+        async (name: string) =>
+          getDefaultLabels().find(
+            (label) => label.name.toLowerCase() === name.toLowerCase(),
+          ) ?? null,
+      ),
       searchMessages: mockSearchMessages,
       countMessages: mockCountMessages,
       getLabels: mockGetLabels,
@@ -220,21 +280,29 @@ export async function runAssistantChat({
   emailAccount,
   messages,
   inboxStats,
+  localMailSearch,
+  chatId,
 }: {
   emailAccount: ReturnType<typeof getEmailAccount>;
   messages: ModelMessage[];
   inboxStats?: { total: number; unread: number } | null;
+  localMailSearch?: LocalMailSearch;
+  /** The web chat's id, which a manageInbox preview's Confirm needs. */
+  chatId?: string;
 }) {
   const trace = await captureAssistantChatTrace({
     messages,
     emailAccount,
     inboxStats,
     logger,
+    localMailSearch,
+    chatId,
   });
 
   return {
     toolCalls: trace.toolCalls,
     finalText: trace.finalText,
+    responseMessages: trace.responseMessages,
     actual: summarizeRecordedToolCalls(trace.toolCalls, summarizeToolCall),
   };
 }

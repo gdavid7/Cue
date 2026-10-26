@@ -87,6 +87,7 @@ export async function runOnOtherAccounts<T>({
   emailAccountId,
   logger,
   abortSignal,
+  selection,
   run,
 }: {
   userId: string;
@@ -94,21 +95,16 @@ export async function runOnOtherAccounts<T>({
   emailAccountId: string;
   logger: Logger;
   abortSignal?: AbortSignal;
+  /** The accounts already chosen with selectOtherAccounts, if the caller needed them first. */
+  selection?: OtherAccountSelection;
   run: (account: ConnectedEmailAccount, signal: AbortSignal) => Promise<T>;
 }): Promise<{
   results: OtherAccountResult<T>[];
   /** The user's other accounts left out, by preference or by the cap. */
   notSearchedCount: number;
 }> {
-  const otherAccounts = (await getConnectedEmailAccounts({ userId })).filter(
-    (account) => account.id !== emailAccountId,
-  );
-  // Pending a product decision: drop this line to search every connected
-  // account, not only those the user keeps in All inboxes.
-  const searchable = otherAccounts.filter(
-    (account) => account.includeInAllAccounts,
-  );
-  const accounts = searchable.slice(0, MAX_OTHER_ACCOUNTS);
+  const { accounts, notSearchedCount } =
+    selection ?? (await selectOtherAccounts({ userId, emailAccountId }));
 
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -162,8 +158,36 @@ export async function runOnOtherAccounts<T>({
           error: "This account did not answer in time.",
         },
     ),
-    notSearchedCount: otherAccounts.length - accounts.length,
+    notSearchedCount,
   };
+}
+
+export type OtherAccountSelection = {
+  accounts: ConnectedEmailAccount[];
+  notSearchedCount: number;
+};
+
+/**
+ * Which of the user's other accounts chat reaches into: those kept in All
+ * inboxes, a few at most. The rest are counted as not searched.
+ */
+export async function selectOtherAccounts({
+  userId,
+  emailAccountId,
+}: {
+  userId: string;
+  emailAccountId: string;
+}): Promise<OtherAccountSelection> {
+  const otherAccounts = (await getConnectedEmailAccounts({ userId })).filter(
+    (account) => account.id !== emailAccountId,
+  );
+  // Pending a product decision: drop this line to search every connected
+  // account, not only those the user keeps in All inboxes.
+  const searchable = otherAccounts.filter(
+    (account) => account.includeInAllAccounts,
+  );
+  const accounts = searchable.slice(0, MAX_OTHER_ACCOUNTS);
+  return { accounts, notSearchedCount: otherAccounts.length - accounts.length };
 }
 
 /**

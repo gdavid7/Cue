@@ -320,4 +320,91 @@ describe("createLocalMailSearch", () => {
 
     expect(await search.search({ query: "x", limit: 20 })).toBeNull();
   });
+
+  it("asks a browser that can count for a count, and keeps only the accounts it asked about", async () => {
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger: createTestLogger(),
+      pollIntervalMs: 5,
+      canCount: true,
+    });
+    const { writer } = browserAnswering({
+      status: "counted",
+      accounts: [
+        { accountId: ACCOUNT, total: 4200 },
+        { accountId: "not-asked", total: 9 },
+      ],
+      groups: [{ count: 4200, messageId: "m1", accountId: ACCOUNT }],
+      groupCount: 1,
+      newest: [
+        { id: "m1", threadId: "t1", accountId: ACCOUNT },
+        { id: "m9", threadId: "t9", accountId: "not-asked" },
+      ],
+    });
+    search.attach(writer);
+
+    const result = await search.count?.({
+      searches: [{ accountId: ACCOUNT, query: "from:news@shop.example" }],
+      groupBy: "sender",
+    });
+
+    expect(result).toEqual({
+      status: "counted",
+      accounts: [{ accountId: ACCOUNT, total: 4200 }],
+      groups: [{ count: 4200, messageId: "m1", accountId: ACCOUNT }],
+      groupCount: 1,
+      newest: [{ id: "m1", threadId: "t1", accountId: ACCOUNT }],
+    });
+    expect(writer.write).toHaveBeenCalledWith({
+      type: "data-local-mail-count",
+      data: {
+        requestId: expect.any(String),
+        searches: [{ accountId: ACCOUNT, query: "from:news@shop.example" }],
+        groupBy: "sender",
+      },
+      transient: true,
+    });
+  });
+
+  it("doesn't ask an older tab, which can't count, to count", () => {
+    const search = createLocalMailSearch({
+      emailAccountId: ACCOUNT,
+      logger: createTestLogger(),
+    });
+    expect(search.count).toBeUndefined();
+  });
+
+  it("keeps only ids and numbers of a count in Redis", async () => {
+    const requestId = crypto.randomUUID();
+    store.set(`assistant-local-search:${ACCOUNT}:${requestId}`, "pending");
+
+    await saveLocalMailSearchResult({
+      emailAccountId: ACCOUNT,
+      requestId,
+      result: {
+        status: "counted",
+        accounts: [{ accountId: ACCOUNT, total: 3 }],
+        groups: [
+          {
+            count: 3,
+            messageId: "m1",
+            accountId: ACCOUNT,
+            from: "ada@example.com",
+          } as never,
+        ],
+        groupCount: 1,
+        newest: [],
+      },
+    });
+
+    const stored = store.get(`assistant-local-search:${ACCOUNT}:${requestId}`);
+    expect(stored).not.toContain("@");
+    expect(JSON.parse(stored ?? "")).toEqual({
+      status: "counted",
+      accounts: [{ accountId: ACCOUNT, total: 3 }],
+      groups: [{ count: 3, messageId: "m1", accountId: ACCOUNT }],
+      groupCount: 1,
+      newest: [],
+    });
+  });
 });

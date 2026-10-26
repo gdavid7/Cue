@@ -1,4 +1,4 @@
-import { type InferUITool, tool } from "ai";
+import { type InferUITool, type JSONValue, tool } from "ai";
 import { z } from "zod";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
@@ -51,6 +51,12 @@ import {
   requiresSenderEmails,
 } from "@/utils/ai/assistant/manage-inbox-actions";
 import { hideToolErrorFromUser } from "@/utils/ai/assistant/tool-error-visibility";
+import { previewMatchingQueryAction } from "@/utils/ai/assistant/chat-matching-actions";
+import { withoutConfirmToken } from "@/utils/ai/assistant/matching-query-actions";
+import {
+  getMatchingQueryActions,
+  toMatchingBulkAction,
+} from "@/utils/ai/assistant/matching-query-actions";
 import {
   type AutomaticUnsubscribeResult,
   unsubscribeSenderAndMark,
@@ -163,6 +169,10 @@ type InboxToolOptions = {
   userId: string;
   /** The chat's browser, when it can answer searches from its local mail. */
   localMailSearch?: LocalMailSearch;
+  /** The chat a manageInbox preview's Confirm button belongs to. */
+  chatId?: string;
+  /** Where the reply shows: only the web chat has confirm buttons. */
+  responseSurface?: "web" | "messaging";
 };
 
 type ProviderToolFactory = (options: InboxToolOptions) => unknown;
@@ -599,7 +609,7 @@ type OutlookSearchInboxInput = z.infer<typeof outlookSearchInboxInputSchema>;
 const gmailSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
-      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; for bulk or all-matching requests, keep calling searchInbox with nextPageToken until hasMore=false before reporting completion. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
+      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: gmailSearchInboxInputSchema,
     execute: async (input, callOptions) => {
       const { email, logger } = options;
@@ -622,7 +632,7 @@ const gmailSearchInboxTool = (options: InboxToolOptions) =>
 const outlookSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
-      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; for bulk or all-matching requests, keep calling searchInbox with nextPageToken until hasMore=false and collect all matching threadIds before writing in batches, even when the current page has zero messages. Report the summed successCount from action results, and disclose any failures or remaining pages. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
+      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page, even when the current page has zero messages. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: outlookSearchInboxInputSchema,
     execute: async (input, callOptions) => {
       const { email, logger } = options;
@@ -891,6 +901,8 @@ const senderEmailsSchema = z
   .max(100)
   .transform((emails) => [...new Set(emails)]);
 
+const matchingQuerySchema = z.string().trim().min(1).max(500).optional();
+
 const outlookManageInboxActions = [
   "archive_threads",
   "trash_threads",
@@ -911,8 +923,11 @@ const outlookManageInboxInputSchema = z
     threadIds: threadIdsSchema
       .optional()
       .describe(
-        "Required for thread actions. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
+        "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
+    query: matchingQuerySchema.describe(
+      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches. This changes nothing: it returns how many conversations would change, and the user starts the change with the Confirm button on the result. Tell them the count; calling again does not start it.",
+    ),
     categoryName: z
       .string()
       .trim()
@@ -937,6 +952,7 @@ const outlookManageInboxInputSchema = z
     validateManageInboxInput(input, context, {
       taxonomyField: "categoryName",
       taxonomyActions: ["categorize_threads", "remove_category_threads"],
+      queryActions: getMatchingQueryActions("microsoft"),
     }),
   )
   .describe("Outlook inbox action input.");
@@ -951,8 +967,11 @@ const gmailManageInboxInputSchema = z
     threadIds: threadIdsSchema
       .optional()
       .describe(
-        "Required for thread actions. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
+        "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
+    query: matchingQuerySchema.describe(
+      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches. This changes nothing: it returns how many conversations would change, and the user starts the change with the Confirm button on the result. Tell them the count; calling again does not start it.",
+    ),
     labelName: z
       .string()
       .trim()
@@ -977,6 +996,7 @@ const gmailManageInboxInputSchema = z
     validateManageInboxInput(input, context, {
       taxonomyField: "labelName",
       taxonomyActions: ["label_threads", "remove_label_threads"],
+      queryActions: getMatchingQueryActions("google"),
     }),
   )
   .describe("Gmail inbox action input.");
@@ -1051,9 +1071,10 @@ const buildManageInboxTool = ({
 
   return tool({
     description:
-      "Run inbox actions on threads or senders. For emails already shown or found in this turn, prefer thread actions with threadIds. Use archive_threads for ordinary inbox cleanup; only use trash_threads when the user explicitly asks to delete or trash. Do not widen a limited thread-level request into sender-wide cleanup. Only use sender-wide cleanup with fromEmails when the user clearly wants all mail from that sender, and get confirmation before doing broad sender-wide cleanup. Only use unsubscribe_senders for an explicit unsubscribe request.",
+      "Run inbox actions on threads or senders. For emails already shown or found in this turn, prefer thread actions with threadIds. To act on everything a search matches, use query instead of collecting threadIds page by page. Use archive_threads for ordinary inbox cleanup; only use trash_threads when the user explicitly asks to delete or trash. Do not widen a limited thread-level request into sender-wide cleanup. Only use sender-wide cleanup with fromEmails when the user clearly wants all mail from that sender, and get confirmation before doing broad sender-wide cleanup. Only use unsubscribe_senders for an explicit unsubscribe request.",
     inputSchema,
-    execute: async (input) => {
+    toModelOutput: manageInboxModelOutput,
+    execute: async (input, callOptions) => {
       trackToolCall({ tool: "manage_inbox", email, logger });
 
       const parsedInputResult = inputSchema.safeParse(input);
@@ -1143,6 +1164,25 @@ const buildManageInboxTool = ({
             sendersCount: normalizedFromEmails.length,
             senders: normalizedFromEmails,
           };
+        }
+
+        if (parsedInput.query) {
+          return await runManageInboxQuery({
+            parsedInput: { ...parsedInput, query: parsedInput.query },
+            emailProvider,
+            emailAccountId,
+            provider,
+            taxonomy,
+            // Only the web chat shows the card a confirmation is pressed on.
+            confirmation:
+              options.responseSurface === "web" &&
+              options.chatId &&
+              callOptions?.toolCallId
+                ? { chatId: options.chatId, toolCallId: callOptions.toolCallId }
+                : undefined,
+            abortSignal: callOptions?.abortSignal,
+            logger,
+          });
         }
 
         const threadIds = parsedInput.threadIds!;
@@ -2341,7 +2381,12 @@ async function runSenderUnsubscribeActions({
 function validateManageInboxInput(
   input: { action: string } & Partial<
     Record<
-      "threadIds" | "labelName" | "categoryName" | "read" | "fromEmails",
+      | "threadIds"
+      | "labelName"
+      | "categoryName"
+      | "read"
+      | "fromEmails"
+      | "query",
       string | boolean | string[]
     >
   >,
@@ -2349,14 +2394,29 @@ function validateManageInboxInput(
   options: {
     taxonomyField: "labelName" | "categoryName";
     taxonomyActions: readonly string[];
+    queryActions: readonly string[];
   },
 ) {
   const { action } = input;
   const isSenderAction =
     action === "bulk_archive_senders" || action === "unsubscribe_senders";
+  const hasQuery = input.query !== undefined;
+  if (hasQuery) {
+    if (
+      !options.queryActions.includes(action) ||
+      input.threadIds !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["query"],
+        message: `works only with ${options.queryActions.join(", ")}, and without threadIds`,
+      });
+      return;
+    }
+  }
   const requiredFields = new Set<
     "threadIds" | "labelName" | "categoryName" | "read" | "fromEmails"
-  >(isSenderAction ? ["fromEmails"] : ["threadIds"]);
+  >(isSenderAction ? ["fromEmails"] : hasQuery ? [] : ["threadIds"]);
   if (options.taxonomyActions.includes(action)) {
     requiredFields.add(options.taxonomyField);
   }
@@ -2420,6 +2480,7 @@ type NormalizedManageInboxInput = {
   action: ManageInboxAction;
   originalAction: string;
   threadIds?: string[] | null;
+  query?: string | null;
   labelName?: string | null;
   read?: boolean | null;
   fromEmails?: string[] | null;
@@ -2433,6 +2494,7 @@ function normalizeGmailManageInboxInput(
     action: originalAction as ManageInboxAction,
     originalAction,
     threadIds: parsed.threadIds as string[] | null | undefined,
+    query: parsed.query as string | null | undefined,
     labelName: parsed.labelName as string | null | undefined,
     read: parsed.read as boolean | null | undefined,
     fromEmails: parsed.fromEmails as string[] | null | undefined,
@@ -2454,10 +2516,75 @@ function normalizeOutlookManageInboxInput(
     action,
     originalAction,
     threadIds: parsed.threadIds as string[] | null | undefined,
+    query: parsed.query as string | null | undefined,
     labelName: parsed.categoryName as string | null | undefined,
     read: parsed.read as boolean | null | undefined,
     fromEmails: parsed.fromEmails as string[] | null | undefined,
   };
+}
+
+/**
+ * manageInbox over every email a search matches: a count the user confirms
+ * on the card, which then starts the inbox's own select-all job.
+ */
+async function runManageInboxQuery({
+  parsedInput,
+  emailProvider,
+  emailAccountId,
+  provider,
+  taxonomy,
+  confirmation,
+  abortSignal,
+  logger,
+}: {
+  parsedInput: NormalizedManageInboxInput & { query: string };
+  emailProvider: EmailProvider;
+  emailAccountId: string;
+  provider: string;
+  taxonomy: ManageInboxTaxonomyConfig;
+  confirmation?: { chatId: string; toolCallId: string };
+  abortSignal?: AbortSignal;
+  logger: Logger;
+}) {
+  const { action, labelName, read, query, originalAction } = parsedInput;
+  const bulkAction = toMatchingBulkAction(action, read);
+  if (!bulkAction) return { error: "This action can't run over a search." };
+
+  let labelId: string | undefined;
+  if (action === "label_threads") {
+    try {
+      const resolved = await resolveThreadLabel({
+        emailProvider,
+        labelName: labelName!,
+        action,
+        matchNestedLabels: isGoogleProvider(provider),
+        missingLabelError: taxonomy.missingLabelError,
+      });
+      labelId = resolved.labelId;
+    } catch (error) {
+      logger.warn("Failed to resolve label for a search-wide action", {
+        error,
+      });
+      return hideToolErrorFromUser({
+        error:
+          error instanceof Error
+            ? error.message
+            : taxonomy.labelResolutionFallbackError,
+      });
+    }
+  }
+
+  return previewMatchingQueryAction({
+    originalAction,
+    query,
+    bulkAction,
+    labelId,
+    emailProvider,
+    emailAccountId,
+    provider,
+    confirmation,
+    abortSignal,
+  });
 }
 
 function isThreadLabelAction(
@@ -2550,6 +2677,14 @@ async function extractAttachmentText(
   }
 
   return { text: "", truncated: false };
+}
+
+// The confirm token is for the card's button; the model has no use for it.
+function manageInboxModelOutput({ output }: { output: unknown }) {
+  return {
+    type: "json" as const,
+    value: withoutConfirmToken(output) as JSONValue,
+  };
 }
 
 function searchInboxModelOutput({ output }: { output: unknown }) {
