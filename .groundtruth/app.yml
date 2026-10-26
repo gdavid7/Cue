@@ -33,5 +33,28 @@ ready:
 # Fresh signed-out Cue with the seeded fake Gmail mailbox (groundtruth-test@gmail.com): resets Groundtruth's own
 # database and Redis containers and every emulator. Never touches the dev database (it's on 5442, not 5432).
 reset: node .groundtruth/cue/reset.mjs
-scenarios: {}
+# Each one signs the fake mailbox in once (so the Cue account exists, onboarding done); the browser itself
+# starts signed out and signs in with Google as groundtruth-test@gmail.com.
+scenarios:
+  signed-in:
+    description: The Cue account for groundtruth-test@gmail.com exists with onboarding done and the seeded fake inbox; the browser is signed out (sign in with Google as groundtruth-test@gmail.com)
+    run: node .groundtruth/cue/scenario.mjs signed-in
+  muted-conversation-with-reply:
+    description: Like signed-in, on a paid plan. The user muted the conversation "Offsite venue shortlist" from Wren Example earlier, and afterwards Wren replied in it, saying the lakeside venue is free in May
+    run: node .groundtruth/cue/scenario.mjs muted-conversation-with-reply
+  team-workspace:
+    description: Like signed-in, and the user is in a team with one teammate (Sam Teammate), so team comments are available
+    run: node .groundtruth/cue/scenario.mjs team-workspace
+  invite-no-calendar:
+    description: Like signed-in, with no calendar to read (the user's Google calendar is switched off on the Calendars page). The inbox holds the meeting invitation "Calendar Invitation Message" (Project planning, about two hours from now)
+    run: node .groundtruth/cue/scenario.mjs invite-no-calendar
+  invite-one-conflict:
+    description: Like invite-no-calendar, with the user's Google calendar connected; it has one other event at the invitation's time, "Product planning with notetaker"
+    run: node .groundtruth/cue/scenario.mjs invite-one-conflict
+  invite-two-conflicts:
+    description: Like invite-one-conflict, plus a second overlapping event, "Hiring sync", starting 15 minutes before the invitation
+    run: node .groundtruth/cue/scenario.mjs invite-two-conflicts
+  invite-free:
+    description: Like invite-no-calendar, with the user's Google calendar connected and nothing on it at the invitation's time
+    run: node .groundtruth/cue/scenario.mjs invite-free
 personas: {}

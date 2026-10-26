@@ -7,6 +7,7 @@
 
 export const PORTS = {
   app: 3100, // not 3000, so it never collides with a dev server
+  appServer: 3101, // Next.js itself, behind the front proxy on the app port (proxy.mjs)
   google: 4100, // Gmail emulator; same as CI
   microsoft: 4101, // Outlook emulator origin; CI freezes it into the build's CSP
   email: 4102, // stand-in for Resend

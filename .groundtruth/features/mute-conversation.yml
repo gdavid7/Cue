@@ -1,0 +1,73 @@
+feature: mute-conversation
+thoroughness: low
+scenarios:
+  signed-in: The Cue account for groundtruth-test@gmail.com exists with onboarding done and the seeded fake inbox; the browser is signed out
+  muted-conversation-with-reply: The user muted "Offsite venue shortlist" from Wren Example earlier, and afterwards Wren replied in it
+  team-workspace: The user is in a team with one teammate, so team comments are available
+claims:
+  - id: c1
+    summary: Mute from the menu archives it, listed as Muted
+    group: Muting takes a conversation out of the inbox
+    criterion: core-behavior
+    given: signed-in
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail, open the conversation "Archive Action Message" and choose Mute from its More actions menu
+    then:
+      kind: visible
+      what: The inbox no longer lists "Archive Action Message", and the Muted view in the sidebar lists it
+    test: tests/mute-conversation/c1.spec.ts
+    checked: After muting Archive Action Message from its More actions menu, the inbox has no such option and the Muted list contains it.
+  - id: c2
+    summary: The m key mutes too
+    group: Muting takes a conversation out of the inbox
+    criterion: core-behavior
+    given: signed-in
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail, open the conversation "Keyboard Navigation Message" and press the m key
+    then:
+      kind: visible
+      what: The inbox no longer lists "Keyboard Navigation Message", and the Muted view in the sidebar lists it
+    test: tests/mute-conversation/c2.spec.ts
+    checked: After pressing m on the open conversation, the Muted view lists "Keyboard Navigation Message" and the inbox listbox has no such option. The fix is an exact-name match on the "More" button.
+  - id: c3
+    summary: A new reply stays out of the inbox
+    group: A muted conversation stays quiet
+    criterion: core-behavior
+    given: muted-conversation-with-reply
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail, then open the Muted view and open "Offsite venue shortlist" from it
+    then:
+      kind: visible
+      what: The inbox does not list "Offsite venue shortlist", while the Muted view lists it, and the opened conversation includes Wren's reply about the lakeside venue
+    test: tests/mute-conversation/c3.spec.ts
+    checked: The inbox lacks the conversation (checked after older mail finishes loading), Muted lists it, and the opened thread-reader shows Wren's lakeside reply. After returning to the inbox, it is still absent.
+  - id: c4
+    summary: Undo brings it back to the inbox
+    group: Undo and unmute
+    criterion: states-and-feedback
+    given: signed-in
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail, open "Archive Action Message", choose Mute from its More actions menu, then click Undo on the confirmation that appears
+    then:
+      kind: visible
+      what: The inbox lists "Archive Action Message" again, and the Muted view does not list it
+    test: tests/mute-conversation/c4.spec.ts
+    checked: After mute then undo, the inbox lists "Archive Action Message" and the Muted view doesn't.
+  - id: c5
+    summary: Unmute takes it off the Muted list
+    group: Undo and unmute
+    criterion: core-behavior
+    given: muted-conversation-with-reply
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail, open the Muted view and click Unmute on "Offsite venue shortlist"
+    then:
+      kind: visible
+      what: An "Unmuted" confirmation appears and the Muted view no longer lists "Offsite venue shortlist"; the conversation stays out of the inbox (unmuting doesn't move it back)
+    test: tests/mute-conversation/c5.spec.ts
+    checked: The Unmuted toast shows, the Muted view no longer lists the conversation, and the Inbox list doesn't contain it. The test goes straight to the Muted URL after sign-in.
+  - id: c6
+    summary: Shift+M opens team comments, not mute
+    group: Team comments moved to Shift+M
+    criterion: accessibility-and-mobile
+    given: team-workspace
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail, open the conversation "Reader Navigation Message" and press Shift+M
+    then:
+      kind: visible
+      what: An internal comment box opens for the conversation, and the conversation is not muted (the inbox still lists it)
+    test: tests/mute-conversation/c6.spec.ts
+    checked: After Shift+M in the open thread, the internal comment box is visible and the inbox still lists the conversation.

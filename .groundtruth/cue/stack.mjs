@@ -6,13 +6,15 @@
 // commands go through `npx` and `pnpm exec`, which don't pass SIGTERM on, so killing only the wrapper would
 // leave the real server holding its port. Groundtruth's stop (SIGTERM to this process) stops every group.
 // SIGUSR2 is reset.mjs asking to clear the in-memory emulators, which have no reset route of their own: the
-// Stripe emulator takes a "reset" line, and the email server and Gmail emulator are restarted from their seed.
+// Stripe emulator takes a "reset" line, and the email server and Gmail emulator are restarted from their seed
+// (and Next.js with them; see RESTARTED_ON_RESET).
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { cleanEnv } from "./env.mjs";
+import { APP_ENV, cleanEnv, PORTS } from "./env.mjs";
 import { ensureInfra } from "./infra.mjs";
+import { startFrontProxy } from "./proxy.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.resolve(here, "../../apps/web");
@@ -20,7 +22,9 @@ const PID_FILE = path.join(here, ".stack.pid");
 const RESET_REQUEST = path.join(here, ".stack.reset-request");
 const RESET_DONE = path.join(here, ".stack.reset-done");
 const GROUPS_FILE = path.join(here, ".stack.groups");
-const RESTARTED_ON_RESET = ["Email emulator", "Google emulator"];
+// Next.js too: a restarted Google emulator signs ID tokens with a new key under the same key id, and a
+// running server keeps the old key set cached, so every sign-in after a reset would fail.
+const RESTARTED_ON_RESET = ["Email emulator", "Google emulator", "Next.js"];
 
 // Replace the whole environment before the config is read: it copies process.env into every server it starts.
 const env = cleanEnv();
@@ -37,6 +41,13 @@ execFileSync("pnpm", ["exec", "prisma", "migrate", "deploy"], { stdio: "inherit"
 const { default: config } = await import(pathToFileURL(path.join(webDir, "playwright.config.mjs")).href);
 const children = new Map();
 let stopping = false;
+
+// Next.js listens behind the front proxy (proxy.mjs), which holds the app's port.
+const nextServer = config.webServer.find((s) => s.name === "Next.js");
+if (!nextServer?.command.includes(`--port ${PORTS.app}`)) throw new Error("Can't find the Next.js server's port in playwright.config.mjs");
+nextServer.command = nextServer.command.replace(`--port ${PORTS.app}`, `--port ${PORTS.appServer}`);
+nextServer.url = nextServer.url.replace(`:${PORTS.app}/`, `:${PORTS.appServer}/`);
+const proxy = startFrontProxy({ port: PORTS.app, appPort: PORTS.appServer, googleUrl: APP_ENV.GOOGLE_BASE_URL });
 
 for (const server of config.webServer) run(server);
 fs.writeFileSync(PID_FILE, String(process.pid));
@@ -87,6 +98,7 @@ async function stop(code) {
   if (stopping) return;
   stopping = true;
   fs.rmSync(PID_FILE, { force: true });
+  proxy.close();
   await Promise.all([...children.values()].map((c) => killGroup(c.pid)));
   fs.rmSync(GROUPS_FILE, { force: true });
   process.exit(code);

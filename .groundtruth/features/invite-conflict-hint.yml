@@ -1,0 +1,52 @@
+feature: invite-conflict-hint
+thoroughness: low
+scenarios:
+  invite-no-calendar: Signed-out browser, existing account; the inbox holds the invitation "Calendar Invitation Message" (Project planning, about two hours from now); no calendar to read (the user's Google calendar is switched off on the Calendars page)
+  invite-one-conflict: As invite-no-calendar, with the Google calendar connected and one other event at that time, "Product planning with notetaker"
+  invite-two-conflicts: As invite-one-conflict, plus "Hiring sync" starting 15 minutes before the invitation
+  invite-free: As invite-no-calendar, with the Google calendar connected and nothing on it at that time
+claims:
+  - id: c1
+    summary: Names the one meeting it clashes with
+    group: The invite card says whether the time is free
+    criterion: core-behavior
+    given: invite-one-conflict
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail and open the conversation "Calendar Invitation Message"
+    then:
+      kind: visible
+      what: The meeting invitation card says "Conflicts with Product planning with notetaker", with no "and … more"
+    test: tests/invite-conflict-hint/c1.spec.ts
+    checked: The invitation card shows exactly "Conflicts with Product planning with notetaker" and no "and N more" text.
+  - id: c2
+    summary: Several clashes show the first and a count
+    group: The invite card says whether the time is free
+    criterion: core-behavior
+    given: invite-two-conflicts
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail and open the conversation "Calendar Invitation Message"
+    then:
+      kind: visible
+      what: The meeting invitation card says "Conflicts with Hiring sync" and "and 1 more"
+    test: tests/invite-conflict-hint/c2.spec.ts
+    checked: The invitation card in the opened thread contains the text "Conflicts with Hiring sync" and "and 1 more".
+  - id: c3
+    summary: Says you're free when nothing clashes
+    group: The invite card says whether the time is free
+    criterion: core-behavior
+    given: invite-free
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail and open the conversation "Calendar Invitation Message"
+    then:
+      kind: visible
+      what: The meeting invitation card says "You’re free then" and names no conflict
+    test: tests/invite-conflict-hint/c3.spec.ts
+    checked: The invitation card in the open thread contains "You’s free then" and no conflict text (no "Conflicts with"/"Product planning with notetaker"/"Hiring sync").
+  - id: c4
+    summary: Says nothing without a calendar
+    group: The invite card says whether the time is free
+    criterion: states-and-feedback
+    given: invite-no-calendar
+    when: Sign in with Google as groundtruth-test@gmail.com, go to Mail and open the conversation "Calendar Invitation Message"
+    then:
+      kind: visible
+      what: The meeting invitation card shows with its Yes, No and Maybe buttons, but no "Conflicts with" line and no "You’re free then"
+    test: tests/invite-conflict-hint/c4.spec.ts
+    checked: The invitation card region has Yes, No and Maybe buttons, and it contains no "Conflicts with" text and no "You’re free then" text.

@@ -108,7 +108,7 @@
       "!.claude",
       "!prototype",
       "!**/public/models",
-      "!.groundtruth/tests/support",
+      "!.groundtruth/tests",
       "!.groundtruth/playwright.config.ts"
     ]
   },
