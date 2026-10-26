@@ -10,7 +10,12 @@ import {
 } from "react";
 import { SWRConfig, mutate, useSWRConfig } from "swr";
 import { useAccount } from "@/providers/EmailAccountProvider";
-import { swrFetcher } from "./swr-fetcher";
+import { promptReconnectForDisconnected, swrFetcher } from "./swr-fetcher";
+import {
+  fetchEmailAccounts,
+  resetEmailAccountsInflight,
+} from "@/utils/fetch-email-accounts";
+import { onReconnectRequiredAction } from "@/utils/reconnect-required";
 import { isSigningOut } from "@/utils/signing-out";
 import {
   accountIdFromSnapshotKey,
@@ -65,6 +70,23 @@ export const SWRProvider = (props: { children: React.ReactNode }) => {
     }
     previousEmailAccountIdRef.current = emailAccountId;
   }, [emailAccountId, resetCache]);
+
+  useEffect(() => {
+    if (!emailAccountId) return;
+    return onReconnectRequiredAction(() => {
+      // A list already on its way may have been read before the refusal
+      // marked the account.
+      resetEmailAccountsInflight();
+      return (
+        fetchEmailAccounts()
+          .then(({ emailAccounts }) =>
+            promptReconnectForDisconnected(emailAccounts, emailAccountId),
+          )
+          // The action's caller already shows its own error.
+          .catch(() => undefined)
+      );
+    });
+  }, [emailAccountId]);
 
   const enhancedFetcher = useCallback(
     async (keyOrUrl: string | [string, string], init?: RequestInit) => {

@@ -13,6 +13,8 @@ import {
 } from "@/utils/email/rate-limit-mode-error";
 import { extractErrorInfo } from "@/utils/gmail/retry";
 import { createScopedLogger, type Logger } from "@/utils/logger";
+import { RECONNECT_REQUIRED_MESSAGE } from "@/utils/config";
+import { notifyReconnectRequiredAction } from "@/utils/reconnect-required";
 import {
   notifySessionExpired,
   SESSION_EXPIRED_MESSAGE,
@@ -653,6 +655,8 @@ function extractActionErrorMessage(error: SafeActionError): string | null {
     // Action call sites read their errors through here, so this is the one
     // client-side place that sees an action rejected for a signed-out session.
     if (error.serverError === SESSION_EXPIRED_MESSAGE) notifySessionExpired();
+    if (error.serverError === RECONNECT_REQUIRED_MESSAGE)
+      notifyReconnectRequiredAction();
     return error.serverError;
   }
 
