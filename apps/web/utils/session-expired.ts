@@ -11,6 +11,7 @@ const REDIRECTED_AT_KEY = "session-expired-redirected-at";
 // Covers a login page that bounces straight back with a session the server
 // still rejects, without blocking a real expiry later in the same tab.
 const REPEAT_REDIRECT_WINDOW_MS = 10_000;
+const SAVE_BEFORE_LEAVING_MS = 5000;
 
 type SessionExpiredHold = {
   /** Asks the user to sign in; `signIn` saves first, then redirects. */
@@ -134,19 +135,23 @@ export function holdSessionExpiredRedirect(hold: SessionExpiredHold) {
 }
 
 /** Whether an open composer would lose what is being typed if the page left. */
-export function hasSessionExpiredHold() {
+export function hasUnsavedWorkHold() {
   return holds.size > 0;
 }
 
-/** Saves what every open composer holds, then leaves. */
-export function saveHeldWorkThen(leave: () => void) {
+/**
+ * Saves what every open composer holds, then leaves. A save that hangs must
+ * not keep the user from leaving, so the wait is capped.
+ */
+export function saveUnsavedWorkThen(leave: () => void) {
   if (holds.size === 0) {
     leave();
     return;
   }
-  Promise.allSettled([...holds].map((hold) => hold.beforeRedirect())).finally(
-    leave,
-  );
+  Promise.race([
+    Promise.allSettled([...holds].map((hold) => hold.beforeRedirect())),
+    new Promise((resolve) => setTimeout(resolve, SAVE_BEFORE_LEAVING_MS)),
+  ]).finally(leave);
 }
 
 function redirectToLogin() {

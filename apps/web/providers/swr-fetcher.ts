@@ -19,10 +19,10 @@ import {
 import { redirectToSafeUrl } from "@/utils/redirect";
 import { isSigningOut, withSigningOutSignal } from "@/utils/signing-out";
 import {
-  hasSessionExpiredHold,
+  hasUnsavedWorkHold,
   isSessionExpiredErrorBody,
   notifySessionExpired,
-  saveHeldWorkThen,
+  saveUnsavedWorkThen,
   SESSION_EXPIRED_MESSAGE,
 } from "@/utils/session-expired";
 import { fetchWithSessionRetry } from "@/utils/session-refresh";
@@ -197,7 +197,7 @@ function promptReconnect(
     expired: true,
   });
   const viewed = emailAccountId === viewedEmailAccountId;
-  if (viewed && !hasSessionExpiredHold()) {
+  if (viewed && !hasUnsavedWorkHold()) {
     redirectToSafeUrl(reconnectUrl);
     return true;
   }
@@ -214,7 +214,7 @@ function offerReconnect(
   reconnectOffered.add(emailAccountId);
   const action = {
     label: "Reconnect",
-    onClick: () => saveHeldWorkThen(() => redirectToSafeUrl(reconnectUrl)),
+    onClick: () => saveUnsavedWorkThen(() => redirectToSafeUrl(reconnectUrl)),
   };
   if (viewed) {
     toastError({

@@ -22,11 +22,11 @@ if (typeof document !== "undefined") {
   });
 }
 
-const actionListeners = new Set<() => void>();
-let actionRefusalNoticed = false;
+const actionListeners = new Set<() => Promise<unknown>>();
+let actionLookupInFlight = false;
 
-/** The page that works out which account to send to its reconnect flow. */
-export function onReconnectRequiredAction(listener: () => void) {
+/** The page that looks up which account to send to its reconnect flow. */
+export function onReconnectRequiredAction(listener: () => Promise<unknown>) {
   actionListeners.add(listener);
   return () => {
     actionListeners.delete(listener);
@@ -35,19 +35,24 @@ export function onReconnectRequiredAction(listener: () => void) {
 
 /**
  * A server action answered that a mailbox grant is gone. The result names no
- * account, so the registered page looks up which one. Once per page: a bulk
- * flow reads every item's error, and on the consent page the user is already
- * reconnecting.
+ * account, so the registered page looks up which one. A bulk flow reads every
+ * item's error, so one lookup answers all that arrive while it runs; on the
+ * consent page the user is already reconnecting.
  */
 export function notifyReconnectRequiredAction() {
   if (
-    actionRefusalNoticed ||
+    actionLookupInFlight ||
+    actionListeners.size === 0 ||
     typeof window === "undefined" ||
     window.location.pathname.endsWith("/permissions/consent")
   )
     return;
-  actionRefusalNoticed = true;
-  for (const listener of actionListeners) listener();
+  actionLookupInFlight = true;
+  Promise.allSettled(
+    [...actionListeners].map((listener) => listener()),
+  ).finally(() => {
+    actionLookupInFlight = false;
+  });
 }
 
 export function isReconnectRequiredBody(body: unknown) {

@@ -451,10 +451,16 @@ describe("server action errors from a revoked mailbox", () => {
     toasts.toastError.mockReset();
   });
 
-  it("tells the page once when a bulk run's items each report the revoked mailbox", async () => {
+  it("looks up once for a bulk run's refusals, and again for a refusal after that lookup found nothing", async () => {
     const { assertActionSucceeded, getActionErrorMessage, ...page } =
       await loadPage();
-    const listener = vi.fn();
+    let finishLookup = () => {};
+    const listener = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLookup = resolve;
+        }),
+    );
     page.onReconnectRequiredAction(listener);
 
     getActionErrorMessage({ serverError: "Unable to update sender" });
@@ -466,6 +472,23 @@ describe("server action errors from a revoked mailbox", () => {
       );
     }
     expect(getActionErrorMessage({ serverError: RECONNECT })).toBe(RECONNECT);
+    expect(listener).toHaveBeenCalledOnce();
+
+    finishLookup();
+    await vi.waitFor(() => {
+      getActionErrorMessage({ serverError: RECONNECT });
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("still looks up a refusal that came before the page registered", async () => {
+    const { getActionErrorMessage, onReconnectRequiredAction } =
+      await loadPage();
+    getActionErrorMessage({ serverError: RECONNECT });
+
+    const listener = vi.fn(async () => undefined);
+    onReconnectRequiredAction(listener);
+    getActionErrorMessage({ serverError: RECONNECT });
 
     expect(listener).toHaveBeenCalledOnce();
   });
@@ -480,7 +503,7 @@ describe("server action errors from a revoked mailbox", () => {
       },
       sessionStorage,
     });
-    const listener = vi.fn();
+    const listener = vi.fn(async () => undefined);
     onReconnectRequiredAction(listener);
 
     expect(() => assertActionSucceeded({ serverError: RECONNECT })).toThrow();
@@ -534,6 +557,56 @@ describe("server action errors from a revoked mailbox", () => {
       ),
     );
     expect(beforeRedirect).toHaveBeenCalledOnce();
+  });
+  it("keeps the page under a composer when the viewed account's own request is refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: RECONNECT,
+            errorCode: "NO_REFRESH_TOKEN",
+            isKnownError: true,
+          },
+          { status: 401 },
+        ),
+      ),
+    );
+    const { swrFetcher, holdSessionExpiredRedirect } = await loadPage();
+    holdSessionExpiredRedirect({
+      prompt: vi.fn(),
+      beforeRedirect: async () => undefined,
+    });
+
+    await expect(
+      swrFetcher("/api/labels", undefined, "acc-1", {
+        viewedEmailAccountId: "acc-1",
+      }),
+    ).rejects.toMatchObject({ status: 401 });
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(toasts.toastError).toHaveBeenCalledOnce();
+    expect(toasts.toastError.mock.calls[0][0].description).toBe(RECONNECT);
+  });
+
+  it("leaves for the reconnect page even when a composer's save hangs", async () => {
+    const { promptReconnectForDisconnected, holdSessionExpiredRedirect } =
+      await loadPage();
+    holdSessionExpiredRedirect({
+      prompt: vi.fn(),
+      beforeRedirect: () => new Promise(() => {}),
+    });
+    promptReconnectForDisconnected(accounts("acc-1"), "acc-1");
+    vi.useFakeTimers();
+
+    toasts.toastError.mock.calls[0][0].action.onClick();
+    await vi.advanceTimersByTimeAsync(4900);
+    expect(assign).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(assign).toHaveBeenCalledExactlyOnceWith(
+      "/acc-1/permissions/consent?reason=expired",
+    );
   });
 });
 
