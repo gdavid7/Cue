@@ -207,7 +207,7 @@ test("unmuting removes it from Muted and leaves it archived", async ({
     .getByRole("listitem")
     .filter({ has: page.getByText(subject, { exact: true }) });
   await expect(mutedRow).toHaveCount(1, { timeout: 60_000 });
-  await mutedRow.getByRole("button", { name: "Unmute" }).click();
+  await mutedRow.getByRole("button", { name: "Unmute", exact: true }).click();
 
   await expect(mutedRow).toHaveCount(0, { timeout: 30_000 });
   await expect.poll(() => mutedCount(threadId)).toBe(0);
