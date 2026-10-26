@@ -1,29 +1,68 @@
 import { NextResponse } from "next/server";
-import { ActionType, DraftEmailStatus } from "@/generated/prisma/enums";
+import { z } from "zod";
+import { ActionType } from "@/generated/prisma/enums";
 import { isDraftUnmodified } from "@/utils/ai/choose-rule/draft-management";
 import { mapWithConcurrency } from "@/utils/async";
 import type { EmailProvider } from "@/utils/email/types";
+import { runWithGmailWaitBudget } from "@/utils/gmail/quota";
 import type { Logger } from "@/utils/logger";
 import { withEmailProvider } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 
-// Each source's newest drafts. Older ones are long sent, cleaned up or
-// deleted, and each one checked costs a mailbox read.
-const RULE_DRAFTS_CHECKED = 20;
-const FOLLOW_UP_DRAFTS_CHECKED = 20;
-const MEETING_DRAFTS_CHECKED = 10;
+// The lane's read limit: the hook asks about at most this many drafts.
+const MAX_ITEMS = 20;
 const CONCURRENCY = 5;
+// What the mailbox reads wait at the gate in all before the request defers
+// (503 with a retry time) and the lane stays hidden for the account.
+const GMAIL_WAIT_MS = 10_000;
+// Cue claims a meeting's follow-up draft just before writing it and never
+// saves it again, so an unedited one was saved within this of the claim.
+const MEETING_DRAFT_SAVE_SLACK_MS = 10 * 60_000;
+
+const idSchema = z.string().min(1).max(512);
+const querySchema = z.object({
+  items: z
+    .array(z.object({ threadId: idSchema, messageId: idSchema }))
+    .min(1)
+    .max(MAX_ITEMS),
+  savedFromMs: z.coerce.number().int().nonnegative(),
+  savedToMs: z.coerce.number().int().nonnegative(),
+});
 
 export type CueAuthoredDraftsResponse = Awaited<ReturnType<typeof getData>>;
 
+/**
+ * `?items=threadId:messageId,...` names the drafts the lane would show, each
+ * by its conversation and its message; `savedFromMs` and `savedToMs` bound
+ * when they were saved. Answers which of those messages are drafts Cue wrote
+ * into the mailbox. If any of Cue's drafts there can't be read, the request
+ * fails rather than answer for some of them.
+ */
 export const GET = withEmailProvider(
   "user/cue-authored-drafts",
   async (request) => {
-    const data = await getData({
-      emailAccountId: request.auth.emailAccountId,
-      provider: request.emailProvider,
-      logger: request.logger,
+    const searchParams = new URL(request.url).searchParams;
+    const query = querySchema.parse({
+      items: (searchParams.get("items") ?? "")
+        .split(",")
+        .filter(Boolean)
+        .map((pair) => {
+          // `searchParams` has already decoded each id once.
+          const [threadId, messageId] = pair.split(":");
+          return { threadId, messageId };
+        }),
+      savedFromMs: searchParams.get("savedFromMs"),
+      savedToMs: searchParams.get("savedToMs"),
     });
+
+    const data = await runWithGmailWaitBudget(GMAIL_WAIT_MS, () =>
+      getData({
+        ...query,
+        emailAccountId: request.auth.emailAccountId,
+        provider: request.emailProvider,
+        logger: request.logger,
+      }),
+    );
     return NextResponse.json(data, {
       headers: { "Cache-Control": "no-store" },
     });
@@ -31,88 +70,108 @@ export const GET = withEmailProvider(
 );
 
 /**
- * The mailbox message ids of drafts Cue wrote into the mailbox that the user
- * hasn't made their own: a rule's draft from before replies became
- * suggestions, while it still reads as Cue wrote it, and every follow-up and
- * meeting follow-up draft, whose original text Cue doesn't keep to compare.
- * Ids only. A Gmail draft id names the draft, not its message, so each is
- * read from the mailbox for its message's id.
+ * Of the given drafts, the message ids of those Cue wrote into the mailbox:
+ * a rule's draft from before replies became suggestions, unless the user has
+ * provably changed its text, and every follow-up and meeting follow-up
+ * draft, whose original text Cue doesn't keep to compare. Only Cue's drafts
+ * in the given conversations are looked up. A Gmail draft id names the
+ * draft, not its message, so each is read from the mailbox for its message's
+ * id; an Outlook draft id is its message's, so one is read only to compare
+ * its text.
  */
 async function getData({
+  items,
+  savedFromMs,
+  savedToMs,
   emailAccountId,
   provider,
   logger,
-}: {
+}: z.infer<typeof querySchema> & {
   emailAccountId: string;
   provider: EmailProvider;
   logger: Logger;
 }) {
+  const threadIds = [...new Set(items.map((item) => item.threadId))];
+  const messageIds = new Set(items.map((item) => item.messageId));
+  const draftIdIsMessageId = provider.name === "microsoft";
+
   const [ruleDrafts, followUps, meetings] = await Promise.all([
     prisma.executedAction.findMany({
       where: {
-        executedRule: { emailAccountId },
+        executedRule: { emailAccountId, threadId: { in: threadIds } },
         type: ActionType.DRAFT_EMAIL,
         draftId: { not: null },
-        OR: [
-          { draftStatus: null },
-          {
-            draftStatus: {
-              in: [
-                DraftEmailStatus.PENDING,
-                DraftEmailStatus.REPLIED_WITHOUT_DRAFT,
-              ],
-            },
-          },
-        ],
       },
       select: { draftId: true, content: true },
-      orderBy: { createdAt: "desc" },
-      take: RULE_DRAFTS_CHECKED,
     }),
     prisma.threadTracker.findMany({
-      where: { emailAccountId, followUpDraftId: { not: null } },
+      where: {
+        emailAccountId,
+        threadId: { in: threadIds },
+        followUpDraftId: { not: null },
+      },
       select: { followUpDraftId: true },
-      orderBy: { updatedAt: "desc" },
-      take: FOLLOW_UP_DRAFTS_CHECKED,
     }),
+    // A meeting's draft starts its own conversation, which the meeting
+    // doesn't keep. An Outlook one is matched by its id. A Gmail one is read
+    // only if it was written while the given drafts were saved; one saved
+    // well after Cue wrote it has been saved again, by the user.
     prisma.meeting.findMany({
-      where: { emailAccountId, followUpDraftId: { not: null } },
+      where: draftIdIsMessageId
+        ? { emailAccountId, followUpDraftId: { in: [...messageIds] } }
+        : {
+            emailAccountId,
+            followUpDraftId: { not: null },
+            // Never written before the meeting; lets the account's
+            // (emailAccountId, startTime) index bound the read.
+            startTime: {
+              lte: new Date(savedToMs + MEETING_DRAFT_SAVE_SLACK_MS),
+            },
+            followUpDraftStartedAt: {
+              gte: new Date(savedFromMs - MEETING_DRAFT_SAVE_SLACK_MS),
+              lte: new Date(savedToMs + MEETING_DRAFT_SAVE_SLACK_MS),
+            },
+          },
       select: { followUpDraftId: true },
-      orderBy: { startTime: "desc" },
-      take: MEETING_DRAFTS_CHECKED,
     }),
   ]);
 
+  // The text Cue wrote, where a changed one makes the draft the user's;
+  // null where there's none to compare and the draft stays Cue's.
   const candidates = new Map<string, string | null>();
+  for (const { draftId, content } of ruleDrafts)
+    if (draftId) candidates.set(draftId, content || null);
   for (const { followUpDraftId } of [...followUps, ...meetings])
     if (followUpDraftId) candidates.set(followUpDraftId, null);
-  // A rule's draft with no text kept can't be told apart from an edit, so
-  // it stays.
-  for (const { draftId, content } of ruleDrafts)
-    if (draftId && !candidates.has(draftId) && content)
-      candidates.set(draftId, content);
 
-  const messageIds = await mapWithConcurrency(
-    [...candidates],
+  const cueAuthored = new Set<string>();
+  const toRead: [string, string][] = [];
+  for (const [draftId, originalContent] of candidates) {
+    if (draftIdIsMessageId) {
+      if (!messageIds.has(draftId)) continue;
+      if (originalContent === null) cueAuthored.add(draftId);
+      else toRead.push([draftId, originalContent]);
+    } else {
+      toRead.push([draftId, originalContent ?? ""]);
+    }
+  }
+
+  // A read that throws, including one deferred at the Gmail gate, fails the
+  // request: a draft left unread may be Cue's.
+  await mapWithConcurrency(
+    toRead,
     CONCURRENCY,
     async ([draftId, originalContent]) => {
-      try {
-        const draft = await provider.getDraft(draftId);
-        if (!draft?.id) return [];
-        if (
-          originalContent !== null &&
-          !isDraftUnmodified({ originalContent, currentDraft: draft, logger })
-        )
-          return [];
-        return [draft.id];
-      } catch (error) {
-        logger.warn("Could not read a Cue-authored draft", { error });
-        // Unread, it may be Cue's, so it is left out by its own id: an
-        // Outlook draft's id is its message's, and a Gmail one matches no
-        // message, which costs nothing.
-        return [draftId];
-      }
+      const draft = await provider.getDraft(draftId);
+      if (!draft?.id || !messageIds.has(draft.id)) return;
+      if (
+        originalContent &&
+        !isDraftUnmodified({ originalContent, currentDraft: draft, logger })
+      )
+        return;
+      cueAuthored.add(draft.id);
     },
   );
-  return { messageIds: [...new Set(messageIds.flat())] };
+
+  return { messageIds: [...cueAuthored] };
 }

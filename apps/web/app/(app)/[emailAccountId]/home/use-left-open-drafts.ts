@@ -105,24 +105,35 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
   );
 
   const read = ready && data ? data : NO_DRAFTS;
-  // Asked again only when the drafts the lane could show change, as each
-  // ask reads Cue's drafts from the mailbox.
-  const candidates = useMemo(
-    () => [...new Set(read.map(draftKey))].sort(),
-    [read],
-  );
+  // Each account is asked about only its drafts the lane could show, and
+  // again only when those change, as each ask may read Cue's drafts from
+  // the mailbox.
+  const requests = useMemo(() => cueAuthoredRequests(read), [read]);
   const { data: cueAuthored } = useSWR(
-    candidates.length
-      ? [CUE_AUTHORED_DRAFTS_PATH, "left-open", ...candidates]
+    requests.length
+      ? [
+          CUE_AUTHORED_DRAFTS_PATH,
+          ...requests.flatMap((r) => [r.accountId, r.path]),
+        ]
       : null,
     async () => {
+      const paths = new Map(requests.map((r) => [r.accountId, r.path]));
       const result = await fetchForAccounts<CueAuthoredDraftsResponse>(
-        CUE_AUTHORED_DRAFTS_PATH,
-        [...new Set(read.map((draft) => draft.accountId))],
+        (accountId) => paths.get(accountId) ?? CUE_AUTHORED_DRAFTS_PATH,
+        [...paths.keys()],
       );
-      return { ...result, checked: new Set(candidates) };
+      return {
+        ...result,
+        checked: new Set(requests.flatMap((r) => r.draftKeys)),
+      };
     },
-    { keepPreviousData: true, revalidateOnFocus: false },
+    {
+      keepPreviousData: true,
+      revalidateOnFocus: false,
+      // The key changes whenever the drafts do; a mount with the same ones
+      // needn't read the mailbox again.
+      revalidateIfStale: false,
+    },
   );
 
   return useMemo(() => {
@@ -166,4 +177,33 @@ export function selectLeftOpenDrafts(
 
 function draftKey(draft: LeftOpenDraft) {
   return `${draft.accountId}\0${draft.messageId}`;
+}
+
+function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
+  const byAccount = new Map<string, LeftOpenDraft[]>();
+  for (const draft of drafts)
+    byAccount.set(draft.accountId, [
+      ...(byAccount.get(draft.accountId) ?? []),
+      draft,
+    ]);
+  return [...byAccount]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([accountId, accountDrafts]) => {
+      const sorted = [...accountDrafts].sort((a, b) =>
+        a.messageId.localeCompare(b.messageId),
+      );
+      const savedAt = sorted.map((draft) => draft.savedAtMs);
+      const params = new URLSearchParams({
+        items: sorted
+          .map((draft) => `${draft.conversationId}:${draft.messageId}`)
+          .join(","),
+        savedFromMs: String(Math.min(...savedAt)),
+        savedToMs: String(Math.max(...savedAt)),
+      });
+      return {
+        accountId,
+        path: `${CUE_AUTHORED_DRAFTS_PATH}?${params}`,
+        draftKeys: sorted.map(draftKey),
+      };
+    });
 }

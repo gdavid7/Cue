@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMAIL_ACCOUNT_HEADER } from "@/utils/config";
+import { GmailCallDeferredError } from "@/utils/gmail/quota";
 import prisma from "@/utils/__mocks__/prisma";
 import { GET } from "./route";
 
@@ -12,11 +13,12 @@ vi.mock("@/utils/auth", () => ({ auth: authMock }));
 vi.mock("@/utils/prisma");
 
 const emailAccountId = "account-1";
-const provider = { getDraft: vi.fn() };
+const provider = { name: "google", getDraft: vi.fn() };
 
 describe("GET /api/user/cue-authored-drafts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    provider.name = "google";
     authMock.mockResolvedValue({ user: { id: "user-1" } });
     createEmailProvider.mockResolvedValue(provider);
     prisma.emailAccount.findUnique.mockResolvedValue({
@@ -41,9 +43,39 @@ describe("GET /api/user/cue-authored-drafts", () => {
       draft(`message-of-${draftId}`, "Following up on this."),
     );
 
-    expect(await read()).toEqual({
-      messageIds: ["message-of-r-follow-up", "message-of-r-meeting"],
-    });
+    const body = await read(
+      items(["t1", "message-of-r-follow-up"], ["t2", "message-of-r-meeting"]),
+    );
+
+    expect(body.messageIds.sort()).toEqual([
+      "message-of-r-follow-up",
+      "message-of-r-meeting",
+    ]);
+  });
+
+  it("looks up only the given conversations' drafts, in the user's own account", async () => {
+    await read(items(["t1", "m1"], ["t2", "m2"]));
+
+    expect(prisma.executedAction.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          executedRule: { emailAccountId, threadId: { in: ["t1", "t2"] } },
+        }),
+      }),
+    );
+    expect(prisma.threadTracker.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          emailAccountId,
+          threadId: { in: ["t1", "t2"] },
+        }),
+      }),
+    );
+    expect(prisma.meeting.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ emailAccountId }),
+      }),
+    );
   });
 
   it("leaves out a rule's draft once the user has edited it", async () => {
@@ -57,7 +89,18 @@ describe("GET /api/user/cue-authored-drafts", () => {
         : draft("m-edited", "Sounds good, but can we do Friday instead?"),
     );
 
-    expect(await read()).toEqual({ messageIds: ["m-as-written"] });
+    expect(
+      await read(items(["t1", "m-as-written"], ["t2", "m-edited"])),
+    ).toEqual({ messageIds: ["m-as-written"] });
+  });
+
+  it("counts a rule's draft with no text kept to compare as Cue's", async () => {
+    prisma.executedAction.findMany.mockResolvedValue([
+      { draftId: "r-no-content", content: null },
+    ] as never);
+    provider.getDraft.mockResolvedValue(draft("m1", "Anything at all."));
+
+    expect(await read(items(["t1", "m1"]))).toEqual({ messageIds: ["m1"] });
   });
 
   it("names nothing for a draft no longer in the mailbox", async () => {
@@ -65,41 +108,129 @@ describe("GET /api/user/cue-authored-drafts", () => {
       { followUpDraftId: "r-gone" },
     ] as never);
 
-    expect(await read()).toEqual({ messageIds: [] });
+    expect(await read(items(["t1", "m1"]))).toEqual({ messageIds: [] });
   });
 
-  it("leaves a draft it couldn't read out by its own id", async () => {
-    prisma.meeting.findMany.mockResolvedValue([
-      { followUpDraftId: "outlook-message-id" },
+  it("fails rather than answer when a Cue draft can't be read", async () => {
+    prisma.threadTracker.findMany.mockResolvedValue([
+      { followUpDraftId: "r-readable" },
+      { followUpDraftId: "r-unreadable" },
     ] as never);
-    provider.getDraft.mockRejectedValue(new Error("unavailable"));
+    provider.getDraft.mockImplementation(async (draftId: string) => {
+      if (draftId === "r-unreadable") throw new Error("unavailable");
+      return draft("m1", "Following up.");
+    });
 
-    expect(await read()).toEqual({ messageIds: ["outlook-message-id"] });
+    const response = await GET(request(items(["t1", "m1"])), params());
+
+    expect(response.status).toBeGreaterThanOrEqual(500);
   });
 
-  it("only reads the mailbox for the user's own account", async () => {
+  it("defers with a retry time when the Gmail gate defers a read", async () => {
+    prisma.threadTracker.findMany.mockResolvedValue([
+      { followUpDraftId: "r-follow-up" },
+    ] as never);
+    provider.getDraft.mockRejectedValue(
+      new GmailCallDeferredError(5000, "background", "per_minute_budget"),
+    );
+
+    const response = await GET(request(items(["t1", "m1"])), params());
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("5");
+  });
+
+  it("names an Outlook draft by its own id without reading it, unless its text needs comparing", async () => {
+    provider.name = "microsoft";
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "developer@example.com",
+      account: { provider: "microsoft" },
+    } as never);
+    prisma.threadTracker.findMany.mockResolvedValue([
+      { followUpDraftId: "m-follow-up" },
+    ] as never);
+    prisma.executedAction.findMany.mockResolvedValue([
+      { draftId: "m-rule", content: "Sounds good." },
+      { draftId: "m-elsewhere", content: "Sounds good." },
+    ] as never);
+    provider.getDraft.mockResolvedValue(draft("m-rule", "Sounds good."));
+
+    const body = await read(
+      items(["c1", "m-follow-up"], ["c2", "m-rule"], ["c3", "m-users-own"]),
+    );
+
+    expect(body.messageIds.sort()).toEqual(["m-follow-up", "m-rule"]);
+    expect(provider.getDraft).toHaveBeenCalledTimes(1);
+    expect(provider.getDraft).toHaveBeenCalledWith("m-rule");
+  });
+
+  it("isn't cached", async () => {
+    const response = await GET(request(items(["t1", "m1"])), params());
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("refuses an account that isn't the user's", async () => {
+    prisma.emailAccount.findUnique.mockResolvedValue(null);
+
+    const response = await GET(request(items(["t1", "m1"])), params());
+
+    expect(response.status).toBe(403);
+    expect(prisma.threadTracker.findMany).not.toHaveBeenCalled();
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
+  it("only reads the mailbox for a signed-in user", async () => {
     authMock.mockResolvedValue(null);
 
-    const response = await GET(request(), { params: Promise.resolve({}) });
+    const response = await GET(request(items(["t1", "m1"])), params());
 
     expect(response.status).toBe(401);
     expect(provider.getDraft).not.toHaveBeenCalled();
   });
+
+  it("rejects more drafts than the lane reads", async () => {
+    const many = Array.from(
+      { length: 21 },
+      (_, i) => [`t${i}`, `m${i}`] as [string, string],
+    );
+
+    const response = await GET(request(items(...many)), params());
+
+    expect(response.status).toBe(400);
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
 });
 
-async function read() {
-  const response = await GET(request(), { params: Promise.resolve({}) });
+async function read(query: string) {
+  const response = await GET(request(query), params());
   expect(response.status).toBe(200);
   return response.json();
 }
 
-function request() {
-  return new NextRequest("http://127.0.0.1/api/user/cue-authored-drafts", {
-    headers: {
-      cookie: "better-auth.session_token=session",
-      [EMAIL_ACCOUNT_HEADER]: emailAccountId,
+function items(...pairs: [string, string][]) {
+  return new URLSearchParams({
+    items: pairs.map(([t, m]) => `${t}:${m}`).join(","),
+    savedFromMs: "1000",
+    savedToMs: "2000",
+  }).toString();
+}
+
+function params() {
+  return { params: Promise.resolve({}) };
+}
+
+function request(query: string) {
+  return new NextRequest(
+    `http://127.0.0.1/api/user/cue-authored-drafts?${query}`,
+    {
+      headers: {
+        cookie: "better-auth.session_token=session",
+        [EMAIL_ACCOUNT_HEADER]: emailAccountId,
+      },
     },
-  });
+  );
 }
 
 function draft(id: string, text: string) {

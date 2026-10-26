@@ -18,6 +18,9 @@ const mail = vi.hoisted(() => ({
   // What the server says Cue wrote, per account; a missing account failed.
   cueAuthored: {} as Record<string, string[]>,
   serverReads: [] as string[][],
+  serverPaths: {} as Record<string, string>,
+  // Set to hold the server's answer until released.
+  pending: null as Promise<void> | null,
 }));
 
 vi.mock("@inboxzero/mail-react/MailEngineProvider", () => ({
@@ -45,8 +48,16 @@ vi.mock("@/hooks/useHiddenDraftMessageIds", () => ({
   useAllAccountsHiddenDraftMessageIds: () => [],
 }));
 vi.mock("@/utils/fetch-for-accounts", () => ({
-  fetchForAccounts: async (_path: string, accountIds: string[]) => {
+  fetchForAccounts: async (
+    path: (accountId: string) => string,
+    accountIds: string[],
+  ) => {
     mail.serverReads.push(accountIds);
+    for (const accountId of accountIds)
+      mail.serverPaths[accountId] = path(accountId);
+    await mail.pending;
+    if (accountIds.every((accountId) => !mail.cueAuthored[accountId]))
+      throw new Error("every account failed");
     return {
       byAccount: accountIds.flatMap((accountId) =>
         mail.cueAuthored[accountId]
@@ -70,6 +81,8 @@ describe("useLeftOpenDrafts", () => {
     mail.drafts = [];
     mail.cueAuthored = {};
     mail.serverReads = [];
+    mail.serverPaths = {};
+    mail.pending = null;
     mail.client = {
       capabilities: ["method:queryLeftOpenDrafts"],
       queryLeftOpenDrafts: vi.fn(async () => mail.drafts),
@@ -100,6 +113,58 @@ describe("useLeftOpenDrafts", () => {
         "b-draft",
       ]),
     );
+  });
+
+  it("asks each account only about its own drafts", async () => {
+    mail.drafts = [
+      draft("a", "a-draft", "a-thread", 1000),
+      draft("b", "b-draft", "b-thread", 3000),
+      draft("a", "a-older", "a-thread-2", 500),
+    ];
+    mail.cueAuthored = { a: [], b: [] };
+
+    renderLeftOpenDrafts();
+
+    await waitFor(() => expect(mail.serverPaths.b).toBeDefined());
+    const a = new URL(mail.serverPaths.a, "http://x").searchParams;
+    expect(a.get("items")?.split(",").sort()).toEqual([
+      "a-thread-2:a-older",
+      "a-thread:a-draft",
+    ]);
+    expect([a.get("savedFromMs"), a.get("savedToMs")]).toEqual(["500", "1000"]);
+    expect(
+      new URL(mail.serverPaths.b, "http://x").searchParams.get("items"),
+    ).toBe("b-thread:b-draft");
+  });
+
+  it("shows nothing while the server hasn't answered", async () => {
+    mail.drafts = [draft("a", "users-own")];
+    mail.cueAuthored = { a: [] };
+    let release = () => {};
+    mail.pending = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    const { result } = renderLeftOpenDrafts();
+
+    await waitFor(() => expect(mail.serverReads).toHaveLength(1));
+    expect(result.current.drafts).toEqual([]);
+    release();
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "users-own",
+      ]),
+    );
+  });
+
+  it("shows nothing when the server couldn't answer for any account", async () => {
+    mail.drafts = [draft("a", "a-draft"), draft("b", "b-draft")];
+
+    const { result } = renderLeftOpenDrafts();
+
+    await waitFor(() => expect(mail.serverReads).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.drafts).toEqual([]);
   });
 
   it("asks the server nothing when there are no drafts to show", async () => {
@@ -173,13 +238,18 @@ function renderLeftOpenDrafts() {
   });
 }
 
-function draft(accountId: string, messageId: string): LeftOpenDraft {
+function draft(
+  accountId: string,
+  messageId: string,
+  conversationId = messageId,
+  savedAtMs = 0,
+): LeftOpenDraft {
   return {
     accountId,
-    conversationId: messageId,
+    conversationId,
     messageId,
     subject: "Plans",
     to: [],
-    savedAtMs: 0,
+    savedAtMs,
   };
 }
