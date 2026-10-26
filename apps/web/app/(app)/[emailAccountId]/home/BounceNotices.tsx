@@ -50,7 +50,7 @@ export function BounceNotices({
   };
 
   return (
-    <ul aria-label="Didn't send" className="space-y-2" ref={listRef}>
+    <ul aria-label="Didn't reach someone" className="space-y-2" ref={listRef}>
       {bounces.map((bounce, index) => {
         const account = accounts?.find(({ id }) => id === bounce.accountId);
         return (
@@ -98,7 +98,7 @@ function BounceCard({
       <MailXIcon aria-hidden className="size-4 shrink-0 text-destructive" />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground" id={titleId}>
-          Didn't send
+          Didn't reach someone
         </p>
         <p
           className="flex min-w-0 items-center gap-1.5 text-muted-foreground"
