@@ -22,6 +22,7 @@ import type { NextUpItem } from "@/utils/home/next-up";
 import type {
   ConversationSummary,
   MailboxView,
+  RecentBounce,
 } from "@inboxzero/mail-core/queries";
 import type { useLocalInboxRows } from "./use-local-inbox-rows";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
@@ -54,6 +55,9 @@ const mocks = vi.hoisted(() => ({
   // What Waiting on you reads from local mail.
   waitingOnYou: [] as TodayThread[],
   dismissWaitingOnYou: vi.fn(),
+  // Recent bounces in local mail, and which of them were dismissed.
+  bounces: [] as RecentBounce[],
+  dismissedBounces: [] as string[],
   // By account, whether Cue has read the mailbox, asked before Today's answer.
   homeCue: undefined as Record<string, boolean> | undefined,
   reportActivation: vi.fn(),
@@ -192,6 +196,26 @@ vi.mock("./use-waiting-on-you", async (importOriginal) => {
         (thread) => (thread.account?.id ?? accounts[0]?.id) in handledLabelIds,
       ),
       dismiss: mocks.dismissWaitingOnYou,
+    }),
+  };
+});
+vi.mock("./use-recent-bounces", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./use-recent-bounces")>();
+  return {
+    ...actual,
+    useRecentBounces: () => ({
+      bounces: mocks.bounces
+        .filter((bounce) => !mocks.dismissedBounces.includes(bounce.messageId))
+        .map((bounce) => ({
+          ...bounce,
+          title: bounce.sentSubject ?? bounce.subject,
+        })),
+      conversations: new Set(
+        mocks.bounces.map((bounce) =>
+          actual.bounceConversationKey(bounce.accountId, bounce.conversationId),
+        ),
+      ),
+      dismiss: vi.fn(),
     }),
   };
 });
@@ -1068,6 +1092,102 @@ describe("HomeDashboard Your day", () => {
 
     expect(screen.queryByRole("region", { name: "Your day" })).toBeNull();
     expect(screen.getByRole("link", { name: "Connect Calendar" })).toBeTruthy();
+  });
+});
+
+describe("HomeDashboard Didn't send", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.bounces = [
+      {
+        accountId: "account",
+        conversationId: "sent",
+        messageId: "sent-bounce",
+        subject: "Delivery Status Notification (Failure)",
+        sentSubject: "Contract draft",
+        receivedAtMs: Date.now(),
+      },
+    ];
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.bounces = [];
+    mocks.dismissedBounces = [];
+  });
+
+  it("shows the card first, and its conversation leaves Waiting on and the inbox list", () => {
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      waiting: [thread("sent", "Contract draft"), thread("w", "Intro to Sam")],
+      alsoInInbox: [thread("sent", "Contract draft"), thread("b", "Dentist")],
+    };
+
+    renderToday();
+
+    const card = within(
+      screen.getByRole("list", { name: "Didn't send" }),
+    ).getByRole("listitem");
+    expect(within(card).getByText("Contract draft")).toBeTruthy();
+    expect(
+      within(card).getByRole("link", { name: "Open" }).getAttribute("href"),
+    ).toBe("/mail/u/0/inbox/sent?from=today");
+    expect(within(lane("Waiting on")).queryByText("Contract draft")).toBeNull();
+    expect(within(lane("Waiting on")).getByText("Intro to Sam")).toBeTruthy();
+    expect(
+      within(lane("Also in your inbox")).queryByText("Contract draft"),
+    ).toBeNull();
+  });
+
+  it("once dismissed, the conversation is back in the inbox list but still waits on no one", () => {
+    mocks.dismissedBounces = ["sent-bounce"];
+    mocks.home.data = {
+      ...homeData([thread("a", "Quarterly numbers")]),
+      waiting: [thread("sent", "Contract draft"), thread("w", "Intro to Sam")],
+      alsoInInbox: [thread("sent", "Contract draft")],
+    };
+
+    renderToday();
+
+    expect(screen.queryByRole("list", { name: "Didn't send" })).toBeNull();
+    expect(within(lane("Waiting on")).queryByText("Contract draft")).toBeNull();
+    expect(
+      within(lane("Also in your inbox")).getByText("Contract draft"),
+    ).toBeTruthy();
+  });
+
+  it("opens in the bounce's own account across accounts", () => {
+    mocks.searchParams = new URLSearchParams({ accounts: "all" });
+    mocks.emailAccounts = [
+      emailAccount("account", "ada@example.com"),
+      emailAccount("account-b", "ada@work.example"),
+    ];
+    mocks.homes = {
+      account: homeData([]),
+      "account-b": homeData([]),
+    };
+    mocks.bounces = [{ ...mocks.bounces[0], accountId: "account-b" }];
+
+    try {
+      renderToday();
+
+      const card = within(
+        screen.getByRole("list", { name: "Didn't send" }),
+      ).getByRole("listitem");
+      expect(
+        within(card).getByRole("link", { name: "Open" }).getAttribute("href"),
+      ).toBe("/mail/u/0/all-inboxes/inbox/sent?account=1&from=today");
+      expect(
+        within(card).getByRole("img", { name: "Account: ada@work.example" }),
+      ).toBeTruthy();
+    } finally {
+      mocks.searchParams = new URLSearchParams();
+      mocks.emailAccounts = [];
+      mocks.homes = {};
+    }
   });
 });
 

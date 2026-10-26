@@ -502,6 +502,95 @@ test("Waiting on you lists local mail from someone you write to until Needs repl
   }
 });
 
+test("Didn't send: a bounce shows on Today named for what was sent, opens its conversation and stays dismissed", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(480_000);
+  const run = Date.now();
+  const subject = `Quarterly plan ${run}`;
+  // A mail server's own address answers in the sent conversation. Its
+  // wording is no part of how it is found.
+  const otherSubject = `Lunch order ${run}`;
+  const bounceFrom = isMicrosoftPlaywright()
+    ? { name: "Microsoft Outlook", address: "postmaster@outlook.com" }
+    : {
+        name: "Mail Delivery Subsystem",
+        address: "MAILER-DAEMON@googlemail.com",
+      };
+  const seeded = await seedMailFromContact(page, subject, {
+    from: bounceFrom,
+    subject: `Undeliverable: ${subject}`,
+  });
+  const other = await seedMailFromContact(page, otherSubject, {
+    from: bounceFrom,
+    subject: `Undeliverable: ${otherSubject}`,
+  });
+  const cards = page.getByRole("list", { name: "Didn't send" });
+  const card = cards.getByRole("listitem").filter({ hasText: subject });
+  try {
+    const emailAccountId = await getEmailAccountId(page);
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.addInitScript((value) => {
+        localStorage.setItem("theme", value);
+      }, theme);
+      await page.goto(`/${emailAccountId}/home`, {
+        waitUntil: "domcontentloaded",
+      });
+      await expect(card).toBeVisible({ timeout: 120_000 });
+      await expect(card).toContainText("Didn't send");
+      // Named for what the user sent, not the bounce's own subject.
+      await expect(card).not.toContainText("Undeliverable");
+      // Each conversation shows once on Today.
+      await expect(
+        page
+          .getByRole("listbox", { name: "Also in your inbox" })
+          .locator(`[data-today-thread="${seeded.threadId}"]`),
+      ).toHaveCount(0);
+      for (const size of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(size);
+        await expect(card).toBeVisible();
+        const scrollWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        expect(scrollWidth).toBeLessThanOrEqual(size.width);
+        await capturePlaywrightCheckpoint(
+          page,
+          testInfo,
+          `today-didnt-send-${theme}-${size.width}`,
+        );
+      }
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
+
+    // Open goes to the bounce's conversation, which comes back to Today.
+    await card.getByRole("link", { name: "Open" }).click();
+    await expect(page).toHaveURL(/[?&]from=today/);
+    await expect(
+      page.getByRole("heading", { name: new RegExp(String(run)) }).first(),
+    ).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("button", { name: "Back to inbox" }).click();
+    await expect(page).toHaveURL(/\/home(\?|$)/);
+
+    // Dismissed stays dismissed in this browser.
+    await expect(card).toBeVisible({ timeout: 60_000 });
+    await card.getByRole("button", { name: "Dismiss" }).click();
+    await expect(card).toHaveCount(0);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    // The other bounce shows, so local mail has been read.
+    await expect(
+      cards.getByRole("listitem").filter({ hasText: otherSubject }),
+    ).toBeVisible({ timeout: 120_000 });
+    await expect(card).toHaveCount(0);
+  } finally {
+    await seeded.remove();
+    await other.remove();
+  }
+});
+
 test("a new mailbox shows Waiting on you from local mail before Today answers, and it stays put", async ({
   page,
 }, testInfo) => {
