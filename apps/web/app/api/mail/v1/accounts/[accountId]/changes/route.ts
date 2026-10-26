@@ -13,6 +13,7 @@ import {
 } from "@/utils/mail-api/authorization";
 import { createEmailProviderMailboxSource } from "@/utils/mail-api/source";
 import { nudgeCatchUpForNewGmail } from "@/utils/mail-api/new-mail-catch-up";
+import { reactToSyncedNewMail } from "@/utils/mail-api/new-mail-reactions";
 import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export const POST = withEmailProvider(
@@ -51,6 +52,14 @@ export const POST = withEmailProvider(
       ...parsed.data,
       signal: request.signal,
     });
+    after(() =>
+      reactToSyncedNewMail({
+        emailAccountId: request.auth.emailAccountId,
+        provider: request.emailProvider,
+        results: [result],
+        logger: request.logger,
+      }),
+    );
     if (isGoogleProvider(request.emailProvider.name)) {
       after(() =>
         nudgeCatchUpForNewGmail({

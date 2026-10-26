@@ -496,6 +496,8 @@
   "snooze-wake-on-reply.spec.ts": [
     "utils/snooze/wake-on-reply.ts",
     "utils/snooze/unsnooze.ts",
-    "utils/webhook/process-history-item.ts"
+    "utils/webhook/process-history-item.ts",
+    "utils/mail-api/new-mail-reactions.ts",
+    "utils/mute/archive-muted-message.ts"
   ]
 }

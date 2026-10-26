@@ -5,6 +5,10 @@ import { SnoozedThreadStatus } from "@/generated/prisma/enums";
 import { createMockEmailProvider } from "@/utils/__mocks__/email-provider";
 import prisma from "@/utils/__mocks__/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
+import {
+  claimNewMailReaction,
+  releaseNewMailReaction,
+} from "@/utils/redis/new-mail-reaction";
 import { unsnoozeThreads } from "@/utils/snooze/unsnooze";
 import type { ParsedMessage } from "@/utils/types";
 import { wakeSnoozedThreadOnReply } from "./wake-on-reply";
@@ -12,6 +16,10 @@ import { wakeSnoozedThreadOnReply } from "./wake-on-reply";
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/snooze/unsnooze", () => ({ unsnoozeThreads: vi.fn() }));
 vi.mock("@/utils/email/provider", () => ({ createEmailProvider: vi.fn() }));
+vi.mock("@/utils/redis/new-mail-reaction", () => ({
+  claimNewMailReaction: vi.fn(),
+  releaseNewMailReaction: vi.fn(),
+}));
 
 const logger = createTestLogger();
 const emailAccount = {
@@ -72,6 +80,35 @@ describe("wakeSnoozedThreadOnReply", () => {
     vi.mocked(unsnoozeThreads).mockResolvedValue({
       unsnoozedThreadIds: ["thread-a"],
     });
+    vi.mocked(claimNewMailReaction).mockResolvedValue(true);
+  });
+
+  // The webhook and each device's mail sync can all see the same reply.
+  it("wakes once when another path already woke for this reply", async () => {
+    vi.mocked(claimNewMailReaction).mockResolvedValue(false);
+
+    await wake(reply());
+
+    expect(claimNewMailReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailAccountId: "account-a",
+        messageId: "reply",
+      }),
+    );
+    expect(unsnoozeThreads).not.toHaveBeenCalled();
+  });
+
+  it("lets a later run try again when nothing woke", async () => {
+    vi.mocked(unsnoozeThreads).mockResolvedValue({ unsnoozedThreadIds: [] });
+
+    await wake(reply());
+
+    expect(releaseNewMailReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailAccountId: "account-a",
+        messageId: "reply",
+      }),
+    );
   });
 
   it.each([

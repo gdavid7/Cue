@@ -32,6 +32,7 @@ import { isEmailProviderRateLimitError } from "@/utils/email/is-provider-rate-li
 import { isGmailCallDeferredError } from "@/utils/gmail/quota";
 import { isTransientMessageProcessingError } from "@/utils/webhook/message-processing-failure";
 import { wakeSnoozedThreadOnReply } from "@/utils/snooze/wake-on-reply";
+import { archiveMutedMessage } from "@/utils/mute/archive-muted-message";
 
 export type SharedProcessHistoryOptions = {
   provider: EmailProvider;
@@ -190,10 +191,7 @@ export async function processHistoryItem(
     };
 
     // A muted conversation's new mail skips the inbox, the rules (and their
-    // model call) and every notification. The mute lives in Cue's database,
-    // never as a mailbox label or filter. Only the message that arrived is
-    // archived: the rest of the thread (the user's Sent replies, drafts, mail
-    // they moved back) stays where it is, and an update event never re-files.
+    // model call) and every notification. An update event never re-files.
     const muted =
       !options.isUpdate && actualThreadId
         ? await prisma.mutedThread.findUnique({
@@ -208,8 +206,15 @@ export async function processHistoryItem(
         : null;
     if (muted) {
       try {
-        await provider.archiveMessage(messageId);
-        logger.info("Skipping. Muted conversation's new message archived.");
+        const outcome = await archiveMutedMessage({
+          emailAccountId,
+          messageId,
+          provider,
+          logger,
+        });
+        logger.info("Skipping. Muted conversation's new message.", {
+          outcome,
+        });
       } catch (error) {
         // Throttling and passing outages go to the existing retry path.
         if (
@@ -367,8 +372,8 @@ export async function processHistoryItem(
 
     // Mute returned above, so it wins. A wake is new mail like any other: the
     // push for this message follows the usual rules. Webhooks only reach
-    // premium accounts with AI access and rules or filing, so elsewhere a
-    // snooze runs to its time.
+    // premium accounts with AI access and rules or filing; mail sync wakes
+    // the rest (utils/mail-api/new-mail-reactions).
     if (!options.isUpdate) {
       try {
         await wakeSnoozedThreadOnReply({

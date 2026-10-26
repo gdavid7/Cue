@@ -111,7 +111,8 @@ export interface MiddlewareOptions {
    * session cookie cache (up to a minute stale after revocation) instead of
    * checking the session in the database. Side effects such a route may have
    * must be bookkeeping the caller cannot steer, like the debounced Gmail
-   * catch-up nudge mail/v1 changes schedules.
+   * catch-up nudge mail/v1 changes schedules, or the mute and snooze moves
+   * that the user's stored choices call for on mail it brings in.
    */
   readOnly?: boolean;
   requestTiming?: {

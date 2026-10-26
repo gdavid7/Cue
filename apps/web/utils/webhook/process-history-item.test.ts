@@ -27,6 +27,7 @@ import { SafeError } from "@/utils/error";
 import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 import { predraftReply } from "@/utils/reply-tracker/predraft-reply";
 import { wakeSnoozedThreadOnReply } from "@/utils/snooze/wake-on-reply";
+import { claimNewMailReaction } from "@/utils/redis/new-mail-reaction";
 
 vi.mock("@/utils/prisma", () => ({
   default: {
@@ -72,6 +73,10 @@ vi.mock("@/utils/mobile-push", () => ({
 }));
 vi.mock("@/utils/web-push/send-new-mail", () => ({
   sendNewMailWebPush: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/utils/redis/new-mail-reaction", () => ({
+  claimNewMailReaction: vi.fn().mockResolvedValue(true),
+  releaseNewMailReaction: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/utils/snooze/wake-on-reply", () => ({
   wakeSnoozedThreadOnReply: vi.fn().mockResolvedValue(undefined),
@@ -526,6 +531,17 @@ describe("Provider Edge Cases", () => {
       expect(sendOtpPushNotification).not.toHaveBeenCalled();
       expect(sendNewMailWebPush).not.toHaveBeenCalled();
       expect(sendMobilePushNotification).not.toHaveBeenCalled();
+    });
+
+    it("doesn't archive again when mail sync already archived the message", async () => {
+      vi.mocked(claimNewMailReaction).mockResolvedValueOnce(false);
+      const { provider } = getArrival();
+
+      await processArrival(provider);
+
+      expect(provider.archiveMessage).not.toHaveBeenCalled();
+      expect(runRules).not.toHaveBeenCalled();
+      expect(sendNewMailWebPush).not.toHaveBeenCalled();
     });
 
     it("leaves an update event alone, so mail moved back to the inbox stays there", async () => {
