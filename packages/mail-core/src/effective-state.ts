@@ -202,13 +202,21 @@ export function applyMetadataPatch(
     categoryIds: patch.categoryIds ?? current.categoryIds,
     roles: patch.roles ?? current.roles,
     hasAttachments: patch.hasAttachments ?? current.hasAttachments,
-    snoozedUntilMs:
-      patch.snoozedUntilMs === undefined
-        ? current.snoozedUntilMs
-        : patch.snoozedUntilMs,
+    snoozedUntilMs: patchedSnooze(current, patch),
     // A message's Message-ID never changes, so a patch without it keeps it.
     internetMessageId: patch.internetMessageId ?? current.internetMessageId,
   };
+}
+
+// The provider putting a message back in the inbox, as a snooze's own return
+// or an early wake on a reply does, ends its snooze here too.
+function patchedSnooze(
+  current: MessageMetadata,
+  patch: Partial<MessageMetadata>,
+) {
+  if (patch.snoozedUntilMs !== undefined) return patch.snoozedUntilMs;
+  if (patch.roles?.includes("inbox")) return null;
+  return current.snoozedUntilMs;
 }
 
 function withRoles(

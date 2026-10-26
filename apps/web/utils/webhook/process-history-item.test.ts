@@ -26,6 +26,7 @@ import { sendMobilePushNotification } from "@/utils/mobile-push";
 import { SafeError } from "@/utils/error";
 import { sendNewMailWebPush } from "@/utils/web-push/send-new-mail";
 import { predraftReply } from "@/utils/reply-tracker/predraft-reply";
+import { wakeSnoozedThreadOnReply } from "@/utils/snooze/wake-on-reply";
 
 vi.mock("@/utils/prisma", () => ({
   default: {
@@ -71,6 +72,9 @@ vi.mock("@/utils/mobile-push", () => ({
 }));
 vi.mock("@/utils/web-push/send-new-mail", () => ({
   sendNewMailWebPush: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@/utils/snooze/wake-on-reply", () => ({
+  wakeSnoozedThreadOnReply: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/utils/reply-tracker/predraft-reply", () => ({
   predraftReply: vi.fn().mockResolvedValue("not-needed"),
@@ -595,6 +599,104 @@ describe("Provider Edge Cases", () => {
       expect(handleOutboundMessage).toHaveBeenCalledOnce();
       expect(provider.archiveMessage).not.toHaveBeenCalled();
       expect(provider.archiveThread).not.toHaveBeenCalled();
+    });
+  });
+
+  describe.each([
+    "google",
+    "microsoft",
+  ])("Snoozed conversations (%s)", (providerName) => {
+    beforeEach(() => {
+      vi.mocked(runRules).mockResolvedValue([]);
+    });
+
+    function arrival(overrides: Record<string, unknown> = {}) {
+      const message = getMockParsedMessage({
+        id: "reply",
+        threadId: "snoozed-thread",
+      });
+      return createMockEmailProvider({
+        name: providerName,
+        getMessage: vi.fn().mockResolvedValue(message),
+        isSentMessage: vi.fn().mockReturnValue(false),
+        ...overrides,
+      });
+    }
+
+    async function processArrival(
+      provider: ReturnType<typeof createMockEmailProvider>,
+      options: Partial<typeof baseOptions> & {
+        isUpdate?: boolean;
+        hasAiAccess?: boolean;
+        hasAutomationRules?: boolean;
+      } = {},
+    ) {
+      await processHistoryItem(
+        { messageId: "reply", threadId: "snoozed-thread" },
+        {
+          ...baseOptions,
+          provider,
+          isNewMessage: true,
+          hasAutomationRules: true,
+          hasAiAccess: true,
+          ...options,
+        },
+      );
+    }
+
+    it("offers new mail to the snooze wake after its rules ran", async () => {
+      vi.mocked(runRules).mockResolvedValueOnce([]);
+      const provider = arrival();
+
+      await processArrival(provider, {
+        hasAutomationRules: true,
+        hasAiAccess: true,
+      });
+
+      expect(wakeSnoozedThreadOnReply).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          emailAccount: baseOptions.emailAccount,
+          message: expect.objectContaining({ id: "reply" }),
+          provider,
+        }),
+      );
+      expect(vi.mocked(runRules).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(wakeSnoozedThreadOnReply).mock.invocationCallOrder[0],
+      );
+    });
+
+    it("keeps a muted conversation muted", async () => {
+      vi.mocked(prisma.mutedThread.findUnique).mockResolvedValueOnce({
+        id: "mute-1",
+      } as any);
+
+      await processArrival(arrival());
+
+      expect(wakeSnoozedThreadOnReply).not.toHaveBeenCalled();
+    });
+
+    it("doesn't wake for the user's own reply", async () => {
+      await processArrival(
+        arrival({ isSentMessage: vi.fn().mockReturnValue(true) }),
+      );
+
+      expect(handleOutboundMessage).toHaveBeenCalledOnce();
+      expect(wakeSnoozedThreadOnReply).not.toHaveBeenCalled();
+    });
+
+    it("doesn't wake on an update to mail already processed", async () => {
+      await processArrival(arrival(), { isUpdate: true });
+
+      expect(wakeSnoozedThreadOnReply).not.toHaveBeenCalled();
+    });
+
+    it("still finishes processing when the wake fails", async () => {
+      vi.mocked(wakeSnoozedThreadOnReply).mockRejectedValueOnce(
+        new Error("offline"),
+      );
+
+      await expect(processArrival(arrival())).resolves.toBeUndefined();
+      expect(sendNewMailWebPush).toHaveBeenCalledOnce();
     });
   });
 
