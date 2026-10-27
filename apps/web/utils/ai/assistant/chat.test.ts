@@ -931,6 +931,56 @@ describe("aiProcessAssistantChat Gmail demand", () => {
     );
   });
 
+  it("holds background work back in each other Gmail account the turn calls, once", async () => {
+    await run();
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockImplementation(async () => {
+      await admitGmailCall({ emailAccountId: "other-account-id", cost: 5 });
+      throw new Error("stop after one Gmail call");
+    });
+    const options = vi.mocked(toolCallAgentStream).mock.calls[0][0];
+    const tools = options.tools as Record<string, Tool>;
+    const callOtherAccount = () =>
+      tools.readEmail.execute?.({ messageId: "message-1" }, {
+        toolCallId: "call",
+        messages: [],
+      } as never);
+
+    vi.setSystemTime(TURN_START + 2000);
+    await callOtherAccount();
+    await callOtherAccount();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(2);
+    expect(holdGmailInteractiveDemand).toHaveBeenLastCalledWith(
+      "other-account-id",
+      43_000,
+    );
+
+    await options.onEnd?.({} as never);
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(2));
+  });
+
+  it("holds a Gmail account's background work back for a chat whose own account is not on Gmail", async () => {
+    const { options } = await run({ provider: "microsoft" });
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockImplementation(async () => {
+      await admitGmailCall({ emailAccountId: "other-account-id", cost: 5 });
+      throw new Error("stop after one Gmail call");
+    });
+    const tools = options.tools as Record<string, Tool>;
+
+    await tools.readEmail.execute?.({ messageId: "message-1" }, {
+      toolCallId: "call",
+      messages: [],
+    } as never);
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
+      "other-account-id",
+      45_000,
+    );
+  });
+
   it("counts only holds the store actually set", async () => {
     vi.mocked(holdGmailInteractiveDemand).mockResolvedValueOnce({
       held: false,

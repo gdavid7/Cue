@@ -45,10 +45,11 @@ describe("searchInbox across the user's accounts", () => {
     ] as never);
   });
 
-  it("searches only the chat's account unless asked for all accounts", async () => {
+  it("gives a user with one covered account that account's result as it is", async () => {
+    prisma.emailAccount.findMany.mockResolvedValue([accounts.chat] as never);
+
     const result = await search("google", { query: "contract renewal" });
 
-    expect(prisma.emailAccount.findMany).not.toHaveBeenCalled();
     expect(createEmailProvider).toHaveBeenCalledTimes(1);
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]).not.toHaveProperty("account");
@@ -58,7 +59,6 @@ describe("searchInbox across the user's accounts", () => {
   it("labels every message with the account it is in", async () => {
     const result = await search("google", {
       query: "contract renewal",
-      allAccounts: true,
     });
 
     expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
@@ -82,7 +82,6 @@ describe("searchInbox across the user's accounts", () => {
   it("gives another account's emails ids that carry their account", async () => {
     const result = await search("google", {
       query: "contract renewal",
-      allAccounts: true,
     });
 
     expect(result.messages[0]).toMatchObject({
@@ -102,7 +101,7 @@ describe("searchInbox across the user's accounts", () => {
   });
 
   it("gives other accounts' searches a signal that can stop them", async () => {
-    await search("google", { query: "contract renewal", allAccounts: true });
+    await search("google", { query: "contract renewal" });
 
     const [{ signal }] = providers["account-2"].searchMessages.mock.calls[0];
     expect(signal).toBeInstanceOf(AbortSignal);
@@ -118,7 +117,7 @@ describe("searchInbox across the user's accounts", () => {
       userId: USER_ID,
       provider: "google",
       logger,
-    }).execute?.({ query: "contract renewal", limit: 20, allAccounts: true }, {
+    }).execute?.({ query: "contract renewal", limit: 20 }, {
       toolCallId: "call-1",
       messages: [],
       abortSignal: turn.signal,
@@ -128,32 +127,80 @@ describe("searchInbox across the user's accounts", () => {
     expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
   });
 
-  it("caps each other account's results below a full page", async () => {
+  it("gives each account a share of the page, so the page stays one page long", async () => {
     await search("google", {
       query: "contract renewal",
       limit: 20,
-      allAccounts: true,
     });
 
-    expect(providers["account-1"].searchMessages).toHaveBeenCalledWith(
-      expect.objectContaining({ maxResults: 20 }),
-    );
-    for (const id of ["account-2", "account-3"]) {
+    for (const id of ["account-1", "account-2", "account-3"]) {
       const [{ maxResults }] = providers[id].searchMessages.mock.calls[0];
-      expect(maxResults).toBeLessThanOrEqual(10);
+      expect(maxResults).toBe(7);
     }
   });
 
-  it("walks later pages in the chat's account only, and says so", async () => {
-    const result = await search("google", {
-      query: "contract renewal",
-      pageToken: "PAGE_2",
-      allAccounts: true,
+  it("lists every account's messages newest first", async () => {
+    providers["account-1"].searchMessages.mockResolvedValue({
+      messages: [messageOn("chat-old", "2026-01-01T10:00:00Z")],
+    });
+    providers["account-3"].searchMessages.mockResolvedValue({
+      messages: [messageOn("outlook-new", "2026-03-01T10:00:00Z")],
+    });
+    providers["account-2"].searchMessages.mockResolvedValue({
+      messages: [messageOn("gmail-mid", "2026-02-01T10:00:00Z")],
     });
 
+    const result = await search("google", { query: "contract renewal" });
+
+    expect(result.messages.map((m: { account: string }) => m.account)).toEqual([
+      "three@example.com",
+      "two@example.com",
+      CHAT_EMAIL,
+    ]);
+  });
+
+  it("continues each account that has more from its own page, in one page token", async () => {
+    providers["account-1"].searchMessages.mockResolvedValue({
+      messages: [messageOn("chat-msg", "2026-01-01T10:00:00Z")],
+      nextPageToken: "CHAT_PAGE_2",
+    });
+    providers["account-2"].searchMessages.mockResolvedValue({
+      messages: [messageOn("gmail-msg", "2026-01-02T10:00:00Z")],
+      nextPageToken: "GMAIL_PAGE_2",
+    });
+
+    const first = await search("google", { query: "contract renewal" });
+
+    expect(first.hasMore).toBe(true);
+    expect(first.nextPageToken).toEqual(expect.any(String));
+    vi.clearAllMocks();
+
+    await search("google", {
+      query: "contract renewal",
+      pageToken: first.nextPageToken,
+    });
+
+    expect(providers["account-1"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "CHAT_PAGE_2" }),
+    );
+    expect(providers["account-2"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "GMAIL_PAGE_2" }),
+    );
+    // Every match in the Outlook account was on the first page.
+    expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
+  });
+
+  it("continues only the chat's account from a single provider's page token", async () => {
+    await search("google", {
+      query: "contract renewal",
+      pageToken: "PAGE_2",
+    });
+
+    expect(providers["account-1"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "PAGE_2" }),
+    );
     expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
     expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
-    expect(result.otherAccountsSkipped).toEqual(expect.any(String));
   });
 
   it("reports the chat account's failed search only for that account when others found mail", async () => {
@@ -163,7 +210,6 @@ describe("searchInbox across the user's accounts", () => {
 
     const result = await search("google", {
       query: "contract renewal",
-      allAccounts: true,
     });
 
     expect(result).not.toHaveProperty("error");
@@ -183,7 +229,6 @@ describe("searchInbox across the user's accounts", () => {
 
     const result = await search("google", {
       query: "contract renewal",
-      allAccounts: true,
     });
 
     expect(result.error).toEqual(expect.any(String));
@@ -207,7 +252,6 @@ describe("searchInbox across the user's accounts", () => {
         fromEmail: "legal@acme.example",
         readState: "unread",
         limit: 20,
-        allAccounts: true,
       },
       toolCallOptions,
     );
@@ -219,9 +263,10 @@ describe("searchInbox across the user's accounts", () => {
   });
 
   it.each([
-    "folder:Legal",
-    'category:"Clients"',
-  ])("keeps an Outlook search scoped in its query (%s) in the chat's account", async (query) => {
+    { query: "folder:Legal" },
+    { query: 'category:"Legal"' },
+    { query: "", folderName: "Legal" },
+  ])("searches another account's own label of an Outlook search's folder or category name (%o)", async (input) => {
     prisma.emailAccount.findMany.mockResolvedValue([
       accounts.outlook,
       accounts.gmail,
@@ -231,20 +276,30 @@ describe("searchInbox across the user's accounts", () => {
       .mockResolvedValue([
         { id: "folder-legal", displayName: "Legal", childFolders: [] },
       ]);
+    providers["account-3"].getLabels.mockResolvedValue([
+      { id: "cat-legal", name: "Legal" },
+    ]);
+    providers["account-2"].getLabels.mockResolvedValue([
+      { id: "Label_7", name: "Legal" },
+    ]);
 
-    const result = await searchInboxTool({
+    const result: any = await searchInboxTool({
       email: "three@example.com",
       emailAccountId: "account-3",
       userId: USER_ID,
       provider: "microsoft",
       logger,
-    }).execute?.({ query, limit: 20, allAccounts: true }, toolCallOptions);
+    }).execute?.({ limit: 20, ...input } as never, toolCallOptions);
 
-    expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ otherAccountsSkipped: expect.any(String) });
+    expect(providers["account-2"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ query: 'label:"Legal"' }),
+    );
+    expect(result.accounts).toContainEqual(
+      expect.objectContaining({ account: "two@example.com", returned: 1 }),
+    );
   });
 
-  it("keeps an Outlook folder search in the chat's account", async () => {
+  it("reports an account without the folder, and creates nothing there", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       accounts.outlook,
       accounts.gmail,
@@ -255,19 +310,23 @@ describe("searchInbox across the user's accounts", () => {
         { id: "folder-legal", displayName: "Legal", childFolders: [] },
       ]);
 
-    const result = await searchInboxTool({
+    const result: any = await searchInboxTool({
       email: "three@example.com",
       emailAccountId: "account-3",
       userId: USER_ID,
       provider: "microsoft",
       logger,
     }).execute?.(
-      { query: "", folderName: "Legal", limit: 20, allAccounts: true },
+      { query: "", folderName: "Legal", limit: 20 },
       toolCallOptions,
     );
 
     expect(providers["account-2"].searchMessages).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ otherAccountsSkipped: expect.any(String) });
+    expect(result.accounts).toContainEqual({
+      account: "two@example.com",
+      error: "No folder or category with this name in this account.",
+    });
+    expect(result.messages).toHaveLength(1);
   });
 
   it("says how many of the user's accounts it did not search", async () => {
@@ -279,7 +338,6 @@ describe("searchInbox across the user's accounts", () => {
 
     const result = await search("google", {
       query: "contract renewal",
-      allAccounts: true,
     });
 
     expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
@@ -289,7 +347,6 @@ describe("searchInbox across the user's accounts", () => {
   it("rewrites a Gmail chat's search for an Outlook account", async () => {
     const result = await search("google", {
       query: "from:legal@acme.example is:unread label:work renewal",
-      allAccounts: true,
     });
 
     expect(providers["account-2"].searchMessages).toHaveBeenCalledWith(
@@ -320,7 +377,6 @@ describe("searchInbox across the user's accounts", () => {
   it("searches an Outlook account for a link from a Gmail chat", async () => {
     const result = await search("google", {
       query: "https://acme.example/invoice",
-      allAccounts: true,
     });
 
     const [outlookSearch] = providers["account-3"].searchMessages.mock.calls[0];
@@ -333,7 +389,6 @@ describe("searchInbox across the user's accounts", () => {
   it("does not search an account the search has nothing for", async () => {
     const result = await search("google", {
       query: "in:inbox label:work",
-      allAccounts: true,
     });
 
     expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
@@ -350,7 +405,6 @@ describe("searchInbox across the user's accounts", () => {
 
     const result = await search("google", {
       query: "contract renewal",
-      allAccounts: true,
     });
 
     expect(result.accounts).toContainEqual(
@@ -479,6 +533,10 @@ function connectedAccount(
     includeInAllAccounts,
     account: { provider },
   };
+}
+
+function messageOn(id: string, date: string) {
+  return { ...getMockMessage({ id, threadId: `${id}-thread` }), date };
 }
 
 function fakeProvider(messageId: string, threadId: string) {

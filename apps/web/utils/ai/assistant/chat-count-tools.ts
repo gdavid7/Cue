@@ -57,13 +57,6 @@ const groupByField = z
     "Optional. Groups the matches by sender, month, week or label. Mail the user sent is left out of sender groups, and a message counts once for each of its labels.",
   );
 
-const allAccountsField = z
-  .boolean()
-  .nullish()
-  .describe(
-    "Optional. Set to true to also count the user's other connected email accounts. Each account's total is then listed too.",
-  );
-
 const gmailCountEmailsInputSchema = z.object({
   query: z
     .string()
@@ -74,7 +67,6 @@ const gmailCountEmailsInputSchema = z.object({
       "Gmail search for the emails to count, in searchInbox's syntax. Leave empty to count all mail.",
     ),
   groupBy: groupByField,
-  allAccounts: allAccountsField,
 });
 
 const outlookCountEmailsInputSchema = z.object({
@@ -87,13 +79,12 @@ const outlookCountEmailsInputSchema = z.object({
       "Outlook search for the emails to count, in searchInbox's query syntax; write an exact sender as from:person@example.com. Leave empty to count all mail.",
     ),
   groupBy: groupByField,
-  allAccounts: allAccountsField,
 });
 
 type CountEmailsInput = z.infer<typeof gmailCountEmailsInputSchema>;
 
 const COUNT_EMAILS_DESCRIPTION =
-  "Count every email that matches a search across the whole mailbox, optionally grouped. Use it instead of paging searchInbox when the user asks how many emails there are, who sends the most, or how mail spreads over time or labels. Returns the exact total, the largest groups (senders or labels, most first) or the latest periods (months or weeks, newest first), and the newest few matches. If exact is false, say the number is partial or a lower bound and why. It does not change any email.";
+  "Count every email that matches a search across the whole mailbox, optionally grouped. Use it instead of paging searchInbox when the user asks how many emails there are, who sends the most, or how mail spreads over time or labels. Returns the exact total, the largest groups (senders or labels, most first) or the latest periods (months or weeks, newest first), and the newest few matches. It counts all of the user's connected accounts and lists each account's total. If exact is false, say the number is partial or a lower bound and why. It does not change any email.";
 
 export const countEmailsTool = (options: CountEmailsOptions) =>
   tool({
@@ -108,8 +99,8 @@ export const countEmailsTool = (options: CountEmailsOptions) =>
 export type CountEmailsTool = InferUITool<ReturnType<typeof countEmailsTool>>;
 
 /**
- * Counts every match of a chat search in the chat's account and, when asked,
- * the user's other included accounts. Counts come from the browser's local
+ * Counts every match of a chat search in the chat's account and the user's
+ * other covered accounts. Counts come from the browser's local
  * mail store where it can count an account exactly, and otherwise from the
  * provider's own listing of matching ids, bounded. Only totals, the top
  * groups and a few examples' headers come back; the matches themselves never
@@ -143,9 +134,14 @@ export async function countEmails({
   };
   const others: AccountToCount[] = [];
   const notSearched: Array<{ account: string; error: string }> = [];
-  const selection = input.allAccounts
-    ? await selectOtherAccounts({ userId, emailAccountId })
-    : null;
+  const selection = await selectOtherAccounts({ userId, emailAccountId }).catch(
+    (error) => {
+      logger.warn("Could not list the user's accounts to count", { error });
+      return null;
+    },
+  );
+  // A user with one covered account gets that account's count as it is.
+  const multiAccount = Boolean(selection?.accounts.length);
   for (const account of selection?.accounts ?? []) {
     const translated = translateAccountSearch({
       search: chatSearch,
@@ -231,33 +227,34 @@ export async function countEmails({
     error: describeFailure(chatAccount, error),
   }));
   // The other accounts share searchInbox's concurrency and deadline.
-  const otherResults = selection
-    ? await runOnOtherAccounts({
-        userId,
-        emailAccountId,
-        logger,
-        abortSignal,
-        selection: {
-          accounts: selection.accounts.filter((account) =>
-            others.some((entry) => entry.account.id === account.id),
-          ),
-          notSearchedCount: selection.notSearchedCount,
-        },
-        run: async (account, signal) => {
-          const entry = others.find((item) => item.account.id === account.id);
-          if (!entry) throw new Error("Account not prepared for counting");
-          try {
-            return await countOne(entry, signal);
-          } catch (error) {
-            return {
-              account: entry.account,
-              keywordsOnly: entry.keywordsOnly,
-              error: describeFailure(entry.account, error),
-            };
-          }
-        },
-      })
-    : null;
+  const otherResults =
+    multiAccount && selection
+      ? await runOnOtherAccounts({
+          userId,
+          emailAccountId,
+          logger,
+          abortSignal,
+          selection: {
+            accounts: selection.accounts.filter((account) =>
+              others.some((entry) => entry.account.id === account.id),
+            ),
+            notSearchedCount: selection.notSearchedCount,
+          },
+          run: async (account, signal) => {
+            const entry = others.find((item) => item.account.id === account.id);
+            if (!entry) throw new Error("Account not prepared for counting");
+            try {
+              return await countOne(entry, signal);
+            } catch (error) {
+              return {
+                account: entry.account,
+                keywordsOnly: entry.keywordsOnly,
+                error: describeFailure(entry.account, error),
+              };
+            }
+          },
+        })
+      : null;
   const perAccount = [
     chatResult,
     ...(otherResults?.results ?? []).map((entry) =>
@@ -275,7 +272,7 @@ export async function countEmails({
         : entry.result,
     ),
   ];
-  const accountsNotSearched = otherResults?.notSearchedCount ?? 0;
+  const accountsNotSearched = selection?.notSearchedCount ?? 0;
 
   const counted = perAccount.filter(
     (item): item is Extract<typeof item, { total: number }> => "total" in item,
@@ -360,7 +357,7 @@ export async function countEmails({
           subject: header.subject,
           from: header.from,
           date: header.date,
-          ...(input.allAccounts ? { account: account.email } : {}),
+          ...(multiAccount ? { account: account.email } : {}),
         },
       ];
     })
@@ -381,11 +378,12 @@ export async function countEmails({
   const failed = perAccount.filter(
     (item): item is Extract<typeof item, { error: string }> => "error" in item,
   );
+  // Accounts the user keeps out of All inboxes are not covered, so leaving
+  // them out does not make the count partial; they are reported apart.
   const exact =
     counted.every((entry) => entry.exact) &&
     failed.length === 0 &&
-    notSearched.length === 0 &&
-    accountsNotSearched === 0;
+    notSearched.length === 0;
   logUsage(exact);
 
   return {
@@ -407,7 +405,7 @@ export async function countEmails({
         }
       : {}),
     newest,
-    ...(input.allAccounts
+    ...(multiAccount
       ? {
           accounts: [
             ...perAccount.map((item) =>
@@ -422,9 +420,9 @@ export async function countEmails({
             ),
             ...notSearched,
           ],
-          ...(accountsNotSearched ? { accountsNotSearched } : {}),
         }
       : {}),
+    ...(accountsNotSearched ? { accountsNotSearched } : {}),
   };
 }
 

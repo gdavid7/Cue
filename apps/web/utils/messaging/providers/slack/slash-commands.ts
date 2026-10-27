@@ -192,6 +192,7 @@ async function runSlackSlashCommandAi({
 
   const [inboxStats, memories] = await Promise.all([
     getInboxStatsForChatContext({
+      userId: emailAccountUser.userId,
       emailAccountId,
       provider: emailAccountUser.account.provider,
       logger,

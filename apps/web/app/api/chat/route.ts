@@ -173,6 +173,7 @@ export const POST = withEmailAccount("chat", async (request) => {
     !chat.messages.some((chatMessage) => chatMessage.role === "user");
   const inboxStatsPromise = isFirstUserTurn
     ? getInboxStatsForChatContext({
+        userId,
         emailAccountId,
         provider: user.account.provider,
         logger: request.logger,

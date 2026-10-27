@@ -28,7 +28,6 @@ import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { resolveLabelNameAndId } from "@/utils/label/resolve-label";
 import {
   buildMicrosoftSearchErrorResult,
-  getOutlookFieldScopeCandidate,
   getOutlookLocalSearch,
   normalizeOutlookSearchInput,
   runOutlookSearch,
@@ -70,7 +69,7 @@ import {
   extractErrorInfo as extractGmailErrorInfo,
   isRetryableError as isGmailRetryableError,
 } from "@/utils/gmail/retry";
-import { microsoftGraphPageTokenSchema } from "@/utils/outlook/page-token";
+import { searchPageTokenSchema } from "@/utils/ai/assistant/all-accounts-page-token";
 import { validateUserAndAiAccess } from "@/utils/user/validate";
 import { SafeError } from "@/utils/error";
 import { getEmailUrlForMessage } from "@/utils/url";
@@ -78,7 +77,13 @@ import {
   type OtherAccountResult,
   resolveEmailAccountForId,
   runOnOtherAccounts,
+  selectOtherAccounts,
 } from "@/utils/ai/assistant/chat-other-accounts";
+import {
+  parseAllAccountsPageToken,
+  toAllAccountsPageToken,
+} from "@/utils/ai/assistant/all-accounts-page-token";
+import { resolveOutlookFolderId } from "@/utils/outlook/search-scope";
 import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 import {
@@ -523,15 +528,9 @@ const searchInboxBaseFields = {
     .describe(
       `Maximum number of messages to return, up to ${SEARCH_INBOX_MAX_RESULTS}. Larger values are clamped; use pagination for more results.`,
     ),
-  pageToken: microsoftGraphPageTokenSchema.describe(
+  pageToken: searchPageTokenSchema.describe(
     "Use the page token returned from a prior search to paginate.",
   ),
-  allAccounts: z
-    .boolean()
-    .nullish()
-    .describe(
-      "Optional. Set to true to also search the user's other connected email accounts, such as when the user asks about all their accounts or the email may be in another one. Every message then names its account. Other accounts return only their first few matches, and their emails can be read but not acted on from this chat.",
-    ),
 };
 
 const gmailSearchInboxInputSchema = z.object({
@@ -609,21 +608,18 @@ type OutlookSearchInboxInput = z.infer<typeof outlookSearchInboxInputSchema>;
 const gmailSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
-      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
+      "Search inbox messages and return concise message metadata. It searches all of the user's connected accounts, and each message names its account. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: gmailSearchInboxInputSchema,
     execute: async (input, callOptions) => {
       const { email, logger } = options;
       trackToolCall({ tool: "search_inbox", email, logger });
 
-      const otherAccounts = startOtherAccountSearch({
+      return searchAllAccounts({
         options,
         input,
         abortSignal: callOptions?.abortSignal,
-      });
-      return withOtherAccountResults({
-        result: await searchGmailChatAccount({ options, input }),
-        chatEmail: email,
-        otherAccounts,
+        searchChatAccount: (chatInput) =>
+          searchGmailChatAccount({ options, input: chatInput }),
       });
     },
     toModelOutput: searchInboxModelOutput,
@@ -632,21 +628,18 @@ const gmailSearchInboxTool = (options: InboxToolOptions) =>
 const outlookSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
-      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page, even when the current page has zero messages. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
+      "Search inbox messages and return concise message metadata. It searches all of the user's connected accounts, and each message names its account. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page, even when the current page has zero messages. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: outlookSearchInboxInputSchema,
     execute: async (input, callOptions) => {
       const { email, logger } = options;
       trackToolCall({ tool: "search_inbox", email, logger });
 
-      const otherAccounts = startOtherAccountSearch({
+      return searchAllAccounts({
         options,
         input,
         abortSignal: callOptions?.abortSignal,
-      });
-      return withOtherAccountResults({
-        result: await searchOutlookChatAccount({ options, input }),
-        chatEmail: email,
-        otherAccounts,
+        searchChatAccount: (chatInput) =>
+          searchOutlookChatAccount({ options, input: chatInput }),
       });
     },
     toModelOutput: searchInboxModelOutput,
@@ -1925,120 +1918,297 @@ async function searchOutlookChatAccount({
   }
 }
 
-// Other accounts answer with a first look, not a page walk: enough to find
-// the email, at a few Gmail or Graph calls per account.
-const OTHER_ACCOUNT_MAX_RESULTS = 10;
+// Each account gets a share of the page, at least a few matches, so the page
+// stays about one page long however many accounts there are.
+const MIN_ACCOUNT_PAGE_SHARE = 5;
 const OTHER_ACCOUNT_EMAIL_NOT_FOUND =
   "That email is not in any of the user's connected accounts.";
+const NO_SUCH_SCOPE_IN_ACCOUNT =
+  "No folder or category with this name in this account.";
 
 type SearchResultItem = ReturnType<typeof mapMessageForSearchResult>;
 
 type OtherAccountSearchResult =
   | {
       messages: Array<SearchResultItem & { account: string }>;
-      hasMore: boolean;
+      nextPageToken?: string;
       /** The other provider could only search the chat's search's keywords. */
       keywordsOnly: boolean;
+      exactCount?: number;
+      countError?: string;
     }
-  | { nothingToSearch: true };
+  | { nothingToSearch: true }
+  | { noSuchScope: true };
 
 type OtherAccount = { id: string; email: string; provider: string };
 
-type OtherAccountSearch = Promise<{
-  results: OtherAccountResult<OtherAccountSearchResult>[];
-  notSearchedCount: number;
-  /** Why the other accounts were not searched at all. */
-  skipped?: string;
-} | null> | null;
+/** Either provider's searchInbox input: a Gmail search has no Outlook-only fields. */
+type AnySearchInboxInput = {
+  query: string;
+  limit: number;
+  pageToken?: string | null;
+  fromEmail?: string | null;
+  readState?: "read" | "unread" | null;
+  folderName?: string | null;
+  categoryName?: string | null;
+};
+
+type ChatAccountSearchResult = {
+  messages?: SearchResultItem[];
+  error?: unknown;
+  nextPageToken?: string;
+  exactCount?: number;
+  countError?: string;
+};
+
+/** A chat search as each other account is asked it, its folder or category apart. */
+type OtherAccountsSearch = {
+  search: AccountSearch;
+  folderName?: string | null;
+  categoryName?: string | null;
+};
 
 /**
- * Starts the search in the user's other accounts, alongside the chat
- * account's own, when the model asked for all accounts.
+ * Searches the chat's account and the user's other covered accounts
+ * together. Each takes a share of the page, the results merge newest first,
+ * and every message names its account. A user with only one covered account
+ * gets that account's result as it is.
  */
-function startOtherAccountSearch({
-  options: { userId, emailAccountId, provider, logger },
-  abortSignal,
+async function searchAllAccounts<
+  TInput extends AnySearchInboxInput,
+  TResult extends ChatAccountSearchResult,
+>({
+  options,
   input,
+  abortSignal,
+  searchChatAccount,
 }: {
   options: InboxToolOptions;
-  // Either provider's input: a Gmail search has no Outlook-only fields.
-  input: GmailSearchInboxInput &
-    Partial<
-      Pick<
-        OutlookSearchInboxInput,
-        "fromEmail" | "readState" | "folderName" | "categoryName"
-      >
-    >;
+  input: TInput;
   abortSignal?: AbortSignal;
-}): OtherAccountSearch {
-  if (!input.allAccounts) return null;
-  // A page walk continues the chat account's search, and folders and
-  // categories are the chat account's own, so those stay in it.
-  if (input.pageToken) {
-    return Promise.resolve({
-      results: [],
-      notSearchedCount: 0,
-      skipped: "Later pages search only this chat's account.",
-    });
-  }
-  if (
-    input.folderName ||
-    input.categoryName ||
-    // An Outlook query can name its folder or category itself.
-    (isMicrosoftProvider(provider) &&
-      getOutlookFieldScopeCandidate(input.query))
-  ) {
-    return Promise.resolve({
-      results: [],
-      notSearchedCount: 0,
-      skipped: "Folder and category filters apply only to this chat's account.",
-    });
+  searchChatAccount: (input: TInput) => Promise<TResult>;
+}) {
+  const { userId, emailAccountId, email, provider, logger } = options;
+  const selection = await selectOtherAccounts({ userId, emailAccountId }).catch(
+    (error) => {
+      logger.warn("Could not list the user's accounts to search", { error });
+      return null;
+    },
+  );
+  const pageTokens = parseAllAccountsPageToken(input.pageToken);
+  const searchesAccount = (accountId: string) =>
+    pageTokens
+      ? accountId in pageTokens
+      : !input.pageToken || accountId === emailAccountId;
+  const pageTokenFor = (accountId: string) =>
+    pageTokens
+      ? pageTokens[accountId]
+      : accountId === emailAccountId
+        ? input.pageToken
+        : undefined;
+
+  if (!pageTokens && !selection?.accounts.length) {
+    const result = await searchChatAccount(input);
+    return selection?.notSearchedCount
+      ? { ...result, accountsNotSearched: selection.notSearchedCount }
+      : result;
   }
 
-  const search: AccountSearch = {
-    query: input.query,
-    fromEmail: input.fromEmail,
-    readState: input.readState,
+  const accountCount = 1 + (selection?.accounts.length ?? 0);
+  const limit = Math.min(
+    input.limit,
+    Math.max(MIN_ACCOUNT_PAGE_SHARE, Math.ceil(input.limit / accountCount)),
+  );
+  const otherSearch = getOtherAccountsSearch(input, provider);
+  const others = (selection?.accounts ?? []).filter((account) =>
+    searchesAccount(account.id),
+  );
+  const otherResultsPromise =
+    selection && otherSearch && others.length
+      ? runOnOtherAccounts({
+          userId,
+          emailAccountId,
+          logger,
+          abortSignal,
+          selection: {
+            accounts: others,
+            notSearchedCount: selection.notSearchedCount,
+          },
+          run: (account, signal) =>
+            searchOtherAccount({
+              account,
+              chatProvider: provider,
+              search: otherSearch,
+              limit,
+              pageToken: pageTokenFor(account.id),
+              signal,
+              logger: logger.with({ otherEmailAccountId: account.id }),
+            }),
+        }).catch((error) => {
+          logger.warn("Search across other accounts failed", { error });
+          return null;
+        })
+      : Promise.resolve({
+          results: [],
+          notSearchedCount: selection?.notSearchedCount ?? 0,
+        });
+
+  const chatResult = searchesAccount(emailAccountId)
+    ? await searchChatAccount({
+        ...input,
+        limit,
+        pageToken: pageTokenFor(emailAccountId) ?? null,
+      })
+    : null;
+  const otherSearchResult = await otherResultsPromise;
+  const otherAccounts = otherSearchResult?.results ?? [];
+
+  const chatMessages = (chatResult?.messages ?? []).map((message) => ({
+    ...message,
+    account: email,
+  }));
+  const otherMessages = otherAccounts.flatMap((entry) =>
+    "result" in entry && "messages" in entry.result
+      ? entry.result.messages
+      : [],
+  );
+  const messages = [...chatMessages, ...otherMessages].sort(
+    (a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0),
+  );
+
+  const nextPageTokens: Record<string, string> = {};
+  if (chatResult?.nextPageToken)
+    nextPageTokens[emailAccountId] = chatResult.nextPageToken;
+  for (const entry of otherAccounts) {
+    if ("result" in entry && "messages" in entry.result) {
+      const next = entry.result.nextPageToken;
+      if (next) nextPageTokens[entry.account.id] = next;
+    }
+  }
+  const nextPageToken = Object.keys(nextPageTokens).length
+    ? toAllAccountsPageToken(nextPageTokens)
+    : undefined;
+
+  const {
+    error: chatError,
+    nextPageToken: _chatNextPageToken,
+    hasMore: _chatHasMore,
+    exactCount: chatExactCount,
+    countError: chatCountError,
+    messages: _chatMessages,
+    totalReturned: _chatTotalReturned,
+    summary: _chatSummary,
+    ...chatRest
+  } = (chatResult ?? { queryUsed: input.query }) as ChatAccountSearchResult &
+    Record<string, unknown>;
+  const accounts = [
+    describeChatAccount({
+      email,
+      result: chatResult,
+      error: chatError,
+      exactCount: chatExactCount,
+      countError: chatCountError,
+    }),
+    ...otherAccounts.map(describeOtherAccount),
+  ];
+  const answered = accounts.filter((entry) => !("error" in entry));
+  const exactCounts = answered.map((entry) =>
+    "exactCount" in entry ? entry.exactCount : undefined,
+  );
+
+  return {
+    ...chatRest,
+    // With mail found elsewhere, the chat account's failure is that
+    // account's alone, not the result's.
+    ...(typeof chatError === "string" && otherMessages.length === 0
+      ? { error: chatError }
+      : {}),
+    totalReturned: messages.length,
+    nextPageToken,
+    hasMore: Boolean(nextPageToken),
+    summary: summarizeSearchResults(messages),
+    messages,
+    accounts,
+    ...(exactCounts.length > 0 &&
+    exactCounts.every((count) => count !== undefined)
+      ? {
+          exactCount: exactCounts.reduce<number>(
+            (sum, count) => sum + (count ?? 0),
+            0,
+          ),
+        }
+      : {}),
+    ...(otherSearchResult?.notSearchedCount
+      ? { accountsNotSearched: otherSearchResult.notSearchedCount }
+      : {}),
+    ...(otherSearchResult
+      ? {}
+      : {
+          otherAccountsError:
+            "The user's other accounts could not be searched.",
+        }),
   };
-  return runOnOtherAccounts({
-    userId,
-    emailAccountId,
-    logger,
-    abortSignal,
-    run: (account, signal) =>
-      searchOtherAccount({
-        account,
-        chatProvider: provider,
-        search,
-        signal,
-        logger: logger.with({ otherEmailAccountId: account.id }),
-      }),
-  }).catch((error) => {
-    logger.warn("Search across other accounts failed", { error });
+}
+
+/**
+ * The chat's search as the other accounts are asked it. An Outlook search's
+ * folder or category is kept apart, for each account to find its own of
+ * that name. Null when the search is malformed, which the chat account's
+ * own search reports.
+ */
+function getOtherAccountsSearch(
+  input: AnySearchInboxInput,
+  provider: string,
+): OtherAccountsSearch | null {
+  if (!isMicrosoftProvider(provider)) return { search: { query: input.query } };
+  try {
+    const normalized = normalizeOutlookSearchInput({
+      query: input.query,
+      fromEmail: input.fromEmail,
+      readState: input.readState,
+      categoryName: input.categoryName,
+      folderName: input.folderName,
+    });
+    return {
+      search: {
+        query: normalized.query,
+        fromEmail: normalized.fromEmail,
+        readState: normalized.readState,
+      },
+      folderName: normalized.folderName,
+      categoryName: normalized.categoryName,
+    };
+  } catch {
     return null;
-  });
+  }
 }
 
 async function searchOtherAccount({
   account,
   chatProvider,
-  search: chatSearch,
+  search: { search: chatSearch, folderName, categoryName },
+  limit,
+  pageToken,
   signal,
   logger,
 }: {
   account: OtherAccount;
   chatProvider: string;
-  search: AccountSearch;
+  search: OtherAccountsSearch;
+  limit: number;
+  pageToken?: string | null;
   signal: AbortSignal;
   logger: Logger;
 }): Promise<OtherAccountSearchResult> {
+  const scopeName = folderName ?? categoryName;
   const translated = translateAccountSearch({
     search: chatSearch,
     from: chatProvider,
     to: account.provider,
   });
-  if (!translated) return { nothingToSearch: true };
-  const { search, keywordsOnly } = translated;
+  if (!translated && !scopeName) return { nothingToSearch: true };
+  const search = translated?.search ?? { query: "" };
+  const keywordsOnly = translated?.keywordsOnly ?? false;
 
   const emailProvider = await createEmailProvider({
     emailAccountId: account.id,
@@ -2048,19 +2218,45 @@ async function searchOtherAccount({
   signal.throwIfAborted();
   const labelsPromise = getLabelsForSearchResults({ emailProvider, logger });
   const isOutlook = isMicrosoftProvider(account.provider);
-  const result = isOutlook
-    ? await searchOtherOutlookAccount({ emailProvider, search, signal, logger })
-    : await emailProvider.searchMessages({
-        query: search.query,
-        maxResults: OTHER_ACCOUNT_MAX_RESULTS,
-        allowPartial: true,
-        signal,
-      });
+
+  let result: SearchMessagesWithCount;
+  if (isOutlook) {
+    // Only an existing folder or category is searched (D-008).
+    if (categoryName && !findLabelNamed(await labelsPromise, categoryName))
+      return { noSuchScope: true };
+    const outlookResult = await searchOtherOutlookAccount({
+      emailProvider,
+      search,
+      folderName,
+      categoryName,
+      limit,
+      pageToken,
+      signal,
+      logger,
+    });
+    if (!outlookResult) return { noSuchScope: true };
+    result = outlookResult;
+  } else {
+    let query = search.query;
+    if (scopeName) {
+      // Gmail keeps folders and categories as labels.
+      const label = findLabelNamed(await labelsPromise, scopeName);
+      if (!label) return { noSuchScope: true };
+      query = [query, `label:"${label.name}"`].filter(Boolean).join(" ");
+    }
+    result = await emailProvider.searchMessages({
+      query,
+      maxResults: limit,
+      pageToken: pageToken ?? undefined,
+      allowPartial: true,
+      signal,
+    });
+  }
   const labelsById = createLabelLookupMap(await labelsPromise);
 
   return {
     keywordsOnly,
-    hasMore: Boolean(result.nextPageToken),
+    nextPageToken: result.nextPageToken,
     messages: result.messages.map((message) => ({
       ...mapMessageForSearchResult(
         searchSourceFromMessage(message),
@@ -2069,33 +2265,74 @@ async function searchOtherAccount({
       ),
       ...otherAccountEmailFields(account, message),
     })),
+    ...(result.exactCount !== undefined && { exactCount: result.exactCount }),
+    ...(result.countError && { countError: result.countError }),
   };
 }
 
+type SearchMessagesWithCount = Awaited<
+  ReturnType<EmailProvider["searchMessages"]>
+> & { exactCount?: number; countError?: string };
+
+/** Null when the account has no folder of that name. */
 async function searchOtherOutlookAccount({
   emailProvider,
   search,
+  folderName,
+  categoryName,
+  limit,
+  pageToken,
   signal,
   logger,
 }: {
   emailProvider: EmailProvider;
   search: AccountSearch;
+  folderName?: string | null;
+  categoryName?: string | null;
+  limit: number;
+  pageToken?: string | null;
   signal: AbortSignal;
   logger: Logger;
-}) {
-  const { result, lastError } = await runOutlookSearch({
+}): Promise<SearchMessagesWithCount | null> {
+  if (folderName) {
+    try {
+      await resolveOutlookFolderId({ emailProvider, folderName });
+    } catch {
+      return null;
+    }
+  }
+  const { result, lastError, exactCount, countError } = await runOutlookSearch({
     emailProvider,
     normalizedInput: normalizeOutlookSearchInput({
       query: search.query,
       fromEmail: search.fromEmail,
       readState: search.readState,
+      folderName,
+      categoryName,
     }),
-    limit: OTHER_ACCOUNT_MAX_RESULTS,
+    limit,
+    pageToken,
     logger,
     signal,
   });
   if (!result) throw lastError ?? new Error("Outlook search failed");
-  return result;
+  return {
+    ...result,
+    ...(exactCount !== undefined && { exactCount }),
+    ...(countError && { countError }),
+  };
+}
+
+function findLabelNamed(
+  labels: Array<{ id: string; name: string }>,
+  name: string,
+) {
+  const wanted = name.trim().toLowerCase();
+  return labels.find(
+    (label) =>
+      label.name.trim().toLowerCase() === wanted ||
+      label.id.toLowerCase() === wanted,
+  );
 }
 
 function otherAccountEmailFields(
@@ -2117,66 +2354,27 @@ function otherAccountEmailFields(
   };
 }
 
-/** The chat account's result, with the other accounts' merged in. */
-async function withOtherAccountResults<
-  T extends {
-    messages?: SearchResultItem[];
-    error?: unknown;
-    hasMore?: unknown;
-  },
->({
+function describeChatAccount({
+  email,
   result,
-  chatEmail,
-  otherAccounts: otherAccountSearch,
+  error,
+  exactCount,
+  countError,
 }: {
-  result: T;
-  chatEmail: string;
-  otherAccounts: OtherAccountSearch;
+  email: string;
+  /** Null once an earlier page found every match in this account. */
+  result: ChatAccountSearchResult | null;
+  error: unknown;
+  exactCount?: number;
+  countError?: string;
 }) {
-  if (!otherAccountSearch) return result;
-  const otherSearch = await otherAccountSearch;
-  const otherAccounts = otherSearch?.results;
-
-  const chatMessages = (result.messages ?? []).map((message) => ({
-    ...message,
-    account: chatEmail,
-  }));
-  const otherMessages = (otherAccounts ?? []).flatMap((entry) =>
-    "result" in entry && "messages" in entry.result
-      ? entry.result.messages
-      : [],
-  );
-  const messages = [...chatMessages, ...otherMessages];
-  // With mail found elsewhere, the chat account's failure is that account's
-  // alone, not the result's.
-  const { error: _chatAccountError, ...resultWithoutError } = result;
-  const merged = otherMessages.length > 0 ? resultWithoutError : result;
-
+  if (typeof error === "string") return { account: email, error };
   return {
-    ...merged,
-    totalReturned: messages.length,
-    summary: summarizeSearchResults(messages),
-    messages,
-    accounts: [
-      typeof result.error === "string"
-        ? { account: chatEmail, error: result.error }
-        : {
-            account: chatEmail,
-            returned: chatMessages.length,
-            hasMore: Boolean(result.hasMore),
-          },
-      ...(otherAccounts ?? []).map(describeOtherAccount),
-    ],
-    ...(otherSearch?.notSearchedCount && {
-      accountsNotSearched: otherSearch.notSearchedCount,
-    }),
-    ...(otherSearch?.skipped && { otherAccountsSkipped: otherSearch.skipped }),
-    ...(otherSearch
-      ? {}
-      : {
-          otherAccountsError:
-            "The user's other accounts could not be searched.",
-        }),
+    account: email,
+    returned: result?.messages?.length ?? 0,
+    hasMore: Boolean(result?.nextPageToken),
+    ...(exactCount !== undefined && { exactCount }),
+    ...(countError && { countError }),
   };
 }
 
@@ -2191,11 +2389,18 @@ function describeOtherAccount(
       error: "Nothing in this search applies to this account.",
     };
   }
+  if ("noSuchScope" in entry.result) {
+    return { account, error: NO_SUCH_SCOPE_IN_ACCOUNT };
+  }
   return {
     account,
     returned: entry.result.messages.length,
-    hasMore: entry.result.hasMore,
+    hasMore: Boolean(entry.result.nextPageToken),
     ...(entry.result.keywordsOnly && { keywordsOnly: true }),
+    ...(entry.result.exactCount !== undefined && {
+      exactCount: entry.result.exactCount,
+    }),
+    ...(entry.result.countError && { countError: entry.result.countError }),
   };
 }
 

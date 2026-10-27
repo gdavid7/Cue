@@ -238,7 +238,7 @@ describe("countEmails", () => {
 
     const result = await countEmails({
       options: options(local),
-      input: { query: "from:ada@example.com", allAccounts: true },
+      input: { query: "from:ada@example.com" },
     });
 
     expect(local.count).toHaveBeenCalledWith({
@@ -289,7 +289,10 @@ describe("countEmails across accounts and groups", () => {
     });
   });
 
-  it("isn't exact when some of the user's accounts were left out", async () => {
+  // The user keeps those accounts out of All inboxes, so they are not
+  // covered: the count is exact for the accounts it covers, and says how
+  // many it left out.
+  it("names how many of the user's accounts it left out, without calling the count partial", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       account(ACCOUNT, "me@example.com", "google"),
       account(OTHER, "me@work.example", "google"),
@@ -312,12 +315,12 @@ describe("countEmails across accounts and groups", () => {
 
     const result = await countEmails({
       options: options(local),
-      input: { query: "", allAccounts: true },
+      input: { query: "" },
     });
 
     expect(result).toMatchObject({
       total: 3,
-      exact: false,
+      exact: true,
       accountsNotSearched: 1,
     });
   });

@@ -710,6 +710,7 @@ async function processMessagingAssistantMessage({
     });
 
     const inboxStatsPromise = getInboxStatsForChatContext({
+      userId: emailAccountUser.userId,
       emailAccountId: context.emailAccountId,
       provider: emailAccountUser.account.provider,
       logger: threadLogger,
