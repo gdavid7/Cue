@@ -9,7 +9,7 @@ import {
   confirmAssistantEmailActionForAccount,
   confirmAssistantSaveMemoryForAccount,
 } from "@/utils/actions/assistant-chat-confirmation";
-import { createTestLogger } from "@/__tests__/helpers";
+import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/email/provider");
@@ -91,6 +91,113 @@ describe("confirmAssistantEmailAction", () => {
         logger: createTestLogger(),
       }),
     ).rejects.toThrow("Prepare the draft again");
+    expect(createEmailProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["reply_email", buildPendingReplyPart],
+    ["forward_email", buildPendingForwardPart],
+  ] as const)("sends a %s prepared in the user's second account through that account's provider", async (actionType, buildPart) => {
+    const part = buildPart();
+    prisma.emailAccount.findMany.mockResolvedValue([
+      {
+        id: "ea_2",
+        email: "second@example.com",
+        name: null,
+        image: null,
+        includeInAllAccounts: true,
+        account: { provider: "google" },
+      },
+    ] as never);
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      name: "Owner",
+      email: "second@example.com",
+    } as never);
+    prisma.chatMessage.findFirst.mockResolvedValue({
+      id: "chat-message-1",
+      chatId: "chat-1",
+      updatedAt: new Date(),
+      parts: [{ ...part, output: { ...part.output, emailAccountId: "ea_2" } }],
+    } as never);
+    prisma.chatMessage.updateMany.mockResolvedValue({ count: 1 });
+    const secondAccountProvider = {
+      getMessage: vi
+        .fn()
+        .mockResolvedValue(
+          getMockMessage({ id: "source-message-1", threadId: "thread-1" }),
+        ),
+      replyToEmail: vi.fn().mockResolvedValue(undefined),
+      forwardEmail: vi.fn().mockResolvedValue(undefined),
+      getSentMessageIds: vi.fn().mockResolvedValue({ messages: [] }),
+    };
+    vi.mocked(createEmailProvider).mockImplementation(
+      async ({ emailAccountId }) => {
+        if (emailAccountId !== "ea_2") throw new Error("wrong mailbox");
+        return secondAccountProvider as never;
+      },
+    );
+
+    const result = await confirmAssistantEmailActionForAccount({
+      chatId: "chat-1",
+      chatMessageId: "chat-message-1",
+      toolCallId: part.toolCallId,
+      actionType,
+      emailAccountId: "ea_1",
+      provider: "microsoft",
+      userId: "u1",
+      logger: createTestLogger(),
+    });
+
+    // The user's own accounts are the only ones a draft may send from.
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: "u1" }),
+      }),
+    );
+    expect(createEmailProvider).toHaveBeenCalledTimes(1);
+    expect(createEmailProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "ea_2", provider: "google" }),
+    );
+    expect(secondAccountProvider.getMessage).toHaveBeenCalledWith(
+      "source-message-1",
+    );
+    const sent =
+      actionType === "reply_email"
+        ? secondAccountProvider.replyToEmail
+        : secondAccountProvider.forwardEmail;
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(result.confirmationState).toBe("confirmed");
+  });
+
+  it("refuses a draft bound to an account the user does not own", async () => {
+    const part = buildPendingReplyPart();
+    prisma.chatMessage.findFirst.mockResolvedValue({
+      id: "chat-message-1",
+      chatId: "chat-1",
+      updatedAt: new Date(),
+      parts: [
+        { ...part, output: { ...part.output, emailAccountId: "someone-else" } },
+      ],
+    } as never);
+    prisma.chatMessage.updateMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      confirmAssistantEmailActionForAccount({
+        chatId: "chat-1",
+        chatMessageId: "chat-message-1",
+        toolCallId: part.toolCallId,
+        actionType: "reply_email",
+        emailAccountId: "ea_1",
+        provider: "microsoft",
+        userId: "u1",
+        logger: createTestLogger(),
+      }),
+    ).rejects.toThrow("Prepare the draft again");
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: "u1" }),
+      }),
+    );
     expect(createEmailProvider).not.toHaveBeenCalled();
   });
 
