@@ -417,7 +417,6 @@ export async function insertInboxThread(
     subject: string;
     body: string;
     from: { name: string; address: string };
-    /** Gmail only: the Outlook emulator's parsed headers carry no Reply-To. */
     replyTo?: string;
     cc?: string;
   },
@@ -438,6 +437,12 @@ export async function insertInboxThread(
         subject: input.subject,
         body: { contentType: "text", content: input.body },
         toRecipients: [{ emailAddress: { address: email } }],
+        ...(input.cc && {
+          ccRecipients: [{ emailAddress: { address: input.cc } }],
+        }),
+        ...(input.replyTo && {
+          replyTo: [{ emailAddress: { address: input.replyTo } }],
+        }),
       },
     });
     expect(created.ok(), await created.text()).toBe(true);

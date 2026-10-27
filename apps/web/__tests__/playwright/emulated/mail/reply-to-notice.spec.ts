@@ -24,14 +24,11 @@ test.beforeEach(async ({ page }) => {
 test("says a reply goes to another domain's Reply-To, and replies to the sender instead", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    isMicrosoftPlaywright(),
-    "Outlook messages are read without their Reply-To, so replies there already go to the sender.",
-  );
   test.setTimeout(180_000);
   const { emailAccountId } = await openMail(page);
+  const subject = `Reply-To notice ${testInfo.retry}-${Date.now()}`;
   const { threadId, messageId } = await insertInboxThread(page, {
-    subject: `Reply-To notice ${testInfo.retry}-${Date.now()}`,
+    subject,
     body: "Our bank details changed, please confirm the new invoice.",
     from: SENDER,
     replyTo: REPLY_TO,
@@ -45,6 +42,8 @@ test("says a reply goes to another domain's Reply-To, and replies to the sender 
 
   await message.getByRole("button", { name: "Reply all", exact: true }).click();
   const notice = message.getByText(NOTICE, { exact: true });
+  // The line reads the To chips, so Reply all went to the Reply-To in place of
+  // the sender, as in Gmail.
   await expect(notice).toBeVisible();
   await capturePlaywrightCheckpoint(page, testInfo, "reply-to-notice-light");
   await page.emulateMedia({ colorScheme: "dark" });
@@ -80,13 +79,20 @@ test("says a reply goes to another domain's Reply-To, and replies to the sender 
       { timeout: UNDO_WINDOW_SEND_TIMEOUT_MS + 30_000 },
     )
     .toMatchObject({ status: "succeeded" });
-  const sentTo = await readSentTo(threadId);
+  const sentTo = await readSentTo({ threadId, subject });
   expect(sentTo).toContain(SENDER.address);
   expect(sentTo).not.toContain(REPLY_TO);
 });
 
 // The thread is new to this test, so its one sent message is the reply.
-async function readSentTo(threadId: string) {
+async function readSentTo({
+  threadId,
+  subject,
+}: {
+  threadId: string;
+  subject: string;
+}) {
+  if (isMicrosoftPlaywright()) return readOutlookSentTo(subject);
   const baseUrl = process.env.GOOGLE_BASE_URL;
   if (!baseUrl) throw new Error("GOOGLE_BASE_URL is missing");
   const response = await fetch(
@@ -109,4 +115,29 @@ async function readSentTo(threadId: string) {
     sent?.payload?.headers?.find((header) => header.name.toLowerCase() === "to")
       ?.value ?? ""
   ).toLowerCase();
+}
+
+async function readOutlookSentTo(subject: string) {
+  const baseUrl = process.env.MICROSOFT_BASE_URL;
+  if (!baseUrl) throw new Error("MICROSOFT_BASE_URL is missing");
+  const response = await fetch(
+    `${baseUrl}/v1.0/me/mailFolders/sentitems/messages?$top=100`,
+    {
+      headers: { Authorization: `Bearer ${await readProviderAccessToken()}` },
+    },
+  );
+  const text = await response.text();
+  expect(response.ok, text).toBe(true);
+  const { value } = JSON.parse(text) as {
+    value: {
+      subject?: string;
+      toRecipients?: { emailAddress?: { address?: string } }[];
+    }[];
+  };
+  const sent = value.find((item) => item.subject?.includes(subject));
+  expect(sent, "the sent reply is in Sent Items").toBeDefined();
+  return (sent?.toRecipients ?? [])
+    .map((recipient) => recipient.emailAddress?.address ?? "")
+    .join(", ")
+    .toLowerCase();
 }
