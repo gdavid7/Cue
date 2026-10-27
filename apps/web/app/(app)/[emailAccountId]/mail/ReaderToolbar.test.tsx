@@ -137,6 +137,7 @@ function Toolbar({ subjectHeadingLevel }: { subjectHeadingLevel?: 1 | 2 }) {
   const [allExpanded, setAllExpanded] = useState(false);
   return (
     <ReaderToolbar
+      emailAccountId="account-1"
       isStarred={false}
       isUnread={false}
       labelHref={() => "/labels"}

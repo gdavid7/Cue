@@ -2832,6 +2832,7 @@ export function MailShell() {
   const readerBarActions: MailMobileReaderActions | null =
     openThreadSelection && !isLargeScreen
       ? {
+          emailAccountId: openThreadSelection.emailAccountId,
           onBack: closeReader,
           onArchive: targetsArchived ? undefined : archiveTargets,
           onMoveToInbox: targetsArchived ? moveToInboxTargets : undefined,

@@ -629,6 +629,7 @@ function CatchUpBody({
               onClick={() => act("keep", "click")}
             />
             <SnoozeButton
+              emailAccountId={current.accountId}
               onSnooze={(until) => {
                 const via = snoozeFromKey.current ? "key" : "click";
                 snoozeFromKey.current = false;
