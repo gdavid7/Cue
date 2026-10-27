@@ -431,6 +431,46 @@ describe("searchInbox across the user's accounts", () => {
     expect(result.messages).toHaveLength(1);
   });
 
+  it("lists an account a short page had no room for, and gives no total that leaves it out", async () => {
+    const secondOutlook = connectedAccount(
+      "account-4",
+      "four@example.com",
+      "microsoft",
+    );
+    prisma.emailAccount.findMany.mockResolvedValue([
+      accounts.outlook,
+      secondOutlook,
+    ] as never);
+    providers["account-4"] = fakeProvider("outlook-2-msg", "outlook-2-thread");
+    for (const id of ["account-3", "account-4"]) {
+      Object.assign(providers[id], {
+        countMessages: vi.fn().mockResolvedValue(5),
+        getFolders: vi
+          .fn()
+          .mockResolvedValue([
+            { id: `${id}-legal`, displayName: "Legal", childFolders: [] },
+          ]),
+      });
+    }
+
+    const result: any = await searchInboxTool({
+      email: "three@example.com",
+      emailAccountId: "account-3",
+      userId: USER_ID,
+      provider: "microsoft",
+      logger,
+    }).execute?.({ query: "", folderName: "Legal", limit: 1 }, toolCallOptions);
+
+    expect(providers["account-4"].searchMessages).not.toHaveBeenCalled();
+    expect(result.accounts).toContainEqual({
+      account: "four@example.com",
+      returned: 0,
+      hasMore: true,
+    });
+    expect(result).not.toHaveProperty("exactCount");
+    expect(result.hasMore).toBe(true);
+  });
+
   it("says how many of the user's accounts it did not search", async () => {
     prisma.emailAccount.findMany.mockResolvedValue([
       accounts.chat,

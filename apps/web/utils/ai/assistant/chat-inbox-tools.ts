@@ -1926,6 +1926,10 @@ async function searchAllAccounts<
   const others = (selection?.accounts ?? []).filter(
     (account) => (shares.get(account.id) ?? 0) > 0,
   );
+  // Listed as having more, with no count, so no total leaves them out.
+  const notReached = (selection?.accounts ?? []).filter(
+    (account) => continuing.includes(account.id) && !shares.get(account.id),
+  );
   const otherResultsPromise =
     selection && otherSearch && others.length
       ? runOnOtherAccounts({
@@ -2021,6 +2025,11 @@ async function searchAllAccounts<
       countError: chatCountError,
     }),
     ...otherAccounts.map(describeOtherAccount),
+    ...notReached.map((account) => ({
+      account: account.email,
+      returned: 0,
+      hasMore: true,
+    })),
   ];
   const answered = accounts.filter((entry) => !("error" in entry));
   const exactCounts = answered.map((entry) =>
