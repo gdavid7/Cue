@@ -316,7 +316,10 @@
     "components/email-list/ThreadDeliveryStatus.tsx",
     "components/email-list/EmailThread.tsx",
     "hooks/useProviderDraftAutosave.ts",
-    "utils/scheduled-email/service.ts"
+    "utils/scheduled-email/service.ts",
+    "app/(app)/[emailAccountId]/compose/RecipientLocalTime.tsx",
+    "app/(app)/[emailAccountId]/compose/recipient-local-time.ts",
+    "utils/email/date-header-offset.ts"
   ],
   "phone-flows.spec.ts": [
     "components/email-list/EmailMessage.tsx",

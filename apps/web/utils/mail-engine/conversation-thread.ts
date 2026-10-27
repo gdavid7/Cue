@@ -3,6 +3,7 @@ import type { MailClient } from "@inboxzero/mail-core/engine";
 import type { OperationStatus } from "@inboxzero/mail-core/operations";
 import type { ConversationView } from "@inboxzero/mail-core/ports/mail-store";
 import type { ThreadResponse } from "@/app/api/threads/[id]/route";
+import { formatDateWithUtcOffset } from "@/utils/email/date-header-offset";
 import { messageLabelIds } from "@/utils/mail-engine/list-thread";
 import type { Attachment, ParsedMessage } from "@/utils/types";
 
@@ -30,6 +31,12 @@ export function conversationMessageToParsed(
   message: ConversationView["messages"][number],
 ): ParsedMessage {
   const date = new Date(message.metadata.receivedAtMs).toISOString();
+  // Written in the sender's offset, as their Date header was, so a reply can
+  // tell their hour. The instant is the same.
+  const headerDate = formatDateWithUtcOffset(
+    message.metadata.receivedAtMs,
+    message.metadata.senderUtcOffsetMinutes,
+  );
   const html =
     message.content.status === "available" ? message.content.html : null;
   const text =
@@ -66,7 +73,7 @@ export function conversationMessageToParsed(
       to: message.metadata.to.join(", "),
       cc: message.metadata.cc.join(", ") || undefined,
       bcc: message.metadata.bcc?.join(", ") || undefined,
-      date,
+      date: headerDate,
       subject: message.metadata.subject,
     },
   };

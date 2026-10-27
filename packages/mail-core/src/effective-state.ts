@@ -205,6 +205,8 @@ export function applyMetadataPatch(
     snoozedUntilMs: patchedSnooze(current, patch),
     // A message's Message-ID never changes, so a patch without it keeps it.
     internetMessageId: patch.internetMessageId ?? current.internetMessageId,
+    senderUtcOffsetMinutes:
+      patch.senderUtcOffsetMinutes ?? current.senderUtcOffsetMinutes,
   };
 }
 

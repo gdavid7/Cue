@@ -13,6 +13,7 @@ import { migrateInternetMessageIds } from "./internet-message-id";
 import { migrateLeftOpenDraftsIndex } from "./left-open-drafts";
 import { migrateConversationMessageKeys } from "./conversation-message-keys";
 import { migrateOperationsAccountStatusIndex } from "./waiting-summary";
+import { migrateSenderUtcOffsets } from "./sender-utc-offset";
 import { migrateMessageEmbeddings } from "./message-embeddings";
 import { migrateMessageSearchIndex } from "./message-search-index";
 
@@ -484,6 +485,7 @@ export async function migrateMailbox(
   await migrateImportantPeople(tx);
   await migrateOperationsAccountStatusIndex(tx);
   await migrateLeftOpenDraftsIndex(tx);
+  await migrateSenderUtcOffsets(tx);
 }
 
 // Delta sync once stored a meeting invitation's flag without its body. Dropping

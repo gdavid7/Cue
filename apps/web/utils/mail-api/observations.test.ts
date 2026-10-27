@@ -158,6 +158,42 @@ describe("parsedMessageMetadata", () => {
   });
 });
 
+describe("parsedMessageMetadata sender offset", () => {
+  const message = (date: string) =>
+    ({
+      id: "m5",
+      threadId: "t5",
+      historyId: "1",
+      date: "2026-10-26T02:12:45.000Z",
+      subject: "Hello",
+      snippet: "Hi",
+      labelIds: ["INBOX"],
+      headers: { from: "ana@example.com", to: "me@example.com", date },
+      inline: [],
+    }) as ParsedMessage;
+
+  it("keeps the UTC offset the sender's Date header was written in", () => {
+    const patch = parsedMessagePatch(
+      "account",
+      "google",
+      message("Mon, 26 Oct 2026 03:12:45 +0100"),
+    );
+    expect(providerChangeSchema.parse(patch)).toMatchObject({
+      fields: { senderUtcOffsetMinutes: 60 },
+    });
+  });
+
+  it("leaves the offset out when the header gives none, so a stored one is kept", () => {
+    expect(
+      "senderUtcOffsetMinutes" in
+        parsedMessageMetadata(message("Mon, 26 Oct 2026 03:12:45 -0000")),
+    ).toBe(false);
+    expect("senderUtcOffsetMinutes" in parsedMessageMetadata(message(""))).toBe(
+      false,
+    );
+  });
+});
+
 describe("parsedMessageBodyObservation", () => {
   it("does not stall a body hydration page on an oversized sender Content-ID", () => {
     const observation = parsedMessageBodyObservation("acc-1", {
