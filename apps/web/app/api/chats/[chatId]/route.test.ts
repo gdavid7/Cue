@@ -89,6 +89,60 @@ describe("GET /api/chats/[chatId]", () => {
   });
 });
 
+describe("chat ownership", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // A chat covers all of the user's accounts, so it opens from any of them.
+  it("finds a chat by its user, not by the page's account", async () => {
+    prisma.chat.findFirst.mockResolvedValueOnce({
+      id: "chat-1",
+      emailAccountId: "other-account-id",
+      messages: [],
+      activeStreamId: null,
+      activeStreamStartedAt: null,
+    } as never);
+
+    const chat = await (await get()).json();
+
+    expect(prisma.chat.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: "chat-1",
+          emailAccount: { userId: "user-1" },
+          deletedAt: null,
+        },
+      }),
+    );
+    expect(chat).toMatchObject({ emailAccountId: "other-account-id" });
+  });
+
+  it("does not rename another user's chat", async () => {
+    prisma.chat.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const response = await PATCH(
+      new Request("http://localhost/api/chats/chat-1", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "New name" }),
+      }) as never,
+      { params: Promise.resolve({ chatId: "chat-1" }) },
+    );
+
+    expect(response.status).toBe(404);
+    expect(prisma.chat.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: "chat-1",
+          emailAccount: { userId: "user-1" },
+          deletedAt: null,
+        },
+      }),
+    );
+  });
+});
+
 function get() {
   return GET(new Request("http://localhost/api/chats/chat-1") as never, {
     params: Promise.resolve({ chatId: "chat-1" }),

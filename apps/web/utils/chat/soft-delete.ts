@@ -1,11 +1,12 @@
 import prisma from "@/utils/prisma";
+import { ownedChatWhere } from "@/utils/chat/owned-chat";
 
 export const REDACTED_TEXT = "[REDACTED]";
 
 const REDACTED_PARTS = [{ type: "text", text: REDACTED_TEXT }];
 
 /**
- * Soft-deletes a chat owned by `emailAccountId`.
+ * Soft-deletes a chat owned by `userId`.
  *
  * The Chat row itself is preserved (with `deletedAt` set) so platform-level
  * analytics and audit trails still work, but every piece of user-supplied or
@@ -18,17 +19,17 @@ const REDACTED_PARTS = [{ type: "text", text: REDACTED_TEXT }];
  *
  * Returns `true` if the chat existed and is now soft-deleted (or was already
  * soft-deleted), `false` if no chat with the given id was owned by this
- * account.
+ * user.
  */
 export async function softDeleteChat({
   chatId,
-  emailAccountId,
+  userId,
 }: {
   chatId: string;
-  emailAccountId: string;
+  userId: string;
 }): Promise<boolean> {
   const chat = await prisma.chat.findFirst({
-    where: { id: chatId, emailAccountId },
+    where: ownedChatWhere({ chatId, userId }),
     select: { id: true, deletedAt: true },
   });
 

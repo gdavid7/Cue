@@ -65,7 +65,7 @@ export const maxDuration = 300;
 
 export const POST = withEmailAccount("chat", async (request) => {
   const requestStartedAt = Date.now();
-  const emailAccountId = request.auth.emailAccountId;
+  const { userId } = request.auth;
   await assertWithinUserRateLimit({
     scope: "assistant-chat",
     userId: request.auth.userId,
@@ -112,10 +112,28 @@ export const POST = withEmailAccount("chat", async (request) => {
     );
   }
 
-  const [user, existingChat] = await Promise.all([
-    getEmailAccountWithAi({ emailAccountId }),
+  const [pageAccountUser, existingChat] = await Promise.all([
+    getEmailAccountWithAi({ emailAccountId: request.auth.emailAccountId }),
     getChatWithCompactions(data.id),
   ]);
+
+  // A chat covers all of the user's accounts, so it is theirs from any page.
+  // Another user's chat is refused before anything about it is used.
+  if (existingChat && existingChat.emailAccount.userId !== userId) {
+    return NextResponse.json(
+      { error: "You are not authorized to access this chat" },
+      { status: 403 },
+    );
+  }
+
+  // The chat runs in the account it was started in, its anchor, wherever it
+  // is opened: rules, settings and new mail act there.
+  const emailAccountId =
+    existingChat?.emailAccountId ?? request.auth.emailAccountId;
+  const user =
+    emailAccountId === request.auth.emailAccountId
+      ? pageAccountUser
+      : await getEmailAccountWithAi({ emailAccountId });
 
   if (!user) {
     return NextResponse.json(
@@ -136,13 +154,6 @@ export const POST = withEmailAccount("chat", async (request) => {
     return NextResponse.json(
       { error: "Failed to get or create chat" },
       { status: 500 },
-    );
-  }
-
-  if (chat.emailAccountId !== emailAccountId) {
-    return NextResponse.json(
-      { error: "You are not authorized to access this chat" },
-      { status: 403 },
     );
   }
 
@@ -321,7 +332,8 @@ export const POST = withEmailAccount("chat", async (request) => {
     const [memories, inboxStats] = await Promise.all([
       prisma.chatMemory
         .findMany({
-          where: { emailAccountId },
+          // Memories follow the user, whichever account the chat was in.
+          where: { emailAccount: { userId } },
           orderBy: { createdAt: "desc" },
           take: 20,
           select: { content: true, createdAt: true },
@@ -578,6 +590,7 @@ async function getChatWithCompactions(chatId: string) {
     include: {
       messages: { orderBy: { createdAt: "asc" } },
       compactions: { orderBy: { createdAt: "desc" }, take: 1 },
+      emailAccount: { select: { userId: true } },
     },
   });
 }
