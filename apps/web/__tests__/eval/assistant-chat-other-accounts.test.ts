@@ -1,7 +1,6 @@
 import { afterAll, describe, expect, test, vi } from "vitest";
 import {
   cloneEmailAccountForProvider,
-  getSearchInboxCalls,
   hasNoWriteToolCalls,
   inboxWorkflowProviders,
   runAssistantChat,
@@ -69,9 +68,6 @@ describe.runIf(shouldRunEval)("Eval: assistant chat across accounts", () => {
               messages: [{ role: "user", content: userPrompt }],
             });
 
-            const searchedAllAccounts = getSearchInboxCalls(toolCalls).some(
-              (call) => (call as { allAccounts?: boolean }).allAccounts,
-            );
             const judge = finalText
               ? await judgeEvalOutput({
                   input: userPrompt,
@@ -86,7 +82,6 @@ describe.runIf(shouldRunEval)("Eval: assistant chat across accounts", () => {
 
             return {
               pass:
-                searchedAllAccounts &&
                 otherProvider.searchMessages.mock.calls.length > 0 &&
                 hasNoWriteToolCalls(toolCalls) &&
                 !!judge?.pass,
@@ -103,7 +98,7 @@ describe.runIf(shouldRunEval)("Eval: assistant chat across accounts", () => {
     );
 
     test.each(inboxWorkflowProviders)(
-      "does not act on another account's email from this chat [$label]",
+      "archives another account's email in that account [$label]",
       async ({ provider, label }) => {
         const userPrompt =
           "Archive the Acme contract renewal email. Check all my accounts, I don't remember where it landed.";
@@ -111,7 +106,7 @@ describe.runIf(shouldRunEval)("Eval: assistant chat across accounts", () => {
 
         const record = await evalReporter.recordCached(
           {
-            testName: `does not act on other account (${label})`,
+            testName: `archives in other account (${label})`,
             model: model.label,
             cacheKeyParts: [
               {
@@ -137,27 +132,27 @@ describe.runIf(shouldRunEval)("Eval: assistant chat across accounts", () => {
               messages: [{ role: "user", content: userPrompt }],
             });
 
-            const nothingChanged = [chatProvider, otherProvider].every(
-              (fake) =>
-                fake.archiveThreadWithLabel.mock.calls.length === 0 &&
-                fake.moveThreadToFolder.mock.calls.length === 0,
-            );
+            const archivedThere =
+              archivedThreadIds(otherProvider).includes("thread-renewal-1");
+            const chatAccountUntouched =
+              archivedThreadIds(chatProvider).length === 0;
             const judge = finalText
               ? await judgeEvalOutput({
                   input: userPrompt,
                   output: finalText,
-                  expected: `The email is in ${OTHER_ACCOUNT_EMAIL}; it was not archived from this chat, and the user is offered to switch to that account to archive it.`,
+                  expected: `The Acme renewal email, found in the user's ${OTHER_ACCOUNT_EMAIL} account, was archived.`,
                   criterion: {
-                    name: "Does not act on another account's email",
-                    description: `PASS only if the response says the Acme email is in the user's ${OTHER_ACCOUNT_EMAIL} account, does not claim it was archived, and tells the user they can switch the chat to that account (or act on it there) to archive it. FAIL if it claims the email was archived, or leaves the user without saying which account the email is in.`,
+                    name: "Archives the email where it is",
+                    description:
+                      "PASS only if the response says the Acme contract renewal email was archived, and does not tell the user to switch accounts or chats, or to archive it themselves elsewhere. FAIL if it says the email could not be archived from here, asks the user to switch, or says the email was not found.",
                   },
                 })
               : null;
 
             return {
-              pass: nothingChanged && !!judge?.pass,
+              pass: archivedThere && chatAccountUntouched && !!judge?.pass,
               actual: judge
-                ? `${actual} | nothingChanged=${nothingChanged} | ${formatSemanticJudgeActual(finalText, judge)}`
+                ? `${actual} | archivedThere=${archivedThere} | chatAccountUntouched=${chatAccountUntouched} | ${formatSemanticJudgeActual(finalText, judge)}`
                 : `no assistant text | ${actual}`,
             };
           },
@@ -166,6 +161,103 @@ describe.runIf(shouldRunEval)("Eval: assistant chat across accounts", () => {
         expect(record.pass, record.actual).toBe(true);
       },
       TIMEOUT,
+    );
+
+    test.each(inboxWorkflowProviders)(
+      "archives search results from two accounts in one call [$label]",
+      async ({ provider, label }) => {
+        const firstPrompt = "Show me the emails from Acme.";
+        const secondPrompt = "Archive these.";
+        const chatAccountMessages = [invoiceEmail()];
+        const otherAccountMessages = [renewalEmail()];
+
+        const record = await evalReporter.recordCached(
+          {
+            testName: `archives mixed accounts in one call (${label})`,
+            model: model.label,
+            cacheKeyParts: [
+              {
+                model,
+                provider,
+                firstPrompt,
+                secondPrompt,
+                chatAccountMessages:
+                  getStableMessageCacheKey(chatAccountMessages),
+                otherAccountMessages:
+                  getStableMessageCacheKey(otherAccountMessages),
+              },
+            ],
+          },
+          async () => {
+            const { chatProvider, otherProvider } = mockAccounts({
+              chatAccountId: emailAccount.id,
+              chatAccountMessages,
+              otherAccountMessages,
+            });
+            const chatEmailAccount = cloneEmailAccountForProvider(
+              emailAccount,
+              provider,
+            );
+
+            const first = await runAssistantChat({
+              emailAccount: chatEmailAccount,
+              messages: [{ role: "user", content: firstPrompt }],
+            });
+            const firstTurnWrote = !hasNoWriteToolCalls(first.toolCalls);
+
+            const { toolCalls, finalText, actual } = await runAssistantChat({
+              emailAccount: chatEmailAccount,
+              messages: [
+                { role: "user", content: firstPrompt },
+                ...first.responseMessages,
+                { role: "user", content: secondPrompt },
+              ],
+            });
+
+            const archiveCalls = toolCalls.filter(
+              (call) =>
+                call.toolName === "manageInbox" &&
+                (call.input as { action?: string })?.action ===
+                  "archive_threads",
+            );
+            const oneCallForBoth =
+              archiveCalls.length === 1 &&
+              ((archiveCalls[0].input as { threadIds?: string[] })?.threadIds
+                ?.length ?? 0) >= 2;
+            const bothArchived =
+              archivedThreadIds(chatProvider).includes("thread-invoice-1") &&
+              archivedThreadIds(otherProvider).includes("thread-renewal-1");
+            const judge = finalText
+              ? await judgeEvalOutput({
+                  input: `${firstPrompt}\n(assistant lists the Acme emails, one in each account)\n${secondPrompt}`,
+                  output: finalText,
+                  expected:
+                    "Both Acme emails were archived, each in the account it is in.",
+                  criterion: {
+                    name: "Archives both without talking about switching",
+                    description:
+                      "PASS only if the response says both Acme emails were archived and makes no claim that the user must switch accounts or chats, or that an email in another account could not be acted on. FAIL if it says only some were archived, asks the user to switch, or claims an email could not be changed because of its account.",
+                  },
+                })
+              : null;
+
+            return {
+              pass:
+                !firstTurnWrote &&
+                oneCallForBoth &&
+                bothArchived &&
+                !!judge?.pass,
+              actual: judge
+                ? `${actual} | firstTurnWrote=${firstTurnWrote} | oneCallForBoth=${oneCallForBoth} | bothArchived=${bothArchived} | ${formatSemanticJudgeActual(finalText, judge)}`
+                : `no assistant text | ${actual}`,
+            };
+          },
+        );
+
+        expect(record.pass, record.actual).toBe(true);
+      },
+      // Two turns.
+      2 * TIMEOUT,
     );
   });
 
@@ -188,19 +280,41 @@ function renewalEmail() {
   });
 }
 
-// The chat's own account holds nothing about Acme; the user's other account
-// holds the renewal email.
+function invoiceEmail() {
+  return getMockMessage({
+    id: "msg-invoice-1",
+    threadId: "thread-invoice-1",
+    from: "Acme Billing <billing@acme.example>",
+    to: "user@test.com",
+    subject: "Acme invoice #4821",
+    snippet: "Your October invoice is attached. Payment is due in 30 days.",
+    textPlain:
+      "Hello, your October invoice #4821 is attached. Payment is due in 30 days. Acme Billing",
+  });
+}
+
+function archivedThreadIds(fake: ReturnType<typeof fakeProvider>) {
+  return [
+    ...fake.archiveThreadWithLabel.mock.calls,
+    ...fake.moveThreadToFolder.mock.calls,
+  ].map(([threadId]) => threadId as string);
+}
+
+// By default the chat's own account holds nothing about Acme; the user's
+// other account holds the renewal email.
 function mockAccounts({
   chatAccountId,
+  chatAccountMessages = [],
   otherAccountMessages,
 }: {
   chatAccountId: string;
+  chatAccountMessages?: ReturnType<typeof getMockMessage>[];
   otherAccountMessages: ReturnType<typeof getMockMessage>[];
 }) {
-  const chatProvider = fakeProvider([]);
+  const chatProvider = fakeProvider(chatAccountMessages);
   const otherProvider = fakeProvider(otherAccountMessages);
 
-  prisma.emailAccount.findMany.mockResolvedValue([
+  const accounts = [
     {
       id: chatAccountId,
       email: "user@test.com",
@@ -217,7 +331,14 @@ function mockAccounts({
       includeInAllAccounts: true,
       account: { provider: "google" },
     },
-  ] as never);
+  ];
+  // As the database would: a lookup by id finds only that account.
+  prisma.emailAccount.findMany.mockImplementation((async (args: {
+    where?: { id?: string };
+  }) =>
+    accounts.filter(
+      (account) => !args?.where?.id || account.id === args.where.id,
+    )) as never);
   vi.mocked(createEmailProvider).mockImplementation(
     async ({ emailAccountId }) =>
       (emailAccountId === OTHER_ACCOUNT_ID
