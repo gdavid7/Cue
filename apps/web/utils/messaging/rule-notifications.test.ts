@@ -289,6 +289,7 @@ describe("handleRuleNotificationAction", () => {
   // send: Slack sends the reply's text, and settles the rule's suggestion.
   it("sends the reply's text from Slack when the rule's reply has no mailbox draft", async () => {
     const provider = {
+      getOwnEmailAddresses: vi.fn().mockResolvedValue(["user@example.com"]),
       sendDraft: vi.fn(),
       getDraft: vi.fn(),
       sendEmailWithHtml: vi
@@ -1187,6 +1188,7 @@ describe("buildNotificationReplySendBody", () => {
       fallbackThreadId: "thread-fallback",
       content: "Thanks for checking in.",
       formattedFrom: "Elie Steinbock <elie@getinboxzero.com>",
+      ownEmails: [],
       attachments: [],
     });
 
@@ -1217,11 +1219,39 @@ describe("buildNotificationReplySendBody", () => {
         fallbackThreadId: "thread-1",
         content: "Thanks for checking in.",
         formattedFrom: "User <user@example.com>",
+        ownEmails: ["user@example.com"],
         attachments: [],
       }).to;
 
     expect(replyTo("billing@pay.example")).toBe("billing@pay.example");
     expect(replyTo("USER@example.com")).toBe("sender@example.com");
+  });
+
+  it("replies to From when Reply-To is one of the user's send-as aliases", async () => {
+    const { buildNotificationReplySendBody } = await import(
+      "./rule-notifications"
+    );
+
+    const body = buildNotificationReplySendBody({
+      sourceMessage: {
+        id: "message-1",
+        threadId: "thread-1",
+        headers: {
+          from: "sender@example.com",
+          "reply-to": "Alias <alias@school.edu>",
+          to: "user@example.com",
+          subject: "Test subject",
+          date: "Mon, 1 Jan 2024 11:00:00 +0000",
+        },
+      } as ParsedMessage,
+      fallbackThreadId: "thread-1",
+      content: "Thanks for checking in.",
+      formattedFrom: "User <user@example.com>",
+      ownEmails: ["user@example.com", "alias@school.edu"],
+      attachments: [],
+    });
+
+    expect(body.to).toBe("sender@example.com");
   });
 
   it("falls back to the stored thread id when the source message omits it", async () => {
@@ -1243,6 +1273,7 @@ describe("buildNotificationReplySendBody", () => {
       } as ParsedMessage,
       fallbackThreadId: "thread-1",
       content: "Thanks for checking in.",
+      ownEmails: [],
       attachments: [],
     });
 
