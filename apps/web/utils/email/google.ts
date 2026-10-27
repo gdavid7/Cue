@@ -1245,7 +1245,7 @@ export class GmailProvider implements EmailProvider {
       email,
       content,
       options?.from || (await this.getReplyFrom(email.headers)),
-      options,
+      { ...options, ownEmails: await this.getSelfEmailAddresses([]) },
     );
     return { messageId: requireSentMessageId(result.data.id) };
   }

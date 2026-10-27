@@ -1,5 +1,9 @@
 import type { ParsedMessageHeaders } from "@/utils/types";
-import { extractEmailAddress, splitRecipientList } from "@/utils/email";
+import {
+  extractEmailAddress,
+  getReplyAddressee,
+  splitRecipientList,
+} from "@/utils/email";
 
 export interface ReplyAllRecipients {
   cc: string[];
@@ -26,7 +30,8 @@ export function buildReplyAllRecipients(
       .map(addressKey)
       .filter(Boolean),
   );
-  const replyToRaw = overrideTo || replyAddressee(headers, currentUserEmailSet);
+  const replyToRaw =
+    overrideTo || getReplyAddressee(headers, currentUserEmails);
   const replyTo = new Set(splitRecipientList(replyToRaw).map(addressKey));
 
   // Build CC list for reply-all behavior
@@ -77,7 +82,7 @@ export function buildComposeReplyRecipients({
   }
   if (!replyAll) {
     return {
-      to: replyAddressee(headers, new Set(ownEmails.map(addressKey))),
+      to: getReplyAddressee(headers, ownEmails),
       cc: headers.cc ?? "",
       bcc: "",
     };
@@ -155,24 +160,6 @@ export function mergeAndDedupeRecipients(
   }
 
   return result;
-}
-
-/**
- * Who a reply to someone else's message goes to: its Reply-To addresses, as
- * Gmail does, or From when it has none. The user's own addresses are left out,
- * so a Reply-To naming only the user answers From.
- */
-function replyAddressee(
-  headers: ParsedMessageHeaders,
-  ownKeys: Set<string>,
-): string {
-  const replyTo = splitRecipientList(headers["reply-to"] ?? "").filter(
-    (recipient) => {
-      const key = addressKey(recipient);
-      return key && !ownKeys.has(key);
-    },
-  );
-  return replyTo.length ? replyTo.join(", ") : headers.from;
 }
 
 function addressKey(recipient: string) {

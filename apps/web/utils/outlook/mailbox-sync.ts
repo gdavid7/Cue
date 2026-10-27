@@ -21,6 +21,10 @@ import { isNotFoundError } from "@/utils/outlook/errors";
 import { mapWithConcurrency } from "@/utils/async";
 import { MICROSOFT_MAILBOX_CONCURRENCY_LIMIT } from "@/utils/outlook/mailbox-concurrency";
 
+// A delta link keeps the $select it was created with, so links saved before
+// replyTo joined this list won't return it until they next reset. Until then
+// those messages read as having no Reply-To: replies go to From and no notice
+// shows, the behaviour from before Reply-To was honored.
 const MESSAGE_SELECT_FIELDS =
   "id,conversationId,conversationIndex,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,replyTo,receivedDateTime,isDraft,isRead,flag,categories,parentFolderId,hasAttachments,webLink,inferenceClassification";
 

@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { extractDomainFromEmail } from "@/utils/email";
 import { getReplyToDifference } from "./reply-to-difference";
+
+vi.mock("@/utils/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/email")>();
+  return {
+    ...actual,
+    extractDomainFromEmail: vi.fn(actual.extractDomainFromEmail),
+  };
+});
 
 describe("getReplyToDifference", () => {
   it("returns the Reply-To address when it is at another domain", () => {
@@ -93,5 +102,25 @@ describe("getReplyToDifference", () => {
         "reply-to": "billing@payments-desk.net",
       }),
     ).toBeNull();
+  });
+
+  // The address parsers rarely let this through, so it is forced here: an
+  // unreadable domain must never pass as the sender's own organization.
+  it("flags a Reply-To whose domain can't be read, or when From's can't", () => {
+    const headers = {
+      from: "ana@supplier.com",
+      "reply-to": "billing@supplier.com",
+    };
+    vi.mocked(extractDomainFromEmail).mockImplementation((address) =>
+      address === "billing@supplier.com" ? "" : "supplier.com",
+    );
+    expect(getReplyToDifference(headers)?.addresses).toEqual([
+      "billing@supplier.com",
+    ]);
+    vi.mocked(extractDomainFromEmail).mockImplementation(() => "");
+    expect(getReplyToDifference(headers)?.addresses).toEqual([
+      "billing@supplier.com",
+    ]);
+    vi.mocked(extractDomainFromEmail).mockRestore();
   });
 });

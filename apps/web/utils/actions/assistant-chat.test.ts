@@ -596,6 +596,59 @@ describe("confirmAssistantEmailAction", () => {
     });
   });
 
+  it("reports From as the reply recipient when Reply-To is the user's own address", async () => {
+    (prisma.emailAccount.findUnique as any)
+      .mockResolvedValueOnce({
+        email: "owner@example.com",
+        account: { userId: "u1", provider: "google" },
+      })
+      .mockResolvedValueOnce({
+        name: "Owner",
+        email: "owner@example.com",
+      });
+
+    prisma.chatMessage.findFirst.mockResolvedValue({
+      id: "chat-message-1",
+      chatId: "chat-1",
+      updatedAt: new Date("2026-02-23T00:00:00.000Z"),
+      parts: [buildPendingReplyPart("Thanks")],
+    } as any);
+    prisma.chatMessage.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    const sourceMessage = {
+      id: "source-message-1",
+      threadId: "thread-1",
+      headers: {
+        from: "sender@example.com",
+        "reply-to": "Owner <OWNER@example.com>",
+        subject: "Original subject",
+      },
+      subject: "Original subject",
+    };
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      getMessage: vi.fn().mockResolvedValue(sourceMessage),
+      replyToEmail: vi.fn().mockResolvedValue(undefined),
+      getSentMessageIds: vi.fn().mockResolvedValue({
+        messages: [{ id: "reply-message-2", threadId: "thread-1" }],
+      }),
+    } as any);
+
+    const result = await confirmAssistantEmailAction(
+      "ea_1" as any,
+      {
+        chatId: "chat-1",
+        chatMessageId: "chat-message-1",
+        toolCallId: "tool-1",
+        actionType: "reply_email",
+      } as any,
+    );
+
+    expect(result?.data?.confirmationResult).toMatchObject({
+      actionType: "reply_email",
+      to: "sender@example.com",
+    });
+  });
+
   it.each([
     "google",
     "microsoft",

@@ -755,3 +755,44 @@ describe("buildComposeReplyRecipients with Reply-To (FT-30b)", () => {
     ).toBe(false);
   });
 });
+
+describe("buildReplyAllRecipients with Reply-To", () => {
+  const ownEmails = ["me@example.com"];
+
+  it("replies to a mailing list's Reply-To without copying the list again", () => {
+    const recipients = buildReplyAllRecipients(
+      {
+        from: "Ana <ana@supplier.example>",
+        "reply-to": "Team <team@groups.example>",
+        to: "me@example.com, Team <TEAM@groups.example>",
+        cc: "sam@example.com",
+        subject: "Planning",
+        date: "2024-01-01",
+      },
+      undefined,
+      ownEmails,
+    );
+    expect(recipients).toEqual({
+      to: "Team <team@groups.example>",
+      cc: ["sam@example.com"],
+    });
+  });
+
+  it("replies to From when every Reply-To entry is malformed", () => {
+    const recipients = buildReplyAllRecipients(
+      {
+        from: "Ana <ana@supplier.example>",
+        "reply-to": "undisclosed-recipients:, @@",
+        to: "me@example.com, alex@example.com",
+        subject: "Planning",
+        date: "2024-01-01",
+      },
+      undefined,
+      ownEmails,
+    );
+    expect(recipients).toEqual({
+      to: "Ana <ana@supplier.example>",
+      cc: ["alex@example.com"],
+    });
+  });
+});

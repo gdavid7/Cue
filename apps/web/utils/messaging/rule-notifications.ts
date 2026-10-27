@@ -58,7 +58,11 @@ import {
 import type { ParsedMessage } from "@/utils/types";
 import he from "he";
 import { isDraftReplyActionType } from "@/utils/actions/draft-reply";
-import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
+import {
+  extractEmailAddress,
+  extractNameFromEmail,
+  getReplyAddressee,
+} from "@/utils/email";
 import {
   isMessagingChannelOperational,
   isOperationalSlackChannel,
@@ -1227,7 +1231,7 @@ export function buildNotificationReplySendBody({
       references: sourceMessage.headers.references,
       messageId: sourceMessage.id,
     },
-    to: to || sourceMessage.headers["reply-to"] || sourceMessage.headers.from,
+    to: to || getReplyAddressee(sourceMessage.headers, [formattedFrom]),
     cc: cc ?? undefined,
     bcc: bcc ?? undefined,
     subject: subject || formatReplySubject(sourceMessage.headers.subject),

@@ -14,7 +14,8 @@ import {
  * public suffix list (private suffixes count, as in sender authentication), so
  * mail.supplier.com and support.supplier.com match while supplier.co.uk and
  * other.co.uk, or alice.github.io and mallory.github.io, do not. Case is
- * ignored. A domain the list can't place is compared whole.
+ * ignored. A domain the list can't place is compared whole, and one that
+ * can't be read at all never counts as the sender's.
  */
 export function getReplyToDifference(
   headers: Pick<ParsedMessageHeaders, "from" | "reply-to">,
@@ -34,7 +35,14 @@ export function getReplyToDifference(
     ...new Set(
       extractEmailAddresses(replyTo)
         .map((address) => address.toLowerCase())
-        .filter((address) => organizationOf(address) !== senderOrganization),
+        .filter((address) => {
+          const organization = organizationOf(address);
+          return (
+            !organization ||
+            !senderOrganization ||
+            organization !== senderOrganization
+          );
+        }),
     ),
   ];
   if (!addresses.length) return null;
