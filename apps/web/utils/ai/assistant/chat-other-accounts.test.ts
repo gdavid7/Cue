@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createTestLogger } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import {
+  createEmailAccountResolver,
   runOnOtherAccounts,
   withChatAccountScope,
 } from "./chat-other-accounts";
@@ -382,5 +383,31 @@ describe("runOnOtherAccounts", () => {
 
     expect((await pending).results).toHaveLength(1);
     expect(accountSignal?.aborted).toBe(true);
+  });
+});
+
+describe("createEmailAccountResolver", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("looks the accounts up again after a failed lookup, so one failure does not fail the rest", async () => {
+    prisma.emailAccount.findMany
+      .mockRejectedValueOnce(new Error("Database unavailable"))
+      .mockResolvedValue([
+        connectedAccount(OTHER_ACCOUNT, "other@example.com"),
+      ] as never);
+    const resolve = createEmailAccountResolver({
+      userId: USER_ID,
+      emailAccountId: CHAT_ACCOUNT,
+      provider: "google",
+    });
+    const id = toOtherAccountEmailId(OTHER_ACCOUNT, "thread-1");
+
+    await expect(resolve(id)).rejects.toThrow("Database unavailable");
+    await expect(resolve(id)).resolves.toMatchObject({
+      emailAccountId: OTHER_ACCOUNT,
+      id: "thread-1",
+    });
   });
 });

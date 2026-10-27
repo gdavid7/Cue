@@ -50,6 +50,11 @@ import {
 import { flushLoggerSafely } from "@/utils/logger-flush";
 import { createLocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
 import { withoutConfirmTokens } from "@/utils/ai/assistant/matching-query-actions";
+import { resolveEmailAccountForId } from "@/utils/ai/assistant/chat-other-accounts";
+import {
+  parseOtherAccountEmailId,
+  toOtherAccountEmailId,
+} from "@/utils/ai/assistant/other-account-email-id";
 import {
   isGoogleProvider,
   isMicrosoftProvider,
@@ -65,7 +70,7 @@ export const maxDuration = 300;
 
 export const POST = withEmailAccount("chat", async (request) => {
   const requestStartedAt = Date.now();
-  const emailAccountId = request.auth.emailAccountId;
+  const { userId } = request.auth;
   await assertWithinUserRateLimit({
     scope: "assistant-chat",
     userId: request.auth.userId,
@@ -112,10 +117,28 @@ export const POST = withEmailAccount("chat", async (request) => {
     );
   }
 
-  const [user, existingChat] = await Promise.all([
-    getEmailAccountWithAi({ emailAccountId }),
+  const [pageAccountUser, existingChat] = await Promise.all([
+    getEmailAccountWithAi({ emailAccountId: request.auth.emailAccountId }),
     getChatWithCompactions(data.id),
   ]);
+
+  // A chat covers all of the user's accounts, so it is theirs from any page.
+  // Another user's chat is refused before anything about it is used.
+  if (existingChat && existingChat.emailAccount.userId !== userId) {
+    return NextResponse.json(
+      { error: "You are not authorized to access this chat" },
+      { status: 403 },
+    );
+  }
+
+  // The chat runs in the account it was started in, its anchor, wherever it
+  // is opened: rules, settings and new mail act there.
+  const emailAccountId =
+    existingChat?.emailAccountId ?? request.auth.emailAccountId;
+  const user =
+    emailAccountId === request.auth.emailAccountId
+      ? pageAccountUser
+      : await getEmailAccountWithAi({ emailAccountId });
 
   if (!user) {
     return NextResponse.json(
@@ -139,13 +162,6 @@ export const POST = withEmailAccount("chat", async (request) => {
     );
   }
 
-  if (chat.emailAccountId !== emailAccountId) {
-    return NextResponse.json(
-      { error: "You are not authorized to access this chat" },
-      { status: 403 },
-    );
-  }
-
   if (chat.deletedAt) {
     return NextResponse.json(
       { error: "This chat has been deleted." },
@@ -162,6 +178,7 @@ export const POST = withEmailAccount("chat", async (request) => {
     !chat.messages.some((chatMessage) => chatMessage.role === "user");
   const inboxStatsPromise = isFirstUserTurn
     ? getInboxStatsForChatContext({
+        userId,
         emailAccountId,
         provider: user.account.provider,
         logger: request.logger,
@@ -321,7 +338,8 @@ export const POST = withEmailAccount("chat", async (request) => {
     const [memories, inboxStats] = await Promise.all([
       prisma.chatMemory
         .findMany({
-          where: { emailAccountId },
+          // Memories follow the user, whichever account the chat was in.
+          where: { emailAccount: { userId } },
           orderBy: { createdAt: "desc" },
           take: 20,
           select: { content: true, createdAt: true },
@@ -376,9 +394,15 @@ export const POST = withEmailAccount("chat", async (request) => {
       context,
       chatId: chat.id,
       supportsInlineEmailCards: data.supportsInlineEmailCards,
-      openThread: data.openThreadId
-        ? { threadId: data.openThreadId, messageId: data.openMessageId }
-        : undefined,
+      openThread: await resolveOpenThread({
+        threadId: data.openThreadId,
+        messageId: data.openMessageId,
+        userId,
+        emailAccountId,
+        provider: user.account.provider,
+      }).catch((error): undefined => {
+        runLogger.warn("Could not check the open thread's account", { error });
+      }),
       chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
       chatHasHistory,
       memories,
@@ -578,6 +602,7 @@ async function getChatWithCompactions(chatId: string) {
     include: {
       messages: { orderBy: { createdAt: "asc" } },
       compactions: { orderBy: { createdAt: "desc" }, take: 1 },
+      emailAccount: { select: { userId: true } },
     },
   });
 }
@@ -743,4 +768,45 @@ function getCompactionBoundary({
       : undefined;
 
   return firstKept?.createdAt ?? newUserMessageCreatedAt ?? new Date();
+}
+
+// A thread open in another account reaches the model named with that
+// account, once the account is checked to be the user's, so the tools that
+// read it go to the right mailbox. One in an account that is not theirs is
+// dropped, as is a message id from another account than its thread's.
+async function resolveOpenThread({
+  threadId,
+  messageId,
+  userId,
+  emailAccountId,
+  provider,
+}: {
+  threadId?: string;
+  messageId?: string;
+  userId: string;
+  emailAccountId: string;
+  provider: string;
+}) {
+  if (!threadId) return;
+  const thread = await resolveEmailAccountForId({
+    id: threadId,
+    userId,
+    emailAccountId,
+    provider,
+  });
+  if (!thread) return;
+
+  const message = messageId ? parseOtherAccountEmailId(messageId) : null;
+  const messageAccountId = message?.emailAccountId ?? emailAccountId;
+  const messageProviderId = message?.id ?? messageId;
+  const named = (id: string) =>
+    thread.otherAccount ? toOtherAccountEmailId(thread.emailAccountId, id) : id;
+
+  return {
+    threadId: named(thread.id),
+    messageId:
+      messageProviderId && messageAccountId === thread.emailAccountId
+        ? named(messageProviderId)
+        : undefined,
+  };
 }

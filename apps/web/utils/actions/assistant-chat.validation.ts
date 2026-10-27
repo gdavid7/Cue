@@ -301,10 +301,12 @@ const assistantChatMessagePartSchema = z.discriminatedUnion("type", [
   assistantChatFilePartSchema,
 ]);
 
+// A provider id, or one named with another of the user's accounts as
+// `acct:<emailAccountId>:<providerId>` (see other-account-email-id.ts).
 const providerIdSchema = z
   .string()
   .trim()
-  .regex(/^[\w=+/.-]{1,200}$/);
+  .regex(/^(?:acct:[\w=+/.-]{1,200}:)?[\w=+/.-]{1,200}$/);
 
 export const assistantInputSchema = z.object({
   id: z.string().trim().min(1),

@@ -4,8 +4,8 @@ import { withAuth } from "@/utils/middleware";
 
 export type GetUserChatsResponse = Awaited<ReturnType<typeof getUserChats>>;
 
-// Chats are stored per account; this lists every account's, so one history
-// shows them all, each labelled with the account it works in.
+// A chat covers all of the user's accounts and is held by the one it was
+// started in; this lists every account's, so one history shows them all.
 export const GET = withAuth("user/chats", async (request) => {
   const result = await getUserChats({ userId: request.auth.userId });
   return NextResponse.json(result);

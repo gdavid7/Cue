@@ -76,9 +76,8 @@ const accountChat = vi.hoisted(() => ({
   } | null,
   switchedAccount: false,
   chatAccountError: undefined as Error | undefined,
-  openThreadAccountId: null as string | null,
+  allAccountsDisconnected: false,
   openChat: vi.fn(),
-  switchChatAccount: vi.fn(),
 }));
 
 vi.mock("@/hooks/useAccounts", () => ({
@@ -278,7 +277,7 @@ beforeEach(() => {
   };
   accountChat.switchedAccount = false;
   accountChat.chatAccountError = undefined;
-  accountChat.openThreadAccountId = null;
+  accountChat.allAccountsDisconnected = false;
   chatState.inputFocusRequested = false;
   window.localStorage.clear();
   mockUseChatInput.mockReturnValue({ input: "", setInput: mockSetInput });
@@ -316,7 +315,7 @@ describe("Chat history", () => {
     });
   });
 
-  it("lists every account's chats with the account each works in, and resumes one in its account", async () => {
+  it("lists every account's chats in one list, and resumes one in the account that holds it", async () => {
     render(<Chat open />);
     fireEvent.pointerDown(
       screen.getByRole("button", { name: /chat history/i }),
@@ -325,7 +324,7 @@ describe("Chat history", () => {
     const otherRow = (await screen.findByText("Travel plans")).closest(
       "[role=menuitem]",
     );
-    expect(otherRow?.textContent).toContain("b@example.com");
+    expect(otherRow?.textContent).not.toContain("b@example.com");
 
     fireEvent.click(screen.getByText("Travel plans"));
 
@@ -349,14 +348,7 @@ describe("Chat account", () => {
     });
   });
 
-  it("names the account the chat works in", () => {
-    render(<Chat open />);
-
-    expect(screen.getByText("Chat for a@example.com")).toBeTruthy();
-    expect(screen.queryByText(/Switched to/)).toBeNull();
-  });
-
-  it("says when it switched to another account for this conversation", () => {
+  it("names no account and offers no switch, since the chat covers every account", () => {
     accountChat.chatAccount = {
       id: "email-account-2",
       email: "b@example.com",
@@ -366,21 +358,9 @@ describe("Chat account", () => {
     accountChat.switchedAccount = true;
     render(<Chat open />);
 
-    expect(
-      screen.getByText("Switched to b@example.com for this conversation"),
-    ).toBeTruthy();
-  });
-
-  it("offers to move to the open email's account when a conversation is under way", () => {
-    accountChat.openThreadAccountId = "email-account-2";
-    render(<Chat open />);
-
-    expect(screen.getByText("The open email is in b@example.com")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
-
-    expect(accountChat.switchChatAccount).toHaveBeenCalledWith(
-      "email-account-2",
-    );
+    expect(screen.queryByText(/Chat for/)).toBeNull();
+    expect(screen.queryByText(/Switched to/)).toBeNull();
+    expect(screen.queryByText(/The open email is in/)).toBeNull();
   });
 
   it("runs the conversation's cards and actions in the chat's account", () => {
@@ -441,7 +421,7 @@ describe("Chat account", () => {
     );
   });
 
-  it("keeps a disconnected account's chat read-only with a way to reconnect", () => {
+  it("keeps the chat open while one account is disconnected", () => {
     accountChat.chatAccount = {
       id: "email-account-2",
       email: "b@example.com",
@@ -451,6 +431,25 @@ describe("Chat account", () => {
       },
       providerRateLimit: null,
     };
+    render(<Chat open />);
+
+    expect(screen.queryByText(/Reconnect/)).toBeNull();
+    expect(
+      (screen.getByTestId("chat-input") as HTMLTextAreaElement).disabled,
+    ).toBe(false);
+  });
+
+  it("is read-only with a way to reconnect once every account is disconnected", () => {
+    accountChat.chatAccount = {
+      id: "email-account-2",
+      email: "b@example.com",
+      account: {
+        disconnectedAt: "2026-09-01T00:00:00.000Z",
+        provider: "google",
+      },
+      providerRateLimit: null,
+    };
+    accountChat.allAccountsDisconnected = true;
     render(<Chat open />);
 
     expect(

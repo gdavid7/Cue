@@ -30,7 +30,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useEmailLookup } from "@/components/assistant-chat/email-lookup-context";
 import { useInlineEmailActionContext } from "@/components/assistant-chat/inline-email-action-context";
-import { useAccount } from "@/providers/EmailAccountProvider";
+import {
+  EmailAccountScopeProvider,
+  useAccount,
+} from "@/providers/EmailAccountProvider";
+import { useAccounts } from "@/hooks/useAccounts";
 import {
   archiveThreadAction,
   markReadThreadAction,
@@ -133,9 +137,12 @@ export function InlineEmailList({ children }: { children?: ReactNode }) {
     setArchiveAllState("loading");
     try {
       const results = await Promise.all(
-        remainingArchiveThreadIds.map((threadId) =>
-          archiveThreadAction(emailAccountId, { threadId }),
-        ),
+        remainingArchiveThreadIds.map((threadId) => {
+          const target = toAccountThread(threadId, emailAccountId);
+          return archiveThreadAction(target.emailAccountId, {
+            threadId: target.threadId,
+          });
+        }),
       );
       const successfulThreadIds = getSuccessfulThreadIds(
         remainingArchiveThreadIds,
@@ -179,9 +186,13 @@ export function InlineEmailList({ children }: { children?: ReactNode }) {
     setMarkReadState("loading");
     try {
       const results = await Promise.all(
-        remainingReadThreadIds.map((threadId) =>
-          markReadThreadAction(emailAccountId, { threadId, read: true }),
-        ),
+        remainingReadThreadIds.map((threadId) => {
+          const target = toAccountThread(threadId, emailAccountId);
+          return markReadThreadAction(target.emailAccountId, {
+            threadId: target.threadId,
+            read: true,
+          });
+        }),
       );
       const successfulThreadIds = getSuccessfulThreadIds(
         remainingReadThreadIds,
@@ -307,16 +318,45 @@ function numberInlineEmailCards(children: ReactNode): ReactNode {
   });
 }
 
-export function InlineEmailCard({
+/**
+ * An email card. One from another of the user's accounts works in that
+ * account: its actions, preview and link are that account's.
+ */
+export function InlineEmailCard(props: {
+  id?: string;
+  threadid?: string;
+  index?: number | string;
+  children?: ReactNode;
+}) {
+  const { data } = useAccounts();
+  const threadId = resolveInlineEmailThreadId(props);
+  const other = threadId ? parseOtherAccountEmailId(threadId) : null;
+  const account = other
+    ? data?.emailAccounts.find(
+        (candidate) => candidate.id === other.emailAccountId,
+      )
+    : undefined;
+  if (!other || !account) return <InlineEmailCardInAccount {...props} />;
+  return (
+    <EmailAccountScopeProvider emailAccount={account}>
+      <InlineEmailCardInAccount {...props} providerThreadId={other.id} />
+    </EmailAccountScopeProvider>
+  );
+}
+
+function InlineEmailCardInAccount({
   id,
   threadid,
   index,
   children,
+  providerThreadId,
 }: {
   id?: string;
   threadid?: string;
   index?: number | string;
   children?: ReactNode;
+  /** The thread's id in its own account, for a card of another account's email. */
+  providerThreadId?: string;
 }) {
   const emailLookup = useEmailLookup();
   const listState = useContext(InlineEmailListContext);
@@ -326,30 +366,32 @@ export function InlineEmailCard({
   const [markReadState, setMarkReadState] = useState<ActionState>("idle");
   const [expanded, setExpanded] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  // The id the chat knows the email by, which lists and the model use.
   const threadId = resolveInlineEmailThreadId({ id, threadid });
-  // Another account's email can't be opened or changed through the chat's
-  // account, so its card only links out to it.
+  // An id from an account this browser doesn't know can't be acted on, so
+  // its card only names where it is.
   const actionableThreadId =
-    threadId && !parseOtherAccountEmailId(threadId) ? threadId : undefined;
+    providerThreadId ??
+    (threadId && !parseOtherAccountEmailId(threadId) ? threadId : undefined);
 
   const meta = threadId ? emailLookup.get(threadId) : undefined;
   const isArchived = !!threadId && !!listState?.archivedThreadIds.has(threadId);
   const isMarkedRead = !!threadId && !!listState?.readThreadIds.has(threadId);
 
   const externalUrl = getInlineEmailExternalUrl({
-    threadId,
-    messageId: meta?.messageId,
+    threadId: actionableThreadId ?? threadId,
+    messageId: providerThreadId ? undefined : meta?.messageId,
     externalUrl: meta?.externalUrl,
     userEmail,
     provider,
   });
 
   async function handleArchive() {
-    if (!threadId || actionState !== "idle") return;
+    if (!threadId || !actionableThreadId || actionState !== "idle") return;
     setActionState("loading");
     try {
       const result = await archiveThreadAction(emailAccountId, {
-        threadId,
+        threadId: actionableThreadId,
       });
       if (result?.serverError) {
         toastError({ description: result.serverError });
@@ -367,11 +409,11 @@ export function InlineEmailCard({
   }
 
   async function handleMarkRead() {
-    if (!threadId || markReadState !== "idle") return;
+    if (!threadId || !actionableThreadId || markReadState !== "idle") return;
     setMarkReadState("loading");
     try {
       const result = await markReadThreadAction(emailAccountId, {
-        threadId,
+        threadId: actionableThreadId,
         read: true,
       });
       if (result?.serverError) {
@@ -393,7 +435,7 @@ export function InlineEmailCard({
   const markReadComplete = isMarkedRead || markReadState === "done";
   const hasSummary = !!children;
   const otherAccount =
-    threadId && !actionableThreadId
+    threadId && parseOtherAccountEmailId(threadId)
       ? (meta?.account ?? "another account")
       : null;
 
@@ -619,18 +661,24 @@ export function InlineEmailDetail({
   );
 }
 
-// The threads "Archive all" and "Mark all read" act on, in the chat's account.
+// The threads "Archive all" and "Mark all read" act on, each in its account.
 function collectThreadIds(children: ReactNode): string[] {
   const ids: string[] = [];
   Children.forEach(children, (child) => {
     if (!isValidElement<{ id?: string; threadid?: string }>(child)) return;
 
     const threadId = resolveInlineEmailThreadId(child.props);
-    if (threadId && !parseOtherAccountEmailId(threadId)) {
-      ids.push(threadId);
-    }
+    if (threadId) ids.push(threadId);
   });
   return ids;
+}
+
+/** The account a card's thread is in, and its id there. */
+function toAccountThread(threadId: string, chatAccountId: string) {
+  const other = parseOtherAccountEmailId(threadId);
+  return other
+    ? { emailAccountId: other.emailAccountId, threadId: other.id }
+    : { emailAccountId: chatAccountId, threadId };
 }
 
 function EmailPreview({

@@ -4,6 +4,7 @@ import { withEmailAccount } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
 import { getChatStreamContext, getLiveStreamId } from "@/utils/chat/active-run";
 import { sleep } from "@/utils/sleep";
+import { ownedChatWhere } from "@/utils/chat/owned-chat";
 
 export const maxDuration = 300;
 
@@ -14,9 +15,9 @@ export const GET = withEmailAccount(
   "chat/stream",
   async (request, { params }) => {
     const { id } = await params;
-    const { emailAccountId } = request.auth;
+    const { userId } = request.auth;
 
-    const chat = await getChat(id, emailAccountId);
+    const chat = await getChat(id, userId);
     if (!chat) {
       return NextResponse.json({ error: "Chat not found" }, { status: 404 });
     }
@@ -51,7 +52,7 @@ export const GET = withEmailAccount(
       if (stream === null) break;
 
       await sleep(REGISTRATION_POLL_MS);
-      const latest = await getChat(id, emailAccountId);
+      const latest = await getChat(id, userId);
       if (!latest || getLiveStreamId(latest) !== streamId) break;
     }
 
@@ -59,9 +60,9 @@ export const GET = withEmailAccount(
   },
 );
 
-function getChat(id: string, emailAccountId: string) {
+function getChat(id: string, userId: string) {
   return prisma.chat.findFirst({
-    where: { id, emailAccountId, deletedAt: null },
+    where: { ...ownedChatWhere({ chatId: id, userId }), deletedAt: null },
     select: { activeStreamId: true, activeStreamStartedAt: true },
   });
 }

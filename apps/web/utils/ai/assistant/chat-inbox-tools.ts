@@ -22,13 +22,12 @@ import type { EmailProvider } from "@/utils/email/types";
 import type { ParsedMessage } from "@/utils/types";
 import { getEmailForLLM } from "@/utils/get-email-from-message";
 import { getFormattedSenderAddress } from "@/utils/email/get-formatted-sender-address";
-import { runWithBoundedConcurrency } from "@/utils/async";
+import { mapWithConcurrency, runWithBoundedConcurrency } from "@/utils/async";
 import { findNestedLabelMatches } from "@/utils/label/find-nested-label-matches";
 import { normalizeLabelName } from "@/utils/label/normalize-label-name";
 import { resolveLabelNameAndId } from "@/utils/label/resolve-label";
 import {
   buildMicrosoftSearchErrorResult,
-  getOutlookFieldScopeCandidate,
   getOutlookLocalSearch,
   normalizeOutlookSearchInput,
   runOutlookSearch,
@@ -51,7 +50,12 @@ import {
   requiresSenderEmails,
 } from "@/utils/ai/assistant/manage-inbox-actions";
 import { hideToolErrorFromUser } from "@/utils/ai/assistant/tool-error-visibility";
-import { previewMatchingQueryAction } from "@/utils/ai/assistant/chat-matching-actions";
+import {
+  countMatchingInAccount,
+  type OtherAccountMatchingPreview,
+  previewMatchingQueryAction,
+  searchForAccount,
+} from "@/utils/ai/assistant/chat-matching-actions";
 import { withoutConfirmToken } from "@/utils/ai/assistant/matching-query-actions";
 import {
   getMatchingQueryActions,
@@ -70,15 +74,23 @@ import {
   extractErrorInfo as extractGmailErrorInfo,
   isRetryableError as isGmailRetryableError,
 } from "@/utils/gmail/retry";
-import { microsoftGraphPageTokenSchema } from "@/utils/outlook/page-token";
+import { searchPageTokenSchema } from "@/utils/ai/assistant/all-accounts-page-token";
 import { validateUserAndAiAccess } from "@/utils/user/validate";
 import { SafeError } from "@/utils/error";
 import { getEmailUrlForMessage } from "@/utils/url";
 import {
+  ACCOUNT_SEARCH_FAILED,
+  createEmailAccountResolver,
   type OtherAccountResult,
   resolveEmailAccountForId,
   runOnOtherAccounts,
+  selectOtherAccounts,
 } from "@/utils/ai/assistant/chat-other-accounts";
+import {
+  parseAllAccountsPageToken,
+  toAllAccountsPageToken,
+} from "@/utils/ai/assistant/all-accounts-page-token";
+import { resolveOutlookFolderId } from "@/utils/outlook/search-scope";
 import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 import { toSearchInboxModelValue } from "@/utils/ai/assistant/search-inbox-model-output";
 import {
@@ -523,15 +535,9 @@ const searchInboxBaseFields = {
     .describe(
       `Maximum number of messages to return, up to ${SEARCH_INBOX_MAX_RESULTS}. Larger values are clamped; use pagination for more results.`,
     ),
-  pageToken: microsoftGraphPageTokenSchema.describe(
+  pageToken: searchPageTokenSchema.describe(
     "Use the page token returned from a prior search to paginate.",
   ),
-  allAccounts: z
-    .boolean()
-    .nullish()
-    .describe(
-      "Optional. Set to true to also search the user's other connected email accounts, such as when the user asks about all their accounts or the email may be in another one. Every message then names its account. Other accounts return only their first few matches, and their emails can be read but not acted on from this chat.",
-    ),
 };
 
 const gmailSearchInboxInputSchema = z.object({
@@ -609,21 +615,18 @@ type OutlookSearchInboxInput = z.infer<typeof outlookSearchInboxInputSchema>;
 const gmailSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
-      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
+      "Search inbox messages and return concise message metadata. It searches all of the user's connected accounts, and each message names its account. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. totalReturned is only the number of messages returned by this call, so do not present it or a single search page as an exact mailbox, folder, or label count. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: gmailSearchInboxInputSchema,
     execute: async (input, callOptions) => {
       const { email, logger } = options;
       trackToolCall({ tool: "search_inbox", email, logger });
 
-      const otherAccounts = startOtherAccountSearch({
+      return searchAllAccounts({
         options,
         input,
         abortSignal: callOptions?.abortSignal,
-      });
-      return withOtherAccountResults({
-        result: await searchGmailChatAccount({ options, input }),
-        chatEmail: email,
-        otherAccounts,
+        searchChatAccount: (chatInput) =>
+          searchGmailChatAccount({ options, input: chatInput }),
       });
     },
     toModelOutput: searchInboxModelOutput,
@@ -632,21 +635,18 @@ const gmailSearchInboxTool = (options: InboxToolOptions) =>
 const outlookSearchInboxTool = (options: InboxToolOptions) =>
   tool({
     description:
-      "Search inbox messages and return concise message metadata. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page, even when the current page has zero messages. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
+      "Search inbox messages and return concise message metadata. It searches all of the user's connected accounts, and each message names its account. Returns at most 20 messages per call. If hasMore=true, more matches remain; call again with nextPageToken for the next page, even when the current page has zero messages. To count matches use countEmails, and to act on every match use manageInbox with query, rather than paging through them. Outlook filtered searches can return an empty page before later matching pages. For folder/category count questions, use only folderName/categoryName with no query or other filters and report exactCount, the full-scope message count including drafts. If countError is returned, the exact total is unavailable. totalReturned is only this page size and is never an exact mailbox, folder, or category total. If the tool returns an error or provider search feedback instead of messages, treat the lookup as inconclusive rather than evidence that the email is absent.",
     inputSchema: outlookSearchInboxInputSchema,
     execute: async (input, callOptions) => {
       const { email, logger } = options;
       trackToolCall({ tool: "search_inbox", email, logger });
 
-      const otherAccounts = startOtherAccountSearch({
+      return searchAllAccounts({
         options,
         input,
         abortSignal: callOptions?.abortSignal,
-      });
-      return withOtherAccountResults({
-        result: await searchOutlookChatAccount({ options, input }),
-        chatEmail: email,
-        otherAccounts,
+        searchChatAccount: (chatInput) =>
+          searchOutlookChatAccount({ options, input: chatInput }),
       });
     },
     toModelOutput: searchInboxModelOutput,
@@ -926,7 +926,7 @@ const outlookManageInboxInputSchema = z
         "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
     query: matchingQuerySchema.describe(
-      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches once the user presses Confirm. Tell them how many conversations would change; calling again does not start it.",
+      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches, in all of the user's connected accounts, once the user presses Confirm. Tell them how many conversations would change in each account; calling again does not start it.",
     ),
     categoryName: z
       .string()
@@ -970,7 +970,7 @@ const gmailManageInboxInputSchema = z
         "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
     query: matchingQuerySchema.describe(
-      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches once the user presses Confirm. Tell them how many conversations would change; calling again does not start it.",
+      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches, in all of the user's connected accounts, once the user presses Confirm. Tell them how many conversations would change in each account; calling again does not start it.",
     ),
     labelName: z
       .string()
@@ -1010,22 +1010,36 @@ type ManageInboxTaxonomyConfig = {
   };
 };
 
+const OUTLOOK_TAXONOMY: ManageInboxTaxonomyConfig = {
+  labelResolutionFallbackError: "Failed to resolve category",
+  missingLabelError: (name, action) =>
+    action === "remove_label_threads"
+      ? `Category "${name}" does not exist, so no category was removed.`
+      : `Category "${name}" does not exist. Use createOrGetCategory first if you want to create it.`,
+  resultKeys: {
+    id: "categoryId",
+    name: "categoryName",
+  },
+};
+
+const GMAIL_TAXONOMY: ManageInboxTaxonomyConfig = {
+  labelResolutionFallbackError: "Failed to resolve label",
+  missingLabelError: (name, action) =>
+    action === "remove_label_threads"
+      ? `Label "${name}" does not exist, so no label was removed.`
+      : `Label "${name}" does not exist. Use createOrGetLabel first if you want to create it.`,
+  resultKeys: {
+    id: "labelId",
+    name: "labelName",
+  },
+};
+
 const outlookManageInboxTool = (options: InboxToolOptions) =>
   buildManageInboxTool({
     options,
     inputSchema: outlookManageInboxInputSchema,
     normalizeInput: normalizeOutlookManageInboxInput,
-    taxonomy: {
-      labelResolutionFallbackError: "Failed to resolve category",
-      missingLabelError: (name, action) =>
-        action === "remove_label_threads"
-          ? `Category "${name}" does not exist, so no category was removed.`
-          : `Category "${name}" does not exist. Use createOrGetCategory first if you want to create it.`,
-      resultKeys: {
-        id: "categoryId",
-        name: "categoryName",
-      },
-    },
+    taxonomy: OUTLOOK_TAXONOMY,
   });
 
 const gmailManageInboxTool = (options: InboxToolOptions) =>
@@ -1033,17 +1047,7 @@ const gmailManageInboxTool = (options: InboxToolOptions) =>
     options,
     inputSchema: gmailManageInboxInputSchema,
     normalizeInput: normalizeGmailManageInboxInput,
-    taxonomy: {
-      labelResolutionFallbackError: "Failed to resolve label",
-      missingLabelError: (name, action) =>
-        action === "remove_label_threads"
-          ? `Label "${name}" does not exist, so no label was removed.`
-          : `Label "${name}" does not exist. Use createOrGetLabel first if you want to create it.`,
-      resultKeys: {
-        id: "labelId",
-        name: "labelName",
-      },
-    },
+    taxonomy: GMAIL_TAXONOMY,
   });
 
 const manageInboxTools = {
@@ -1067,11 +1071,11 @@ const buildManageInboxTool = ({
   ) => NormalizedManageInboxInput;
   taxonomy: ManageInboxTaxonomyConfig;
 }) => {
-  const { email, emailAccountId, provider, logger } = options;
+  const { email, provider, logger } = options;
 
   return tool({
     description:
-      "Run inbox actions on threads or senders. For emails already shown or found in this turn, prefer thread actions with threadIds. To act on everything a search matches, call it with query directly instead of searching, counting or collecting threadIds first: a query call changes nothing and shows the user the count with a Confirm button. Use archive_threads for ordinary inbox cleanup; only use trash_threads when the user explicitly asks to delete or trash. Do not widen a limited thread-level request into sender-wide cleanup. Only use sender-wide cleanup with fromEmails when the user clearly wants all mail from that sender, and get confirmation before doing broad sender-wide cleanup. Only use unsubscribe_senders for an explicit unsubscribe request.",
+      "Run inbox actions on threads or senders. Each email is changed in the account it is in. For emails already shown or found in this turn, prefer thread actions with threadIds. To act on everything a search matches, call it with query directly instead of searching, counting or collecting threadIds first: a query call changes nothing and shows the user the count with a Confirm button. Use archive_threads for ordinary inbox cleanup; only use trash_threads when the user explicitly asks to delete or trash. Do not widen a limited thread-level request into sender-wide cleanup. Only use sender-wide cleanup with fromEmails when the user clearly wants all mail from that sender, and get confirmation before doing broad sender-wide cleanup. Only use unsubscribe_senders for an explicit unsubscribe request.",
     inputSchema,
     toModelOutput: manageInboxModelOutput,
     execute: async (input, callOptions) => {
@@ -1091,16 +1095,10 @@ const buildManageInboxTool = ({
       const parsedInput = normalizeInput(
         parsedInputResult.data as Record<string, unknown>,
       );
-      const { action, labelName, originalAction } = parsedInput;
+      const { action, originalAction } = parsedInput;
       const isSenderAction = requiresSenderEmails(action);
 
       try {
-        const emailProvider = await createEmailProvider({
-          emailAccountId,
-          provider,
-          logger,
-        });
-
         if (isSenderAction) {
           const normalizedFromEmails = normalizeSenderEmails(
             parsedInput.fromEmails ?? [],
@@ -1112,67 +1110,19 @@ const buildManageInboxTool = ({
             };
           }
 
-          if (action === "unsubscribe_senders") {
-            const unsubscribeResults = await runSenderUnsubscribeActions({
-              fromEmails: normalizedFromEmails,
-              emailProvider,
-              emailAccountId,
-              logger,
-            });
-            const successfulSenders = unsubscribeResults
-              .filter((result) => result.success)
-              .map((result) => result.senderEmail);
-            const failedSenders = unsubscribeResults
-              .filter((result) => !result.success)
-              .map((result) => result.senderEmail);
-            const successCount = successfulSenders.length;
-            const autoUnsubscribeCount = unsubscribeResults.filter(
-              (result) => result.success && result.unsubscribe.success,
-            ).length;
-            const autoUnsubscribeAttemptedCount = unsubscribeResults.filter(
-              (result) => result.unsubscribe.attempted,
-            ).length;
-
-            await emailProvider.bulkArchiveFromSenders(
-              normalizedFromEmails,
-              email,
-              emailAccountId,
-            );
-
-            return {
-              success: failedSenders.length === 0,
-              action: originalAction,
-              sendersCount: normalizedFromEmails.length,
-              senders: normalizedFromEmails,
-              successCount,
-              failedCount: failedSenders.length,
-              failedSenders,
-              autoUnsubscribeCount,
-              autoUnsubscribeAttemptedCount,
-            };
-          }
-
-          await emailProvider.bulkArchiveFromSenders(
-            normalizedFromEmails,
-            email,
-            emailAccountId,
-          );
-
-          return {
-            success: true,
-            action: originalAction,
-            sendersCount: normalizedFromEmails.length,
-            senders: normalizedFromEmails,
-          };
+          return await runSenderActionsAcrossAccounts({
+            options,
+            action,
+            originalAction,
+            fromEmails: normalizedFromEmails,
+          });
         }
 
         if (parsedInput.query) {
           const startedAt = Date.now();
           const result = await runManageInboxQuery({
             parsedInput: { ...parsedInput, query: parsedInput.query },
-            emailProvider,
-            emailAccountId,
-            provider,
+            options,
             taxonomy,
             // Only the web chat shows the card a confirmation is pressed on.
             confirmation:
@@ -1182,7 +1132,6 @@ const buildManageInboxTool = ({
                 ? { chatId: options.chatId, toolCallId: callOptions.toolCallId }
                 : undefined,
             abortSignal: callOptions?.abortSignal,
-            logger,
           });
           logger.info("manageInbox query ran", {
             action: originalAction,
@@ -1194,92 +1143,11 @@ const buildManageInboxTool = ({
           return result;
         }
 
-        const threadIds = parsedInput.threadIds!;
-
-        const resolvedArchiveLabel =
-          action === "archive_threads"
-            ? await resolveLabelNameAndId({ emailProvider, label: labelName })
-            : null;
-        const resolvedArchiveLabelId =
-          resolvedArchiveLabel?.labelId ?? undefined;
-        let resolvedThreadLabel: Awaited<
-          ReturnType<typeof resolveThreadLabel>
-        > | null = null;
-
-        if (isThreadLabelAction(action)) {
-          try {
-            resolvedThreadLabel = await resolveThreadLabel({
-              emailProvider,
-              labelName: labelName!,
-              action,
-              matchNestedLabels: isGoogleProvider(provider),
-              missingLabelError: taxonomy.missingLabelError,
-            });
-          } catch (error) {
-            logger.warn("Failed to resolve label for thread action", {
-              error,
-              labelName,
-            });
-            return hideToolErrorFromUser({
-              error:
-                error instanceof Error
-                  ? error.message
-                  : taxonomy.labelResolutionFallbackError,
-            });
-          }
-        }
-
-        const threadActionResults = await runThreadActionsInParallel({
-          threadIds,
-          concurrency: THREAD_ACTION_CONCURRENCY,
-          runAction: async (threadId) => {
-            if (action === "archive_threads") {
-              await emailProvider.archiveThreadWithLabel(
-                threadId,
-                email,
-                resolvedArchiveLabelId,
-              );
-            } else if (action === "trash_threads") {
-              await emailProvider.trashThread(threadId, email, "user");
-            } else if (action === "label_threads") {
-              await applyLabelToThread({
-                emailProvider,
-                threadId,
-                labelId: resolvedThreadLabel!.labelId,
-                labelName: resolvedThreadLabel!.labelName,
-              });
-            } else if (action === "remove_label_threads") {
-              await emailProvider.removeThreadLabel(
-                threadId,
-                resolvedThreadLabel!.labelId,
-              );
-            } else {
-              await emailProvider.markReadThread(
-                threadId,
-                parsedInput.read ?? true,
-              );
-            }
-          },
+        return await runThreadActionsAcrossAccounts({
+          options,
+          parsedInput,
+          taxonomy,
         });
-
-        const failedThreadIds = threadActionResults
-          .filter((result) => !result.success)
-          .map((result) => result.threadId);
-        const successCount =
-          threadActionResults.length - failedThreadIds.length;
-
-        return {
-          success: failedThreadIds.length === 0,
-          action: originalAction,
-          requestedCount: threadIds.length,
-          successCount,
-          failedCount: failedThreadIds.length,
-          failedThreadIds,
-          ...(resolvedThreadLabel && {
-            [taxonomy.resultKeys.id]: resolvedThreadLabel.labelId,
-            [taxonomy.resultKeys.name]: resolvedThreadLabel.labelName,
-          }),
-        };
       } catch (error) {
         logger.error("Failed to run inbox action", { error });
         return {
@@ -1341,11 +1209,14 @@ export type SendEmailTool = InferUITool<ReturnType<typeof sendEmailTool>>;
 export const replyEmailTool = ({
   email,
   emailAccountId,
+  userId,
   provider,
   logger,
 }: {
   email: string;
   emailAccountId: string;
+  /** The signed-in user, whose other accounts' emails it may reply to. */
+  userId: string;
   provider: string;
   logger: Logger;
 }) =>
@@ -1361,27 +1232,36 @@ export const replyEmailTool = ({
         return { error: getReplyEmailValidationError(parsedInput.error) };
       }
 
+      let target: Awaited<ReturnType<typeof resolveEmailAccountForId>> = null;
       try {
-        const emailProvider = await createEmailProvider({
+        // The reply sends from the account the email is in.
+        target = await resolveEmailAccountForId({
+          id: parsedInput.data.messageId,
+          userId,
           emailAccountId,
           provider,
+        });
+        if (!target) return { error: OTHER_ACCOUNT_EMAIL_NOT_FOUND };
+        const emailProvider = await createEmailProvider({
+          emailAccountId: target.emailAccountId,
+          provider: target.provider,
           logger,
         });
-        const message = await emailProvider.getMessage(
-          parsedInput.data.messageId,
-        );
+        const message = await emailProvider.getMessage(target.id);
 
         return createPendingReplyEmailOutput(
-          parsedInput.data,
+          { ...parsedInput.data, messageId: target.id },
           message,
-          emailAccountId,
+          target.emailAccountId,
         );
       } catch (error) {
         logger.error("Failed to prepare reply from chat", { error });
         return {
           error:
-            describeProviderRateLimitError(error, provider) ??
-            "Failed to prepare reply",
+            describeProviderRateLimitError(
+              error,
+              target?.provider ?? provider,
+            ) ?? "Failed to prepare reply",
         };
       }
     },
@@ -1392,11 +1272,14 @@ export type ReplyEmailTool = InferUITool<ReturnType<typeof replyEmailTool>>;
 export const forwardEmailTool = ({
   email,
   emailAccountId,
+  userId,
   provider,
   logger,
 }: {
   email: string;
   emailAccountId: string;
+  /** The signed-in user, whose other accounts' emails it may forward. */
+  userId: string;
   provider: string;
   logger: Logger;
 }) =>
@@ -1412,26 +1295,35 @@ export const forwardEmailTool = ({
         return { error: getForwardEmailValidationError(parsedInput.error) };
       }
 
+      let target: Awaited<ReturnType<typeof resolveEmailAccountForId>> = null;
       try {
-        const emailProvider = await createEmailProvider({
+        // The forward sends from the account the email is in.
+        target = await resolveEmailAccountForId({
+          id: parsedInput.data.messageId,
+          userId,
           emailAccountId,
           provider,
+        });
+        if (!target) return { error: OTHER_ACCOUNT_EMAIL_NOT_FOUND };
+        const emailProvider = await createEmailProvider({
+          emailAccountId: target.emailAccountId,
+          provider: target.provider,
           logger,
         });
-        const message = await emailProvider.getMessage(
-          parsedInput.data.messageId,
-        );
+        const message = await emailProvider.getMessage(target.id);
         return createPendingForwardEmailOutput(
-          parsedInput.data,
+          { ...parsedInput.data, messageId: target.id },
           message,
-          emailAccountId,
+          target.emailAccountId,
         );
       } catch (error) {
         logger.error("Failed to prepare email forward from chat", { error });
         return {
           error:
-            describeProviderRateLimitError(error, provider) ??
-            "Failed to prepare email forward",
+            describeProviderRateLimitError(
+              error,
+              target?.provider ?? provider,
+            ) ?? "Failed to prepare email forward",
         };
       }
     },
@@ -1925,120 +1817,321 @@ async function searchOutlookChatAccount({
   }
 }
 
-// Other accounts answer with a first look, not a page walk: enough to find
-// the email, at a few Gmail or Graph calls per account.
-const OTHER_ACCOUNT_MAX_RESULTS = 10;
 const OTHER_ACCOUNT_EMAIL_NOT_FOUND =
   "That email is not in any of the user's connected accounts.";
+const NO_SUCH_SCOPE_IN_ACCOUNT =
+  "No folder or category with this name in this account.";
 
 type SearchResultItem = ReturnType<typeof mapMessageForSearchResult>;
 
 type OtherAccountSearchResult =
   | {
       messages: Array<SearchResultItem & { account: string }>;
-      hasMore: boolean;
+      nextPageToken?: string;
       /** The other provider could only search the chat's search's keywords. */
       keywordsOnly: boolean;
+      exactCount?: number;
+      countError?: string;
     }
-  | { nothingToSearch: true };
+  | { nothingToSearch: true }
+  | { noSuchScope: true };
 
 type OtherAccount = { id: string; email: string; provider: string };
 
-type OtherAccountSearch = Promise<{
-  results: OtherAccountResult<OtherAccountSearchResult>[];
-  notSearchedCount: number;
-  /** Why the other accounts were not searched at all. */
-  skipped?: string;
-} | null> | null;
+/** Either provider's searchInbox input: a Gmail search has no Outlook-only fields. */
+type AnySearchInboxInput = {
+  query: string;
+  limit: number;
+  pageToken?: string | null;
+  fromEmail?: string | null;
+  readState?: "read" | "unread" | null;
+  folderName?: string | null;
+  categoryName?: string | null;
+};
+
+type ChatAccountSearchResult = {
+  messages?: SearchResultItem[];
+  error?: unknown;
+  nextPageToken?: string;
+  exactCount?: number;
+  countError?: string;
+};
+
+/** A chat search as each other account is asked it, its folder or category apart. */
+type OtherAccountsSearch = {
+  search: AccountSearch;
+  folderName?: string | null;
+  categoryName?: string | null;
+};
 
 /**
- * Starts the search in the user's other accounts, alongside the chat
- * account's own, when the model asked for all accounts.
+ * Searches the chat's account and the user's other covered accounts
+ * together. Each takes a share of the page, the results merge newest first,
+ * and every message names its account. A user with only one covered account
+ * gets that account's result as it is.
  */
-function startOtherAccountSearch({
-  options: { userId, emailAccountId, provider, logger },
-  abortSignal,
+async function searchAllAccounts<
+  TInput extends AnySearchInboxInput,
+  TResult extends ChatAccountSearchResult,
+>({
+  options,
   input,
+  abortSignal,
+  searchChatAccount,
 }: {
   options: InboxToolOptions;
-  // Either provider's input: a Gmail search has no Outlook-only fields.
-  input: GmailSearchInboxInput &
-    Partial<
-      Pick<
-        OutlookSearchInboxInput,
-        "fromEmail" | "readState" | "folderName" | "categoryName"
-      >
-    >;
+  input: TInput;
   abortSignal?: AbortSignal;
-}): OtherAccountSearch {
-  if (!input.allAccounts) return null;
-  // A page walk continues the chat account's search, and folders and
-  // categories are the chat account's own, so those stay in it.
-  if (input.pageToken) {
-    return Promise.resolve({
-      results: [],
-      notSearchedCount: 0,
-      skipped: "Later pages search only this chat's account.",
-    });
-  }
-  if (
-    input.folderName ||
-    input.categoryName ||
-    // An Outlook query can name its folder or category itself.
-    (isMicrosoftProvider(provider) &&
-      getOutlookFieldScopeCandidate(input.query))
-  ) {
-    return Promise.resolve({
-      results: [],
-      notSearchedCount: 0,
-      skipped: "Folder and category filters apply only to this chat's account.",
-    });
+  searchChatAccount: (input: TInput) => Promise<TResult>;
+}) {
+  const { userId, emailAccountId, email, provider, logger } = options;
+  const selection = await selectOtherAccounts({ userId, emailAccountId }).catch(
+    (error) => {
+      logger.warn("Could not list the user's accounts to search", { error });
+      return null;
+    },
+  );
+  const pageTokens = parseAllAccountsPageToken(input.pageToken);
+  const searchesAccount = (accountId: string) =>
+    pageTokens
+      ? accountId in pageTokens
+      : !input.pageToken || accountId === emailAccountId;
+  const pageTokenFor = (accountId: string) =>
+    pageTokens
+      ? (pageTokens[accountId] ?? undefined)
+      : accountId === emailAccountId
+        ? input.pageToken
+        : undefined;
+
+  if (!pageTokens && !selection?.accounts.length) {
+    const result = await searchChatAccount(input);
+    return selection?.notSearchedCount
+      ? { ...result, accountsNotSearched: selection.notSearchedCount }
+      : result;
   }
 
-  const search: AccountSearch = {
-    query: input.query,
-    fromEmail: input.fromEmail,
-    readState: input.readState,
-  };
-  return runOnOtherAccounts({
-    userId,
+  const otherSearch = getOtherAccountsSearch(input, provider);
+  const searchable = [
     emailAccountId,
-    logger,
-    abortSignal,
-    run: (account, signal) =>
-      searchOtherAccount({
-        account,
-        chatProvider: provider,
-        search,
-        signal,
-        logger: logger.with({ otherEmailAccountId: account.id }),
+    ...(otherSearch
+      ? (selection?.accounts ?? []).map((account) => account.id)
+      : []),
+  ];
+  // A continued search takes its accounts in the page token's order, which
+  // puts those the last page had no room for first, so each gets its turn.
+  const continuing = pageTokens
+    ? Object.keys(pageTokens).filter((id) => searchable.includes(id))
+    : searchable.filter(searchesAccount);
+  const shares = splitPage(continuing, input.limit);
+  const others = (selection?.accounts ?? []).filter(
+    (account) => (shares.get(account.id) ?? 0) > 0,
+  );
+  // Listed as having more, with no count, so no total leaves them out.
+  const notReached = (selection?.accounts ?? []).filter(
+    (account) => continuing.includes(account.id) && !shares.get(account.id),
+  );
+  const otherResultsPromise =
+    selection && otherSearch && others.length
+      ? runOnOtherAccounts({
+          userId,
+          emailAccountId,
+          logger,
+          abortSignal,
+          selection: {
+            accounts: others,
+            notSearchedCount: selection.notSearchedCount,
+          },
+          run: (account, signal) =>
+            searchOtherAccount({
+              account,
+              chatProvider: provider,
+              search: otherSearch,
+              limit: shares.get(account.id) ?? 0,
+              pageToken: pageTokenFor(account.id),
+              signal,
+              logger: logger.with({ otherEmailAccountId: account.id }),
+            }),
+        }).catch((error) => {
+          logger.warn("Search across other accounts failed", { error });
+          return null;
+        })
+      : Promise.resolve({
+          results: [],
+          notSearchedCount: selection?.notSearchedCount ?? 0,
+        });
+
+  const chatShare = shares.get(emailAccountId) ?? 0;
+  const chatResult = chatShare
+    ? await searchChatAccount({
+        ...input,
+        limit: chatShare,
+        pageToken: pageTokenFor(emailAccountId) ?? null,
+      })
+    : null;
+  const otherSearchResult = await otherResultsPromise;
+  const otherAccounts = otherSearchResult?.results ?? [];
+
+  const chatMessages = (chatResult?.messages ?? []).map((message) => ({
+    ...message,
+    account: email,
+  }));
+  const otherMessages = otherAccounts.flatMap((entry) =>
+    "result" in entry && "messages" in entry.result
+      ? entry.result.messages
+      : [],
+  );
+  const messages = [...chatMessages, ...otherMessages].sort(
+    (a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0),
+  );
+
+  // An account this page had no room for is searched on the next one, from
+  // where it was, so none of its matches are skipped.
+  const nextPageTokens: Record<string, string | null> = {};
+  for (const accountId of continuing) {
+    if (!shares.get(accountId))
+      nextPageTokens[accountId] = pageTokenFor(accountId) ?? null;
+  }
+  if (chatResult?.nextPageToken)
+    nextPageTokens[emailAccountId] = chatResult.nextPageToken;
+  for (const entry of otherAccounts) {
+    if ("result" in entry && "messages" in entry.result) {
+      const next = entry.result.nextPageToken;
+      if (next) nextPageTokens[entry.account.id] = next;
+    }
+  }
+  const nextPageToken = Object.keys(nextPageTokens).length
+    ? toAllAccountsPageToken(nextPageTokens)
+    : undefined;
+
+  const {
+    error: chatError,
+    nextPageToken: _chatNextPageToken,
+    hasMore: _chatHasMore,
+    exactCount: chatExactCount,
+    countError: chatCountError,
+    messages: _chatMessages,
+    totalReturned: _chatTotalReturned,
+    summary: _chatSummary,
+    ...chatRest
+  } = (chatResult ?? { queryUsed: input.query }) as ChatAccountSearchResult &
+    Record<string, unknown>;
+  const accounts = [
+    describeChatAccount({
+      email,
+      result: chatResult,
+      hasMore: emailAccountId in nextPageTokens,
+      error: chatError,
+      exactCount: chatExactCount,
+      countError: chatCountError,
+    }),
+    ...otherAccounts.map(describeOtherAccount),
+    ...notReached.map((account) =>
+      describeChatAccount({
+        email: account.email,
+        result: null,
+        hasMore: true,
+        error: undefined,
       }),
-  }).catch((error) => {
-    logger.warn("Search across other accounts failed", { error });
+    ),
+  ];
+  const answered = accounts.filter((entry) => !("error" in entry));
+  const exactCounts = answered.map((entry) =>
+    "exactCount" in entry ? entry.exactCount : undefined,
+  );
+
+  return {
+    ...chatRest,
+    // With mail found elsewhere, the chat account's failure is that
+    // account's alone, not the result's.
+    ...(typeof chatError === "string" && otherMessages.length === 0
+      ? { error: chatError }
+      : {}),
+    totalReturned: messages.length,
+    nextPageToken,
+    hasMore: Boolean(nextPageToken),
+    summary: summarizeSearchResults(messages),
+    messages,
+    accounts,
+    ...(exactCounts.length > 0 &&
+    exactCounts.every((count) => count !== undefined)
+      ? {
+          exactCount: exactCounts.reduce<number>(
+            (sum, count) => sum + (count ?? 0),
+            0,
+          ),
+        }
+      : {}),
+    ...(otherSearchResult?.notSearchedCount
+      ? { accountsNotSearched: otherSearchResult.notSearchedCount }
+      : {}),
+    ...(otherSearchResult
+      ? {}
+      : {
+          otherAccountsError:
+            "The user's other accounts could not be searched.",
+        }),
+  };
+}
+
+/**
+ * The chat's search as the other accounts are asked it. An Outlook search's
+ * folder or category is kept apart, for each account to find its own of
+ * that name. Null when the search is malformed, which the chat account's
+ * own search reports.
+ */
+function getOtherAccountsSearch(
+  input: AnySearchInboxInput,
+  provider: string,
+): OtherAccountsSearch | null {
+  if (!isMicrosoftProvider(provider)) return { search: { query: input.query } };
+  try {
+    const normalized = normalizeOutlookSearchInput({
+      query: input.query,
+      fromEmail: input.fromEmail,
+      readState: input.readState,
+      categoryName: input.categoryName,
+      folderName: input.folderName,
+    });
+    return {
+      search: {
+        query: normalized.query,
+        fromEmail: normalized.fromEmail,
+        readState: normalized.readState,
+      },
+      folderName: normalized.folderName,
+      categoryName: normalized.categoryName,
+    };
+  } catch {
     return null;
-  });
+  }
 }
 
 async function searchOtherAccount({
   account,
   chatProvider,
-  search: chatSearch,
+  search: { search: chatSearch, folderName, categoryName },
+  limit,
+  pageToken,
   signal,
   logger,
 }: {
   account: OtherAccount;
   chatProvider: string;
-  search: AccountSearch;
+  search: OtherAccountsSearch;
+  limit: number;
+  pageToken?: string | null;
   signal: AbortSignal;
   logger: Logger;
 }): Promise<OtherAccountSearchResult> {
+  const scopeName = folderName ?? categoryName;
   const translated = translateAccountSearch({
     search: chatSearch,
     from: chatProvider,
     to: account.provider,
   });
-  if (!translated) return { nothingToSearch: true };
-  const { search, keywordsOnly } = translated;
+  if (!translated && !scopeName) return { nothingToSearch: true };
+  const search = translated?.search ?? { query: "" };
+  const keywordsOnly = translated?.keywordsOnly ?? false;
 
   const emailProvider = await createEmailProvider({
     emailAccountId: account.id,
@@ -2048,19 +2141,45 @@ async function searchOtherAccount({
   signal.throwIfAborted();
   const labelsPromise = getLabelsForSearchResults({ emailProvider, logger });
   const isOutlook = isMicrosoftProvider(account.provider);
-  const result = isOutlook
-    ? await searchOtherOutlookAccount({ emailProvider, search, signal, logger })
-    : await emailProvider.searchMessages({
-        query: search.query,
-        maxResults: OTHER_ACCOUNT_MAX_RESULTS,
-        allowPartial: true,
-        signal,
-      });
+
+  let result: SearchMessagesWithCount;
+  if (isOutlook) {
+    // Only an existing folder or category is searched (D-008).
+    if (categoryName && !findLabelNamed(await labelsPromise, categoryName))
+      return { noSuchScope: true };
+    const outlookResult = await searchOtherOutlookAccount({
+      emailProvider,
+      search,
+      folderName,
+      categoryName,
+      limit,
+      pageToken,
+      signal,
+      logger,
+    });
+    if (!outlookResult) return { noSuchScope: true };
+    result = outlookResult;
+  } else {
+    let query = search.query;
+    if (scopeName) {
+      // Gmail keeps folders and categories as labels.
+      const label = findLabelNamed(await labelsPromise, scopeName);
+      if (!label) return { noSuchScope: true };
+      query = [query, `label:"${label.name}"`].filter(Boolean).join(" ");
+    }
+    result = await emailProvider.searchMessages({
+      query,
+      maxResults: limit,
+      pageToken: pageToken ?? undefined,
+      allowPartial: true,
+      signal,
+    });
+  }
   const labelsById = createLabelLookupMap(await labelsPromise);
 
   return {
     keywordsOnly,
-    hasMore: Boolean(result.nextPageToken),
+    nextPageToken: result.nextPageToken,
     messages: result.messages.map((message) => ({
       ...mapMessageForSearchResult(
         searchSourceFromMessage(message),
@@ -2069,33 +2188,74 @@ async function searchOtherAccount({
       ),
       ...otherAccountEmailFields(account, message),
     })),
+    ...(result.exactCount !== undefined && { exactCount: result.exactCount }),
+    ...(result.countError && { countError: result.countError }),
   };
 }
 
+type SearchMessagesWithCount = Awaited<
+  ReturnType<EmailProvider["searchMessages"]>
+> & { exactCount?: number; countError?: string };
+
+/** Null when the account has no folder of that name. */
 async function searchOtherOutlookAccount({
   emailProvider,
   search,
+  folderName,
+  categoryName,
+  limit,
+  pageToken,
   signal,
   logger,
 }: {
   emailProvider: EmailProvider;
   search: AccountSearch;
+  folderName?: string | null;
+  categoryName?: string | null;
+  limit: number;
+  pageToken?: string | null;
   signal: AbortSignal;
   logger: Logger;
-}) {
-  const { result, lastError } = await runOutlookSearch({
+}): Promise<SearchMessagesWithCount | null> {
+  if (folderName) {
+    try {
+      await resolveOutlookFolderId({ emailProvider, folderName });
+    } catch {
+      return null;
+    }
+  }
+  const { result, lastError, exactCount, countError } = await runOutlookSearch({
     emailProvider,
     normalizedInput: normalizeOutlookSearchInput({
       query: search.query,
       fromEmail: search.fromEmail,
       readState: search.readState,
+      folderName,
+      categoryName,
     }),
-    limit: OTHER_ACCOUNT_MAX_RESULTS,
+    limit,
+    pageToken,
     logger,
     signal,
   });
   if (!result) throw lastError ?? new Error("Outlook search failed");
-  return result;
+  return {
+    ...result,
+    ...(exactCount !== undefined && { exactCount }),
+    ...(countError && { countError }),
+  };
+}
+
+function findLabelNamed(
+  labels: Array<{ id: string; name: string }>,
+  name: string,
+) {
+  const wanted = name.trim().toLowerCase();
+  return labels.find(
+    (label) =>
+      label.name.trim().toLowerCase() === wanted ||
+      label.id.toLowerCase() === wanted,
+  );
 }
 
 function otherAccountEmailFields(
@@ -2117,66 +2277,29 @@ function otherAccountEmailFields(
   };
 }
 
-/** The chat account's result, with the other accounts' merged in. */
-async function withOtherAccountResults<
-  T extends {
-    messages?: SearchResultItem[];
-    error?: unknown;
-    hasMore?: unknown;
-  },
->({
+function describeChatAccount({
+  email,
   result,
-  chatEmail,
-  otherAccounts: otherAccountSearch,
+  hasMore,
+  error,
+  exactCount,
+  countError,
 }: {
-  result: T;
-  chatEmail: string;
-  otherAccounts: OtherAccountSearch;
+  email: string;
+  /** Null when this page did not search this account. */
+  result: ChatAccountSearchResult | null;
+  hasMore: boolean;
+  error: unknown;
+  exactCount?: number;
+  countError?: string;
 }) {
-  if (!otherAccountSearch) return result;
-  const otherSearch = await otherAccountSearch;
-  const otherAccounts = otherSearch?.results;
-
-  const chatMessages = (result.messages ?? []).map((message) => ({
-    ...message,
-    account: chatEmail,
-  }));
-  const otherMessages = (otherAccounts ?? []).flatMap((entry) =>
-    "result" in entry && "messages" in entry.result
-      ? entry.result.messages
-      : [],
-  );
-  const messages = [...chatMessages, ...otherMessages];
-  // With mail found elsewhere, the chat account's failure is that account's
-  // alone, not the result's.
-  const { error: _chatAccountError, ...resultWithoutError } = result;
-  const merged = otherMessages.length > 0 ? resultWithoutError : result;
-
+  if (typeof error === "string") return { account: email, error };
   return {
-    ...merged,
-    totalReturned: messages.length,
-    summary: summarizeSearchResults(messages),
-    messages,
-    accounts: [
-      typeof result.error === "string"
-        ? { account: chatEmail, error: result.error }
-        : {
-            account: chatEmail,
-            returned: chatMessages.length,
-            hasMore: Boolean(result.hasMore),
-          },
-      ...(otherAccounts ?? []).map(describeOtherAccount),
-    ],
-    ...(otherSearch?.notSearchedCount && {
-      accountsNotSearched: otherSearch.notSearchedCount,
-    }),
-    ...(otherSearch?.skipped && { otherAccountsSkipped: otherSearch.skipped }),
-    ...(otherSearch
-      ? {}
-      : {
-          otherAccountsError:
-            "The user's other accounts could not be searched.",
-        }),
+    account: email,
+    returned: result?.messages?.length ?? 0,
+    hasMore,
+    ...(exactCount !== undefined && { exactCount }),
+    ...(countError && { countError }),
   };
 }
 
@@ -2191,11 +2314,18 @@ function describeOtherAccount(
       error: "Nothing in this search applies to this account.",
     };
   }
+  if ("noSuchScope" in entry.result) {
+    return { account, error: NO_SUCH_SCOPE_IN_ACCOUNT };
+  }
   return {
     account,
     returned: entry.result.messages.length,
-    hasMore: entry.result.hasMore,
+    hasMore: Boolean(entry.result.nextPageToken),
     ...(entry.result.keywordsOnly && { keywordsOnly: true }),
+    ...(entry.result.exactCount !== undefined && {
+      exactCount: entry.result.exactCount,
+    }),
+    ...(entry.result.countError && { countError: entry.result.countError }),
   };
 }
 
@@ -2223,6 +2353,488 @@ function createLabelLookupMap(labels: Array<{ id: string; name: string }>) {
     ["inbox", "Inbox"],
     ["unread", "Unread"],
   ] as const);
+}
+
+// Writes reach a few accounts at once, each with its own provider budget.
+const ACCOUNT_WRITE_CONCURRENCY = 3;
+const SENDER_LOOKUP_CONCURRENCY = 5;
+
+type ChatAccount = { id: string; email: string; provider: string };
+
+/** A thread id as the model gave it, and as its own account knows it. */
+type AccountThreadId = { requested: string; providerId: string };
+
+/**
+ * Runs a thread action on each email in the account it is in: the chat's own
+ * account for a plain id, or the user's other account an id names once it
+ * is checked to be theirs. An id in no account of the user's fails alone.
+ * A chat that only touched its own account gets that account's result as it
+ * always has.
+ */
+async function runThreadActionsAcrossAccounts({
+  options,
+  parsedInput,
+  taxonomy,
+}: {
+  options: InboxToolOptions;
+  parsedInput: NormalizedManageInboxInput;
+  taxonomy: ManageInboxTaxonomyConfig;
+}) {
+  const { userId, emailAccountId, email, provider } = options;
+  const threadIds = parsedInput.threadIds ?? [];
+  const groups = new Map<
+    string,
+    { account: ChatAccount; threadIds: AccountThreadId[] }
+  >();
+  const notOwned: string[] = [];
+  const resolved = new Map<string, ChatAccount | null>();
+  const resolve = createEmailAccountResolver({
+    userId,
+    emailAccountId,
+    provider,
+  });
+  for (const requested of threadIds) {
+    const target = await resolve(requested).then(
+      (found) => found,
+      () => null,
+    );
+    if (!target) {
+      notOwned.push(requested);
+      continue;
+    }
+    let account = resolved.get(target.emailAccountId);
+    if (account === undefined) {
+      account = target.otherAccount
+        ? {
+            id: target.otherAccount.id,
+            email: target.otherAccount.email,
+            provider: target.otherAccount.provider,
+          }
+        : { id: emailAccountId, email, provider };
+      resolved.set(target.emailAccountId, account);
+    }
+    if (!account) continue;
+    const group = groups.get(account.id) ?? { account, threadIds: [] };
+    group.threadIds.push({ requested, providerId: target.id });
+    groups.set(account.id, group);
+  }
+
+  const accountGroups = [...groups.values()];
+  const onlyChatAccount =
+    notOwned.length === 0 &&
+    accountGroups.length === 1 &&
+    accountGroups[0].account.id === emailAccountId;
+
+  if (onlyChatAccount) {
+    const result = await runThreadActionsInAccount({
+      options,
+      account: accountGroups[0].account,
+      threadIds: accountGroups[0].threadIds,
+      parsedInput,
+      taxonomy,
+    });
+    if ("labelError" in result)
+      return hideToolErrorFromUser({ error: result.labelError });
+    const successCount = threadIds.length - result.failedThreadIds.length;
+    return {
+      success: result.failedThreadIds.length === 0,
+      action: parsedInput.originalAction,
+      requestedCount: threadIds.length,
+      successCount,
+      failedCount: result.failedThreadIds.length,
+      failedThreadIds: result.failedThreadIds,
+      ...(result.label && {
+        [taxonomy.resultKeys.id]: result.label.labelId,
+        [taxonomy.resultKeys.name]: result.label.labelName,
+      }),
+    };
+  }
+
+  const results = await mapWithConcurrency(
+    accountGroups,
+    ACCOUNT_WRITE_CONCURRENCY,
+    async ({ account, threadIds: accountThreadIds }) => {
+      try {
+        return {
+          account,
+          requested: accountThreadIds,
+          result: await runThreadActionsInAccount({
+            options,
+            account,
+            threadIds: accountThreadIds,
+            parsedInput,
+            taxonomy: getManageInboxTaxonomy(account.provider),
+          }),
+        };
+      } catch (error) {
+        options.logger.warn("Inbox action failed in an account", {
+          actionEmailAccountId: account.id,
+          error,
+        });
+        return {
+          account,
+          requested: accountThreadIds,
+          result: {
+            labelError:
+              describeProviderRateLimitError(error, account.provider) ??
+              "Failed to update emails",
+          },
+        };
+      }
+    },
+  );
+
+  const failedThreadIds = [
+    ...results.flatMap(({ requested, result }) =>
+      "labelError" in result
+        ? requested.map((item) => item.requested)
+        : result.failedThreadIds,
+    ),
+    ...notOwned,
+  ];
+  const label = results.flatMap(({ result }) =>
+    "label" in result && result.label ? [result.label] : [],
+  )[0];
+
+  return {
+    success: failedThreadIds.length === 0,
+    action: parsedInput.originalAction,
+    requestedCount: threadIds.length,
+    successCount: threadIds.length - failedThreadIds.length,
+    failedCount: failedThreadIds.length,
+    failedThreadIds,
+    ...(label && {
+      [taxonomy.resultKeys.id]: label.labelId,
+      [taxonomy.resultKeys.name]: label.labelName,
+    }),
+    accounts: [
+      ...results.map(({ account, requested, result }) =>
+        "labelError" in result
+          ? {
+              account: account.email,
+              requestedCount: requested.length,
+              successCount: 0,
+              failedCount: requested.length,
+              error: result.labelError,
+            }
+          : {
+              account: account.email,
+              requestedCount: requested.length,
+              successCount: requested.length - result.failedThreadIds.length,
+              failedCount: result.failedThreadIds.length,
+            },
+      ),
+      ...(notOwned.length
+        ? [
+            {
+              account: null,
+              requestedCount: notOwned.length,
+              successCount: 0,
+              failedCount: notOwned.length,
+              error: OTHER_ACCOUNT_EMAIL_NOT_FOUND,
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
+/**
+ * One account's share of a thread action. Its label or category must
+ * already exist there: another account's is looked up, never created
+ * (D-008).
+ */
+async function runThreadActionsInAccount({
+  options: { emailAccountId, logger },
+  account,
+  threadIds,
+  parsedInput: { action, labelName, read },
+  taxonomy,
+}: {
+  options: InboxToolOptions;
+  account: ChatAccount;
+  threadIds: AccountThreadId[];
+  parsedInput: NormalizedManageInboxInput;
+  taxonomy: ManageInboxTaxonomyConfig;
+}): Promise<
+  | {
+      failedThreadIds: string[];
+      label: { labelId: string; labelName: string } | null;
+    }
+  | { labelError: string }
+> {
+  const emailProvider = await createEmailProvider({
+    emailAccountId: account.id,
+    provider: account.provider,
+    logger,
+  });
+  const isChatAccount = account.id === emailAccountId;
+
+  let archiveLabelId: string | undefined;
+  if (action === "archive_threads" && labelName) {
+    archiveLabelId = isChatAccount
+      ? ((await resolveLabelNameAndId({ emailProvider, label: labelName }))
+          .labelId ?? undefined)
+      : ((await emailProvider.getLabelByName(labelName))?.id ?? undefined);
+  }
+
+  let label: { labelId: string; labelName: string } | null = null;
+  if (isThreadLabelAction(action)) {
+    try {
+      label = await resolveThreadLabel({
+        emailProvider,
+        labelName: labelName!,
+        action,
+        matchNestedLabels: isGoogleProvider(account.provider),
+        missingLabelError: taxonomy.missingLabelError,
+      });
+    } catch (error) {
+      logger.warn("Failed to resolve label for thread action", {
+        error,
+        labelName,
+      });
+      return {
+        labelError:
+          error instanceof Error
+            ? error.message
+            : taxonomy.labelResolutionFallbackError,
+      };
+    }
+  }
+
+  const results = await runThreadActionsInParallel({
+    threadIds: threadIds.map((item) => item.providerId),
+    concurrency: THREAD_ACTION_CONCURRENCY,
+    runAction: async (threadId) => {
+      if (action === "archive_threads") {
+        await emailProvider.archiveThreadWithLabel(
+          threadId,
+          account.email,
+          archiveLabelId,
+        );
+      } else if (action === "trash_threads") {
+        await emailProvider.trashThread(threadId, account.email, "user");
+      } else if (action === "label_threads") {
+        await applyLabelToThread({
+          emailProvider,
+          threadId,
+          labelId: label!.labelId,
+          labelName: label!.labelName,
+        });
+      } else if (action === "remove_label_threads") {
+        await emailProvider.removeThreadLabel(threadId, label!.labelId);
+      } else {
+        await emailProvider.markReadThread(threadId, read ?? true);
+      }
+    },
+  });
+
+  return {
+    failedThreadIds: results.flatMap((result, index) =>
+      result.success ? [] : [threadIds[index].requested],
+    ),
+    label,
+  };
+}
+
+/**
+ * A sender-wide action in every covered account that has mail from the
+ * sender, with each account's result. A user with one covered account gets
+ * that account's result as it always has.
+ */
+async function runSenderActionsAcrossAccounts({
+  options,
+  action,
+  originalAction,
+  fromEmails,
+}: {
+  options: InboxToolOptions;
+  action: ManageInboxAction;
+  originalAction: string;
+  fromEmails: string[];
+}) {
+  const { userId, emailAccountId, email, provider, logger } = options;
+  const chatAccount: ChatAccount = { id: emailAccountId, email, provider };
+  const selection = await selectOtherAccounts({ userId, emailAccountId }).catch(
+    (error) => {
+      logger.warn("Could not list the user's accounts for a sender action", {
+        error,
+      });
+      return null;
+    },
+  );
+
+  if (!selection?.accounts.length) {
+    const result = await runSenderActionsInAccount({
+      account: chatAccount,
+      action,
+      fromEmails,
+      onlySendersWithMail: false,
+      logger,
+    });
+    return { action: originalAction, ...result };
+  }
+
+  const runInAccount = (account: ChatAccount) =>
+    runSenderActionsInAccount({
+      account,
+      action,
+      fromEmails,
+      onlySendersWithMail: true,
+      logger: logger.with({ actionEmailAccountId: account.id }),
+    }).catch((error) => {
+      logger.warn("Sender action failed in an account", {
+        actionEmailAccountId: account.id,
+        error,
+      });
+      return {
+        error:
+          describeProviderRateLimitError(error, account.provider) ??
+          "Failed to update emails",
+      };
+    });
+  // A write runs to the end in every account, as the thread writes do: one
+  // cut off by a read deadline would be reported as not done, and a retry
+  // would unsubscribe again where it had finished.
+  const accounts = await mapWithConcurrency(
+    [chatAccount, ...selection.accounts],
+    ACCOUNT_WRITE_CONCURRENCY,
+    async (account) => ({
+      account: account.email,
+      ...(await runInAccount(account)),
+    }),
+  );
+  const succeeded = new Set(
+    accounts.flatMap((entry) =>
+      "senders" in entry
+        ? entry.senders.filter(
+            (sender) =>
+              !("failedSenders" in entry) ||
+              !entry.failedSenders?.includes(sender),
+          )
+        : [],
+    ),
+  );
+  const failedSenders = [
+    ...new Set(
+      accounts.flatMap((entry) =>
+        "failedSenders" in entry ? (entry.failedSenders ?? []) : [],
+      ),
+    ),
+  ];
+  const failedAccounts = accounts.filter((entry) => "error" in entry);
+
+  return {
+    success: failedSenders.length === 0 && failedAccounts.length === 0,
+    action: originalAction,
+    sendersCount: fromEmails.length,
+    senders: fromEmails,
+    ...(action === "unsubscribe_senders" && {
+      successCount: succeeded.size,
+      failedCount: failedSenders.length,
+      failedSenders,
+    }),
+    accounts,
+    ...(selection.notSearchedCount
+      ? { accountsNotSearched: selection.notSearchedCount }
+      : {}),
+  };
+}
+
+async function runSenderActionsInAccount({
+  account,
+  action,
+  fromEmails,
+  onlySendersWithMail,
+  logger,
+}: {
+  account: ChatAccount;
+  action: ManageInboxAction;
+  fromEmails: string[];
+  /** Acts only for senders this account has mail from. */
+  onlySendersWithMail: boolean;
+  logger: Logger;
+}) {
+  const emailProvider = await createEmailProvider({
+    emailAccountId: account.id,
+    provider: account.provider,
+    logger,
+  });
+  const senders = onlySendersWithMail
+    ? await findSendersWithMail({ emailProvider, fromEmails })
+    : fromEmails;
+  if (!senders.length) {
+    return { success: true, sendersCount: 0, senders };
+  }
+
+  if (action === "unsubscribe_senders") {
+    const unsubscribeResults = await runSenderUnsubscribeActions({
+      fromEmails: senders,
+      emailProvider,
+      emailAccountId: account.id,
+      logger,
+    });
+    const failedSenders = unsubscribeResults
+      .filter((result) => !result.success)
+      .map((result) => result.senderEmail);
+
+    await emailProvider.bulkArchiveFromSenders(
+      senders,
+      account.email,
+      account.id,
+    );
+
+    return {
+      success: failedSenders.length === 0,
+      sendersCount: senders.length,
+      senders,
+      successCount: unsubscribeResults.length - failedSenders.length,
+      failedCount: failedSenders.length,
+      failedSenders,
+      autoUnsubscribeCount: unsubscribeResults.filter(
+        (result) => result.success && result.unsubscribe.success,
+      ).length,
+      autoUnsubscribeAttemptedCount: unsubscribeResults.filter(
+        (result) => result.unsubscribe.attempted,
+      ).length,
+    };
+  }
+
+  await emailProvider.bulkArchiveFromSenders(
+    senders,
+    account.email,
+    account.id,
+  );
+  return { success: true, sendersCount: senders.length, senders };
+}
+
+async function findSendersWithMail({
+  emailProvider,
+  fromEmails,
+}: {
+  emailProvider: EmailProvider;
+  fromEmails: string[];
+}) {
+  const results = await runWithBoundedConcurrency({
+    items: fromEmails,
+    concurrency: SENDER_LOOKUP_CONCURRENCY,
+    run: async (senderEmail) =>
+      (
+        await emailProvider.getMessagesFromSender({
+          senderEmail,
+          maxResults: 1,
+        })
+      ).messages.length > 0,
+  });
+  // A sender whose mail could not be checked is acted on, so its failure
+  // is reported rather than skipped.
+  return results.flatMap(({ item, result }) =>
+    result.status === "rejected" || result.value ? [item] : [],
+  );
+}
+
+function getManageInboxTaxonomy(provider: string) {
+  return isMicrosoftProvider(provider) ? OUTLOOK_TAXONOMY : GMAIL_TAXONOMY;
 }
 
 async function runThreadActionsInParallel({
@@ -2538,29 +3150,51 @@ function normalizeOutlookManageInboxInput(
  */
 async function runManageInboxQuery({
   parsedInput,
-  emailProvider,
-  emailAccountId,
-  provider,
+  options,
   taxonomy,
   confirmation,
   abortSignal,
-  logger,
 }: {
   parsedInput: NormalizedManageInboxInput & { query: string };
-  emailProvider: EmailProvider;
-  emailAccountId: string;
-  provider: string;
+  options: InboxToolOptions;
   taxonomy: ManageInboxTaxonomyConfig;
   confirmation?: { chatId: string; toolCallId: string };
   abortSignal?: AbortSignal;
-  logger: Logger;
 }) {
+  const { userId, email, emailAccountId, provider, logger } = options;
   const { action, labelName, read, query, originalAction } = parsedInput;
   const bulkAction = toMatchingBulkAction(action, read);
   if (!bulkAction) return { error: "This action can't run over a search." };
 
+  const selection = await selectOtherAccounts({ userId, emailAccountId }).catch(
+    (error) => {
+      logger.warn("Could not list the user's accounts for a search action", {
+        error,
+      });
+      return null;
+    },
+  );
+  const multiAccount = Boolean(selection?.accounts.length);
+
   let labelId: string | undefined;
-  if (action === "label_threads") {
+  let chatAccountError: string | undefined;
+  // The chat's own account is one of the accounts counted: when it can't be
+  // reached, the others are still counted, as one of them failing would be.
+  let emailProvider: EmailProvider | undefined;
+  try {
+    emailProvider = await createEmailProvider({
+      emailAccountId,
+      provider,
+      logger,
+    });
+  } catch (error) {
+    if (!multiAccount) throw error;
+    logger.warn("Could not reach the chat's account for a search action", {
+      error,
+    });
+    chatAccountError = ACCOUNT_SEARCH_FAILED;
+  }
+  if (emailProvider && action === "label_threads") {
     try {
       const resolved = await resolveThreadLabel({
         emailProvider,
@@ -2574,26 +3208,130 @@ async function runManageInboxQuery({
       logger.warn("Failed to resolve label for a search-wide action", {
         error,
       });
-      return hideToolErrorFromUser({
-        error:
-          error instanceof Error
-            ? error.message
-            : taxonomy.labelResolutionFallbackError,
-      });
+      const message =
+        error instanceof Error
+          ? error.message
+          : taxonomy.labelResolutionFallbackError;
+      if (!multiAccount) return hideToolErrorFromUser({ error: message });
+      chatAccountError = message;
     }
   }
+
+  const otherAccounts =
+    multiAccount && selection
+      ? {
+          chatEmail: email,
+          previews: (
+            await runOnOtherAccounts({
+              userId,
+              emailAccountId,
+              logger,
+              abortSignal,
+              selection,
+              run: (account, signal) =>
+                previewMatchingInOtherAccount({
+                  account,
+                  chatProvider: provider,
+                  query,
+                  bulkAction,
+                  labelName,
+                  signal,
+                  logger: logger.with({ otherEmailAccountId: account.id }),
+                }),
+            })
+          ).results.map(
+            (entry): OtherAccountMatchingPreview =>
+              "error" in entry
+                ? { account: entry.account, error: entry.error }
+                : { account: entry.account, ...entry.result },
+          ),
+        }
+      : undefined;
 
   return previewMatchingQueryAction({
     originalAction,
     query,
     bulkAction,
     labelId,
+    chatAccountError,
     emailProvider,
     emailAccountId,
     provider,
+    otherAccounts,
     confirmation,
     abortSignal,
   });
+}
+
+/**
+ * What a search-wide action would change in one of the user's other
+ * accounts. Only a search that carries over exactly is acted on, and only a
+ * label or category that already exists there (D-008).
+ */
+async function previewMatchingInOtherAccount({
+  account,
+  chatProvider,
+  query,
+  bulkAction,
+  labelName,
+  signal,
+  logger,
+}: {
+  account: ChatAccount;
+  chatProvider: string;
+  query: string;
+  bulkAction: NonNullable<ReturnType<typeof toMatchingBulkAction>>;
+  labelName?: string | null;
+  signal: AbortSignal;
+  logger: Logger;
+}): Promise<
+  | { error: string }
+  | {
+      search: AccountSearch;
+      labelId?: string;
+      count: Extract<
+        Awaited<ReturnType<typeof countMatchingInAccount>>,
+        { total: number }
+      >;
+    }
+> {
+  const search = searchForAccount({
+    query,
+    from: chatProvider,
+    to: account.provider,
+  });
+  if (!search)
+    return { error: "Nothing in this search applies to this account." };
+
+  const emailProvider = await createEmailProvider({
+    emailAccountId: account.id,
+    provider: account.provider,
+    logger,
+  });
+  signal.throwIfAborted();
+  let labelId: string | undefined;
+  if (bulkAction === "label") {
+    const label = labelName
+      ? await emailProvider.getLabelByName(labelName)
+      : null;
+    if (!label)
+      return {
+        error: getManageInboxTaxonomy(account.provider).missingLabelError(
+          labelName ?? "",
+          "label_threads",
+        ),
+      };
+    labelId = label.id;
+  }
+  const count = await countMatchingInAccount({
+    search,
+    provider: account.provider,
+    bulkAction,
+    emailProvider,
+    abortSignal: signal,
+  });
+  if ("error" in count) return count;
+  return { search, ...(labelId ? { labelId } : {}), count };
 }
 
 function isThreadLabelAction(
@@ -2701,4 +3439,17 @@ function searchInboxModelOutput({ output }: { output: unknown }) {
     type: "json" as const,
     value: toSearchInboxModelValue(JSON.parse(JSON.stringify(output))),
   };
+}
+
+/**
+ * Splits a page of `limit` messages between the accounts a search continues,
+ * in order, so the merged page is never longer than asked for. With more
+ * accounts than messages, the last ones get none this page.
+ */
+function splitPage(accountIds: string[], limit: number) {
+  const base = Math.floor(limit / Math.max(accountIds.length, 1));
+  const extra = limit % Math.max(accountIds.length, 1);
+  return new Map(
+    accountIds.map((id, index) => [id, base + (index < extra ? 1 : 0)]),
+  );
 }

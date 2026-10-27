@@ -189,6 +189,7 @@ describe("localInboxRows", () => {
         accounts: [ADA, BOB],
         named: true,
         newsletterThreadIds: { [ADA.id]: ["weekly", "digest"] },
+        now: Date.parse("2026-10-21T09:00:00.000Z"),
       },
     );
 

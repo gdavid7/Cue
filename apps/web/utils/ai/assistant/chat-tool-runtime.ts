@@ -26,8 +26,8 @@ export function withChatToolRuntime<T extends Record<string, Tool>>({
 }: {
   tools: T;
   logger: Logger;
-  /** Told before each Gmail call any tool makes. */
-  onGmailCall?: () => void;
+  /** Told before each Gmail call any tool makes, with its account. */
+  onGmailCall?: (emailAccountId: string | undefined) => void;
 }): T {
   return Object.fromEntries(
     Object.entries(tools).map(([name, definition]) => {

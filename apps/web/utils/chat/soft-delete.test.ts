@@ -9,15 +9,21 @@ describe("softDeleteChat", () => {
     vi.clearAllMocks();
   });
 
-  it("returns false when no chat is owned by the email account", async () => {
+  it("returns false when no chat is owned by the user", async () => {
     prisma.chat.findFirst.mockResolvedValue(null);
 
     const result = await softDeleteChat({
       chatId: "chat-1",
-      emailAccountId: "ea_1",
+      userId: "user-1",
     });
 
     expect(result).toBe(false);
+    // The chat is the user's in any of their accounts, never another user's.
+    expect(prisma.chat.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "chat-1", emailAccount: { userId: "user-1" } },
+      }),
+    );
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
@@ -29,7 +35,7 @@ describe("softDeleteChat", () => {
 
     const result = await softDeleteChat({
       chatId: "chat-1",
-      emailAccountId: "ea_1",
+      userId: "user-1",
     });
 
     expect(result).toBe(true);
@@ -45,7 +51,7 @@ describe("softDeleteChat", () => {
 
     const result = await softDeleteChat({
       chatId: "chat-1",
-      emailAccountId: "ea_1",
+      userId: "user-1",
     });
 
     expect(result).toBe(true);

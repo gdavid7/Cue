@@ -664,6 +664,8 @@ export const SERVER_CACHE_WRITES: Record<
  * an address or a name, reviewed and found safe. `file: template` → why.
  */
 export const KEY_TEMPLATE_EXCEPTIONS: Record<string, string> = {
+  'utils/ai/assistant/chat-inbox-tools.ts: `label:"${label.name}"`':
+    "a Gmail search query sent to the provider, never a Redis key",
   "utils/messaging/chat-sdk/bot.ts: `reaction:${event.threadId}:${event.messageId}:${event.user.userId}:${event.emoji.name}`":
     "an id for a reaction event, never a Redis key; the name is the emoji's",
   "utils/outlook/local-mail-sync.ts: `local-mail-folder-id:${input.emailAccountId}:${name}`":

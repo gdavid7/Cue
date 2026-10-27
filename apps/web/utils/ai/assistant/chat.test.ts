@@ -100,6 +100,16 @@ describe("buildResolvedSystemPrompt", () => {
     );
   });
 
+  it("says which account rules and settings apply to only when the chat covers several accounts", () => {
+    const multi = buildPrompt({ multiAccountAnchorEmail: "me@example.com" });
+    const single = buildPrompt();
+
+    expect(multi).toContain(
+      "- Searches, counts and inbox actions cover all of the user's connected accounts. Rules and assistant settings apply to me@example.com.",
+    );
+    expect(single).not.toContain("cover all of the user's connected accounts");
+  });
+
   it("only asks for inline email card markup when the client can render it", () => {
     const cardPrompt = buildPrompt({ supportsInlineEmailCards: true });
     const plainPrompt = buildPrompt({ supportsInlineEmailCards: false });
@@ -388,9 +398,13 @@ describe("aiProcessAssistantChat across accounts", () => {
     return tools;
   }
 
-  it("refuses to change another account's email from this chat", async () => {
+  it("changes another account's email in that account", async () => {
     const { createEmailProvider } = await import("@/utils/email/provider");
-    vi.mocked(createEmailProvider).mockClear();
+    const archiveThreadWithLabel = vi.fn(async () => {});
+    vi.mocked(createEmailProvider).mockReset();
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      archiveThreadWithLabel,
+    } as never);
     prisma.emailAccount.findMany.mockResolvedValue([
       {
         id: "other-account",
@@ -406,6 +420,44 @@ describe("aiProcessAssistantChat across accounts", () => {
       {
         action: "archive_threads",
         threadIds: [toOtherAccountEmailId("other-account", "thread-1")],
+      },
+      { toolCallId: "call-1", messages: [] } as never,
+    );
+
+    expect(createEmailProvider).toHaveBeenCalledTimes(1);
+    expect(createEmailProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "other-account" }),
+    );
+    expect(archiveThreadWithLabel).toHaveBeenCalledWith(
+      "thread-1",
+      "other@example.com",
+      undefined,
+    );
+    expect(result).toMatchObject({ success: true, successCount: 1 });
+  });
+
+  it("refuses an action that works only in the chat's account on another account's email", async () => {
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockReset();
+    mockGetConnectedDriveApps.mockResolvedValueOnce([
+      { id: "drive-1" },
+    ] as never);
+    prisma.emailAccount.findMany.mockResolvedValue([
+      {
+        id: "other-account",
+        email: "other@example.com",
+        name: null,
+        image: null,
+        account: { provider: "google" },
+      },
+    ] as never);
+    const tools = await chatTools();
+
+    const result = await tools.saveToDrive.execute?.(
+      {
+        messageId: toOtherAccountEmailId("other-account", "message-1"),
+        filename: "invoice.pdf",
+        app: "googledrive",
       },
       { toolCallId: "call-1", messages: [] } as never,
     );
@@ -928,6 +980,56 @@ describe("aiProcessAssistantChat Gmail demand", () => {
         heldMs: 5000,
         firstGmailCallAfterHoldMs: 2000,
       }),
+    );
+  });
+
+  it("holds background work back in each other Gmail account the turn calls, once", async () => {
+    await run();
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockImplementation(async () => {
+      await admitGmailCall({ emailAccountId: "other-account-id", cost: 5 });
+      throw new Error("stop after one Gmail call");
+    });
+    const options = vi.mocked(toolCallAgentStream).mock.calls[0][0];
+    const tools = options.tools as Record<string, Tool>;
+    const callOtherAccount = () =>
+      tools.readEmail.execute?.({ messageId: "message-1" }, {
+        toolCallId: "call",
+        messages: [],
+      } as never);
+
+    vi.setSystemTime(TURN_START + 2000);
+    await callOtherAccount();
+    await callOtherAccount();
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(2);
+    expect(holdGmailInteractiveDemand).toHaveBeenLastCalledWith(
+      "other-account-id",
+      43_000,
+    );
+
+    await options.onEnd?.({} as never);
+    await vi.waitFor(() => expect(mockReleaseDemand).toHaveBeenCalledTimes(2));
+  });
+
+  it("holds a Gmail account's background work back for a chat whose own account is not on Gmail", async () => {
+    const { options } = await run({ provider: "microsoft" });
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockImplementation(async () => {
+      await admitGmailCall({ emailAccountId: "other-account-id", cost: 5 });
+      throw new Error("stop after one Gmail call");
+    });
+    const tools = options.tools as Record<string, Tool>;
+
+    await tools.readEmail.execute?.({ messageId: "message-1" }, {
+      toolCallId: "call",
+      messages: [],
+    } as never);
+
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledTimes(1);
+    expect(holdGmailInteractiveDemand).toHaveBeenCalledWith(
+      "other-account-id",
+      45_000,
     );
   });
 
