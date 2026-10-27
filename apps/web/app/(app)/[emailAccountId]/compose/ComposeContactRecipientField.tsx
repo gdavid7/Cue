@@ -199,7 +199,7 @@ export function ComposeContactRecipientField({
         >
           {selectedEmailAddresses.map((recipient) => {
             const address = extractEmailAddress(recipient) || recipient;
-            const displayName = extractNameFromEmail(recipient);
+            const displayName = recipientChipLabel(recipient, address);
             return (
               <Badge className="rounded-md" key={recipient} variant="secondary">
                 <button
@@ -394,3 +394,11 @@ type ContactsFetchError = Error & {
   info?: Partial<ContactsErrorResponse>;
   status?: number;
 };
+
+// Local suggestions take names from inbound headers, so a sender can be named
+// "ceo@company.com" while the address is someone else's. A name that looks
+// like an address (including full-width or small "@") never stands in for it.
+function recipientChipLabel(recipient: string, address: string) {
+  const name = extractNameFromEmail(recipient);
+  return /[@\uFF20\uFE6B]/u.test(name) ? address : name;
+}

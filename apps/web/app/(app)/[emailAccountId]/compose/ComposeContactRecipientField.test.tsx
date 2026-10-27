@@ -115,6 +115,27 @@ describe("compose contact suggestions", () => {
     );
   });
 
+  it.each([
+    "ceo@company.com",
+    "ceo＠company.com",
+  ])("chips a suggestion named like an address (%s) by its real address", async (spoofedName) => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    local.mockResolvedValue([
+      { name: spoofedName, emailAddress: "attacker@evil.example" },
+    ]);
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "ceo" } });
+    await screen.findByRole("option", { name: /attacker@evil.example/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyUp(input, { key: "Enter" });
+    const chip = await screen.findByRole("button", {
+      name: "Edit attacker@evil.example",
+    });
+    expect(chip.textContent).toBe("attacker@evil.example");
+    expect(screen.queryByText(spoofedName)).toBeNull();
+  });
+
   it("picks the named suggestion when its address is typed in full", async () => {
     env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
     render(<Harness />);
