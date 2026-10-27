@@ -18,6 +18,15 @@ describe("resolveRecipientSelection", () => {
     expect(resolveRecipientSelection([])).toBe("");
   });
 
+  it("commits a picked suggestion that carries a display name", () => {
+    expect(
+      resolveRecipientSelection([
+        "first@example.com",
+        '"Lovelace, Ada" <ada@example.com>',
+      ]),
+    ).toBe('first@example.com,"Lovelace, Ada" <ada@example.com>');
+  });
+
   it("ignores a selection ending in an incomplete search query", () => {
     expect(
       resolveRecipientSelection(["first@example.com", "second@"]),
@@ -125,6 +134,23 @@ describe("findInvalidPendingRecipientField", () => {
         to: '"Doe, Jane" <jane@example.com>',
         cc: "",
         bcc: " ",
+      }),
+    ).toBeNull();
+  });
+
+  it("checks only the address part of a named recipient", () => {
+    expect(
+      findInvalidPendingRecipientField({
+        to: '"Lovelace, Ada" <ada@exmaple>',
+        cc: "",
+        bcc: "",
+      }),
+    ).toBe("to");
+    expect(
+      findInvalidPendingRecipientField({
+        to: "Zoë Ångström <zoe@example.com>",
+        cc: "",
+        bcc: "",
       }),
     ).toBeNull();
   });

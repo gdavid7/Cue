@@ -33,7 +33,7 @@ export function resolveComposeRecipientFields({
 export function resolveRecipientSelection(values: string[]): string | null {
   if (values.length === 0) return "";
   const lastValue = values.at(-1);
-  if (!lastValue || !isValidEmail(lastValue)) return null;
+  if (!lastValue || !isValidEmail(extractEmailAddress(lastValue))) return null;
   return values.join(",");
 }
 

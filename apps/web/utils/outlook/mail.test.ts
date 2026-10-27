@@ -148,6 +148,46 @@ describe("sendEmailWithHtml", () => {
     expect(payload).not.toHaveProperty("bccRecipients");
   });
 
+  it("sends the display names of quoted recipients", async () => {
+    const draftPost = vi.fn(
+      async () => ({ id: "draft-1", conversationId: "c-1" }) as Message,
+    );
+    const client = createMockOutlookClient((path) => {
+      if (path === "/me/messages") return { post: draftPost };
+      if (path === "/me/messages/draft-1/send") return { post: vi.fn() };
+      throw new Error(`Unexpected API path: ${path}`);
+    });
+
+    await sendEmailWithHtml(
+      client,
+      {
+        to: '"Lovelace, Ada" <ada@example.com>,"Grace \\"Amazing\\", Hopper" <grace@example.com>,"Zoë Ångström" <zoe@example.com>',
+        subject: "Subject",
+        messageHtml: "<p>Hello</p>",
+      },
+      createTestLogger(),
+    );
+
+    expect(draftPost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toRecipients: [
+          {
+            emailAddress: { address: "ada@example.com", name: "Lovelace, Ada" },
+          },
+          {
+            emailAddress: {
+              address: "grace@example.com",
+              name: 'Grace "Amazing", Hopper',
+            },
+          },
+          {
+            emailAddress: { address: "zoe@example.com", name: "Zoë Ångström" },
+          },
+        ],
+      }),
+    );
+  });
+
   it("parses formatted recipients when sending a new draft", async () => {
     const draftPost = vi.fn(
       async () =>

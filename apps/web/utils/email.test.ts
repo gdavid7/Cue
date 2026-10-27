@@ -467,7 +467,20 @@ describe("email utils", () => {
         "special characters in name",
         "O'Brien, John",
         "john@example.com",
-        "O'Brien, John <john@example.com>",
+        '"O\'Brien, John" <john@example.com>',
+      ],
+      [
+        "quotes and backslashes in name",
+        'Ada "The Countess" \\ Lovelace',
+        "ada@example.com",
+        '"Ada \\"The Countess\\" \\\\ Lovelace" <ada@example.com>',
+      ],
+      ["period in name", "J. Doe", "j@example.com", '"J. Doe" <j@example.com>'],
+      [
+        "line breaks in name",
+        "Ada\r\nBcc: evil@example.com",
+        "ada@example.com",
+        '"Ada Bcc: evil@example.com" <ada@example.com>',
       ],
       [
         "unicode name",
@@ -500,6 +513,22 @@ describe("email utils", () => {
       const formatted = formatEmailWithName("John Doe", "john@example.com");
       expect(extractNameFromEmail(formatted)).toBe("John Doe");
       expect(extractEmailAddress(formatted)).toBe("john@example.com");
+    });
+
+    it.each([
+      "Doe, John",
+      'Ada "The Countess" Lovelace',
+      "Zoë Ångström, Ph.D.",
+      "李明",
+    ])("round-trips %s through a recipient list", (name) => {
+      const list = [
+        formatEmailWithName(name, "first@example.com"),
+        "second@example.com",
+      ].join(",");
+      const [first, second] = splitRecipientList(list);
+      expect(extractNameFromEmail(first)).toBe(name);
+      expect(extractEmailAddress(first)).toBe("first@example.com");
+      expect(second).toBe("second@example.com");
     });
   });
 

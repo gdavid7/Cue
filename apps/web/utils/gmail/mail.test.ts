@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ParsedMessage } from "@/utils/types";
 import { parseMessage } from "@/utils/gmail/message";
 import { formatEmailDate } from "@/utils/email/reply-quote";
+import { formatEmailWithName } from "@/utils/email";
 
 import {
   buildReplyMessageText,
@@ -44,6 +45,32 @@ describe("createMail", () => {
 
       expect(headerLine).toMatch(/<(?:recipient|"recipient")@example\.com>$/);
     });
+  });
+
+  it("sends named recipients with quoted and encoded display names", async () => {
+    const raw = await createMail({
+      from: "sender@example.com",
+      to: [
+        formatEmailWithName("Lovelace, Ada", "ada@example.com"),
+        formatEmailWithName('Grace "Amazing" Hopper', "grace@example.com"),
+        formatEmailWithName("Zoë Ångström", "zoe@example.com"),
+      ].join(","),
+      subject: "Named recipients",
+      text: "Message",
+    });
+    const message = Buffer.from(raw, "base64url").toString("utf8");
+    const toHeader = message
+      .split("\r\n\r\n")[0]
+      .replace(/\r\n[ \t]+/g, " ")
+      .split("\r\n")
+      .find((line) => line.startsWith("To: "));
+
+    expect(toHeader).toContain('"Lovelace, Ada" <ada@example.com>');
+    expect(toHeader).toContain(
+      '"Grace \\"Amazing\\" Hopper" <grace@example.com>',
+    );
+    expect(toHeader).toMatch(/=\?UTF-8\?[QB]\?[^?]+\?= <zoe@example\.com>/);
+    expect(toHeader).not.toContain("Zoë");
   });
 
   it("keeps BCC recipients in raw messages sent through the Gmail API", async () => {
