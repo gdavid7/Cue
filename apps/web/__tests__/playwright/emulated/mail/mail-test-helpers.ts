@@ -417,6 +417,9 @@ export async function insertInboxThread(
     subject: string;
     body: string;
     from: { name: string; address: string };
+    /** Gmail only: the Outlook emulator's parsed headers carry no Reply-To. */
+    replyTo?: string;
+    cc?: string;
   },
 ): Promise<{ threadId: string; messageId: string }> {
   const token = await readProviderAccessToken();
@@ -470,6 +473,8 @@ export async function insertInboxThread(
       data: {
         from: `${input.from.name} <${input.from.address}>`,
         to: email,
+        cc: input.cc,
+        reply_to: input.replyTo,
         subject: input.subject,
         body_text: input.body,
         labelIds: ["INBOX", "UNREAD"],

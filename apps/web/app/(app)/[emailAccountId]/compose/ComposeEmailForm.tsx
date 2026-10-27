@@ -109,6 +109,7 @@ import {
   recordSuggestedReplyDraftAction,
 } from "@/utils/actions/thread-assist";
 import {
+  canonicalizeEmailAddress,
   extractEmailAddresses,
   formatRecipientNames,
   isSameEmailAddress,
@@ -203,7 +204,10 @@ import {
 } from "./compose-attachments";
 import { useFileDropTarget } from "./useFileDropTarget";
 import { getAttachmentTotalLimitBytes } from "@/utils/email/draft-attachment-upload";
+import { getReplyToDifference } from "@/utils/email/reply-to-difference";
+import type { ParsedMessageHeaders } from "@/utils/types";
 import { RecipientLocalTime } from "./RecipientLocalTime";
+import { ReplyToNotice } from "./ReplyToNotice";
 import type { SenderOffsets } from "./recipient-local-time";
 import {
   finishComposeDraftMove,
@@ -243,6 +247,8 @@ export type ReplyingToEmail = {
   date?: string;
   /** Each sender's UTC offset in their latest message in the thread. */
   senderUtcOffsets?: SenderOffsets;
+  /** The replied message's sender and Reply-To, to say when a reply goes elsewhere. */
+  replyToHeaders?: Pick<ParsedMessageHeaders, "from" | "reply-to">;
 };
 
 type ComposeEmailFormProps = {
@@ -604,6 +610,11 @@ function ComposeEmailFormContent({
   >({});
   const [isReconnectingContacts, setIsReconnectingContacts] = useState(false);
   const [editReply, setEditReply] = useState(false);
+  const replyToHeaders = replyingToEmail?.replyToHeaders;
+  const replyToDifference = useMemo(
+    () => (replyToHeaders ? getReplyToDifference(replyToHeaders) : null),
+    [replyToHeaders],
+  );
   // Forwards start without a recipient, so focus To. Replies already have one.
   const focusRecipientField = draftMode === "forward" || !replyingToEmail;
   const [attachments, setAttachments] = useState<ComposeAttachment[]>(
@@ -1934,6 +1945,31 @@ function ComposeEmailFormContent({
     setEditReply(false);
     requestAnimationFrame(() => inlineReplySummaryButtonRef.current?.focus());
   };
+  // Derived from the To chips, so the line goes once the user or the swap
+  // takes the Reply-To address out.
+  const replyToInTo = replyToDifference
+    ? extractEmailAddresses(watch("to") ?? "")
+        .map((address) => address.toLowerCase())
+        .filter((address) => replyToDifference.addresses.includes(address))
+    : [];
+  const replyToSender = () => {
+    if (!replyToDifference) return;
+    const { addresses, senderRecipient } = replyToDifference;
+    const kept = splitRecipientList(getValues("to") ?? "").filter(
+      (recipient) => !addresses.includes(canonicalizeEmailAddress(recipient)),
+    );
+    const hasSender = kept.some((recipient) =>
+      isSameEmailAddress(recipient, senderRecipient),
+    );
+    setValue("to", (hasSender ? kept : [senderRecipient, ...kept]).join(", "));
+    // The button goes with the line; focus lands on what now names the sender.
+    requestAnimationFrame(() =>
+      (showInlineReplySummary
+        ? inlineReplySummaryButtonRef.current
+        : recipientInputsRef.current.to
+      )?.focus(),
+    );
+  };
   const dismissPreSend = useCallback(() => {
     const returnFocus = preSend?.returnFocus;
     shownPreSendWarnings.current = undefined;
@@ -2410,6 +2446,13 @@ function ComposeEmailFormContent({
               />
             </div>
           </div>
+        )}
+        {replyToDifference && replyToInTo.length > 0 && (
+          <ReplyToNotice
+            address={replyToInTo.join(", ")}
+            sender={replyToDifference.sender}
+            onReplyToSender={replyToSender}
+          />
         )}
         <RecipientLocalTime
           senderUtcOffsets={replyingToEmail?.senderUtcOffsets}

@@ -1160,6 +1160,7 @@ function ReplyPanel({
           ...prepareDraftReplyEmail(draftSource),
           ...(threadMessages && getThreadAddresses(threadMessages)),
           senderUtcOffsets: getLatestSenderOffsets(threadMessages ?? []),
+          replyToHeaders: getLatestReplyToHeaders(threadMessages ?? []),
         };
 
       const reply = prepareReplyingToEmail({
@@ -1484,6 +1485,7 @@ const prepareReplyingToEmail = ({
       .join(","),
     draftHtml: "",
     quotedContentHtml: html,
+    replyToHeaders: sentFromUser ? undefined : getReplyToHeaders(message),
   };
 };
 
@@ -1654,4 +1656,20 @@ function canReplyAllTo(message: ParsedMessage, ownEmails: string[]) {
     !message.labelIds?.includes(GmailLabel.SENT) &&
     hasReplyAllRecipients(message.headers, ownEmails)
   );
+}
+
+function getReplyToHeaders({ headers }: ParsedMessage) {
+  return headers["reply-to"]
+    ? { from: headers.from, "reply-to": headers["reply-to"] }
+    : undefined;
+}
+
+// A reopened draft answers the latest message someone else sent.
+function getLatestReplyToHeaders(thread: ParsedMessage[]) {
+  const received = thread.findLast(
+    (item) =>
+      !item.labelIds?.includes(GmailLabel.SENT) &&
+      !item.labelIds?.includes(GmailLabel.DRAFT),
+  );
+  return received ? getReplyToHeaders(received) : undefined;
 }
