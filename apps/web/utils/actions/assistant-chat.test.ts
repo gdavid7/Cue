@@ -20,6 +20,7 @@ vi.mock("@/utils/auth", () => ({
 describe("confirmAssistantEmailAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prisma.emailAccount.findMany.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -53,6 +54,7 @@ describe("confirmAssistantEmailAction", () => {
         actionType,
         emailAccountId: "switched-mailbox",
         provider: "microsoft",
+        userId: "u1",
         logger: createTestLogger(),
       }),
     ).rejects.toThrow("Prepare the draft again");
@@ -85,6 +87,7 @@ describe("confirmAssistantEmailAction", () => {
         actionType: "send_email",
         emailAccountId: "ea_1",
         provider: "microsoft",
+        userId: "u1",
         logger: createTestLogger(),
       }),
     ).rejects.toThrow("Prepare the draft again");
@@ -270,6 +273,7 @@ describe("confirmAssistantEmailAction", () => {
       actionType: "send_email",
       emailAccountId: "ea_1",
       provider: "microsoft",
+      userId: "u1",
       logger: createTestLogger(),
     });
     await lookupStarted;
@@ -982,6 +986,7 @@ describe("confirmAssistantEmailAction", () => {
       waitForPersistence: true,
       emailAccountId: "ea_1",
       provider: "google",
+      userId: "u1",
       logger: createTestLogger(),
     });
 
@@ -1042,6 +1047,7 @@ describe("confirmAssistantEmailAction", () => {
       persistenceWaitMs: 10_000,
       emailAccountId: "ea_1",
       provider: "google",
+      userId: "u1",
       logger: createTestLogger(),
     });
 
@@ -1159,6 +1165,7 @@ describe("confirmAssistantEmailAction", () => {
       waitForPersistence: true,
       emailAccountId: "ea_1",
       provider: "google",
+      userId: "u1",
       logger: createTestLogger(),
     });
 

@@ -191,9 +191,9 @@ export async function selectOtherAccounts({
 }
 
 /**
- * Keeps every tool but the named read tools on the chat's own account: an id
+ * Keeps every tool but the named mail tools on the chat's own account: an id
  * from another account's search result is refused before the tool runs, so
- * nothing is changed in either mailbox. The read tools resolve such ids
+ * nothing is changed in either mailbox. The mail tools resolve such ids
  * themselves, after checking the account is the user's.
  */
 export function withChatAccountScope<T extends Record<string, Tool>>({
@@ -207,7 +207,7 @@ export function withChatAccountScope<T extends Record<string, Tool>>({
   userId: string;
   emailAccountId: string;
   /** The chat account's address, for telling the model where it works. */
-  email?: string;
+  email: string;
   crossAccountTools: Array<keyof T>;
 }): T {
   return Object.fromEntries(
@@ -278,7 +278,7 @@ async function refuseOtherAccountEmail({
 }: {
   userId: string;
   otherAccountId: string;
-  chatEmail?: string;
+  chatEmail: string;
 }) {
   const account = await getOwnedEmailAccount({
     userId,
@@ -291,9 +291,8 @@ async function refuseOtherAccountEmail({
     });
   }
 
-  const chatAccount = chatEmail ? ` (${chatEmail})` : "";
   return hideToolErrorFromUser({
-    error: `This email is in the user's other account ${account.email}. This chat works in its own account${chatAccount} and can only act on that account's email, so nothing was done. Tell the user which account the email is in and that they can switch the chat to ${account.email} to act on it.`,
+    error: `This email is in the user's account ${account.email}, and this action works only for email in ${chatEmail}, so nothing was done. Tell the user which account the email is in.`,
     emailAccount: account.email,
   });
 }

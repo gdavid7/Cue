@@ -104,6 +104,7 @@ describe("confirm email action route", () => {
       emailAccountId: "email-account-1",
       logger: request.logger,
       provider: "google",
+      userId: "user-1",
     });
   });
 });

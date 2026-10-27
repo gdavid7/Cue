@@ -3,6 +3,7 @@ import "server-only";
 import type { Prisma } from "@/generated/prisma/client";
 import { SafeError } from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
+import { getConnectedEmailAccounts } from "@/utils/email/connected-accounts";
 import { getFormattedSenderAddress } from "@/utils/email/get-formatted-sender-address";
 import { forwardMessage } from "@/utils/email/forward-message";
 import type { Logger } from "@/utils/logger";
@@ -105,6 +106,8 @@ const CONFIRMATION_IN_PROGRESS_ERROR =
   "Email action confirmation already in progress";
 const SAVE_MEMORY_CONFIRMATION_IN_PROGRESS_ERROR =
   "Memory save confirmation already in progress";
+const SENDING_MAILBOX_NOT_VERIFIED =
+  "The sending mailbox for this draft could not be verified. Prepare the draft again in the account you want to send from.";
 const CONFIRMATION_PROCESSING_LEASE_MS = 5 * 60 * 1000;
 const CONFIRMATION_PERSIST_MAX_ATTEMPTS = 3;
 const PENDING_ACTION_PERSIST_WAIT_MS = 2000;
@@ -148,7 +151,8 @@ export async function confirmAssistantEmailActionForAccount({
   waitForPersistence,
   persistenceWaitMs,
   emailAccountId,
-  provider,
+  provider: chatProvider,
+  userId,
   logger,
 }: {
   chatId: string;
@@ -158,16 +162,28 @@ export async function confirmAssistantEmailActionForAccount({
   contentOverride?: string;
   waitForPersistence?: boolean;
   persistenceWaitMs?: number;
+  /** The chat's account, which holds the draft. */
   emailAccountId: string;
+  /** The chat account's provider. */
   provider: string;
+  /** The signed-in user, whose account the draft sends from. */
+  userId: string;
   logger: Logger;
 }) {
+  // A reply or forward sends from the account the email is in, which may be
+  // any of the user's connected accounts, never someone else's.
+  const sendingAccounts = await getConnectedEmailAccounts({ userId });
+  const sendingAccountIds = new Set([
+    emailAccountId,
+    ...sendingAccounts.map((account) => account.id),
+  ]);
   const reservation = await reservePendingAssistantEmailAction({
     chatId,
     chatMessageId,
     toolCallId,
     actionType,
     emailAccountId,
+    sendingAccountIds,
     waitForPersistence,
     persistenceWaitMs,
     logger,
@@ -182,8 +198,16 @@ export async function confirmAssistantEmailActionForAccount({
     };
   }
 
+  const sendingAccount =
+    reservation.output.emailAccountId === emailAccountId
+      ? { id: emailAccountId, email: null, provider: chatProvider }
+      : sendingAccounts.find(
+          (account) => account.id === reservation.output.emailAccountId,
+        );
+  if (!sendingAccount) throw new SafeError(SENDING_MAILBOX_NOT_VERIFIED);
+  const { provider } = sendingAccount;
   const emailProvider = await createEmailProvider({
-    emailAccountId,
+    emailAccountId: sendingAccount.id,
     provider,
     logger,
   });
@@ -193,7 +217,7 @@ export async function confirmAssistantEmailActionForAccount({
     confirmationResult = await executeAssistantEmailAction({
       output: reservation.output,
       emailProvider,
-      emailAccountId,
+      emailAccountId: sendingAccount.id,
       contentOverride,
     });
   } catch (error) {
@@ -262,6 +286,9 @@ export async function confirmAssistantEmailActionForAccount({
     confirmationState: "confirmed" as const,
     actionType,
     confirmationResult,
+    ...(sendingAccount.email && {
+      sentFrom: { email: sendingAccount.email, provider },
+    }),
   };
 }
 
@@ -1316,6 +1343,7 @@ async function reservePendingAssistantEmailAction({
   toolCallId,
   actionType,
   emailAccountId,
+  sendingAccountIds,
   waitForPersistence,
   persistenceWaitMs,
   logger,
@@ -1325,6 +1353,7 @@ async function reservePendingAssistantEmailAction({
   toolCallId: string;
   actionType: AssistantPendingEmailActionType;
   emailAccountId: string;
+  sendingAccountIds: Set<string>;
   waitForPersistence?: boolean;
   persistenceWaitMs?: number;
   logger: Logger;
@@ -1346,10 +1375,9 @@ async function reservePendingAssistantEmailAction({
         ? lookup.output.confirmationResult
         : null,
     validateLookup: (lookup) => {
-      if (lookup.output.emailAccountId !== emailAccountId) {
-        throw new SafeError(
-          "The sending mailbox for this draft could not be verified. Prepare the draft again in the account you want to send from.",
-        );
+      const sendingAccountId = lookup.output.emailAccountId;
+      if (!sendingAccountId || !sendingAccountIds.has(sendingAccountId)) {
+        throw new SafeError(SENDING_MAILBOX_NOT_VERIFIED);
       }
     },
     logPrefix: "Assistant email confirmation",

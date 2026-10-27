@@ -3,8 +3,10 @@ import { createTestLogger, getMockMessage } from "@/__tests__/helpers";
 import prisma from "@/utils/__mocks__/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import {
+  manageInboxTool,
   readAttachmentTool,
   readEmailTool,
+  replyEmailTool,
   searchInboxTool,
 } from "./chat-inbox-tools";
 import { toOtherAccountEmailId } from "./other-account-email-id";
@@ -496,6 +498,180 @@ describe("reading another account's email", () => {
   });
 });
 
+describe("changing email across the user's accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    providers = {
+      "account-1": fakeProvider("chat-msg", "chat-thread"),
+      "account-2": fakeProvider("gmail-msg", "gmail-thread"),
+      "account-3": fakeProvider("outlook-msg", "outlook-thread"),
+    };
+    vi.mocked(createEmailProvider).mockImplementation(
+      async ({ emailAccountId }) => providers[emailAccountId] as never,
+    );
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { id?: string };
+    }) =>
+      [accounts.chat, accounts.gmail, accounts.outlook].filter(
+        (account) => !args.where.id || account.id === args.where.id,
+      )) as never);
+  });
+
+  it("archives each email in the account it is in, in one call", async () => {
+    const result = await manage("google", {
+      action: "archive_threads",
+      threadIds: [
+        "chat-thread",
+        toOtherAccountEmailId("account-2", "gmail-thread"),
+        toOtherAccountEmailId("account-3", "outlook-thread"),
+      ],
+    });
+
+    expect(providers["account-1"].archiveThreadWithLabel).toHaveBeenCalledWith(
+      "chat-thread",
+      CHAT_EMAIL,
+      undefined,
+    );
+    expect(providers["account-2"].archiveThreadWithLabel).toHaveBeenCalledWith(
+      "gmail-thread",
+      "two@example.com",
+      undefined,
+    );
+    expect(providers["account-3"].archiveThreadWithLabel).toHaveBeenCalledWith(
+      "outlook-thread",
+      "three@example.com",
+      undefined,
+    );
+    expect(result).toMatchObject({
+      success: true,
+      requestedCount: 3,
+      successCount: 3,
+      failedCount: 0,
+    });
+    expect(result.accounts).toEqual([
+      expect.objectContaining({ account: CHAT_EMAIL, successCount: 1 }),
+      expect.objectContaining({ account: "two@example.com", successCount: 1 }),
+      expect.objectContaining({
+        account: "three@example.com",
+        successCount: 1,
+      }),
+    ]);
+  });
+
+  it("changes nothing for an email in no account of the user's, and only that email fails", async () => {
+    const foreign = toOtherAccountEmailId("account-9", "thread-x");
+
+    const result = await manage("google", {
+      action: "archive_threads",
+      threadIds: ["chat-thread", foreign],
+    });
+
+    expect(providers["account-1"].archiveThreadWithLabel).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(createEmailProvider).not.toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "account-9" }),
+    );
+    expect(result).toMatchObject({
+      success: false,
+      successCount: 1,
+      failedCount: 1,
+      failedThreadIds: [foreign],
+    });
+  });
+
+  it("applies an Outlook chat's category as an existing Gmail label, and fails only where it does not exist", async () => {
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { id?: string };
+    }) =>
+      [accounts.outlook, accounts.gmail].filter(
+        (account) => !args.where.id || account.id === args.where.id,
+      )) as never);
+    providers["account-2"].getLabelByName.mockResolvedValue(null);
+    providers["account-3"].getLabelByName.mockResolvedValue({
+      id: "cat-1",
+      name: "Clients",
+    });
+
+    const result: any = await manageInboxTool({
+      email: "three@example.com",
+      emailAccountId: "account-3",
+      userId: USER_ID,
+      provider: "microsoft",
+      logger,
+    }).execute?.(
+      {
+        action: "categorize_threads",
+        categoryName: "Clients",
+        threadIds: [
+          "outlook-thread",
+          toOtherAccountEmailId("account-2", "gmail-thread"),
+        ],
+      },
+      toolCallOptions,
+    );
+
+    expect(providers["account-3"].labelMessage).toHaveBeenCalled();
+    expect(providers["account-2"].labelMessage).not.toHaveBeenCalled();
+    expect(providers["account-2"].createLabel).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ successCount: 1, failedCount: 1 });
+    expect(result.accounts).toContainEqual(
+      expect.objectContaining({
+        account: "two@example.com",
+        failedCount: 1,
+        error: expect.stringContaining("Clients"),
+      }),
+    );
+  });
+
+  it("archives a sender's mail in every covered account that has mail from them", async () => {
+    providers["account-3"].getMessagesFromSender.mockResolvedValue({
+      messages: [],
+    });
+
+    const result = await manage("google", {
+      action: "bulk_archive_senders",
+      fromEmails: ["news@acme.example"],
+    });
+
+    for (const id of ["account-1", "account-2"]) {
+      expect(providers[id].bulkArchiveFromSenders).toHaveBeenCalledWith(
+        ["news@acme.example"],
+        expect.any(String),
+        id,
+      );
+    }
+    expect(
+      providers["account-3"].bulkArchiveFromSenders,
+    ).not.toHaveBeenCalled();
+    expect(result.accounts).toEqual([
+      expect.objectContaining({ account: CHAT_EMAIL, sendersCount: 1 }),
+      expect.objectContaining({ account: "two@example.com", sendersCount: 1 }),
+      expect.objectContaining({
+        account: "three@example.com",
+        sendersCount: 0,
+      }),
+    ]);
+  });
+
+  it("prepares a reply that sends from the account the email is in", async () => {
+    const result: any = await replyEmailTool(chatToolOptions()).execute?.(
+      {
+        messageId: toOtherAccountEmailId("account-2", "gmail-msg"),
+        content: "Thanks!",
+      },
+      toolCallOptions,
+    );
+
+    expect(providers["account-2"].getMessage).toHaveBeenCalledWith("gmail-msg");
+    expect(providers["account-1"].getMessage).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      emailAccountId: "account-2",
+      pendingAction: { messageId: "gmail-msg" },
+    });
+  });
+});
+
 const toolCallOptions = { toolCallId: "call-1", messages: [] } as never;
 
 function chatToolOptions() {
@@ -506,6 +682,17 @@ function chatToolOptions() {
     provider: "google",
     logger,
   };
+}
+
+async function manage(provider: string, input: Record<string, unknown>) {
+  const result = await manageInboxTool({
+    email: CHAT_EMAIL,
+    emailAccountId: "account-1",
+    userId: USER_ID,
+    provider,
+    logger,
+  }).execute?.(input as never, toolCallOptions);
+  return result as any;
 }
 
 async function search(provider: string, input: Record<string, unknown>) {
@@ -555,5 +742,12 @@ function fakeProvider(messageId: string, threadId: string) {
       size: 5,
     }),
     getFolders: vi.fn().mockResolvedValue([]),
+    archiveThreadWithLabel: vi.fn().mockResolvedValue(undefined),
+    getLabelByName: vi.fn().mockResolvedValue(null),
+    createLabel: vi.fn(),
+    getThreadMessages: vi.fn().mockResolvedValue([message]),
+    labelMessage: vi.fn().mockResolvedValue(undefined),
+    getMessagesFromSender: vi.fn().mockResolvedValue({ messages: [message] }),
+    bulkArchiveFromSenders: vi.fn().mockResolvedValue(undefined),
   };
 }

@@ -30,7 +30,7 @@ export const confirmAssistantEmailAction = actionClient
   .inputSchema(confirmAssistantEmailActionBody)
   .action(
     async ({
-      ctx: { emailAccountId, provider, logger },
+      ctx: { emailAccountId, provider, userId, logger },
       parsedInput: {
         chatId,
         chatMessageId,
@@ -48,6 +48,7 @@ export const confirmAssistantEmailAction = actionClient
         waitForPersistence: true,
         emailAccountId,
         provider,
+        userId,
         logger,
       }),
   );

@@ -377,13 +377,21 @@ export async function aiProcessAssistantChat({
     const runtimeTools = withChatToolRuntime({
       logger,
       onGmailCall: gmailDemand.noteGmailCall,
-      // searchInbox may list other accounts' emails; only these read tools
-      // follow them there, and every other tool stays in the chat's account.
+      // searchInbox lists every covered account's emails; these mail tools
+      // follow an email into its account, and the rest stay in the chat's.
       tools: withChatAccountScope({
         userId: user.userId,
         emailAccountId,
         email: user.email,
-        crossAccountTools: ["readEmail", "readAttachment"],
+        crossAccountTools: [
+          "readEmail",
+          "readAttachment",
+          "manageInbox",
+          "replyEmail",
+          "forwardEmail",
+          "getRuleExecutionForMessage",
+          "searchContext",
+        ],
         tools: {
           getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
           getAccountOverview: getAccountOverviewTool(toolOptions),

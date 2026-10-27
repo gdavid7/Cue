@@ -388,9 +388,13 @@ describe("aiProcessAssistantChat across accounts", () => {
     return tools;
   }
 
-  it("refuses to change another account's email from this chat", async () => {
+  it("changes another account's email in that account", async () => {
     const { createEmailProvider } = await import("@/utils/email/provider");
-    vi.mocked(createEmailProvider).mockClear();
+    const archiveThreadWithLabel = vi.fn(async () => {});
+    vi.mocked(createEmailProvider).mockReset();
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      archiveThreadWithLabel,
+    } as never);
     prisma.emailAccount.findMany.mockResolvedValue([
       {
         id: "other-account",
@@ -406,6 +410,44 @@ describe("aiProcessAssistantChat across accounts", () => {
       {
         action: "archive_threads",
         threadIds: [toOtherAccountEmailId("other-account", "thread-1")],
+      },
+      { toolCallId: "call-1", messages: [] } as never,
+    );
+
+    expect(createEmailProvider).toHaveBeenCalledTimes(1);
+    expect(createEmailProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "other-account" }),
+    );
+    expect(archiveThreadWithLabel).toHaveBeenCalledWith(
+      "thread-1",
+      "other@example.com",
+      undefined,
+    );
+    expect(result).toMatchObject({ success: true, successCount: 1 });
+  });
+
+  it("refuses an action that works only in the chat's account on another account's email", async () => {
+    const { createEmailProvider } = await import("@/utils/email/provider");
+    vi.mocked(createEmailProvider).mockReset();
+    mockGetConnectedDriveApps.mockResolvedValueOnce([
+      { id: "drive-1" },
+    ] as never);
+    prisma.emailAccount.findMany.mockResolvedValue([
+      {
+        id: "other-account",
+        email: "other@example.com",
+        name: null,
+        image: null,
+        account: { provider: "google" },
+      },
+    ] as never);
+    const tools = await chatTools();
+
+    const result = await tools.saveToDrive.execute?.(
+      {
+        messageId: toOtherAccountEmailId("other-account", "message-1"),
+        filename: "invoice.pdf",
+        app: "googledrive",
       },
       { toolCallId: "call-1", messages: [] } as never,
     );
