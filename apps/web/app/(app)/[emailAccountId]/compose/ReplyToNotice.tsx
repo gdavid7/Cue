@@ -1,5 +1,6 @@
 "use client";
 
+import { ReplyIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -19,6 +20,10 @@ export function ReplyToNotice({
   return (
     <div className="flex min-h-6 flex-wrap items-center gap-x-2 text-muted-foreground text-xs">
       <span className="min-w-0 break-words">
+        <ReplyIcon
+          aria-hidden
+          className="mr-1 inline size-3 align-[-0.125em]"
+        />
         Goes to {address}, set by the sender's Reply-To
       </span>
       <Button
