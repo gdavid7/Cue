@@ -53,24 +53,19 @@ describe("GET /api/user/cue-authored-drafts", () => {
     ]);
   });
 
-  it("looks up only the given conversations' drafts, in the user's own account", async () => {
+  it("looks up only the given Gmail conversations' drafts, in the user's own account", async () => {
     await read(items(["t1", "m1"], ["t2", "m2"]));
 
-    expect(prisma.executedAction.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          executedRule: { emailAccountId, threadId: { in: ["t1", "t2"] } },
-        }),
-      }),
-    );
-    expect(prisma.threadTracker.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          emailAccountId,
-          threadId: { in: ["t1", "t2"] },
-        }),
-      }),
-    );
+    expect(prisma.executedAction.findMany.mock.calls[0][0]?.where).toEqual({
+      executedRule: { emailAccountId, threadId: { in: ["t1", "t2"] } },
+      type: "DRAFT_EMAIL",
+      draftId: { not: null },
+    });
+    expect(prisma.threadTracker.findMany.mock.calls[0][0]?.where).toEqual({
+      emailAccountId,
+      threadId: { in: ["t1", "t2"] },
+      followUpDraftId: { not: null },
+    });
     expect(prisma.meeting.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ emailAccountId }),
@@ -372,6 +367,17 @@ describe("GET /api/user/cue-authored-drafts", () => {
 
     expect(body.messageIds).toEqual(["m-rule"]);
     expect(provider.getDraft).toHaveBeenCalledWith("m-rule");
+    // Looked up by draft id alone: a lookup scoped to the current
+    // conversation would miss the rule's row and count the draft as checked.
+    expect(prisma.executedAction.findMany.mock.calls[0][0]?.where).toEqual({
+      executedRule: { emailAccountId },
+      type: "DRAFT_EMAIL",
+      draftId: { in: ["m-rule"] },
+    });
+    expect(prisma.threadTracker.findMany.mock.calls[0][0]?.where).toEqual({
+      emailAccountId,
+      followUpDraftId: { in: ["m-rule"] },
+    });
   });
 
   it("fails without reading the mailbox when the lookup has more rows than it reads", async () => {

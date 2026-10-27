@@ -104,11 +104,13 @@ export const GET = withEmailProvider(
  * A Gmail draft id names the draft, not its message, so each Gmail candidate
  * is read for its message's id; an Outlook draft id is its message's, so an
  * Outlook candidate is matched by id and read only to compare its text.
- * - A rule's draft (from before replies became suggestions), looked up in
- *   the given conversations: Cue's unless the user has provably changed the
- *   text Cue kept for it; with no text kept it stays Cue's.
- * - A follow-up draft, looked up in the given conversations: Cue keeps no
- *   text for it, so it is Cue's while it is a draft.
+ * - A rule's draft (from before replies became suggestions): Cue's unless
+ *   the user has provably changed the text Cue kept for it; with no text kept
+ *   it stays Cue's.
+ * - A follow-up draft: Cue keeps no text for it, so it is Cue's while it is
+ *   a draft.
+ * Both are looked up in the account by draft id on Outlook, in any
+ * conversation, and in the given conversations on Gmail.
  * - A meeting's follow-up draft starts its own conversation, which the
  *   meeting doesn't keep, and has no text kept. Outlook: Cue's by id, edited
  *   or not. Gmail: read only if Cue started it within ten minutes of when one
@@ -130,14 +132,19 @@ async function getData({
   const threadIds = [...new Set(items.map((item) => item.threadId))];
   const messageIds = new Set(items.map((item) => item.messageId));
   const draftIdIsMessageId = provider.name === "microsoft";
+  // An Outlook draft is looked up by its id alone, in any conversation: its
+  // conversation's id can change after Cue wrote it, and a lookup scoped to
+  // the current one would miss Cue's draft and count it as checked. A Gmail
+  // draft's id isn't its message's, so its conversation is what narrows it.
   const byMessageId = draftIdIsMessageId
     ? { in: [...messageIds] }
     : { not: null };
+  const inThreads = draftIdIsMessageId ? {} : { threadId: { in: threadIds } };
 
   const [ruleDrafts, followUps, meetings] = await Promise.all([
     prisma.executedAction.findMany({
       where: {
-        executedRule: { emailAccountId, threadId: { in: threadIds } },
+        executedRule: { emailAccountId, ...inThreads },
         type: ActionType.DRAFT_EMAIL,
         draftId: byMessageId,
       },
@@ -151,7 +158,7 @@ async function getData({
     prisma.threadTracker.findMany({
       where: {
         emailAccountId,
-        threadId: { in: threadIds },
+        ...inThreads,
         followUpDraftId: byMessageId,
       },
       select: { followUpDraftId: true, threadId: true },

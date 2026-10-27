@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import useSWR, { useSWRConfig } from "swr";
+import useSWR, { unstable_serialize, useSWRConfig } from "swr";
 import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type {
   ConversationQuery,
@@ -30,7 +30,7 @@ const CUE_AUTHORED_DRAFTS_PATH = "/api/user/cue-authored-drafts";
 // Answers kept per account set: past what the lane reads, so a draft that
 // leaves and comes back is still answered, while a long session's saves
 // don't pile up.
-const ANSWERS_KEPT = 200;
+export const ANSWERS_KEPT = 200;
 // How often, and from how long after, an account the server couldn't answer
 // for, or answered for only some drafts of, is asked again: past a typical
 // Gmail deferral, then doubling.
@@ -126,7 +126,7 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
     answersKey,
     null,
   );
-  const { mutate } = useSWRConfig();
+  const { mutate, cache } = useSWRConfig();
   const answersRef = useRef(answers);
   const readRef = useRef(read);
   useEffect(() => {
@@ -163,7 +163,14 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
     read.length ? [CUE_AUTHORED_DRAFTS_PATH, draftsKey] : null,
     async () => {
       // This render's drafts: the refs catch up only after SWR starts this.
-      const toAsk = unanswered(read, answers);
+      // The answers as cached now, not as this render saw them, which may be
+      // another account set's.
+      const toAsk = unanswered(
+        read,
+        (cache.get(unstable_serialize(answersKey))?.data as
+          | ReadonlyMap<string, boolean>
+          | undefined) ?? NO_ANSWERS,
+      );
       const result = toAsk.length
         ? await askCueAuthored(cueAuthoredRequests(toAsk))
         : { answers: new Map<string, boolean>(), retryAccountIds: [] };

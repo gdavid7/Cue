@@ -6,6 +6,7 @@ import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LeftOpenDraft } from "@inboxzero/mail-core/queries";
 import {
+  ANSWERS_KEPT,
   CUE_AUTHORED_RECOVERIES,
   CUE_AUTHORED_RECOVERY_MS,
   LEFT_OPEN_SHOWN_LIMIT,
@@ -230,6 +231,24 @@ describe("useLeftOpenDrafts", () => {
         "aged-in",
       ]),
     );
+  });
+
+  it("keeps no more answers than its cap, dropping the oldest", async () => {
+    mail.drafts = Array.from({ length: ANSWERS_KEPT + 10 }, (_, i) =>
+      draft("a", `d${String(i).padStart(3, "0")}`),
+    );
+    mail.cueAuthored = { a: [] };
+
+    const { cache } = renderLeftOpenDrafts();
+    await waitFor(() =>
+      expect(
+        (cachedAnswers(cache) as Map<string, boolean> | undefined)?.size,
+      ).toBe(ANSWERS_KEPT),
+    );
+    const kept = [...(cachedAnswers(cache) as Map<string, boolean>).keys()];
+    // Asked in message id order, so the first ten asked are the ones dropped.
+    expect(kept.some((key) => key.includes("\0d009\0"))).toBe(false);
+    expect(kept.some((key) => key.includes("\0d010\0"))).toBe(true);
   });
 
   it("doesn't ask the server when the only change is a draft leaving the lane", async () => {
