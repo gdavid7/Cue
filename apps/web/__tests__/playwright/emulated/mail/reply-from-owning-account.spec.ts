@@ -10,6 +10,7 @@ import {
   conversationWithSubject,
   openMail,
   readProviderAccessToken,
+  requestEmailAccountId,
   UNDO_WINDOW_SEND_TIMEOUT_MS,
 } from "./mail-test-helpers";
 
@@ -94,8 +95,7 @@ test("replies all from the account that owns the thread, leaving out the user's 
     expect(sends.length).toBeGreaterThan(0);
     for (const request of sends) {
       expect((await request.response())?.ok()).toBe(true);
-      const sentAs =
-        (await request.headerValue("x-email-account-id")) ?? request.url();
+      const sentAs = await requestEmailAccountId(request);
       expect(sentAs).toContain(secondAccount.id);
       expect(sentAs).not.toContain(emailAccountId);
     }

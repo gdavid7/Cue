@@ -1,4 +1,9 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Request,
+} from "@playwright/test";
 import { Client } from "pg";
 import type { ThreadResponse } from "@/app/api/threads/[id]/route";
 import type { ReadComposeDraftResponse } from "@/app/api/user/drafts/route";
@@ -821,4 +826,22 @@ export async function deleteProviderMessage(
     headers: { Authorization: `Bearer ${token}` },
   });
   expect(response.ok()).toBe(true);
+}
+
+/**
+ * The account a mail request acts as: the account header on API requests, or
+ * a server action's first argument (actions bind the email account id there).
+ * The page address is not evidence: it can name another account, such as the
+ * open chat's.
+ */
+export async function requestEmailAccountId(request: Request) {
+  const header = await request.headerValue("x-email-account-id");
+  if (header) return header;
+  if (!(await request.headerValue("next-action"))) return request.url();
+  try {
+    const args: unknown = JSON.parse(request.postData() ?? "");
+    return Array.isArray(args) && typeof args[0] === "string" ? args[0] : null;
+  } catch {
+    return null;
+  }
 }
