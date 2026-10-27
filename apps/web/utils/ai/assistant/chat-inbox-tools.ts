@@ -1113,7 +1113,6 @@ const buildManageInboxTool = ({
             action,
             originalAction,
             fromEmails: normalizedFromEmails,
-            abortSignal: callOptions?.abortSignal,
           });
         }
 
@@ -2626,13 +2625,11 @@ async function runSenderActionsAcrossAccounts({
   action,
   originalAction,
   fromEmails,
-  abortSignal,
 }: {
   options: InboxToolOptions;
   action: ManageInboxAction;
   originalAction: string;
   fromEmails: string[];
-  abortSignal?: AbortSignal;
 }) {
   const { userId, emailAccountId, email, provider, logger } = options;
   const chatAccount: ChatAccount = { id: emailAccountId, email, provider };
@@ -2674,26 +2671,17 @@ async function runSenderActionsAcrossAccounts({
           "Failed to update emails",
       };
     });
-  const [chatResult, otherResults] = await Promise.all([
-    runInAccount(chatAccount),
-    runOnOtherAccounts({
-      userId,
-      emailAccountId,
-      logger,
-      abortSignal,
-      selection,
-      run: (account) => runInAccount(account),
+  // A write runs to the end in every account, as the thread writes do: one
+  // cut off by a read deadline would be reported as not done, and a retry
+  // would unsubscribe again where it had finished.
+  const accounts = await mapWithConcurrency(
+    [chatAccount, ...selection.accounts],
+    ACCOUNT_WRITE_CONCURRENCY,
+    async (account) => ({
+      account: account.email,
+      ...(await runInAccount(account)),
     }),
-  ]);
-
-  const accounts = [
-    { account: email, ...chatResult },
-    ...otherResults.results.map((entry) =>
-      "error" in entry
-        ? { account: entry.account.email, error: entry.error }
-        : { account: entry.account.email, ...entry.result },
-    ),
-  ];
+  );
   const succeeded = new Set(
     accounts.flatMap((entry) =>
       "senders" in entry
@@ -2725,8 +2713,8 @@ async function runSenderActionsAcrossAccounts({
       failedSenders,
     }),
     accounts,
-    ...(otherResults.notSearchedCount
-      ? { accountsNotSearched: otherResults.notSearchedCount }
+    ...(selection.notSearchedCount
+      ? { accountsNotSearched: selection.notSearchedCount }
       : {}),
   };
 }

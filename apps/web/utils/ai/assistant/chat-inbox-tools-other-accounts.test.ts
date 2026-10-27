@@ -654,6 +654,52 @@ describe("changing email across the user's accounts", () => {
     ]);
   });
 
+  it("finishes a slow sender-wide archive in every account, past the read deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const more = [
+        connectedAccount("account-4", "four@example.com", "google"),
+        connectedAccount("account-5", "five@example.com", "google"),
+      ];
+      providers["account-4"] = fakeProvider("four-msg", "four-thread");
+      providers["account-5"] = fakeProvider("five-msg", "five-thread");
+      prisma.emailAccount.findMany.mockResolvedValue([
+        accounts.chat,
+        accounts.gmail,
+        accounts.outlook,
+        ...more,
+      ] as never);
+      let running = 0;
+      let mostAtOnce = 0;
+      for (const provider of Object.values(providers)) {
+        provider.bulkArchiveFromSenders.mockImplementation(async () => {
+          running += 1;
+          mostAtOnce = Math.max(mostAtOnce, running);
+          await new Promise((resolve) => setTimeout(resolve, 20_000));
+          running -= 1;
+        });
+      }
+
+      const pending = manage("google", {
+        action: "bulk_archive_senders",
+        fromEmails: ["news@acme.example"],
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await pending;
+
+      for (const id of Object.keys(providers)) {
+        expect(providers[id].bulkArchiveFromSenders).toHaveBeenCalledTimes(1);
+      }
+      expect(mostAtOnce).toBe(3);
+      expect(result.success).toBe(true);
+      expect(
+        result.accounts.filter((entry: object) => "error" in entry),
+      ).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("counts a search-wide action in each account, and never acts on a search that only carries over as keywords", async () => {
     const result = await manage("google", {
       action: "archive_threads",
