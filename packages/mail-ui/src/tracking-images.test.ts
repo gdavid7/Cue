@@ -22,6 +22,10 @@ describe("isTrackingImage", () => {
       "style overrides larger attributes",
       '<img src="https://e.example.com/p" width="600" style="width:1px!important;height:1px">',
     ],
+    [
+      "a 1px height with no width",
+      '<img src="https://e.example.com/p" height="1">',
+    ],
     ["zero height only", '<img src="https://e.example.com/p" height="0">'],
     [
       "a 1px width with no height",
@@ -77,6 +81,10 @@ describe("isTrackingImage", () => {
     [
       "a 600x1 divider",
       '<img src="https://e.example.com/line.gif" width="600" height="1">',
+    ],
+    [
+      "a 600x1 divider sized by inline style",
+      '<img src="https://e.example.com/line.gif" style="width:600px;height:1px">',
     ],
     [
       "a 1x20 spacer",
