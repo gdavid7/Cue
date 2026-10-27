@@ -15,6 +15,7 @@ import {
   conversationWithSubject,
   openMail,
   readProviderAccessToken,
+  requestEmailAccountId,
   withClient,
 } from "./mail-test-helpers";
 
@@ -136,8 +137,7 @@ test("merges Drafts, Sent and Starred from every included account, each row acti
       .poll(() => saves.length, { timeout: 60_000 })
       .toBeGreaterThan(0);
     for (const request of saves) {
-      const savedAs =
-        (await request.headerValue("x-email-account-id")) ?? request.url();
+      const savedAs = await requestEmailAccountId(request);
       expect(savedAs).toContain(second.id);
       expect(savedAs).not.toContain(emailAccountId);
     }
