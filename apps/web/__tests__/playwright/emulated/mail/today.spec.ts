@@ -1094,7 +1094,11 @@ test("Drafts you left open still lists the user's drafts when another conversati
   test.setTimeout(300_000);
   const emailAccountId = await getEmailAccountId(page);
   // Cue drafted many replies in "Draft deletion example" before replies
-  // became suggestions; they were all sent or deleted long ago.
+  // became suggestions; they were all sent or deleted long ago. That crowds
+  // the check's mailbox reads on Gmail only: an Outlook draft of Cue's is
+  // matched by its id, so the old ones are never read there, and Outlook
+  // proves just that the user's draft shows and Cue's doesn't (the route's
+  // tests cover Outlook's matching).
   await seedRuleDrafts(
     emailAccountId,
     "thr_draft_indicator",
