@@ -131,6 +131,7 @@ import { OutlookLabel } from "@/utils/outlook/constants";
 import { resolveOutlookCategoryName } from "@/utils/outlook/search-scope";
 import {
   extractEmailAddress,
+  extractNameFromEmail,
   getSearchTermForSender,
   splitRecipientList,
 } from "@/utils/email";
@@ -3429,7 +3430,15 @@ function toGraphRecipients(to: string, logger: Logger) {
   }));
   const recipients = parsed
     .filter(({ email }) => email.length > 0)
-    .map(({ email }) => ({ emailAddress: { address: email } }));
+    .map(({ candidate, email }) => {
+      const name = extractNameFromEmail(candidate).trim();
+      return {
+        emailAddress: {
+          address: email,
+          ...(name && name !== email ? { name } : {}),
+        },
+      };
+    });
 
   if (candidates.length > 0 && recipients.length === 0) {
     throw new Error("No valid recipient email addresses");

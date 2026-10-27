@@ -2278,13 +2278,14 @@ describe("OutlookProvider.createDraft", () => {
     );
 
     await provider.createDraft({
-      to: "Alice <alice@example.com>, bob@example.com",
+      to: 'Alice <alice@example.com>, "Lovelace, Ada" <ada@example.com>, bob@example.com',
       subject: "Notes from our call",
       messageHtml: "<p>Thanks all</p>",
     });
 
     expect(post.mock.calls[0]?.[0]?.toRecipients).toEqual([
-      { emailAddress: { address: "alice@example.com" } },
+      { emailAddress: { address: "alice@example.com", name: "Alice" } },
+      { emailAddress: { address: "ada@example.com", name: "Lovelace, Ada" } },
       { emailAddress: { address: "bob@example.com" } },
     ]);
   });
@@ -2303,7 +2304,7 @@ describe("OutlookProvider.createDraft", () => {
     });
 
     expect(post.mock.calls[0]?.[0]?.toRecipients).toEqual([
-      { emailAddress: { address: "alice@example.com" } },
+      { emailAddress: { address: "alice@example.com", name: "Alice" } },
       { emailAddress: { address: "bob@example.com" } },
     ]);
   });
