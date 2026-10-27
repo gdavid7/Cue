@@ -43,6 +43,21 @@ describe("email utils", () => {
         '"John \\"JD\\" Doe" <john@example.com>',
         'John "JD" Doe',
       ],
+      [
+        "quoted name containing angle brackets",
+        '"Bob <x>" <bob@example.com>',
+        "Bob <x>",
+      ],
+      [
+        "quoted name containing an address in brackets",
+        '"Bob <bob@other.com>" <bob@example.com>',
+        "Bob <bob@other.com>",
+      ],
+      [
+        "quoted name with an escaped backslash",
+        '"A \\\\ B" <ab@example.com>',
+        "A \\ B",
+      ],
       ["empty input", "", ""],
     ])("handles %s", (_caseName, input, expected) => {
       expect(extractNameFromEmail(input)).toBe(expected);

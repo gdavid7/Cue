@@ -9,6 +9,14 @@ const emailSchema = z.string().email();
 // Converts "john.doe@gmail" to "john.doe@gmail"
 export function extractNameFromEmail(email: string) {
   if (!email) return "";
+  // A quoted name can hold "<" itself, so the address is the final <...>,
+  // matched the same way as extractEmailAddress.
+  const trimmedEmail = email.trim();
+  const bracketMatch = trimmedEmail.match(/<([^<>]+)>$/);
+  if (bracketMatch) {
+    const name = trimmedEmail.slice(0, bracketMatch.index).trim();
+    return name ? unquoteDisplayName(name) : bracketMatch[1].trim();
+  }
   const firstPart = email.split("<")[0]?.trim();
   if (firstPart) return unquoteDisplayName(firstPart);
   const secondPart = email.split("<")?.[1]?.trim();
