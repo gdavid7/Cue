@@ -42,6 +42,9 @@ const querySchema = z
       .min(1)
       .max(MAX_ITEMS),
     savedAtMs: z.array(msSchema).max(MAX_ITEMS),
+    // A client that takes an answer for only some drafts says so; one from
+    // before that counts every draft in an answer as checked.
+    partial: z.literal("1").optional(),
   })
   .refine((query) => query.savedAtMs.length === query.items.length, {
     message: "savedAtMs needs one time per item",
@@ -54,10 +57,11 @@ export type CueAuthoredDraftsResponse = Awaited<ReturnType<typeof getData>>;
  * by its conversation and its message (split at the last `:`), and
  * `savedAtMs=...` when each was saved, in the same order. Answers which of
  * those messages are drafts Cue wrote into the mailbox, and which it checked:
- * a draft it didn't check may be Cue's. If any of Cue's drafts it reads
- * can't be read, the request fails rather than answer for some of them; if
- * there are more meeting drafts or rows to look at than one request may, it
- * fails with 409, which asking again won't change.
+ * a draft it didn't check may be Cue's. Without `partial=1` it answers for
+ * all of them or fails with 409. If any of Cue's drafts it reads can't be
+ * read, the request fails rather than answer for some of them; if there are
+ * more meeting drafts or rows to look at than one request may, it fails with
+ * 409, which asking again won't change.
  */
 export const GET = withEmailProvider(
   "user/cue-authored-drafts",
@@ -78,6 +82,7 @@ export const GET = withEmailProvider(
               };
         }),
       savedAtMs: (searchParams.get("savedAtMs") ?? "").split(","),
+      partial: searchParams.get("partial") ?? undefined,
     });
 
     const data = await runWithGmailWaitBudget(GMAIL_WAIT_MS, () =>
@@ -113,6 +118,7 @@ export const GET = withEmailProvider(
 async function getData({
   items,
   savedAtMs,
+  partial,
   emailAccountId,
   provider,
   logger,
@@ -193,8 +199,9 @@ async function getData({
   }
 
   // The text Cue wrote, where a changed one makes the draft the user's;
-  // null where there's none to compare and the draft stays Cue's. A
-  // meeting's draft has no conversation among the given ones.
+  // null where there's none to compare and the draft stays Cue's. Its
+  // conversation is where Cue wrote it; a meeting's draft has none among the
+  // given ones.
   const candidates = new Map<
     string,
     { originalContent: string | null; threadId: string | null }
@@ -216,9 +223,11 @@ async function getData({
       });
 
   const cueAuthored = new Set<string>();
-  // Each conversation's reads; a meeting's draft is read whichever
-  // conversations are checked.
-  const readsByThread = new Map<string | null, [string, string][]>();
+  const reads: {
+    draftId: string;
+    originalContent: string;
+    threadId: string | null;
+  }[] = [];
   for (const [draftId, { originalContent, threadId }] of candidates) {
     if (draftIdIsMessageId) {
       if (!messageIds.has(draftId)) continue;
@@ -227,36 +236,49 @@ async function getData({
         continue;
       }
     }
-    readsByThread.set(threadId, [
-      ...(readsByThread.get(threadId) ?? []),
-      [draftId, originalContent ?? ""],
-    ]);
+    reads.push({ draftId, originalContent: originalContent ?? "", threadId });
   }
 
-  const toRead = readsByThread.get(null) ?? [];
-  const checkedThreadIds = new Set<string>();
+  // A draft is checked only once every one of Cue's it could be is read:
+  // on Outlook the one with its id, wherever the rule ran, as an Outlook
+  // conversation's id can change; on Gmail any written in its conversation,
+  // and any meeting's. Newest drafts first, as many as the reads allow.
+  const couldBe = (
+    read: (typeof reads)[number],
+    item: (typeof items)[number],
+  ) =>
+    draftIdIsMessageId
+      ? read.draftId === item.messageId
+      : read.threadId === null || read.threadId === item.threadId;
+  const toRead = new Set<(typeof reads)[number]>();
+  const checkedMessageIds = new Set<string>();
   const newestFirst = items
-    .map((item, i) => ({ threadId: item.threadId, savedAtMs: savedAtMs[i] }))
+    .map((item, i) => ({ item, savedAtMs: savedAtMs[i] }))
     .sort((a, b) => b.savedAtMs - a.savedAtMs);
-  for (const { threadId } of newestFirst) {
-    if (checkedThreadIds.has(threadId)) continue;
-    const reads = readsByThread.get(threadId) ?? [];
-    if (toRead.length + reads.length > MAX_DRAFT_READS) continue;
-    toRead.push(...reads);
-    checkedThreadIds.add(threadId);
+  for (const { item } of newestFirst) {
+    const needed = reads.filter(
+      (read) => !toRead.has(read) && couldBe(read, item),
+    );
+    if (toRead.size + needed.length > MAX_DRAFT_READS) continue;
+    for (const read of needed) toRead.add(read);
+    checkedMessageIds.add(item.messageId);
   }
-  if (checkedThreadIds.size < threadIds.length)
-    logger.info("Left some drafts lane conversations unchecked", {
-      conversations: threadIds.length,
-      checked: checkedThreadIds.size,
+  if (checkedMessageIds.size < messageIds.size) {
+    logger.info("Left some drafts lane drafts unchecked", {
+      drafts: messageIds.size,
+      checked: checkedMessageIds.size,
+      partial: Boolean(partial),
     });
+    // 409: the same drafts would hit the same limit, so not worth retrying.
+    if (!partial) throw new SafeError("Too many of Cue's drafts to check", 409);
+  }
 
   // A read that throws, including one deferred at the Gmail gate, fails the
   // request: a draft left unread may be Cue's.
   await mapWithConcurrency(
-    toRead,
+    [...toRead],
     CONCURRENCY,
-    async ([draftId, originalContent]) => {
+    async ({ draftId, originalContent }) => {
       const draft = await provider.getDraft(draftId);
       if (!draft?.id || !messageIds.has(draft.id)) return;
       if (
@@ -271,8 +293,8 @@ async function getData({
   return {
     messageIds: [...cueAuthored],
     checkedMessageIds: items
-      .filter((item) => checkedThreadIds.has(item.threadId))
-      .map((item) => item.messageId),
+      .map((item) => item.messageId)
+      .filter((messageId) => checkedMessageIds.has(messageId)),
   };
 }
 

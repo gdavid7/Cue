@@ -280,7 +280,10 @@ describe("GET /api/user/cue-authored-drafts", () => {
 
     // t0 was saved most recently.
     const body = await read(
-      query(threads.map((t, i) => [t, `m-${t}`, 100_000 - i] as const)),
+      query(
+        threads.map((t, i) => [t, `m-${t}`, 100_000 - i] as const),
+        PARTIAL,
+      ),
     );
 
     expect(provider.getDraft.mock.calls.length).toBeLessThanOrEqual(40);
@@ -303,15 +306,72 @@ describe("GET /api/user/cue-authored-drafts", () => {
     );
 
     const body = await read(
-      query([
-        ["t-crowded", "m-cue", 2000],
-        ["t-quiet", "m-users-own", 1000],
-      ]),
+      query(
+        [
+          ["t-crowded", "m-cue", 2000],
+          ["t-quiet", "m-users-own", 1000],
+        ],
+        PARTIAL,
+      ),
     );
 
     expect(body.checkedMessageIds).toEqual(["m-users-own"]);
     expect(body.messageIds).toEqual([]);
     expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
+  it("fails as before, without reading the mailbox, when a client that doesn't take a partial answer asks about more than one request reads", async () => {
+    // A tab from before partial answers counts every draft in a 200 as
+    // checked.
+    prisma.executedAction.findMany.mockResolvedValue(
+      Array.from({ length: 41 }, (_, i) =>
+        ruleDraft(`r-old-${i}`, "t-crowded", "Sounds good."),
+      ) as never,
+    );
+
+    const response = await GET(
+      request(
+        query([
+          ["t-crowded", "m-cue", 2000],
+          ["t-quiet", "m-users-own", 1000],
+        ]),
+      ),
+      params(),
+    );
+
+    expect(response.status).toBe(409);
+    expect(provider.getDraft).not.toHaveBeenCalled();
+  });
+
+  it("answers in full for a client that doesn't take a partial answer when every draft fits", async () => {
+    prisma.executedAction.findMany.mockResolvedValue([
+      ruleDraft("r-cue", "t1", "Sounds good."),
+    ] as never);
+    provider.getDraft.mockResolvedValue(draft("m-cue", "Sounds good."));
+
+    expect(await read(items(["t1", "m-cue"], ["t2", "m-users-own"]))).toEqual({
+      messageIds: ["m-cue"],
+      checkedMessageIds: ["m-cue", "m-users-own"],
+    });
+  });
+
+  it("reads an Outlook rule's draft for the draft with its id, whatever conversation the rule recorded", async () => {
+    provider.name = "microsoft";
+    prisma.emailAccount.findUnique.mockResolvedValue({
+      userId: "user-1",
+      email: "developer@example.com",
+      account: { provider: "microsoft" },
+    } as never);
+    // The rule ran in a conversation id Outlook has since changed.
+    prisma.executedAction.findMany.mockResolvedValue([
+      ruleDraft("m-rule", "c-recorded", "Sounds good."),
+    ] as never);
+    provider.getDraft.mockResolvedValue(draft("m-rule", "Sounds good."));
+
+    const body = await read(query([["c-current", "m-rule", 1500]], PARTIAL));
+
+    expect(body.messageIds).toEqual(["m-rule"]);
+    expect(provider.getDraft).toHaveBeenCalledWith("m-rule");
   });
 
   it("fails without reading the mailbox when the lookup has more rows than it reads", async () => {
@@ -378,6 +438,8 @@ describe("GET /api/user/cue-authored-drafts", () => {
     expect(provider.getDraft).not.toHaveBeenCalled();
   });
 });
+
+const PARTIAL = { partial: "1" };
 
 async function read(query: string) {
   const response = await GET(request(query), params());
