@@ -187,10 +187,16 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
   return useMemo(() => {
     if (!cueAuthored) return selectLeftOpenDrafts(NO_DRAFTS, hidden);
     // A draft the server hasn't answered for, or whose account it couldn't
-    // answer for, may be Cue's.
+    // answer for, or that it says it didn't check, may be Cue's.
+    const serverChecked = new Set(
+      cueAuthored.byAccount.flatMap(({ accountId, data }) =>
+        data.checkedMessageIds.map((id) => `${accountId}\0${id}`),
+      ),
+    );
     const checked = read.filter(
       (draft) =>
         cueAuthored.checked.has(draftKey(draft)) &&
+        serverChecked.has(draftKey(draft)) &&
         !cueAuthored.failedAccountIds.includes(draft.accountId),
     );
     return selectLeftOpenDrafts(checked, [

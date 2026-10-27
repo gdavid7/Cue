@@ -19,6 +19,8 @@ const mail = vi.hoisted(() => ({
   client: {} as { capabilities?: string[]; queryLeftOpenDrafts?: unknown },
   // What the server says Cue wrote, per account; a missing account failed.
   cueAuthored: {} as Record<string, string[]>,
+  // Drafts the server says it didn't check, per account.
+  unchecked: {} as Record<string, string[]>,
   // The status a failed account's read answers with; 503 if unset.
   failStatus: {} as Record<string, number>,
   // Each account the server was asked about, in order.
@@ -67,8 +69,14 @@ vi.mock("@/utils/fetch-for-accounts", () => ({
       throw Object.assign(new Error("failed"), {
         status: mail.failStatus[accountId] ?? 503,
       });
+    const asked = (new URL(path, "http://x").searchParams.get("items") ?? "")
+      .split(",")
+      .map((item) => item.slice(item.lastIndexOf(":") + 1));
+    const checkedMessageIds = asked.filter(
+      (id) => !mail.unchecked[accountId]?.includes(id),
+    );
     return {
-      byAccount: [{ accountId, data: { messageIds } }],
+      byAccount: [{ accountId, data: { messageIds, checkedMessageIds } }],
       failedAccountIds: [],
     };
   },
@@ -85,6 +93,7 @@ describe("useLeftOpenDrafts", () => {
     mail.cueAuthored = {};
     mail.serverReads = [];
     mail.failStatus = {};
+    mail.unchecked = {};
     mail.sequence = 1;
     mail.serverPaths = {};
     mail.pending = null;
@@ -116,6 +125,20 @@ describe("useLeftOpenDrafts", () => {
     await waitFor(() =>
       expect(result.current.drafts.map((item) => item.messageId)).toEqual([
         "b-draft",
+      ]),
+    );
+  });
+
+  it("shows no draft the server says it didn't check", async () => {
+    mail.drafts = [draft("a", "unchecked"), draft("a", "users-own")];
+    mail.cueAuthored = { a: [] };
+    mail.unchecked = { a: ["unchecked"] };
+
+    const { result } = renderLeftOpenDrafts();
+
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "users-own",
       ]),
     );
   });
