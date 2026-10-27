@@ -63,7 +63,7 @@ export function ManageInboxQueryResult({
   const status = answer ?? value?.status;
 
   const refreshChat = () => {
-    if (chatId) mutate(chatMessagesKey(chatId, emailAccountId));
+    if (chatId) mutate(chatMessagesKey(chatId));
   };
 
   const confirm = async () => {

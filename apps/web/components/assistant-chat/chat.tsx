@@ -5,7 +5,6 @@ import type { ChangeEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  ChevronDownIcon,
   HistoryIcon,
   Loader2,
   PaperclipIcon,
@@ -48,7 +47,6 @@ import { liveHistoryFromUiMessages } from "@/utils/voice/live-history";
 import { PageHeading } from "@/components/Typography";
 import { Loading } from "@/components/Loading";
 import { ErrorDisplay } from "@/components/ErrorDisplay";
-import { useAccounts } from "@/hooks/useAccounts";
 import { EmailAccountScopeProvider } from "@/providers/EmailAccountProvider";
 import { getPermissionsConsentPath } from "@/utils/permissions-consent";
 
@@ -89,6 +87,7 @@ export function Chat({
     chatAccount,
     switchedAccount,
     chatAccountError,
+    allAccountsDisconnected,
     inputFocusRequested,
     clearInputFocusRequest,
   } = useChat();
@@ -99,8 +98,9 @@ export function Chat({
     clearInputFocusRequest();
   }, [inputFocusRequested, clearInputFocusRequest]);
   const { messages, status, regenerate, setMessages } = chat;
-  // Tools would run on the dead account's tokens, so the chat is read-only.
-  const readOnly = Boolean(chatAccount?.account.disconnectedAt);
+  // With every account disconnected no tool can run, so the chat is
+  // read-only. While one is connected the chat works across it.
+  const readOnly = allAccountsDisconnected;
   // Until another account's row loads, the conversation would render in the
   // page's account, so its cards could act there.
   const chatAccountLoading = switchedAccount && !chatAccount;
@@ -515,7 +515,6 @@ function ChatTopBar({
     <div className="relative mx-auto w-full max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)] pt-2">
       <div className="flex min-w-0 items-center gap-1">
         {start}
-        <ChatAccountLabel />
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {hasMessages ? <NewChatButton /> : null}
           <ChatHistoryDropdown />
@@ -669,65 +668,16 @@ function ChatHistoryDropdown() {
   );
 }
 
-/** Which account the chat reads and acts in, and a way to change it. */
-function ChatAccountLabel() {
-  const { chatAccount, switchChatAccount } = useChat();
-  const { data } = useAccounts();
-  if (!chatAccount) return null;
-
-  const label = `Chat for ${chatAccount.email}`;
-  const otherAccounts =
-    data?.emailAccounts.filter((account) => account.id !== chatAccount.id) ??
-    [];
-  if (!otherAccounts.length) {
-    return (
-      <span className="min-w-0 truncate px-2 text-muted-foreground text-xs">
-        {label}
-      </span>
-    );
-  }
+function ChatAccountNotice() {
+  const { chatAccount, allAccountsDisconnected } = useChat();
+  if (!chatAccount || !allAccountsDisconnected) return null;
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 min-w-0 gap-1 px-2 font-normal text-muted-foreground text-xs"
-        >
-          <span className="truncate">{label}</span>
-          <ChevronDownIcon className="size-3 shrink-0" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64">
-        {otherAccounts.map((account) => (
-          <DropdownMenuItem
-            key={account.id}
-            disabled={Boolean(account.account.disconnectedAt)}
-            onSelect={() => switchChatAccount(account.id)}
-          >
-            <span className="truncate">{account.email}</span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function ChatAccountNotice() {
-  const {
-    chatAccount,
-    openThreadAccountId,
-    switchChatAccount,
-    switchedAccount,
-  } = useChat();
-  const { data } = useAccounts();
-  if (!chatAccount) return null;
-
-  let notice: React.ReactNode = null;
-  if (chatAccount.account.disconnectedAt) {
-    notice = (
-      <>
+    <div className="mx-auto w-full max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)]">
+      <div
+        role="status"
+        className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-muted px-3 py-1.5 text-muted-foreground text-xs"
+      >
         <span>Reconnect {chatAccount.email} to continue</span>
         <Button asChild size="xs-2" variant="outline">
           <Link
@@ -736,37 +686,6 @@ function ChatAccountNotice() {
             Reconnect
           </Link>
         </Button>
-      </>
-    );
-  } else if (openThreadAccountId) {
-    const threadEmail = data?.emailAccounts.find(
-      (account) => account.id === openThreadAccountId,
-    )?.email;
-    if (!threadEmail) return null;
-    notice = (
-      <>
-        <span>The open email is in {threadEmail}</span>
-        <Button
-          size="xs-2"
-          variant="outline"
-          onClick={() => switchChatAccount(openThreadAccountId)}
-        >
-          Switch
-        </Button>
-      </>
-    );
-  } else if (switchedAccount) {
-    notice = <span>Switched to {chatAccount.email} for this conversation</span>;
-  }
-  if (!notice) return null;
-
-  return (
-    <div className="mx-auto w-full max-w-[calc(var(--chat-max-w)+var(--chat-px)*2)] px-[var(--chat-px)]">
-      <div
-        role="status"
-        className="flex min-w-0 flex-wrap items-center gap-2 rounded-md bg-muted px-3 py-1.5 text-muted-foreground text-xs"
-      >
-        {notice}
       </div>
     </div>
   );

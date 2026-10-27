@@ -14,7 +14,7 @@ const THREAD_SUBJECT = "Reply Workflow Message";
 const SECOND_THREAD_SUBJECT = "Playwright Test Message";
 const commandModifier = process.platform === "darwin" ? "Meta" : "Control";
 
-test("chat works in the open thread's account and lists every account's chats", async ({
+test("one chat covers every account and lists every account's chats", async ({
   page,
 }, testInfo) => {
   const { emailAccountId } = await openMail(page);
@@ -33,9 +33,11 @@ test("chat works in the open thread's account and lists every account's chats", 
     const conversations = page.getByRole("listbox", { name: "Conversations" });
     await expect(conversations).toBeVisible({ timeout: 60_000 });
     await page.getByRole("button", { name: "Ask Cue", exact: true }).click();
-    await expect(page.getByText(`Chat for ${primary.email}`)).toBeVisible({
-      timeout: 60_000,
-    });
+    await expect(
+      page.getByRole("button", { name: "Chat History" }),
+    ).toBeVisible({ timeout: 60_000 });
+    // The chat covers every account, so it names none and offers no switch.
+    await expect(page.getByText(/^Chat for /)).toHaveCount(0);
 
     // Each seeded message is listed once per account, the page's first.
     const rows = conversations
@@ -46,13 +48,10 @@ test("chat works in the open thread's account and lists every account's chats", 
     // All Inboxes names the open thread's account by its position.
     await expect(page).toHaveURL(/[?&]account=1(&|$)/, { timeout: 60_000 });
 
-    await expect(page.getByText(`Chat for ${second.email}`)).toBeVisible({
-      timeout: 60_000,
-    });
-    await expect(
-      page.getByText(`Switched to ${second.email} for this conversation`),
-    ).toBeVisible();
-    await capturePlaywrightCheckpoint(page, testInfo, "chat-follows-thread");
+    // Opening another account's email leaves the chat as it is.
+    await expect(page.getByText(/Switched to /)).toHaveCount(0);
+    await expect(page.getByText(/The open email is in /)).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "chat-covers-accounts");
 
     await page.getByRole("button", { name: "Chat History" }).click();
     const secondChat = page.getByRole("menuitem", {
@@ -61,20 +60,27 @@ test("chat works in the open thread's account and lists every account's chats", 
     const primaryChat = page.getByRole("menuitem", {
       name: /Primary account planning/,
     });
-    await expect(secondChat).toContainText(second.email);
-    await expect(primaryChat).toContainText(primary.email);
-    await capturePlaywrightCheckpoint(page, testInfo, "chat-history-accounts");
+    await expect(secondChat).toBeVisible();
+    await expect(primaryChat).toBeVisible();
+    // One list, with no account line on each chat.
+    await expect(secondChat).not.toContainText(second.email);
+    await expect(primaryChat).not.toContainText(primary.email);
+    await capturePlaywrightCheckpoint(page, testInfo, "chat-history-one-list");
 
-    await primaryChat.click();
-    await expect(page.getByText(`Chat for ${primary.email}`)).toBeVisible();
+    // A chat held by the second account opens from the primary's page.
+    await secondChat.click();
+    await expect(page.getByText("Plan for the second account.")).toBeVisible({
+      timeout: 60_000,
+    });
+
+    await page.getByRole("button", { name: "Chat History" }).click();
+    await page
+      .getByRole("menuitem", { name: /Primary account planning/ })
+      .click();
     await expect(page.getByText("Plan for the primary account.")).toBeVisible({
       timeout: 60_000,
     });
-    // The conversation is under way in the primary account, so the open
-    // thread's account is offered rather than taken.
-    await expect(
-      page.getByText(`The open email is in ${second.email}`),
-    ).toBeVisible();
+    await expect(page.getByText(/The open email is in /)).toHaveCount(0);
   } finally {
     await deleteChats(chatIds);
     await deleteSecondEmailAccount(second.accountId);

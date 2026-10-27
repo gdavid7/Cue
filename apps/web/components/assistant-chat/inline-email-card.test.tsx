@@ -26,9 +26,41 @@ const mockMarkReadThreadAction = vi.fn();
 const mockUseThread = vi.fn();
 const mockQueueAction = vi.fn();
 
-vi.mock("@/providers/EmailAccountProvider", () => ({
-  useAccount: () => mockUseAccount(),
+const mockUseAccounts = vi.fn();
+vi.mock("@/hooks/useAccounts", () => ({
+  useAccounts: () => mockUseAccounts(),
 }));
+
+// The scope provider makes descendants act as the account it is given.
+vi.mock("@/providers/EmailAccountProvider", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
+  type Scoped = { id: string; email: string; account: { provider: string } };
+  const Scope = React.createContext<Scoped | null>(null);
+  return {
+    useAccount: () => {
+      const scoped = React.useContext(Scope);
+      return scoped
+        ? {
+            emailAccountId: scoped.id,
+            provider: scoped.account.provider,
+            userEmail: scoped.email,
+          }
+        : mockUseAccount();
+    },
+    EmailAccountScopeProvider: ({
+      children,
+      emailAccount,
+    }: {
+      children: ReactNode;
+      emailAccount?: Scoped;
+    }) =>
+      React.createElement(
+        Scope.Provider,
+        { value: emailAccount ?? null },
+        children,
+      ),
+  };
+});
 
 vi.mock("@/components/assistant-chat/email-lookup-context", () => ({
   useEmailLookup: () => mockUseEmailLookup(),
@@ -511,7 +543,7 @@ describe("InlineEmailList", () => {
     }
   });
 
-  it("leaves another account's email out of archive all", async () => {
+  it("archives each email in its own account with archive all", async () => {
     const otherThreadId = toOtherAccountEmailId("account-2", "thread-9");
     render(
       createElement(
@@ -525,10 +557,13 @@ describe("InlineEmailList", () => {
     fireEvent.click(screen.getAllByRole("button")[0]);
 
     await waitFor(() => {
-      expect(mockArchiveThreadAction).toHaveBeenCalledTimes(1);
+      expect(mockArchiveThreadAction).toHaveBeenCalledTimes(2);
     });
     expect(mockArchiveThreadAction).toHaveBeenCalledWith("account-1", {
       threadId: "thread-1",
+    });
+    expect(mockArchiveThreadAction).toHaveBeenCalledWith("account-2", {
+      threadId: "thread-9",
     });
   });
 });
@@ -567,28 +602,60 @@ describe("InlineEmailCard for another account's email", () => {
     });
   });
 
-  it("says which account it is in and offers no actions in the chat's account", () => {
+  it("says which account it is in and acts on it there", async () => {
+    mockArchiveThreadAction.mockResolvedValue({});
     render(<InlineEmailCard threadid={otherThreadId}>Renewal</InlineEmailCard>);
 
     expect(screen.getByText(/other@example\.com/)).toBeTruthy();
 
     openMoreActions();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+
+    await waitFor(() =>
+      expect(mockArchiveThreadAction).toHaveBeenCalledWith("account-2", {
+        threadId: "thread-9",
+      }),
+    );
+    // The chat is told of it by the id it knows the email by.
+    expect(mockQueueAction).toHaveBeenCalledWith("archive_threads", [
+      otherThreadId,
+    ]);
+  });
+
+  it("loads it through its own account", () => {
+    render(<InlineEmailCard threadid={otherThreadId}>Renewal</InlineEmailCard>);
+
+    fireEvent.click(screen.getByText("Renewal"));
+
+    expect(mockUseThread).toHaveBeenCalledWith({ id: "thread-9" });
+  });
+
+  it("only links out to an email in an account this browser doesn't know", () => {
+    mockUseAccounts.mockReturnValue({ data: { emailAccounts: [] } });
+    render(<InlineEmailCard threadid={otherThreadId}>Renewal</InlineEmailCard>);
+
+    openMoreActions();
 
     expect(screen.queryByRole("menuitem", { name: "Archive" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Mark as read" })).toBeNull();
     expect(
       screen
         .getByRole("menuitem", { name: "Open in email" })
         .getAttribute("href"),
     ).toBe("https://mail.example/other-account/thread-9");
   });
+});
 
-  it("does not load it through the chat's account", () => {
-    render(<InlineEmailCard threadid={otherThreadId}>Renewal</InlineEmailCard>);
-
-    fireEvent.click(screen.getByText("Renewal"));
-
-    expect(mockUseThread).not.toHaveBeenCalled();
+beforeEach(() => {
+  mockUseAccounts.mockReturnValue({
+    data: {
+      emailAccounts: [
+        {
+          id: "account-2",
+          email: "other@example.com",
+          account: { provider: "google" },
+        },
+      ],
+    },
   });
 });
 

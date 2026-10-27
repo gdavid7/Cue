@@ -47,6 +47,7 @@ const {
   mockResumeStream: vi.fn(),
   accountState: {
     emailAccountId: "account-a",
+    disconnectedA: null as string | null,
     disconnectedB: null as string | null,
     accountsLoading: false,
     accountsError: undefined as Error | undefined,
@@ -140,12 +141,8 @@ vi.mock("swr", () => ({
 }));
 
 vi.mock("@/hooks/useChatMessages", () => ({
-  useChatMessages: (chatId: string | null, emailAccountId: string) =>
-    mockUseChatMessages(chatId, emailAccountId),
-  chatMessagesKey: (chatId: string, emailAccountId: string) => [
-    `/api/chats/${chatId}`,
-    emailAccountId,
-  ],
+  useChatMessages: (chatId: string | null) => mockUseChatMessages(chatId),
+  chatMessagesKey: (chatId: string) => `/api/chats/${chatId}`,
 }));
 
 vi.mock("@/providers/EmailAccountProvider", () => ({
@@ -169,7 +166,7 @@ vi.mock("@/hooks/useAccounts", () => ({
               {
                 id: "account-a",
                 email: "a@example.com",
-                account: { disconnectedAt: null },
+                account: { disconnectedAt: accountState.disconnectedA },
               },
               ...(accountState.accountsWithoutB
                 ? []
@@ -224,6 +221,7 @@ describe("ChatProvider", () => {
     vi.clearAllMocks();
 
     accountState.emailAccountId = "account-a";
+    accountState.disconnectedA = null;
     accountState.disconnectedB = null;
     accountState.accountsLoading = false;
     accountState.accountsError = undefined;
@@ -300,10 +298,8 @@ describe("ChatProvider", () => {
     expect(mockSendMessage.mock.calls[1]?.[1]).toBeUndefined();
   });
 
-  it("keeps a chat already in the fixed email's account there, with the fix attached", async () => {
-    // All inboxes on account A; the chat followed B's open thread.
+  it("starts a new chat about another account's rules in that account", async () => {
     queryState.initialChatId = null;
-    queryState.initial = { chatAccountId: "account-b" };
     const fixContext = buildFixRuleContext("b-thread");
     let latestContext: ReturnType<typeof useChat> | undefined;
     function Consumer() {
@@ -320,13 +316,12 @@ describe("ChatProvider", () => {
       expect(latestContext?.context).toEqual(fixContext);
     });
     expect(latestContext?.chatAccount?.id).toBe("account-b");
-    expect(queryState.set.chatAccountId).toBeUndefined();
+    const body = await sendThroughTransport();
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
   });
 
-  it("moves a chat in a third account to the fixed email's account", async () => {
-    accountState.withAccountC = true;
-    queryState.initialChatId = null;
-    queryState.initial = { chatAccountId: "account-c" };
+  it("starts over in the fixed email's account when a conversation is held by another", async () => {
+    queryState.initialChatId = "chat-from-account-a";
     const fixContext = buildFixRuleContext("b-thread");
     let latestContext: ReturnType<typeof useChat> | undefined;
     function Consumer() {
@@ -334,7 +329,6 @@ describe("ChatProvider", () => {
       return null;
     }
     renderWithProvider(<Consumer />);
-    expect(latestContext?.chatAccount?.id).toBe("account-c");
 
     act(() => {
       latestContext?.setContext(fixContext, { accountId: "account-b" });
@@ -343,56 +337,8 @@ describe("ChatProvider", () => {
     await waitFor(() => {
       expect(latestContext?.chatAccount?.id).toBe("account-b");
     });
+    expect(latestContext?.chatId).toBeNull();
     expect(latestContext?.context).toEqual(fixContext);
-    expect(queryState.set.chatAccountId).toBe("account-b");
-  });
-
-  describe("asking about an email in another account", () => {
-    function renderConsumer() {
-      const latest: { current?: ReturnType<typeof useChat> } = {};
-      function Consumer() {
-        latest.current = useChat();
-        return null;
-      }
-      renderWithProvider(<Consumer />);
-      return latest;
-    }
-
-    it("takes an empty, idle chat to the email's account", async () => {
-      queryState.initialChatId = null;
-      const latest = renderConsumer();
-
-      act(() => latest.current?.followEmailAccount("account-b"));
-
-      await waitFor(() => {
-        expect(latest.current?.chatAccount?.id).toBe("account-b");
-      });
-    });
-
-    it("leaves a conversation under way where it is, and offers the switch", () => {
-      queryState.initialChatId = "chat-from-account-a";
-      const latest = renderConsumer();
-      mockSetMessages.mockClear();
-
-      act(() => latest.current?.followEmailAccount("account-b"));
-
-      expect(latest.current?.chatAccount?.id).toBe("account-a");
-      expect(latest.current?.chatId).toBe("chat-from-account-a");
-      expect(mockSetMessages).not.toHaveBeenCalled();
-      expect(queryState.set.chatAccountId).toBeUndefined();
-    });
-
-    it("leaves a running reply where it is", () => {
-      queryState.initialChatId = null;
-      chatState.status = "streaming";
-      const latest = renderConsumer();
-      mockSetMessages.mockClear();
-
-      act(() => latest.current?.followEmailAccount("account-b"));
-
-      expect(latest.current?.chatAccount?.id).toBe("account-a");
-      expect(mockSetMessages).not.toHaveBeenCalled();
-    });
   });
 
   it("restores consumed fix context when sending fails", async () => {
@@ -708,9 +654,12 @@ describe("ChatProvider", () => {
       { openThreadId: "t-42", openMessageId: "m-7" },
     ],
     [
-      "leaves out a thread open in another account",
+      "names a thread open in another account with its account",
       "account-b",
-      { openThreadId: undefined, openMessageId: undefined },
+      {
+        openThreadId: "acct:account-b:t-42",
+        openMessageId: "acct:account-b:m-7",
+      },
     ],
   ])("%s", async (_name, ownerAccountId, expected) => {
     getDefaultStore().set(openThreadAtom, {
@@ -958,10 +907,9 @@ describe("ChatProvider interrupted replies", () => {
       await act(async () => {
         vi.advanceTimersByTime(3000);
       });
-      expect(mutate).toHaveBeenCalledWith([
+      expect(mutate).toHaveBeenCalledWith(
         expect.stringMatching(/^\/api\/chats\//),
-        "account-a",
-      ]);
+      );
 
       running = false;
       rerender(
@@ -1088,6 +1036,7 @@ describe("ChatProvider across accounts", () => {
     vi.clearAllMocks();
     latestContext = undefined;
     accountState.emailAccountId = "account-a";
+    accountState.disconnectedA = null;
     accountState.disconnectedB = null;
     accountState.accountsLoading = false;
     accountState.accountsError = undefined;
@@ -1121,7 +1070,7 @@ describe("ChatProvider across accounts", () => {
     expect(latestContext?.switchedAccount).toBe(false);
   });
 
-  it("follows a thread from another account opened in All inboxes, and says so", async () => {
+  it("keeps the chat where it is when a thread from another account opens, and names the thread with its account", async () => {
     getDefaultStore().set(openThreadAtom, {
       emailAccountId: "account-b",
       threadId: "t-b",
@@ -1129,20 +1078,19 @@ describe("ChatProvider across accounts", () => {
     });
     renderWithProvider(<Consumer />);
 
-    await waitFor(() =>
-      expect(latestContext?.chatAccount?.id).toBe("account-b"),
-    );
-    expect(latestContext?.switchedAccount).toBe(true);
-    expect(latestContext?.openThreadAccountId).toBeNull();
-
+    expect(latestContext?.chatAccount?.id).toBe("account-a");
+    expect(latestContext?.switchedAccount).toBe(false);
     const body = await sendThroughTransport();
-    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
-    expect(body.json.openThreadId).toBe("t-b");
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-a");
+    expect(body.json.openThreadId).toBe("acct:account-b:t-b");
+    expect(body.json.openMessageId).toBe("acct:account-b:m-b");
   });
 
-  it("keeps a conversation in its account and offers the switch when another account's thread opens", async () => {
+  it("keeps a conversation under way when another account's thread opens", async () => {
+    queryState.initialChatId = "chat-from-a";
     chatState.messages = [{ id: "m1", role: "user" }];
     renderWithProvider(<Consumer />);
+    mockSetMessages.mockClear();
 
     act(() => {
       getDefaultStore().set(openThreadAtom, {
@@ -1151,231 +1099,73 @@ describe("ChatProvider across accounts", () => {
       });
     });
 
-    await waitFor(() =>
-      expect(latestContext?.openThreadAccountId).toBe("account-b"),
-    );
     expect(latestContext?.chatAccount?.id).toBe("account-a");
-    const body = await sendThroughTransport();
-    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-a");
-    expect(body.json.openThreadId).toBeUndefined();
-
-    act(() => latestContext?.switchChatAccount("account-b"));
-
-    expect(latestContext?.chatAccount?.id).toBe("account-b");
-    expect(mockSetMessages).toHaveBeenLastCalledWith([]);
+    expect(latestContext?.chatId).toBe("chat-from-a");
+    expect(mockSetMessages).not.toHaveBeenCalledWith([]);
   });
 
-  it("starts a conversation in the new account at once, so a question asked with the switch is sent", async () => {
-    queryState.initialChatId = "chat-from-account-a";
-    renderWithProvider(<Consumer />);
-
-    act(() => latestContext?.switchChatAccount("account-b"));
-
-    expect(latestContext?.chatId).toEqual(expect.any(String));
-    expect(latestContext?.chatId).not.toBe("chat-from-account-a");
-    expect(mockUseChatMessages).toHaveBeenLastCalledWith(
-      latestContext?.chatId,
-      "account-b",
-    );
-  });
-
-  it("keeps a reloaded chat in its account while the accounts list loads", async () => {
-    accountState.accountsLoading = true;
+  it("runs a saved chat in the account that holds it, from any of the user's pages", async () => {
     queryState.initialChatId = "chat-from-b";
-    queryState.initial = { chatAccountId: "account-b" };
+    mockUseChatMessages.mockReturnValue({
+      data: { emailAccountId: "account-b", messages: [] },
+    });
     renderWithProvider(<Consumer />);
 
-    // Known to be another account's, though its row hasn't loaded.
+    expect(mockUseChatMessages).toHaveBeenLastCalledWith("chat-from-b");
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
     expect(latestContext?.switchedAccount).toBe(true);
-    expect(latestContext?.chatAccount).toBeNull();
     const body = await sendThroughTransport();
     expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
   });
 
-  it("goes back to the page's account when the accounts list loads without it", () => {
-    accountState.accountsWithoutB = true;
-    queryState.initialChatId = "chat-from-b";
-    queryState.initial = { chatAccountId: "account-b" };
+  it("opens a chat from the history in the account that holds it, before its messages load", async () => {
     renderWithProvider(<Consumer />);
 
-    // Never left waiting on an account row that won't come.
-    expect(latestContext?.switchedAccount).toBe(false);
-    expect(latestContext?.chatAccount?.id ?? "account-a").toBe("account-a");
-    expect(queryState.set.chatAccountId).toBeNull();
+    act(() =>
+      latestContext?.openChat({
+        id: "chat-from-b",
+        emailAccountId: "account-b",
+      }),
+    );
+
+    expect(latestContext?.chatId).toBe("chat-from-b");
+    expect(latestContext?.chatAccount?.id).toBe("account-b");
+    const body = await sendThroughTransport();
+    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
   });
 
-  it("keeps the chat when refreshing the accounts list fails", () => {
-    // SWR keeps the loaded list and reports the failed revalidation.
-    accountState.accountsError = new Error("Failed to fetch");
-    accountState.keepDataOnError = true;
+  it("uses the page's account for a chat held by an account the user no longer has", () => {
+    accountState.accountsWithoutB = true;
     queryState.initialChatId = "chat-from-b";
-    queryState.initial = { chatAccountId: "account-b" };
+    mockUseChatMessages.mockReturnValue({
+      data: { emailAccountId: "someone-elses-account", messages: [] },
+    });
     renderWithProvider(<Consumer />);
 
-    expect(latestContext?.chatAccount?.id).toBe("account-b");
-    expect(latestContext?.chatId).toBe("chat-from-b");
-    expect(queryState.set.chatAccountId).toBeUndefined();
+    expect(latestContext?.chatAccount?.id).toBe("account-a");
   });
 
   it("keeps the chat and reports the error when the accounts list can't load", () => {
     accountState.accountsError = new Error("Failed to fetch");
     queryState.initialChatId = "chat-from-b";
-    queryState.initial = { chatAccountId: "account-b" };
+    mockUseChatMessages.mockReturnValue({
+      data: { emailAccountId: "account-b", messages: [] },
+    });
     renderWithProvider(<Consumer />);
 
     expect(latestContext?.switchedAccount).toBe(true);
     expect(latestContext?.chatId).toBe("chat-from-b");
     expect(latestContext?.chatAccountError).toBe(accountState.accountsError);
-    expect(queryState.set.chatAccountId).toBeUndefined();
-  });
-
-  it("reopens a chat from another account after a reload", () => {
-    queryState.initialChatId = "chat-from-b";
-    queryState.initial = { chatAccountId: "account-b" };
-    renderWithProvider(<Consumer />);
-
-    expect(latestContext?.chatAccount?.id).toBe("account-b");
-    expect(mockUseChatMessages).toHaveBeenLastCalledWith(
-      "chat-from-b",
-      "account-b",
-    );
-  });
-
-  it("keeps the address naming the chat's account while it is not the page's", () => {
-    renderWithProvider(<Consumer />);
-
-    act(() =>
-      latestContext?.openChat({
-        id: "chat-from-b",
-        emailAccountId: "account-b",
-      }),
-    );
-    expect(queryState.set.chatAccountId).toBe("account-b");
-
-    act(() => latestContext?.switchChatAccount("account-a"));
-    expect(queryState.set.chatAccountId).toBeNull();
-  });
-
-  it("ignores a chat account in the address that is not one of the user's", () => {
-    queryState.initialChatId = "chat-of-a-removed-account";
-    queryState.initial = { chatAccountId: "someone-elses-account" };
-    renderWithProvider(<Consumer />);
-
-    expect(latestContext?.chatAccount?.id).toBe("account-a");
-    // Its chat is not this account's, so it is not shown as one.
-    expect(latestContext?.chatId).toBeNull();
-    expect(queryState.set.chatAccountId).toBeNull();
-  });
-
-  it("does not move a saved chat while its messages are still loading", () => {
-    queryState.initialChatId = "chat-from-a";
-    mockUseChatMessages.mockReturnValue({ data: undefined });
-    getDefaultStore().set(openThreadAtom, {
-      emailAccountId: "account-b",
-      threadId: "t-b",
-    });
-    const { rerender } = renderWithProvider(<Consumer />);
-    expect(latestContext?.chatAccount?.id).toBe("account-a");
-
-    // The saved conversation arrives: it stays, and the switch is offered.
-    mockUseChatMessages.mockReturnValue({
-      data: { messages: [{ id: "m1", role: "user", parts: [] }] },
-    });
-    rerender(
-      <ChatProvider>
-        <Consumer />
-      </ChatProvider>,
-    );
-
-    expect(latestContext?.chatAccount?.id).toBe("account-a");
-    expect(latestContext?.chatId).toBe("chat-from-a");
-    expect(latestContext?.openThreadAccountId).toBe("account-b");
-  });
-
-  it.each([
-    404, 403,
-  ])("follows the open thread when the chat can't be read here (%i)", async (status) => {
-    queryState.initialChatId = "unreadable-chat";
-    mockUseChatMessages.mockReturnValue({
-      data: undefined,
-      error: Object.assign(new Error("Chat unavailable"), { status }),
-    });
-    getDefaultStore().set(openThreadAtom, {
-      emailAccountId: "account-b",
-      threadId: "t-b",
-    });
-    renderWithProvider(<Consumer />);
-
-    await waitFor(() =>
-      expect(latestContext?.chatAccount?.id).toBe("account-b"),
-    );
-  });
-
-  it.each([
-    [
-      "a server error",
-      Object.assign(new Error("Server error"), { status: 500 }),
-    ],
-    ["a dropped connection", new TypeError("Failed to fetch")],
-  ])("keeps a saved chat through %s while loading it", (_name, error) => {
-    queryState.initialChatId = "saved-chat";
-    mockUseChatMessages.mockReturnValue({ data: undefined, error });
-    getDefaultStore().set(openThreadAtom, {
-      emailAccountId: "account-b",
-      threadId: "t-b",
-    });
-    renderWithProvider(<Consumer />);
-
-    expect(latestContext?.chatAccount?.id).toBe("account-a");
-    expect(latestContext?.chatId).toBe("saved-chat");
-  });
-
-  it("follows the open thread once an empty chat's messages have loaded", async () => {
-    queryState.initialChatId = "fresh-chat";
-    mockUseChatMessages.mockReturnValue({ data: undefined });
-    getDefaultStore().set(openThreadAtom, {
-      emailAccountId: "account-b",
-      threadId: "t-b",
-    });
-    const { rerender } = renderWithProvider(<Consumer />);
-    expect(latestContext?.chatAccount?.id).toBe("account-a");
-
-    mockUseChatMessages.mockReturnValue({ data: null });
-    rerender(
-      <ChatProvider>
-        <Consumer />
-      </ChatProvider>,
-    );
-
-    await waitFor(() =>
-      expect(latestContext?.chatAccount?.id).toBe("account-b"),
-    );
-  });
-
-  it("switches to a resumed chat's account before sending", async () => {
-    renderWithProvider(<Consumer />);
-
-    act(() =>
-      latestContext?.openChat({
-        id: "chat-from-b",
-        emailAccountId: "account-b",
-      }),
-    );
-
-    expect(latestContext?.chatId).toBe("chat-from-b");
-    expect(latestContext?.chatAccount?.id).toBe("account-b");
-    expect(mockUseChatMessages).toHaveBeenLastCalledWith(
-      "chat-from-b",
-      "account-b",
-    );
-
-    const body = await sendThroughTransport();
-    expect(body.headers[EMAIL_ACCOUNT_HEADER.toLowerCase()]).toBe("account-b");
   });
 
   it("goes back to the page's account when the page's account changes", async () => {
     const { rerender } = renderWithProvider(<Consumer />);
-    act(() => latestContext?.switchChatAccount("account-b"));
+    act(() =>
+      latestContext?.openChat({
+        id: "chat-from-b",
+        emailAccountId: "account-b",
+      }),
+    );
     expect(latestContext?.chatAccount?.id).toBe("account-b");
 
     accountState.emailAccountId = "account-a2";
@@ -1385,12 +1175,27 @@ describe("ChatProvider across accounts", () => {
       </ChatProvider>,
     );
 
-    await waitFor(() =>
-      expect(latestContext?.chatAccount?.id ?? "account-a2").toBe("account-a2"),
-    );
+    await waitFor(() => expect(latestContext?.chatId).toBeNull());
   });
 
-  it("does not send from a disconnected account's chat", async () => {
+  it("keeps sending while any of the user's accounts is connected", async () => {
+    accountState.disconnectedB = "2026-09-01T00:00:00.000Z";
+    renderWithProvider(<Consumer />);
+    act(() =>
+      latestContext?.openChat({
+        id: "chat-from-b",
+        emailAccountId: "account-b",
+      }),
+    );
+
+    await act(async () => {
+      await latestContext?.submitTextMessage("Archive this");
+    });
+    expect(mockSendMessage).toHaveBeenCalled();
+  });
+
+  it("does not send once every account is disconnected", async () => {
+    accountState.disconnectedA = "2026-09-01T00:00:00.000Z";
     accountState.disconnectedB = "2026-09-01T00:00:00.000Z";
     renderWithProvider(<Consumer />);
     act(() =>

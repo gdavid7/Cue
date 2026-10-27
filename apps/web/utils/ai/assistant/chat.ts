@@ -64,7 +64,10 @@ import {
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 import { fitPromptToBudget } from "@/utils/ai/assistant/chat-prompt-budget";
 import { estimateTextTokens } from "@/utils/ai/assistant/prompt-size";
-import { withChatAccountScope } from "@/utils/ai/assistant/chat-other-accounts";
+import {
+  selectOtherAccounts,
+  withChatAccountScope,
+} from "@/utils/ai/assistant/chat-other-accounts";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
 import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";
 import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
@@ -196,6 +199,7 @@ export async function aiProcessAssistantChat({
       hasConnectedDrive,
       freshRuleState,
       expectedFixSystemType,
+      coversOtherAccounts,
     ] = await Promise.all([
       isIntegrationActionEnabledForUserId(user.userId),
       hasUsableCalendarConnection(emailAccountId).then(
@@ -235,6 +239,15 @@ export async function aiProcessAssistantChat({
             logger,
           })
         : null,
+      selectOtherAccounts({ userId: user.userId, emailAccountId }).then(
+        (selection) => selection.accounts.length > 0,
+        (error) => {
+          logger.warn("Failed to list the user's accounts for chat", {
+            error,
+          });
+          return false;
+        },
+      ),
     ]);
     let ruleReadState: RuleReadState | null = null;
     const pendingRuleDeletionNames = new Set<string>();
@@ -252,6 +265,7 @@ export async function aiProcessAssistantChat({
       supportsInlineEmailCards,
       messagingPlatform,
       userTimezone,
+      multiAccountAnchorEmail: coversOtherAccounts ? user.email : undefined,
     });
     const toolOptions = {
       email: user.email,
@@ -978,6 +992,7 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards,
   messagingPlatform,
   userTimezone,
+  multiAccountAnchorEmail,
 }: {
   emailSendToolsEnabled: boolean;
   draftReplyActionsEnabled: boolean;
@@ -988,6 +1003,8 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards: boolean;
   messagingPlatform?: MessagingPlatform;
   userTimezone: string;
+  /** The chat's own account, when the chat covers more than one. */
+  multiAccountAnchorEmail?: string;
 }) {
   const providerPolicy = getAssistantChatProvider(provider);
   const sections = [
@@ -1046,6 +1063,7 @@ export function buildResolvedSystemPrompt({
       provider,
       userTimezone,
       calendarConnection,
+      multiAccountAnchorEmail,
     }),
     providerPolicy.searchSyntaxPolicy,
     `Search strategy:
@@ -1089,14 +1107,21 @@ function getProviderContextSection({
   provider,
   userTimezone,
   calendarConnection,
+  multiAccountAnchorEmail,
 }: {
   provider: string;
   userTimezone: string;
   calendarConnection: CalendarConnectionStatus;
+  multiAccountAnchorEmail?: string;
 }) {
   const lines = [
     "Provider context:",
     `- Current provider: ${provider}.`,
+    ...(multiAccountAnchorEmail
+      ? [
+          `- Searches, counts and inbox actions cover all of the user's connected accounts. Rules and assistant settings apply to ${multiAccountAnchorEmail}.`,
+        ]
+      : []),
     `- User timezone: ${userTimezone}. The current timestamp is in the automated context message. Resolve relative dates like today, tomorrow, this afternoon, Monday, or Friday from this timezone before calling calendar or inbox date-range tools.`,
   ];
 

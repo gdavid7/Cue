@@ -100,6 +100,16 @@ describe("buildResolvedSystemPrompt", () => {
     );
   });
 
+  it("says which account rules and settings apply to only when the chat covers several accounts", () => {
+    const multi = buildPrompt({ multiAccountAnchorEmail: "me@example.com" });
+    const single = buildPrompt();
+
+    expect(multi).toContain(
+      "- Searches, counts and inbox actions cover all of the user's connected accounts. Rules and assistant settings apply to me@example.com.",
+    );
+    expect(single).not.toContain("cover all of the user's connected accounts");
+  });
+
   it("only asks for inline email card markup when the client can render it", () => {
     const cardPrompt = buildPrompt({ supportsInlineEmailCards: true });
     const plainPrompt = buildPrompt({ supportsInlineEmailCards: false });
