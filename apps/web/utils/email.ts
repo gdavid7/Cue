@@ -9,6 +9,14 @@ const emailSchema = z.string().email();
 // Converts "john.doe@gmail" to "john.doe@gmail"
 export function extractNameFromEmail(email: string) {
   if (!email) return "";
+  // A quoted name can hold "<" itself, so the address is the final <...>,
+  // matched the same way as extractEmailAddress.
+  const trimmedEmail = email.trim();
+  const bracketMatch = trimmedEmail.match(/<([^<>]+)>$/);
+  if (bracketMatch) {
+    const name = trimmedEmail.slice(0, bracketMatch.index).trim();
+    return name ? unquoteDisplayName(name) : bracketMatch[1].trim();
+  }
   const firstPart = email.split("<")[0]?.trim();
   if (firstPart) return unquoteDisplayName(firstPart);
   const secondPart = email.split("<")?.[1]?.trim();
@@ -213,8 +221,10 @@ export function formatEmailWithName(
   address: string | null | undefined,
 ): string {
   if (!address) return "";
-  if (!name || name === address) return address;
-  return `${name} <${address}>`;
+  // A line break in a name could otherwise start a header of its own.
+  const displayName = name?.replace(/[\r\n]+/g, " ").trim();
+  if (!displayName || displayName === address) return address;
+  return `${quoteDisplayName(displayName)} <${address}>`;
 }
 
 export function getNewsletterSenderDisplayName({
@@ -348,6 +358,14 @@ function unquoteDisplayName(name: string) {
   const quoted = name.match(/^"(.*)"$/);
   if (!quoted) return name;
   return quoted[1].replace(/\\(.)/g, "$1").trim();
+}
+
+// RFC 5322 specials (a comma, a period, quotes) need a quoted string, or a
+// list splits "Doe, John" into two recipients. Non-ASCII names stay as they
+// are here; the MIME layer encodes them when the message is built.
+function quoteDisplayName(name: string) {
+  if (!/[()<>[\]:;@\\,."]/.test(name)) return name;
+  return `"${name.replace(/(["\\])/g, "\\$1")}"`;
 }
 
 function recipientFirstName(recipient: string) {

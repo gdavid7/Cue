@@ -16,15 +16,13 @@ import {
   withMicrosoftGraphWriteRetry,
 } from "@/utils/outlook/retry";
 import { extractEmailAddress, extractNameFromEmail } from "@/utils/email";
+import { toGraphRecipients } from "@/utils/outlook/recipients";
 import { isOutlookItemNotFoundError, SafeError } from "@/utils/error";
 import { ensureEmailSendingEnabled } from "@/utils/mail";
 import { uploadResumableChunks } from "@/utils/outlook/upload-session";
 import type { Logger } from "@/utils/logger";
 import type { SendEmailOptions } from "@/utils/email/types";
 
-type GraphRecipient = {
-  emailAddress: { address: string; name?: string };
-};
 type MailSendEmailBody = WithMailerAttachments<SendEmailBody>;
 
 const MAX_GRAPH_ATTACHMENT_SIZE_BYTES = 3 * 1024 * 1024;
@@ -40,8 +38,8 @@ export async function sendEmailWithHtml(
 ): Promise<SentEmailResult> {
   ensureEmailSendingEnabled();
 
-  const toRecipients = buildGraphRecipients(body.to);
-  if (!toRecipients?.length)
+  const toRecipients = toGraphRecipients(body.to, logger);
+  if (!toRecipients.length)
     throw new SafeError("Recipient address is required");
 
   // For replies with a message ID, use createReply for proper threading
@@ -161,10 +159,10 @@ export async function forwardEmail(
 
   if (!options.to.trim()) throw new Error("Recipient address is required");
 
-  const toRecipients = buildGraphRecipients(options.to);
-  if (!toRecipients?.length) throw new Error("Recipient address is required");
-  const ccRecipients = buildGraphRecipients(options.cc);
-  const bccRecipients = buildGraphRecipients(options.bcc);
+  const toRecipients = toGraphRecipients(options.to, logger);
+  if (!toRecipients.length) throw new Error("Recipient address is required");
+  const ccRecipients = toGraphRecipients(options.cc, logger);
+  const bccRecipients = toGraphRecipients(options.bcc, logger);
 
   // Get the original message
   const originalMessage: Message = await withMicrosoftGraphRetry(
@@ -213,8 +211,8 @@ export async function forwardEmail(
         .api(`/me/messages/${forwardDraft.id}`)
         .patch({
           toRecipients,
-          ...(ccRecipients ? { ccRecipients } : {}),
-          ...(bccRecipients ? { bccRecipients } : {}),
+          ...(ccRecipients.length ? { ccRecipients } : {}),
+          ...(bccRecipients.length ? { bccRecipients } : {}),
           ...(fromField ? { from: fromField } : {}),
           subject: forwardEmailSubject(message.headers.subject),
           body: {
@@ -407,9 +405,9 @@ async function sendReplyUsingCreateReply(
     logger,
   );
 
-  const toRecipients = buildGraphRecipients(body.to);
-  const ccRecipients = buildGraphRecipients(body.cc);
-  const bccRecipients = buildGraphRecipients(body.bcc);
+  const toRecipients = toGraphRecipients(body.to, logger);
+  const ccRecipients = toGraphRecipients(body.cc, logger);
+  const bccRecipients = toGraphRecipients(body.bcc, logger);
 
   // Update the draft with our content and recipients
   // Note: We cannot set In-Reply-To/References headers via internetMessageHeaders
@@ -427,9 +425,9 @@ async function sendReplyUsingCreateReply(
             contentType: "html",
             content: body.messageHtml,
           },
-          ...(toRecipients ? { toRecipients } : {}),
-          ...(ccRecipients ? { ccRecipients } : {}),
-          ...(bccRecipients ? { bccRecipients } : {}),
+          ...(toRecipients.length ? { toRecipients } : {}),
+          ...(ccRecipients.length ? { ccRecipients } : {}),
+          ...(bccRecipients.length ? { bccRecipients } : {}),
         }),
     logger,
   );
@@ -472,9 +470,9 @@ async function sendForwardUsingCreateForward(
     forwardedMessageId,
     logger,
   );
-  const toRecipients = buildGraphRecipients(body.to);
-  const ccRecipients = buildGraphRecipients(body.cc);
-  const bccRecipients = buildGraphRecipients(body.bcc);
+  const toRecipients = toGraphRecipients(body.to, logger);
+  const ccRecipients = toGraphRecipients(body.cc, logger);
+  const bccRecipients = toGraphRecipients(body.bcc, logger);
 
   await withMicrosoftGraphWriteRetry(
     () =>
@@ -487,9 +485,9 @@ async function sendForwardUsingCreateForward(
             contentType: "html",
             content: body.messageHtml,
           },
-          ...(toRecipients ? { toRecipients } : {}),
-          ...(ccRecipients ? { ccRecipients } : {}),
-          ...(bccRecipients ? { bccRecipients } : {}),
+          ...(toRecipients.length ? { toRecipients } : {}),
+          ...(ccRecipients.length ? { ccRecipients } : {}),
+          ...(bccRecipients.length ? { bccRecipients } : {}),
         }),
     logger,
   );
@@ -546,10 +544,10 @@ async function sendNewDraft(
   body: MailSendEmailBody,
   logger: Logger,
 ): Promise<SentEmailResult> {
-  const toRecipients = buildGraphRecipients(body.to);
-  const ccRecipients = buildGraphRecipients(body.cc);
-  const bccRecipients = buildGraphRecipients(body.bcc);
-  const replyToRecipients = buildGraphRecipients(body.replyTo);
+  const toRecipients = toGraphRecipients(body.to, logger);
+  const ccRecipients = toGraphRecipients(body.cc, logger);
+  const bccRecipients = toGraphRecipients(body.bcc, logger);
+  const replyToRecipients = toGraphRecipients(body.replyTo, logger);
 
   const draft: Message = await withMicrosoftGraphWriteRetry(
     () =>
@@ -563,9 +561,9 @@ async function sendNewDraft(
             content: body.messageHtml,
           },
           toRecipients,
-          ...(ccRecipients ? { ccRecipients } : {}),
-          ...(bccRecipients ? { bccRecipients } : {}),
-          ...(replyToRecipients ? { replyTo: replyToRecipients } : {}),
+          ...(ccRecipients.length ? { ccRecipients } : {}),
+          ...(bccRecipients.length ? { bccRecipients } : {}),
+          ...(replyToRecipients.length ? { replyTo: replyToRecipients } : {}),
         }),
     logger,
   );
@@ -588,40 +586,6 @@ async function sendNewDraft(
     id: draft.id,
     conversationId: draft.conversationId,
   };
-}
-
-function buildGraphRecipients(
-  recipientList?: string,
-): GraphRecipient[] | undefined {
-  if (!recipientList) return;
-
-  const parts = recipientList.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
-  const recipients = parts
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part): GraphRecipient | null => {
-      const address = extractEmailAddress(part);
-      if (!address) return null;
-
-      const name = extractNameFromEmail(part).trim();
-      return {
-        emailAddress: {
-          address,
-          ...(name && name !== address ? { name } : {}),
-        },
-      };
-    })
-    .filter((recipient): recipient is GraphRecipient => recipient !== null);
-
-  if (!recipients.length) return;
-
-  const seen = new Set<string>();
-  return recipients.filter((recipient) => {
-    const key = recipient.emailAddress.address.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function buildGraphFromField(

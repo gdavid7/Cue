@@ -72,6 +72,105 @@ describe("compose contact suggestions", () => {
     expect(screen.queryByRole("option", { name: /Jane Local/ })).toBeNull();
   });
 
+  it("chips a picked suggestion by its name and keeps the name for sending", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    local.mockResolvedValue([
+      { name: "Lovelace, Ada", emailAddress: "ada@example.com" },
+      { name: "Zoë Ångström", emailAddress: "zoe@example.com" },
+      { emailAddress: "nameless@example.com" },
+    ]);
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "a" } });
+    await screen.findByRole("option", { name: /Lovelace, Ada/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyUp(input, { key: "Enter" });
+    const ada = await screen.findByRole("button", {
+      name: "Edit Lovelace, Ada",
+    });
+    expect(ada.textContent).toBe("Lovelace, Ada");
+    expect(ada.getAttribute("title")).toBe("ada@example.com");
+
+    fireEvent.change(input, { target: { value: "a" } });
+    await screen.findByRole("option", { name: /Zoë Ångström/ });
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.blur(input);
+    const zoe = await screen.findByRole("button", {
+      name: "Edit Zoë Ångström",
+    });
+    expect(zoe.textContent).toBe("Zoë Ångström");
+
+    fireEvent.change(input, { target: { value: "a" } });
+    fireEvent.mouseDown(
+      await screen.findByRole("option", { name: /nameless@example.com/ }),
+      { button: 0 },
+    );
+    const nameless = await screen.findByRole("button", {
+      name: "Edit nameless@example.com",
+    });
+    expect(nameless.textContent).toBe("nameless@example.com");
+
+    expect(screen.getByTestId("recipients").textContent).toBe(
+      '"Lovelace, Ada" <ada@example.com>,Zoë Ångström <zoe@example.com>,nameless@example.com',
+    );
+  });
+
+  it.each([
+    "ceo@company.com",
+    "ceo＠company.com",
+  ])("chips a suggestion named like an address (%s) by its real address", async (spoofedName) => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    local.mockResolvedValue([
+      { name: spoofedName, emailAddress: "attacker@evil.example" },
+    ]);
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "ceo" } });
+    await screen.findByRole("option", { name: /attacker@evil.example/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyUp(input, { key: "Enter" });
+    const chip = await screen.findByRole("button", {
+      name: "Edit attacker@evil.example",
+    });
+    expect(chip.textContent).toBe("attacker@evil.example");
+    expect(screen.queryByText(spoofedName)).toBeNull();
+  });
+
+  it("picks the named suggestion when its address is typed in full", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "jane@example.com" } });
+    await screen.findByRole("option", { name: /Jane Local/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyUp(input, { key: "Enter" });
+    expect(
+      (await screen.findByRole("button", { name: "Edit Jane Local" }))
+        .textContent,
+    ).toBe("Jane Local");
+    expect(screen.getByTestId("recipients").textContent).toBe(
+      "Jane Local <jane@example.com>",
+    );
+  });
+
+  it("keeps the name of a typed Name <address> recipient", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, {
+      target: { value: "Grace Hopper <grace@example.com>" },
+    });
+    fireEvent.blur(input);
+    const grace = await screen.findByRole("button", {
+      name: "Edit Grace Hopper",
+    });
+    expect(grace.textContent).toBe("Grace Hopper");
+    expect(grace.getAttribute("title")).toBe("grace@example.com");
+    expect(screen.getByTestId("recipients").textContent).toBe(
+      "Grace Hopper <grace@example.com>",
+    );
+  });
+
   it("merges API and local results with the flag on", async () => {
     env.NEXT_PUBLIC_CONTACTS_ENABLED = true;
     render(<Harness />);
@@ -93,7 +192,7 @@ describe("compose contact suggestions", () => {
     fireEvent.keyUp(input, { key: "Enter" });
     expect(
       await screen.findByRole("button", {
-        name: 'Remove "Doe, Jane" <jane@example.com>',
+        name: "Remove jane@example.com",
       }),
     ).toBeTruthy();
     expect(
@@ -180,7 +279,7 @@ describe("compose contact suggestions", () => {
     ).toBeTruthy();
     expect(
       screen.getByRole("button", {
-        name: "Remove Second <second@example.com>",
+        name: "Remove second@example.com",
       }),
     ).toBeTruthy();
     expect((input as HTMLInputElement).value).toBe("");
@@ -262,7 +361,7 @@ describe("compose contact suggestions", () => {
     });
     expect(
       await screen.findByRole("button", {
-        name: 'Remove "Doe, John" <j@x.com>',
+        name: "Remove j@x.com",
       }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Remove k@x.com" })).toBeTruthy();
@@ -365,6 +464,7 @@ function Harness({
           onSearchQueryChange={pending}
           onSelectedRecipientsChange={(_, value) => setRecipients(value)}
         />
+        <div data-testid="recipients">{recipients}</div>
       </MailEngineProvider>
     </SWRConfig>
   );

@@ -222,7 +222,9 @@
     "utils/email/compose-draft.ts"
   ],
   "contact-autocomplete.spec.ts": [
-    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx"
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "app/(app)/[emailAccountId]/compose/ComposeContactRecipientField.tsx",
+    "app/(app)/[emailAccountId]/compose/compose-recipients.ts"
   ],
   "draft-deletion.spec.ts": [
     "app/(app)/[emailAccountId]/mail/ThreadRow.tsx",

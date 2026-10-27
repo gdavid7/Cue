@@ -137,6 +137,19 @@ describe("local contact suggestions", () => {
     expect(await search(store, "   ")).toEqual([]);
   });
 
+  it("unescapes a quoted display name so it is not escaped twice when reused", async () => {
+    const { store } = await setup();
+    await write(store, [
+      message("1", '"Ada \\"The Countess\\" \\\\ Lovelace" <ada@example.com>'),
+    ]);
+    expect(await search(store, "countess")).toEqual([
+      {
+        emailAddress: "ada@example.com",
+        name: 'Ada "The Countess" \\ Lovelace',
+      },
+    ]);
+  });
+
   it("excludes own/alias, automated and selected addresses; caps results and scopes accounts", async () => {
     const { store } = await setup();
     const addresses = [

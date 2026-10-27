@@ -148,6 +148,96 @@ describe("sendEmailWithHtml", () => {
     expect(payload).not.toHaveProperty("bccRecipients");
   });
 
+  it("sends the display names of quoted recipients", async () => {
+    const draftPost = vi.fn(
+      async () => ({ id: "draft-1", conversationId: "c-1" }) as Message,
+    );
+    const client = createMockOutlookClient((path) => {
+      if (path === "/me/messages") return { post: draftPost };
+      if (path === "/me/messages/draft-1/send") return { post: vi.fn() };
+      throw new Error(`Unexpected API path: ${path}`);
+    });
+
+    await sendEmailWithHtml(
+      client,
+      {
+        to: '"Lovelace, Ada" <ada@example.com>,"Grace \\"Amazing\\", Hopper" <grace@example.com>,"Zoë Ångström" <zoe@example.com>',
+        subject: "Subject",
+        messageHtml: "<p>Hello</p>",
+      },
+      createTestLogger(),
+    );
+
+    expect(draftPost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toRecipients: [
+          {
+            emailAddress: { address: "ada@example.com", name: "Lovelace, Ada" },
+          },
+          {
+            emailAddress: {
+              address: "grace@example.com",
+              name: 'Grace "Amazing", Hopper',
+            },
+          },
+          {
+            emailAddress: { address: "zoe@example.com", name: "Zoë Ångström" },
+          },
+        ],
+      }),
+    );
+  });
+
+  it.each([
+    {
+      escapes: "an odd number of escaped quotes",
+      to: 'a@example.com, "X \\"y" <c@example.com>',
+      expected: [
+        { emailAddress: { address: "a@example.com" } },
+        { emailAddress: { address: "c@example.com", name: 'X "y' } },
+      ],
+    },
+    {
+      escapes: "an escaped quote next to a comma",
+      to: '"Doe, 5\\" pipe" <a@example.com>, c@example.com',
+      expected: [
+        { emailAddress: { address: "a@example.com", name: 'Doe, 5" pipe' } },
+        { emailAddress: { address: "c@example.com" } },
+      ],
+    },
+    {
+      escapes: "an even number of escaped quotes",
+      to: '"A \\"b\\", c" <a@example.com>, d@example.com, "E \\"f" <e@example.com>',
+      expected: [
+        { emailAddress: { address: "a@example.com", name: 'A "b", c' } },
+        { emailAddress: { address: "d@example.com" } },
+        { emailAddress: { address: "e@example.com", name: 'E "f' } },
+      ],
+    },
+  ])("keeps every recipient of a list with $escapes", async ({
+    to,
+    expected,
+  }) => {
+    const draftPost = vi.fn(
+      async () => ({ id: "draft-1", conversationId: "c-1" }) as Message,
+    );
+    const client = createMockOutlookClient((path) => {
+      if (path === "/me/messages") return { post: draftPost };
+      if (path === "/me/messages/draft-1/send") return { post: vi.fn() };
+      throw new Error(`Unexpected API path: ${path}`);
+    });
+
+    await sendEmailWithHtml(
+      client,
+      { to, subject: "Subject", messageHtml: "<p>Hello</p>" },
+      createTestLogger(),
+    );
+
+    expect(draftPost).toHaveBeenCalledWith(
+      expect.objectContaining({ toRecipients: expected }),
+    );
+  });
+
   it("parses formatted recipients when sending a new draft", async () => {
     const draftPost = vi.fn(
       async () =>
