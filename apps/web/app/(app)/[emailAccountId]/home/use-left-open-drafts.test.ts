@@ -143,6 +143,70 @@ describe("useLeftOpenDrafts", () => {
     );
   });
 
+  it("asks again only about drafts that are new or saved again, and keeps showing the rest meanwhile", async () => {
+    mail.drafts = [
+      draft("a", "kept", "t-kept", 1000),
+      draft("a", "resaved", "t-resaved", 1000),
+    ];
+    mail.cueAuthored = { a: [] };
+
+    const { result, rerender } = renderLeftOpenDrafts();
+    await waitFor(() => expect(result.current.drafts).toHaveLength(2));
+
+    let release = () => {};
+    mail.pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    mail.sequence += 1;
+    mail.drafts = [
+      draft("a", "kept", "t-kept", 1000),
+      draft("a", "resaved", "t-resaved", 2000),
+      draft("a", "aged-in", "t-aged-in", 1500),
+    ];
+    rerender();
+
+    await waitFor(() => expect(mail.serverReads).toHaveLength(2));
+    expect(
+      new URL(mail.serverPaths.a, "http://x").searchParams
+        .get("items")
+        ?.split(",")
+        .sort(),
+    ).toEqual(["t-aged-in:aged-in", "t-resaved:resaved"]);
+    // What was already answered still shows; a draft saved since may be
+    // Cue's until the server says.
+    expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+      "kept",
+    ]);
+    release();
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "kept",
+        "resaved",
+        "aged-in",
+      ]),
+    );
+  });
+
+  it("doesn't ask the server when the only change is a draft leaving the lane", async () => {
+    mail.drafts = [draft("a", "stays"), draft("a", "sent")];
+    mail.cueAuthored = { a: [] };
+
+    const { result, rerender } = renderLeftOpenDrafts();
+    await waitFor(() => expect(result.current.drafts).toHaveLength(2));
+
+    mail.sequence += 1;
+    mail.drafts = [draft("a", "stays")];
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "stays",
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mail.serverReads).toEqual(["a"]);
+  });
+
   it("asks each account only about its own drafts", async () => {
     mail.drafts = [
       draft("a", "a-draft", "a-thread", 1000),
@@ -307,6 +371,7 @@ describe("useLeftOpenDrafts", () => {
       const { unmount, cache } = renderLeftOpenDrafts();
       await waitFor(() => expect(mail.serverReads).toHaveLength(2));
       const answered = cachedCueAuthored(cache);
+      const answers = cachedAnswers(cache);
       let release = () => {};
       mail.pending = new Promise((resolve) => {
         release = resolve;
@@ -322,6 +387,7 @@ describe("useLeftOpenDrafts", () => {
 
       expect(readsOf("a")).toBe(2);
       expect(cachedCueAuthored(cache)).toBe(answered);
+      expect(cachedAnswers(cache)).toBe(answers);
     });
 
     it("doesn't ask again for an account with too many of Cue's drafts to check", async () => {
@@ -416,6 +482,13 @@ function renderLeftOpenDrafts() {
 
 function cachedCueAuthored(cache: Map<string, { data?: unknown }>) {
   const key = [...cache.keys()].find((k) => k.includes("cue-authored-drafts"));
+  return key ? cache.get(key)?.data : undefined;
+}
+
+function cachedAnswers(cache: Map<string, { data?: unknown }>) {
+  const key = [...cache.keys()].find((k) =>
+    k.includes("left-open-cue-answers"),
+  );
   return key ? cache.get(key)?.data : undefined;
 }
 
