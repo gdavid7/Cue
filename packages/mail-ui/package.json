@@ -34,7 +34,8 @@
     "@inboxzero/mail-react": "workspace:*",
     "dompurify": "3.4.15",
     "linkify-it": "5.0.2",
-    "tlds": "1.261.0"
+    "tlds": "1.261.0",
+    "tldts": "7.4.12"
   },
   "peerDependencies": {
     "react": ">=19",

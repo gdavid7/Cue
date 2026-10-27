@@ -131,6 +131,7 @@ const featureGroups = [
       "mail/reader-transition.spec.ts",
       "mail/person-card.spec.ts",
       "mail/sender-notice.spec.ts",
+      "mail/link-mismatch.spec.ts",
     ],
   },
   {
