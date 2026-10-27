@@ -400,6 +400,9 @@ export const POST = withEmailAccount("chat", async (request) => {
         userId,
         emailAccountId,
         provider: user.account.provider,
+      }).catch((error) => {
+        runLogger.warn("Could not check the open thread's account", { error });
+        return;
       }),
       chatLastSeenRulesRevision: chat.lastSeenRulesRevision,
       chatHasHistory,

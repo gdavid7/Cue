@@ -368,6 +368,29 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("answers without the open thread when its account cannot be checked", async () => {
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { id?: string };
+    }) => {
+      if (args.where.id === "other-account")
+        throw new Error("Database unavailable");
+      return [];
+    }) as never);
+
+    const response = await POST(
+      createRequest("What's this about?", {
+        openThreadId: "acct:other-account:t-42",
+        openMessageId: "acct:other-account:m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ openThread: undefined }),
+    );
+  });
+
   it("returns 404 when the email account cannot be loaded", async () => {
     mockGetEmailAccountWithAi.mockResolvedValueOnce(null);
 
