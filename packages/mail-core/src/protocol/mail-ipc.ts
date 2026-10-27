@@ -120,6 +120,17 @@ export const mailIpcRequestSchema = z.discriminatedUnion("method", [
   z.object({
     protocolVersion: z.literal(MAIL_IPC_PROTOCOL_VERSION),
     requestId: z.string().min(1).max(128),
+    method: z.literal("queryContactSuggestions"),
+    payload: z.object({
+      accountId: accountIdSchema,
+      query: z.string().max(200),
+      ownAddresses: z.array(z.string().max(320)).max(50),
+      excludeEmails: z.array(z.string().max(320)).max(500),
+    }),
+  }),
+  z.object({
+    protocolVersion: z.literal(MAIL_IPC_PROTOCOL_VERSION),
+    requestId: z.string().min(1).max(128),
     method: z.literal("queryImportantPeople"),
     payload: z.object({ accountIds: z.array(accountIdSchema).min(1).max(50) }),
   }),

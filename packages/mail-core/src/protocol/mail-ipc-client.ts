@@ -83,6 +83,7 @@ export function createMailIpcClient(
     getDiagnostics: (accountId) => call("getDiagnostics", { accountId }),
     getWaitingSummary: (accountIds) =>
       call("getWaitingSummary", { accountIds }),
+    queryContactSuggestions: (query) => call("queryContactSuggestions", query),
     queryImportantPeople: (accountIds) =>
       call("queryImportantPeople", { accountIds }),
     setImportantPerson: async (input) => {

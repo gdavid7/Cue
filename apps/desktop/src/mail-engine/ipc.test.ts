@@ -76,6 +76,26 @@ describe("dispatchMailIpc", () => {
     expect(setImportantPerson).toHaveBeenCalledWith(star);
   });
 
+  it("relays recipient suggestions to the desktop engine", async () => {
+    const suggestions = [{ emailAddress: "dana@example.com", name: "Dana" }];
+    const queryContactSuggestions = vi.fn(async () => suggestions);
+    const query = {
+      accountId: "acc-1",
+      query: "da",
+      ownAddresses: ["me@example.com"],
+      excludeEmails: [],
+    };
+    await expect(
+      dispatchMailIpc({ queryContactSuggestions } as never, {
+        protocolVersion: MAIL_IPC_PROTOCOL_VERSION,
+        requestId: "req-1",
+        method: "queryContactSuggestions",
+        payload: query,
+      }),
+    ).resolves.toEqual({ status: "ok", result: suggestions });
+    expect(queryContactSuggestions).toHaveBeenCalledWith(query);
+  });
+
   it("rejects an Important star write beyond the account limit", async () => {
     const setImportantPerson = vi.fn(async () => {});
     const result = await dispatchMailIpc({ setImportantPerson } as never, {

@@ -338,6 +338,8 @@ export function createTabFollowerClient(input: {
     // Answered by the tab that owns the engine; it fails over to the
     // provider search if that tab can't.
     searchMessages: (query) => call("searchMessages", [query]) as never,
+    queryContactSuggestions: (query) =>
+      call("queryContactSuggestions", [query]) as never,
     queryPersonCard: (query) => call("queryPersonCard", [query]) as never,
     queryNeverReadSenders: (query) =>
       call("queryNeverReadSenders", [query]) as never,

@@ -278,6 +278,48 @@ describe("mail engine tab channel capability handshake", () => {
     disposeTabFollowerClient(behindOlder);
   });
 
+  it("suggests recipients through the owner's engine, and not behind an owner without them", async () => {
+    const queryContactSuggestions = vi.fn(async () => [
+      { emailAddress: "dana@example.com", name: "Dana" },
+    ]);
+    const current = createMemoryTabBus();
+    bindTabMailOwner({
+      client: { ...stubClient({}), queryContactSuggestions } as never,
+      bus: current,
+    });
+    const follower = createTabFollowerClient({
+      accountId: "acc-1",
+      bus: current,
+      capabilities: (await helloOwner(current, "acc-1")).capabilities,
+    });
+    const query = {
+      accountId: "acc-1",
+      query: "da",
+      ownAddresses: ["me@example.com"],
+      excludeEmails: [],
+    };
+    expect(mailClientSupports(follower, "method:queryContactSuggestions")).toBe(
+      true,
+    );
+    await expect(follower.queryContactSuggestions?.(query)).resolves.toEqual([
+      { emailAddress: "dana@example.com", name: "Dana" },
+    ]);
+    expect(queryContactSuggestions).toHaveBeenCalledWith(query);
+    disposeTabFollowerClient(follower);
+
+    const inTab = createMemoryTabBus();
+    bindTabMailOwner({ client: stubClient({}), bus: inTab });
+    const behindInTab = createTabFollowerClient({
+      accountId: "acc-1",
+      bus: inTab,
+      capabilities: (await helloOwner(inTab, "acc-1")).capabilities,
+    });
+    expect(
+      mailClientSupports(behindInTab, "method:queryContactSuggestions"),
+    ).toBe(false);
+    disposeTabFollowerClient(behindInTab);
+  });
+
   it("assumes the baseline behind an owner tab that predates reporting", async () => {
     const bus = createMemoryTabBus();
     bindOlderOwner(bus);

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  findInvalidPendingRecipientField,
+  normalizePastedRecipients,
   resolveComposeRecipientFields,
   resolveComposeRecipients,
   resolveRecipientSelection,
@@ -100,5 +102,40 @@ describe("resolveComposeRecipients", () => {
       cc: "first-cc@example.com,second-cc@example.com",
       bcc: "bcc@example.com",
     });
+  });
+});
+
+describe("findInvalidPendingRecipientField", () => {
+  it("names the first field holding typed text that isn't an address", () => {
+    expect(
+      findInvalidPendingRecipientField({ to: "bob@exmaple", cc: "", bcc: "" }),
+    ).toBe("to");
+    expect(
+      findInvalidPendingRecipientField({
+        to: "bob@example.com",
+        cc: "  ",
+        bcc: "sam@example.com, half",
+      }),
+    ).toBe("bcc");
+  });
+
+  it("lets a send through when typed text is empty or valid", () => {
+    expect(
+      findInvalidPendingRecipientField({
+        to: '"Doe, Jane" <jane@example.com>',
+        cc: "",
+        bcc: " ",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("normalizePastedRecipients", () => {
+  it("splits on commas, semicolons and lines but not inside quoted names", () => {
+    expect(
+      normalizePastedRecipients(
+        '"Doe; John" <j@x.com>;k@x.com\nl@x.com\r\n, m@x.com;',
+      ),
+    ).toBe('"Doe; John" <j@x.com>, k@x.com, l@x.com, m@x.com');
   });
 });
