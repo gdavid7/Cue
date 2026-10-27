@@ -22,7 +22,7 @@ import { mapWithConcurrency } from "@/utils/async";
 import { MICROSOFT_MAILBOX_CONCURRENCY_LIMIT } from "@/utils/outlook/mailbox-concurrency";
 
 const MESSAGE_SELECT_FIELDS =
-  "id,conversationId,conversationIndex,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,receivedDateTime,isDraft,isRead,flag,categories,parentFolderId,hasAttachments,webLink,inferenceClassification";
+  "id,conversationId,conversationIndex,internetMessageId,subject,bodyPreview,from,toRecipients,ccRecipients,replyTo,receivedDateTime,isDraft,isRead,flag,categories,parentFolderId,hasAttachments,webLink,inferenceClassification";
 
 type DeltaMessage = Message & {
   "@removed"?: { reason?: string };

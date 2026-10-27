@@ -207,6 +207,8 @@ export function applyMetadataPatch(
     internetMessageId: patch.internetMessageId ?? current.internetMessageId,
     senderUtcOffsetMinutes:
       patch.senderUtcOffsetMinutes ?? current.senderUtcOffsetMinutes,
+    // Reply-To is fixed when a message is sent, so a patch without it keeps it.
+    replyTo: patch.replyTo ?? current.replyTo,
   };
 }
 

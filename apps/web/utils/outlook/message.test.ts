@@ -7,6 +7,7 @@ import {
   buildOutlookSearchFallbackQuery,
   convertMessage,
   getMessage,
+  MESSAGE_LIST_SELECT_FIELDS,
   queryBatchMessages,
   queryMessagesWithAttachments,
   queryMessagesWithFilters,
@@ -166,6 +167,24 @@ describe("convertMessage", () => {
       "list-unsubscribe": "<https://example.com/unsubscribe>",
       "list-unsubscribe-post": "List-Unsubscribe=One-Click",
     });
+  });
+
+  it("reads Graph's replyTo recipients as the Reply-To header", () => {
+    const result = convertMessage({
+      id: "msg-123",
+      replyTo: [
+        { emailAddress: { name: "Billing", address: "billing@pay.example" } },
+        { emailAddress: { address: "ops@pay.example" } },
+      ],
+    });
+    expect(result.headers["reply-to"]).toBe(
+      "Billing <billing@pay.example>, ops@pay.example",
+    );
+    expect(convertMessage({ id: "m", replyTo: [] }).headers["reply-to"]).toBe(
+      undefined,
+    );
+    // Graph leaves out what the request does not select.
+    expect(MESSAGE_LIST_SELECT_FIELDS.split(",")).toContain("replyTo");
   });
 
   it("normalizes null reply headers", () => {
