@@ -720,6 +720,31 @@ describe("changing email across the user's accounts", () => {
     });
   });
 
+  it("counts a search-wide action in the other accounts when the chat's own account can't be reached", async () => {
+    vi.mocked(createEmailProvider).mockImplementation(
+      async ({ emailAccountId }) => {
+        if (emailAccountId === "account-1") throw new Error("Disconnected");
+        return providers[emailAccountId] as never;
+      },
+    );
+
+    const result = await manage("google", {
+      action: "archive_threads",
+      query: "label:work older_than:1y",
+    });
+
+    expect(providers["account-2"].listMatchingMessages).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "needs_confirmation",
+      conversations: 1,
+      accounts: [
+        { account: CHAT_EMAIL, error: "Could not search this account." },
+        { account: "two@example.com", conversations: 1 },
+        { account: "three@example.com", error: expect.any(String) },
+      ],
+    });
+  });
+
   it("prepares a reply that sends from the account the email is in", async () => {
     const result: any = await replyEmailTool(chatToolOptions()).execute?.(
       {

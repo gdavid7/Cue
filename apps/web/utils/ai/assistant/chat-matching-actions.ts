@@ -18,7 +18,10 @@ import {
 } from "@/utils/mail-bulk/run-matching-job";
 import { startMatchingBulkJob } from "@/utils/mail-bulk/start-matching-job";
 import { redis } from "@/utils/redis";
-import { getOwnedEmailAccount } from "@/utils/ai/assistant/chat-other-accounts";
+import {
+  ACCOUNT_SEARCH_FAILED,
+  getOwnedEmailAccount,
+} from "@/utils/ai/assistant/chat-other-accounts";
 import {
   type AccountSearch,
   translateAccountSearch,
@@ -141,7 +144,8 @@ export async function previewMatchingQueryAction({
   labelId?: string;
   /** Why the chat's own account can't be acted on, when it can't. */
   chatAccountError?: string;
-  emailProvider: EmailProvider;
+  /** The chat's own account, absent when chatAccountError says why. */
+  emailProvider?: EmailProvider;
   emailAccountId: string;
   provider: string;
   /** The user's other covered accounts, already counted. */
@@ -153,15 +157,16 @@ export async function previewMatchingQueryAction({
   confirmation?: { chatId: string; toolCallId: string };
   abortSignal?: AbortSignal;
 }) {
-  const chatCount: MatchingCount | { error: string } = chatAccountError
-    ? { error: chatAccountError }
-    : await countMatchingInAccount({
-        search: { query },
-        provider,
-        bulkAction,
-        emailProvider,
-        abortSignal,
-      });
+  const chatCount: MatchingCount | { error: string } =
+    chatAccountError || !emailProvider
+      ? { error: chatAccountError ?? ACCOUNT_SEARCH_FAILED }
+      : await countMatchingInAccount({
+          search: { query },
+          provider,
+          bulkAction,
+          emailProvider,
+          abortSignal,
+        });
   if (!otherAccounts && "error" in chatCount) return chatCount;
 
   const previews: OtherAccountMatchingPreview[] = [

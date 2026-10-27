@@ -13,6 +13,8 @@ const OTHER_ACCOUNTS_CONCURRENCY = 3;
 const MAX_OTHER_ACCOUNTS = 10;
 const OTHER_ACCOUNTS_DEADLINE_MS = 15_000;
 
+export const ACCOUNT_SEARCH_FAILED = "Could not search this account.";
+
 type ConnectedEmailAccount = Awaited<
   ReturnType<typeof getConnectedEmailAccounts>
 >[number];
@@ -136,10 +138,7 @@ export async function runOnOtherAccounts<T>({
               otherEmailAccountId: account.id,
               error,
             });
-            finished[index] = {
-              account,
-              error: "Could not search this account.",
-            };
+            finished[index] = { account, error: ACCOUNT_SEARCH_FAILED };
           }
         },
       ),

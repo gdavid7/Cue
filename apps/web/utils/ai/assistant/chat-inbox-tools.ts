@@ -79,6 +79,7 @@ import { validateUserAndAiAccess } from "@/utils/user/validate";
 import { SafeError } from "@/utils/error";
 import { getEmailUrlForMessage } from "@/utils/url";
 import {
+  ACCOUNT_SEARCH_FAILED,
   type OtherAccountResult,
   resolveEmailAccountForId,
   runOnOtherAccounts,
@@ -1069,7 +1070,7 @@ const buildManageInboxTool = ({
   ) => NormalizedManageInboxInput;
   taxonomy: ManageInboxTaxonomyConfig;
 }) => {
-  const { email, emailAccountId, provider, logger } = options;
+  const { email, provider, logger } = options;
 
   return tool({
     description:
@@ -1117,15 +1118,9 @@ const buildManageInboxTool = ({
         }
 
         if (parsedInput.query) {
-          const emailProvider = await createEmailProvider({
-            emailAccountId,
-            provider,
-            logger,
-          });
           const startedAt = Date.now();
           const result = await runManageInboxQuery({
             parsedInput: { ...parsedInput, query: parsedInput.query },
-            emailProvider,
             options,
             taxonomy,
             // Only the web chat shows the card a confirmation is pressed on.
@@ -3128,14 +3123,12 @@ function normalizeOutlookManageInboxInput(
  */
 async function runManageInboxQuery({
   parsedInput,
-  emailProvider,
   options,
   taxonomy,
   confirmation,
   abortSignal,
 }: {
   parsedInput: NormalizedManageInboxInput & { query: string };
-  emailProvider: EmailProvider;
   options: InboxToolOptions;
   taxonomy: ManageInboxTaxonomyConfig;
   confirmation?: { chatId: string; toolCallId: string };
@@ -3158,7 +3151,23 @@ async function runManageInboxQuery({
 
   let labelId: string | undefined;
   let chatAccountError: string | undefined;
-  if (action === "label_threads") {
+  // The chat's own account is one of the accounts counted: when it can't be
+  // reached, the others are still counted, as one of them failing would be.
+  let emailProvider: EmailProvider | undefined;
+  try {
+    emailProvider = await createEmailProvider({
+      emailAccountId,
+      provider,
+      logger,
+    });
+  } catch (error) {
+    if (!multiAccount) throw error;
+    logger.warn("Could not reach the chat's account for a search action", {
+      error,
+    });
+    chatAccountError = ACCOUNT_SEARCH_FAILED;
+  }
+  if (emailProvider && action === "label_threads") {
     try {
       const resolved = await resolveThreadLabel({
         emailProvider,
