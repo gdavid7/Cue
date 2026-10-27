@@ -6,6 +6,7 @@ import { createEmailProvider } from "@/utils/email/provider";
 import { getConnectedEmailAccounts } from "@/utils/email/connected-accounts";
 import { getFormattedSenderAddress } from "@/utils/email/get-formatted-sender-address";
 import { forwardMessage } from "@/utils/email/forward-message";
+import { getReplyAddressee } from "@/utils/email";
 import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
 import { sleep } from "@/utils/sleep";
@@ -943,7 +944,7 @@ async function confirmPendingReplyEmailAction({
     actionType: output.actionType,
     messageId,
     threadId: message.threadId || null,
-    to: message.headers["reply-to"] || message.headers.from || null,
+    to: getReplyAddressee(message.headers, [from]) || null,
     subject: message.subject || message.headers.subject || null,
     confirmedAt,
   };

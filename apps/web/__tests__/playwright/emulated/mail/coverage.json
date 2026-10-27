@@ -184,6 +184,13 @@
     "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
     "app/(app)/[emailAccountId]/compose/upload-draft-attachment.ts"
   ],
+  "reply-to-notice.spec.ts": [
+    "app/(app)/[emailAccountId]/compose/ReplyToNotice.tsx",
+    "utils/email/reply-to-difference.ts",
+    "app/(app)/[emailAccountId]/compose/ComposeEmailForm.tsx",
+    "components/email-list/EmailMessage.tsx",
+    "utils/email/reply-all.ts"
+  ],
   "reply-from-owning-account.spec.ts": [
     "components/email-list/EmailMessage.tsx",
     "hooks/useOwnEmailAddresses.ts",

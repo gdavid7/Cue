@@ -109,6 +109,7 @@ import {
   parseStoredAttachments,
   readCoverage,
   readRevision,
+  replyToFromRow,
 } from "./store-read-utils";
 
 const MAX_QUEUE = 5000;
@@ -3164,8 +3165,8 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
        account_id, message_id, conversation_id, provider, version, subject, preview, external_url,
        from_address, to_json, cc_json, bcc_json, received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json,
        roles_json, in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, deleted,
-       internet_message_id, sender_utc_offset_minutes
-     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       internet_message_id, sender_utc_offset_minutes, reply_to_json
+     ) VALUES (?, ?, ?, COALESCE((SELECT provider FROM accounts WHERE account_id = ?), 'google'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(account_id, message_id) DO UPDATE SET
        conversation_id = excluded.conversation_id,
        version = excluded.version,
@@ -3193,7 +3194,8 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
        snoozed_until_ms = excluded.snoozed_until_ms,
        deleted = excluded.deleted,
        internet_message_id = COALESCE(excluded.internet_message_id, messages.internet_message_id),
-       sender_utc_offset_minutes = COALESCE(excluded.sender_utc_offset_minutes, messages.sender_utc_offset_minutes)`,
+       sender_utc_offset_minutes = COALESCE(excluded.sender_utc_offset_minutes, messages.sender_utc_offset_minutes),
+       reply_to_json = COALESCE(excluded.reply_to_json, messages.reply_to_json)`,
     [
       message.accountId,
       message.messageId,
@@ -3225,6 +3227,7 @@ async function upsertConfirmed(tx: SqlTransaction, message: ConfirmedMessage) {
       message.deleted ? 1 : 0,
       message.internetMessageId ?? null,
       message.senderUtcOffsetMinutes ?? null,
+      message.replyTo ? JSON.stringify(message.replyTo) : null,
     ],
   );
   await indexContactMessage(tx, message);
@@ -3417,8 +3420,8 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
          account_id, message_id, conversation_id, subject, preview, external_url, from_address, to_json, cc_json, bcc_json,
          received_at_ms, read, starred, folder_id, inbox_section, label_ids_json, category_ids_json, roles_json,
          in_inbox, in_sent, in_draft, in_trash, in_spam, has_attachments, snoozed_until_ms, pending_operation_ids_json,
-         message_key, sender_utc_offset_minutes
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         message_key, sender_utc_offset_minutes, reply_to_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(account_id, message_id) DO UPDATE SET
          conversation_id = excluded.conversation_id,
          subject = excluded.subject,
@@ -3445,7 +3448,8 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
          snoozed_until_ms = excluded.snoozed_until_ms,
          pending_operation_ids_json = excluded.pending_operation_ids_json,
          message_key = excluded.message_key,
-         sender_utc_offset_minutes = excluded.sender_utc_offset_minutes`,
+         sender_utc_offset_minutes = excluded.sender_utc_offset_minutes,
+         reply_to_json = excluded.reply_to_json`,
       [
         effective.accountId,
         effective.messageId,
@@ -3475,6 +3479,7 @@ async function recomputeTargets(tx: SqlTransaction, targets: MessageKey[]) {
         JSON.stringify(effective.pendingOperationIds),
         normalizeInternetMessageId(confirmed.internetMessageId),
         effective.senderUtcOffsetMinutes ?? null,
+        effective.replyTo ? JSON.stringify(effective.replyTo) : null,
       ],
     );
   }
@@ -3662,6 +3667,7 @@ function confirmedFromRow(
       row.sender_utc_offset_minutes == null
         ? undefined
         : Number(row.sender_utc_offset_minutes),
+    replyTo: replyToFromRow(row.reply_to_json),
   };
 }
 

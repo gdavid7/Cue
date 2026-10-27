@@ -1,4 +1,4 @@
-import type { ParsedMessage } from "@/utils/types";
+import type { ParsedMessage, ParsedMessageHeaders } from "@/utils/types";
 import { z } from "zod";
 
 const emailSchema = z.string().email();
@@ -123,6 +123,30 @@ export function formatRecipientNames(
   return (includesMe ? ["me", ...names] : names).join(", ");
 }
 
+/**
+ * Who a reply to someone else's message goes to: its Reply-To addresses, as
+ * Gmail does, or From when it has none. The user's own addresses are left out,
+ * so a Reply-To naming only the user answers From.
+ */
+export function getReplyAddressee(
+  headers: Pick<ParsedMessageHeaders, "from" | "reply-to">,
+  ownEmails: string | Array<string | null | undefined>,
+): string {
+  const ownKeys = new Set(
+    [ownEmails]
+      .flat()
+      .map((email) => extractEmailAddress(email ?? "").toLowerCase())
+      .filter(Boolean),
+  );
+  const replyTo = splitRecipientList(headers["reply-to"] ?? "").filter(
+    (recipient) => {
+      const key = extractEmailAddress(recipient).toLowerCase();
+      return key && !ownKeys.has(key);
+    },
+  );
+  return replyTo.length ? replyTo.join(", ") : headers.from;
+}
+
 export function messageRepliesToSourceSender({
   sentMessage,
   sourceMessage,
@@ -131,7 +155,7 @@ export function messageRepliesToSourceSender({
   sourceMessage: Pick<ParsedMessage, "headers">;
 }) {
   const replyTargetEmails = extractEmailAddresses(
-    sourceMessage.headers["reply-to"] || sourceMessage.headers.from,
+    getReplyAddressee(sourceMessage.headers, sentMessage.headers.from),
   ).map((email) => email.toLowerCase());
   if (!replyTargetEmails.length) return null;
 

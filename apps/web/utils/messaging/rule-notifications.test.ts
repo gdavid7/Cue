@@ -1197,6 +1197,33 @@ describe("buildNotificationReplySendBody", () => {
     );
   });
 
+  it("replies to Reply-To, or to From when Reply-To is the user's own address", async () => {
+    const { buildNotificationReplySendBody } = await import(
+      "./rule-notifications"
+    );
+    const replyTo = (replyToHeader: string) =>
+      buildNotificationReplySendBody({
+        sourceMessage: {
+          id: "message-1",
+          threadId: "thread-1",
+          headers: {
+            from: "sender@example.com",
+            "reply-to": replyToHeader,
+            to: "user@example.com",
+            subject: "Test subject",
+            date: "Mon, 1 Jan 2024 11:00:00 +0000",
+          },
+        } as ParsedMessage,
+        fallbackThreadId: "thread-1",
+        content: "Thanks for checking in.",
+        formattedFrom: "User <user@example.com>",
+        attachments: [],
+      }).to;
+
+    expect(replyTo("billing@pay.example")).toBe("billing@pay.example");
+    expect(replyTo("USER@example.com")).toBe("sender@example.com");
+  });
+
   it("falls back to the stored thread id when the source message omits it", async () => {
     const { buildNotificationReplySendBody } = await import(
       "./rule-notifications"

@@ -1,5 +1,9 @@
 import type { ParsedMessageHeaders } from "@/utils/types";
-import { extractEmailAddress, splitRecipientList } from "@/utils/email";
+import {
+  extractEmailAddress,
+  getReplyAddressee,
+  splitRecipientList,
+} from "@/utils/email";
 
 export interface ReplyAllRecipients {
   cc: string[];
@@ -8,7 +12,8 @@ export interface ReplyAllRecipients {
 
 /**
  * Builds reply-all recipients by including original TO and CC recipients.
- * The reply goes to the original sender, and CC includes all other recipients.
+ * The reply goes to the sender's Reply-To, or to From without one, and CC
+ * includes all other recipients.
  *
  * @param headers - Original email headers
  * @param overrideTo - Optional override for the TO field (e.g., for drafts)
@@ -20,15 +25,14 @@ export function buildReplyAllRecipients(
   overrideTo: string | undefined,
   currentUserEmails: string | string[],
 ): ReplyAllRecipients {
-  // Determine the primary recipient (TO field)
-  const replyToRaw = overrideTo || headers["reply-to"] || headers.from;
-  const replyTo = extractEmailAddress(replyToRaw);
-
   const currentUserEmailSet = new Set(
     (Array.isArray(currentUserEmails) ? currentUserEmails : [currentUserEmails])
-      .map((email) => extractEmailAddress(email).toLowerCase())
+      .map(addressKey)
       .filter(Boolean),
   );
+  const replyToRaw =
+    overrideTo || getReplyAddressee(headers, currentUserEmails);
+  const replyTo = new Set(splitRecipientList(replyToRaw).map(addressKey));
 
   // Build CC list for reply-all behavior
   const ccSet = new Set<string>();
@@ -57,8 +61,9 @@ export function buildReplyAllRecipients(
 
 /**
  * Recipients the inline composer opens with. Following up on your own message
- * keeps its recipients; replying to someone else goes back to them, and reply
- * all also copies everyone else on the message except you. "You" is every
+ * keeps its recipients; replying to someone else goes to their Reply-To, or
+ * back to them without one, and reply all also copies everyone else on the
+ * message except you. "You" is every
  * address the user has connected, not only the one replying.
  */
 export function buildComposeReplyRecipients({
@@ -75,7 +80,13 @@ export function buildComposeReplyRecipients({
   if (sentFromUser) {
     return { to: headers.to, cc: headers.cc ?? "", bcc: headers.bcc ?? "" };
   }
-  if (!replyAll) return { to: headers.from, cc: headers.cc ?? "", bcc: "" };
+  if (!replyAll) {
+    return {
+      to: getReplyAddressee(headers, ownEmails),
+      cc: headers.cc ?? "",
+      bcc: "",
+    };
+  }
 
   const recipients = buildReplyAllRecipients(headers, undefined, ownEmails);
   const ownKeys = new Set(ownEmails.map(addressKey));
@@ -163,7 +174,7 @@ function addHeaderRecipientsToCcSet({
   ccSet,
 }: {
   headerValue: string | undefined;
-  replyTo: string;
+  replyTo: Set<string>;
   currentUserEmailSet: Set<string>;
   seenEmails: Set<string>;
   ccSet: Set<string>;
@@ -177,7 +188,7 @@ function addHeaderRecipientsToCcSet({
 
       const normalizedEmail = email.toLowerCase();
       return (
-        normalizedEmail !== replyTo.toLowerCase() &&
+        !replyTo.has(normalizedEmail) &&
         !currentUserEmailSet.has(normalizedEmail)
       );
     });

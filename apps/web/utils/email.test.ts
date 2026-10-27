@@ -10,6 +10,7 @@ import {
   normalizeEmailAddress,
   formatEmailWithName,
   getNewsletterSenderDisplayName,
+  getReplyAddressee,
   messageRepliesToSourceSender,
   isSameOrganization,
   getInitials,
@@ -309,6 +310,45 @@ describe("email utils", () => {
     });
   });
 
+  describe("getReplyAddressee", () => {
+    const from = "Ana <ana@supplier.example>";
+    const ownEmails = ["me@example.com", "Me <me@alias.example>"];
+
+    it("answers every Reply-To address, keeping their names", () => {
+      expect(
+        getReplyAddressee(
+          {
+            from,
+            "reply-to": '"Billing, EU" <billing@pay.example>, ops@pay.example',
+          },
+          ownEmails,
+        ),
+      ).toBe('"Billing, EU" <billing@pay.example>, ops@pay.example');
+    });
+
+    it("falls back to From when Reply-To is the user's own alias", () => {
+      expect(
+        getReplyAddressee({ from, "reply-to": "ME@alias.example" }, ownEmails),
+      ).toBe(from);
+      expect(
+        getReplyAddressee(
+          { from, "reply-to": "me@example.com, ops@pay.example" },
+          "me@example.com",
+        ),
+      ).toBe("ops@pay.example");
+    });
+
+    it("falls back to From without a readable Reply-To", () => {
+      expect(getReplyAddressee({ from }, ownEmails)).toBe(from);
+      expect(
+        getReplyAddressee(
+          { from, "reply-to": "not an address, @@" },
+          ownEmails,
+        ),
+      ).toBe(from);
+    });
+  });
+
   describe("messageRepliesToSourceSender", () => {
     const cases: Array<
       [string, MessageHeaders, MessageHeaders, boolean | null]
@@ -326,6 +366,12 @@ describe("email utils", () => {
           "reply-to": "Ops <ops@example.com>, Support <support@example.com>",
         },
         { from: "user@example.com", to: "support@example.com" },
+        true,
+      ],
+      [
+        "reply-to names only the user, so From is the reply target",
+        { from: "Sales <sales@example.com>", "reply-to": "USER@example.com" },
+        { from: "User <user@example.com>", to: "sales@example.com" },
         true,
       ],
       [

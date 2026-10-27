@@ -76,6 +76,7 @@ const featureGroups = [
       "mail/contact-autocomplete.spec.ts",
       "mail/calendar-invitation.spec.ts",
       "mail/pre-send-check.spec.ts",
+      "mail/reply-to-notice.spec.ts",
     ],
   },
   {

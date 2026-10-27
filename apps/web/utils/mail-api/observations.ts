@@ -65,6 +65,7 @@ export function parsedMessageMetadata(message: ParsedMessage): MessageMetadata {
       message.hasAttachment ?? Boolean(message.attachments?.length),
     ...internetMessageId(message),
     ...senderUtcOffset(message),
+    ...replyTo(message),
   };
 }
 
@@ -168,6 +169,13 @@ function internetMessageId(message: ParsedMessage) {
 function senderUtcOffset(message: ParsedMessage) {
   const offset = parseDateHeaderOffsetMinutes(message.headers.date);
   return offset === undefined ? {} : { senderUtcOffsetMinutes: offset };
+}
+
+// Gmail's Reply-To header, or Outlook's replyTo recipients, which the Outlook
+// parser files under the same header.
+function replyTo(message: ParsedMessage) {
+  const addresses = splitAddresses(message.headers["reply-to"]?.trim());
+  return addresses.length ? { replyTo: addresses } : {};
 }
 
 function receivedAtMs(message: ParsedMessage): number {

@@ -963,6 +963,91 @@ describe("draftEmail", () => {
       }),
     );
   });
+
+  describe("addressing the reply as Gmail does", () => {
+    const draftReplyTo = async (
+      headers: Partial<EmailForAction["headers"]>,
+    ) => {
+      const updateDraft = vi.fn(async () => ({ id: "draft-1" }) as Message);
+      const client = createMockOutlookClient((path) => {
+        if (path === "/me/messages/message-1") {
+          return { get: async () => ({ isRead: true }) };
+        }
+        if (path === "/me/messages/message-1/createReplyAll") {
+          return { post: async () => ({ id: "draft-1" }) as Message };
+        }
+        if (path === "/me/messages/draft-1") return { patch: updateDraft };
+        throw new Error(`Unexpected API path: ${path}`);
+      });
+      await draftEmail(
+        client,
+        {
+          id: "message-1",
+          threadId: "conversation-1",
+          headers: {
+            from: "Ana Lopez <ana@supplier.example>",
+            to: "me@example.com",
+            subject: "Original subject",
+            date: "2026-01-01T12:00:00.000Z",
+            ...headers,
+          },
+          rawRecipients: {
+            from: {
+              emailAddress: { address: "ana@supplier.example", name: "Ana" },
+            },
+            toRecipients: [],
+            ccRecipients: [],
+          },
+          textPlain: "Original body",
+          textHtml: "<p>Original body</p>",
+        } as EmailForAction,
+        { content: "Draft body" },
+        ["me@example.com", "me@alias.example"],
+        createTestLogger(),
+      );
+      const [patch] = updateDraft.mock.calls[0] as unknown as [
+        { toRecipients: unknown; ccRecipients: unknown },
+      ];
+      return patch;
+    };
+    const recipient = (address: string, name: string) => ({
+      emailAddress: { address, name },
+    });
+
+    it("addresses every Reply-To address instead of From", async () => {
+      const patch = await draftReplyTo({
+        "reply-to": "Billing <billing@pay.example>, ops@pay.example",
+        cc: "sam@example.com",
+      });
+      expect(patch.toRecipients).toEqual([
+        recipient("billing@pay.example", "Billing"),
+        { emailAddress: { address: "ops@pay.example" } },
+      ]);
+      expect(patch.ccRecipients).toEqual([
+        recipient("sam@example.com", "sam@example.com"),
+      ]);
+    });
+
+    it("keeps a mailing list that asks for replies on the reply", async () => {
+      const patch = await draftReplyTo({
+        to: "me@example.com, Team <team@groups.example>",
+        "reply-to": "Team <team@groups.example>",
+      });
+      expect(patch.toRecipients).toEqual([
+        recipient("team@groups.example", "Team"),
+      ]);
+      expect(patch.ccRecipients).toEqual([]);
+    });
+
+    it("answers From as before when there is no usable Reply-To", async () => {
+      const from = [recipient("ana@supplier.example", "Ana")];
+      expect((await draftReplyTo({})).toRecipients).toEqual(from);
+      expect(
+        (await draftReplyTo({ "reply-to": "Me <ME@alias.example>" }))
+          .toRecipients,
+      ).toEqual(from);
+    });
+  });
 });
 
 function createMockOutlookClient(

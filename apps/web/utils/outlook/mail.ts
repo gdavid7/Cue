@@ -1,4 +1,8 @@
-import type { Message, UploadSession } from "@microsoft/microsoft-graph-types";
+import type {
+  Message,
+  Recipient,
+  UploadSession,
+} from "@microsoft/microsoft-graph-types";
 import type { OutlookClient } from "@/utils/outlook/client";
 import type { Attachment } from "nodemailer/lib/mailer";
 import type { SendEmailBody, WithMailerAttachments } from "@/utils/types/mail";
@@ -263,26 +267,12 @@ export async function draftEmail(
     userEmails,
   );
 
-  const overrideToRecipient = args.to
-    ? {
-        emailAddress: {
-          address: extractEmailAddress(recipients.to),
-          name: extractNameFromEmail(recipients.to),
-        },
-      }
-    : undefined;
-
-  const fallbackToRecipient = {
-    emailAddress: {
-      address: extractEmailAddress(recipients.to),
-      name: extractNameFromEmail(recipients.to),
-    },
-  };
-
-  const toRecipient =
-    overrideToRecipient ??
-    originalEmail.rawRecipients?.from ??
-    fallbackToRecipient;
+  const toRecipients = draftToRecipients({
+    to: recipients.to,
+    overridden: Boolean(args.to),
+    originalEmail,
+    logger,
+  });
 
   // Build CC list from reply-all and args
   const ccAddresses = mergeAndDedupeRecipients(recipients.cc, args.cc);
@@ -345,7 +335,7 @@ export async function draftEmail(
           contentType: "html",
           content: html,
         },
-        toRecipients: [toRecipient],
+        toRecipients,
         ccRecipients,
         bccRecipients,
       }),
@@ -749,4 +739,31 @@ async function uploadAttachmentViaSession({
     action: "upload Outlook attachment chunk",
     statusAction: "fetch Outlook upload session status",
   });
+}
+
+// Without an explicit To, the draft answers the sender's Reply-To addresses,
+// as Gmail does. When it falls back to From, Graph's own From recipient is
+// kept, exactly as before Reply-To was honored.
+function draftToRecipients({
+  to,
+  overridden,
+  originalEmail,
+  logger,
+}: {
+  to: string;
+  overridden: boolean;
+  originalEmail: EmailForAction;
+  logger: Logger;
+}): Recipient[] {
+  const single = {
+    emailAddress: {
+      address: extractEmailAddress(to),
+      name: extractNameFromEmail(to),
+    },
+  };
+  if (overridden) return [single];
+  if (to === originalEmail.headers.from) {
+    return [originalEmail.rawRecipients?.from ?? single];
+  }
+  return toGraphRecipients(to, logger);
 }

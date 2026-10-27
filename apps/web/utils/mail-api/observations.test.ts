@@ -194,6 +194,44 @@ describe("parsedMessageMetadata sender offset", () => {
   });
 });
 
+describe("parsedMessageMetadata Reply-To", () => {
+  const message = (replyTo?: string) =>
+    ({
+      id: "m6",
+      threadId: "t6",
+      historyId: "1",
+      date: "2026-10-26T02:12:45.000Z",
+      subject: "Invoice",
+      snippet: "Hi",
+      labelIds: ["INBOX"],
+      headers: {
+        from: "Ana <noreply@supplier.example>",
+        to: "me@example.com",
+        date: "",
+        ...(replyTo === undefined ? {} : { "reply-to": replyTo }),
+      },
+      inline: [],
+    }) as ParsedMessage;
+
+  it("keeps every Reply-To address, from Gmail's header or Outlook's replyTo", () => {
+    const patch = parsedMessagePatch(
+      "account",
+      "google",
+      message('"Billing, EU" <billing@pay.example>, ops@pay.example'),
+    );
+    expect(providerChangeSchema.parse(patch)).toMatchObject({
+      fields: {
+        replyTo: ['"Billing, EU" <billing@pay.example>', "ops@pay.example"],
+      },
+    });
+  });
+
+  it("leaves Reply-To out when the message has none", () => {
+    expect("replyTo" in parsedMessageMetadata(message())).toBe(false);
+    expect("replyTo" in parsedMessageMetadata(message("  "))).toBe(false);
+  });
+});
+
 describe("parsedMessageBodyObservation", () => {
   it("does not stall a body hydration page on an oversized sender Content-ID", () => {
     const observation = parsedMessageBodyObservation("acc-1", {
