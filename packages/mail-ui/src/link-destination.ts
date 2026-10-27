@@ -10,12 +10,26 @@ import { getDomain, parse } from "tldts";
 // Kept to the common ones.
 const REDIRECT_HOSTS = [
   "awstrack.me", // Amazon SES
+  "convertkit-mail.com", // ConvertKit
+  "convertkit-mail2.com", // ConvertKit
   "exct.net", // Salesforce Marketing Cloud
+  "hubspotlinks.com", // HubSpot
+  "klclick.com", // Klaviyo
+  "klclick1.com", // Klaviyo
+  "klclick2.com", // Klaviyo
+  "klclick3.com", // Klaviyo
   "list-manage.com", // Mailchimp
+  "mail.beehiiv.com", // Beehiiv
   "mandrillapp.com", // Mandrill
+  "mjt.lu", // Mailjet
   "sendgrid.net", // SendGrid
+  "sendibt2.com", // Brevo (Sendinblue)
+  "sendibt3.com", // Brevo (Sendinblue)
   "urldefense.com", // Proofpoint
 ];
+
+// Hosts that serve real pages too, so only their redirect path is skipped.
+const REDIRECT_PATHS = [{ host: "substack.com", path: "/redirect/" }]; // Substack
 
 // Microsoft Defender Safe Links keeps the original address in `url`, so the
 // link is judged by that address instead.
@@ -57,12 +71,18 @@ export function getMismatchedLinkHost(
   const destination = parseHref(href);
   if (!destination) return null;
 
-  const destinationHost = destination.hostname;
+  const destinationHost = stripTrailingDot(destination.hostname);
   if (isHostOrSubdomain(destinationHost, SAFE_LINKS_HOST)) {
     const original = destination.searchParams.get("url");
     return original ? getMismatchedLinkHost(text, original) : null;
   }
-  if (REDIRECT_HOSTS.some((host) => isHostOrSubdomain(destinationHost, host))) {
+  if (
+    REDIRECT_HOSTS.some((host) => isHostOrSubdomain(destinationHost, host)) ||
+    REDIRECT_PATHS.some(
+      ({ host, path }) =>
+        destinationHost === host && destination.pathname.startsWith(path),
+    )
+  ) {
     return null;
   }
 
@@ -83,12 +103,16 @@ function parseShownHost(text: string) {
     .trim()
     .replace(WRAPPING_PUNCTUATION, "");
   if (!candidate.includes(".")) return null;
-  if (SCHEME.test(candidate)) return parseHref(candidate)?.hostname ?? null;
+  if (SCHEME.test(candidate)) {
+    const hostname = parseHref(candidate)?.hostname;
+    return hostname ? stripTrailingDot(hostname) : null;
+  }
 
   // An email address is a mailbox, not where the link says it goes.
   if (!BARE_HOST.test(candidate) || candidate.includes("@")) return null;
-  const host = parseHref(`https://${candidate}`)?.hostname;
-  if (!host) return null;
+  const hostname = parseHref(`https://${candidate}`)?.hostname;
+  if (!hostname) return null;
+  const host = stripTrailingDot(hostname);
 
   // "report.pdf" and "Node.js" end in a suffix no registry hands out.
   const { isIcann, isPrivate } = parse(host, { allowPrivateDomains: true });
@@ -123,4 +147,9 @@ function getRegistrableDomain(host: string) {
 
 function isHostOrSubdomain(host: string, domain: string) {
   return host === domain || host.endsWith(`.${domain}`);
+}
+
+// "example.com." is the same name as "example.com".
+function stripTrailingDot(host: string) {
+  return host.endsWith(".") ? host.slice(0, -1) : host;
 }

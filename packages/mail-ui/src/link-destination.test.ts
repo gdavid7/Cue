@@ -198,4 +198,41 @@ describe("getMismatchedLinkHost", () => {
       getMismatchedLinkHost("pay\u200Bpal.com", "https://paypal.com/"),
     ).toBeNull();
   });
+
+  it("skips common email-service click-tracking hosts", () => {
+    for (const href of [
+      "https://substack.com/redirect/2/abc?j=x",
+      "https://klclick.com/ls/click?upn=x",
+      "https://klclick3.com/ls/click?upn=x",
+      "https://abc.hubspotlinks.com/Ctc/x",
+      "https://hubspotlinks.com/Ctc/x",
+      "https://abc.mjt.lu/lnk/x",
+      "https://abc.sendibt3.com/tr/cl/x",
+      "https://abc.convertkit-mail2.com/x",
+      "https://link.mail.beehiiv.com/ss/c/x",
+    ]) {
+      expect(getMismatchedLinkHost("example.com/offer", href), href).toBeNull();
+    }
+  });
+
+  it("still flags other pages on a host that only has a redirect path", () => {
+    expect(
+      getMismatchedLinkHost("example.com", "https://substack.com/home"),
+    ).toBe("substack.com");
+  });
+
+  it("ignores a trailing dot on the destination and the shown host", () => {
+    expect(
+      getMismatchedLinkHost("example.com", "https://example.com./login"),
+    ).toBeNull();
+    expect(
+      getMismatchedLinkHost("https://example.com./", "https://example.com/"),
+    ).toBeNull();
+    expect(
+      getMismatchedLinkHost("paypal.com", "https://evil.example./login"),
+    ).toBe("evil.example");
+    expect(
+      getMismatchedLinkHost("example.com", "https://abc.mjt.lu./lnk/x"),
+    ).toBeNull();
+  });
 });
