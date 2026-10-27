@@ -38,6 +38,7 @@ const PINNED: Record<string, GmailQuotaPriority> = {
   "user/mail/matching-count": "interactive",
   "user/signature": "interactive",
   "user/calendar/free-times": "interactive",
+  "user/calendar/snooze-times": "interactive",
   "user/scheduled-emails/retry": "interactive",
   messages: "interactive",
   "mobile/all-inboxes/archive": "interactive",
