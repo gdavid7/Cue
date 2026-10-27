@@ -61,3 +61,44 @@ export function isValidComposeRecipientList(value: string) {
     )
   );
 }
+
+/**
+ * The first field whose typed, uncommitted text isn't a valid address list.
+ * Sending would otherwise drop that text without a word.
+ */
+export function findInvalidPendingRecipientField(
+  pendingRecipients: Record<ComposeRecipientField, string>,
+): ComposeRecipientField | null {
+  for (const field of ["to", "cc", "bcc"] as const) {
+    const pending = pendingRecipients[field].trim();
+    if (pending && !isValidComposeRecipientList(pending)) return field;
+  }
+  return null;
+}
+
+/**
+ * Pasted lists come separated by commas, semicolons (Outlook) or lines
+ * (spreadsheets). Separators inside a quoted display name are kept.
+ */
+export function normalizePastedRecipients(text: string) {
+  const recipients: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (inQuotes && char === "\\") {
+      current += char + (text[index + 1] ?? "");
+      index++;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+      current += char;
+    } else if (!inQuotes && /[,;\r\n]/.test(char)) {
+      if (current.trim()) recipients.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) recipients.push(current.trim());
+  return recipients.join(", ");
+}

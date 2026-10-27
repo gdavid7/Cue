@@ -186,6 +186,112 @@ describe("compose contact suggestions", () => {
     expect((input as HTMLInputElement).value).toBe("");
   });
 
+  it("keeps a complete typed address over a different top suggestion on Enter and Tab", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    local.mockResolvedValue([
+      { name: "Dan Acme", emailAddress: "dan@acme.com" },
+    ]);
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "dan@acme.co" } });
+    await screen.findByRole("option", { name: /Dan Acme/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyUp(input, { key: "Enter" });
+    expect(
+      await screen.findByRole("button", { name: "Remove dan@acme.co" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Remove dan@acme.com" }),
+    ).toBeNull();
+
+    fireEvent.change(input, { target: { value: "dana@acme.co" } });
+    await screen.findByRole("option", { name: /Dan Acme/ });
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.blur(input);
+    expect(
+      await screen.findByRole("button", { name: "Remove dana@acme.co" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Remove dan@acme.com" }),
+    ).toBeNull();
+  });
+
+  it("picks the arrowed-to suggestion over a typed address, once, when Tab leaves the field", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    local.mockResolvedValue([
+      { name: "Jane Local", emailAddress: "jane@example.com" },
+      { name: "Janet Local", emailAddress: "janet@example.com" },
+    ]);
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "jane@example.co" } });
+    await screen.findByRole("option", { name: /Janet Local/ });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.blur(input);
+    await screen.findByRole("button", { name: "Remove janet@example.com" });
+    expect(
+      screen
+        .getAllByRole("button")
+        .filter((button) =>
+          button.getAttribute("aria-label")?.startsWith("Remove "),
+        )
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Remove janet@example.com"]);
+  });
+
+  it("ignores Enter and Tab while an input method is composing", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "jan@example.com" } });
+    await screen.findByRole("option", { name: /Jane Local/ });
+    fireEvent.keyDown(input, { key: "Tab", isComposing: true });
+    fireEvent.keyUp(input, { key: "Enter", isComposing: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+    expect((input as HTMLInputElement).value).toBe("jan@example.com");
+  });
+
+  it("chips a pasted list with a quoted comma name, and separators from Outlook or a sheet", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => '"Doe, John" <j@x.com>, k@x.com' },
+    });
+    expect(
+      await screen.findByRole("button", {
+        name: 'Remove "Doe, John" <j@x.com>',
+      }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove k@x.com" })).toBeTruthy();
+
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "l@x.com; m@x.com\nn@x.com" },
+    });
+    for (const address of ["l@x.com", "m@x.com", "n@x.com"])
+      expect(
+        await screen.findByRole("button", { name: `Remove ${address}` }),
+      ).toBeTruthy();
+  });
+
+  it("leaves a mixed valid and invalid paste, or a paste into typed text, to the browser", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    const mixed = fireEvent.paste(input, {
+      clipboardData: { getData: () => "ok@x.com, not-an-address" },
+    });
+    expect(mixed).toBe(true);
+    fireEvent.change(input, { target: { value: "bo" } });
+    const intoText = fireEvent.paste(input, {
+      clipboardData: { getData: () => "b@x.com" },
+    });
+    expect(intoText).toBe(true);
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+  });
+
   it("asks only an engine that reports suggestions, and still takes typed recipients", async () => {
     env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
     render(<Harness engineAnswers={false} />);

@@ -149,6 +149,7 @@ import type { DraftAttachment } from "@/utils/email/types";
 import { cn } from "@/utils";
 import {
   type ComposeRecipientField,
+  findInvalidPendingRecipientField,
   resolveComposeRecipientFields,
 } from "./compose-recipients";
 import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
@@ -592,6 +593,11 @@ function ComposeEmailFormContent({
   });
   const [contactsReconnectRequired, setContactsReconnectRequired] =
     useState(false);
+  const [invalidRecipientField, setInvalidRecipientField] =
+    useState<ComposeRecipientField | null>(null);
+  const recipientInputsRef = useRef<
+    Partial<Record<ComposeRecipientField, HTMLInputElement | null>>
+  >({});
   const [isReconnectingContacts, setIsReconnectingContacts] = useState(false);
   const [editReply, setEditReply] = useState(false);
   // Forwards start without a recipient, so focus To. Replies already have one.
@@ -1407,6 +1413,15 @@ function ComposeEmailFormContent({
       const submitter = (event?.nativeEvent as SubmitEvent | undefined)
         ?.submitter;
       const markDoneAfterSend = submitter === sendAndMarkDoneButtonRef.current;
+      const invalidField = findInvalidPendingRecipientField(
+        pendingRecipientsRef.current,
+      );
+      if (invalidField) {
+        setInvalidRecipientField(invalidField);
+        recipientInputsRef.current[invalidField]?.focus();
+        toastError({ description: "Enter a valid recipient email address." });
+        return;
+      }
       const recipients = resolveComposeRecipientFields({
         selectedRecipients: {
           to: data.to,
@@ -1864,6 +1879,9 @@ function ComposeEmailFormContent({
   const updatePendingRecipient = useCallback(
     (field: ComposeRecipientField, query: string) => {
       pendingRecipientsRef.current[field] = query;
+      setInvalidRecipientField((current) =>
+        current === field ? null : current,
+      );
       queueMicrotask(() => {
         if (isMountedRef.current) captureDraft();
       });
@@ -2337,6 +2355,10 @@ function ComposeEmailFormContent({
                         autoFocus && field === "to" && focusRecipientField
                       }
                       className="min-h-8"
+                      inputRef={(input) => {
+                        recipientInputsRef.current[field] = input;
+                      }}
+                      invalid={invalidRecipientField === field}
                       name={field}
                       selectedRecipients={watch(field) ?? ""}
                     />

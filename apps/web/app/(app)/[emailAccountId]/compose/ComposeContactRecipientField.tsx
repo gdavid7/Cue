@@ -26,6 +26,7 @@ import {
 import {
   type ComposeRecipientField,
   isValidComposeRecipientList,
+  normalizePastedRecipients,
   resolveComposeRecipients,
   resolveRecipientSelection,
 } from "./compose-recipients";
@@ -45,6 +46,8 @@ export function ComposeContactRecipientField({
   autoFocus,
   className,
   emailAccountId,
+  inputRef,
+  invalid = false,
   ownAddresses,
   isReconnectingContacts,
   name,
@@ -60,6 +63,9 @@ export function ComposeContactRecipientField({
   autoFocus?: boolean;
   className?: string;
   emailAccountId: string;
+  inputRef?: (input: HTMLInputElement | null) => void;
+  /** Typed text here blocked a send; marks the field until it's edited. */
+  invalid?: boolean;
   ownAddresses: string[];
   isReconnectingContacts: boolean;
   name: ComposeRecipientField;
@@ -139,6 +145,9 @@ export function ComposeContactRecipientField({
   // Tab picks a suggestion and then moves focus; the blur that follows
   // must not commit the partial text typed before the pick.
   const pickedOnTabRef = useRef(false);
+  // Arrow keys are a deliberate choice of suggestion; until then a complete
+  // typed address wins over a different one that merely matches it.
+  const navigatedRef = useRef(false);
 
   const commitTypedRecipients = (pending = searchQuery) => {
     if (!isValidComposeRecipientList(pending.trim())) return;
@@ -218,12 +227,19 @@ export function ComposeContactRecipientField({
 
           <div className="relative min-w-32 flex-1">
             <ComboboxInput
+              aria-invalid={invalid || undefined}
               aria-label={label}
               autoFocus={autoFocus}
-              className="w-full border-none bg-background p-0 text-base focus:border-none focus:ring-0 md:text-sm"
+              className={cn(
+                "w-full border-none bg-background p-0 text-base focus:border-none focus:ring-0 md:text-sm",
+                invalid &&
+                  "text-destructive underline decoration-destructive decoration-wavy",
+              )}
+              ref={inputRef}
               id={name}
               onChange={(event) => {
                 pickedOnTabRef.current = false;
+                navigatedRef.current = false;
                 updateSearchQuery(event.target.value);
               }}
               onFocus={() => onActivate(name)}
@@ -236,13 +252,31 @@ export function ComposeContactRecipientField({
               }}
               onPaste={(event) => {
                 // Pasted addresses become recipients at once, as in Gmail.
-                const pasted = event.clipboardData.getData("text");
+                const pasted = normalizePastedRecipients(
+                  event.clipboardData.getData("text"),
+                );
                 if (searchQuery.trim() || !isValidComposeRecipientList(pasted))
                   return;
                 event.preventDefault();
                 commitTypedRecipients(pasted);
               }}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === "ArrowDown" || event.key === "ArrowUp")
+                  navigatedRef.current = true;
+                const typed = searchQuery.trim();
+                const typedWins =
+                  !navigatedRef.current &&
+                  isValidComposeRecipientList(typed) &&
+                  typed.toLowerCase() !== activeOption?.toLowerCase();
+                if (event.key === "Enter" && typedWins) {
+                  // Stops Headless UI picking the highlighted suggestion.
+                  event.preventDefault();
+                  commitTypedRecipients();
+                  return;
+                }
+                // Leaving the field commits the typed text on blur.
+                if (event.key === "Tab" && typedWins) return;
                 if (
                   event.key === "Tab" &&
                   !event.shiftKey &&
@@ -262,7 +296,8 @@ export function ComposeContactRecipientField({
                 commitTypedRecipients();
               }}
               onKeyUp={(event) => {
-                if (event.key !== "Enter") return;
+                if (event.nativeEvent.isComposing || event.key !== "Enter")
+                  return;
                 event.preventDefault();
                 commitTypedRecipients();
               }}

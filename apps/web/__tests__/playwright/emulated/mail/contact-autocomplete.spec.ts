@@ -234,3 +234,34 @@ test("suggests recipients from mail in a second tab and picks them with Enter or
   await capturePlaywrightCheckpoint(follower, testInfo, "follower-tab-picked");
   await follower.close();
 });
+
+test("blocks a send while a recipient field holds half-typed text", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/user/contacts?*", (route) =>
+    route.fulfill({ json: { contacts: [] } }),
+  );
+  await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const to = dialog.getByRole("combobox", { name: "To", exact: true });
+  await to.fill("alice@example.com");
+  await to.press(",");
+  await expect(
+    dialog.getByRole("button", { name: "Remove alice@example.com" }),
+  ).toBeVisible();
+  await to.fill("bob@exmaple");
+  await dialog.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(
+    page.getByText("Enter a valid recipient email address."),
+  ).toBeVisible();
+  await expect(to).toBeFocused();
+  await expect(to).toHaveAttribute("aria-invalid", "true");
+  await expect(to).toHaveValue("bob@exmaple");
+  await expect(dialog).toBeVisible();
+  await capturePlaywrightCheckpoint(
+    page,
+    testInfo,
+    "invalid-recipient-blocked",
+  );
+});
