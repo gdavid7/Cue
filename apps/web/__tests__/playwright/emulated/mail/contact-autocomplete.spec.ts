@@ -1,9 +1,15 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
+import { formatEmailWithName } from "@/utils/email";
+import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
-import { openMail } from "./mail-test-helpers";
+import {
+  openMail,
+  readProviderAccessToken,
+  waitForComposeOutboxSend,
+} from "./mail-test-helpers";
 
 test("suggests contacts in every recipient field and reuses cached searches", async ({
   page,
@@ -134,6 +140,9 @@ for (const theme of ["light", "dark"] as const) {
     await expect(
       dialog.getByRole("button", { name: "Remove alice@example.com" }),
     ).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "Edit Alice Example" }),
+    ).toHaveText("Alice Example");
     await expect(to).toHaveValue("");
     await capturePlaywrightCheckpoint(
       page,
@@ -161,7 +170,7 @@ for (const theme of ["light", "dark"] as const) {
     await to.press("Enter");
     await expect(
       dialog.getByRole("button", {
-        name: 'Remove "Doe, Jamie" <jamie@example.com>',
+        name: "Remove jamie@example.com",
       }),
     ).toBeVisible();
     await expect(
@@ -265,3 +274,115 @@ test("blocks a send while a recipient field holds half-typed text", async ({
     "invalid-recipient-blocked",
   );
 });
+
+test("sends a picked suggestion to its name and address, and keeps the name in the draft", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    process.env.NEXT_PUBLIC_CONTACTS_ENABLED === "false",
+    "API contacts are disabled for this run",
+  );
+  const subject = `Named recipient ${testInfo.retry} ${Date.now()}`;
+  const named = '"Lovelace, Ada" <ada@example.com>';
+  await page.route("**/api/user/contacts?*", (route) =>
+    route.fulfill({
+      json: {
+        contacts: [{ name: "Lovelace, Ada", emailAddress: "ada@example.com" }],
+      },
+    }),
+  );
+  const { emailAccountId } = await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const to = dialog.getByRole("combobox", { name: "To", exact: true });
+  await to.fill("lovel");
+  await page.getByRole("option", { name: /Lovelace, Ada/ }).click();
+  const chip = dialog.getByRole("button", { name: "Edit Lovelace, Ada" });
+  await expect(chip).toHaveText("Lovelace, Ada");
+  await expect(chip).toHaveAttribute("title", "ada@example.com");
+  await capturePlaywrightCheckpoint(page, testInfo, "named-recipient-chip");
+  await dialog.getByPlaceholder("Subject").fill(subject);
+  await dialog
+    .getByRole("textbox", { name: "Email message" })
+    .fill("A message to a named recipient.");
+
+  await dialog.getByRole("button", { name: "Close compose" }).click();
+  await expect(dialog).toBeHidden();
+  await expect
+    .poll(() => readProviderTo(page, subject, "draft"), { timeout: 60_000 })
+    .toContain(named);
+  await page.reload();
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  await expect(
+    dialog.getByRole("button", { name: "Edit Lovelace, Ada" }),
+  ).toHaveText("Lovelace, Ada");
+  await capturePlaywrightCheckpoint(page, testInfo, "named-recipient-reopened");
+
+  await dialog.getByRole("button", { name: "Send", exact: true }).click();
+  await waitForComposeOutboxSend(page, emailAccountId);
+  await expect
+    .poll(() => readProviderTo(page, subject, "sent"), { timeout: 60_000 })
+    .toContain(named);
+});
+
+/** The To of the provider's draft or sent message with this subject. */
+async function readProviderTo(
+  page: Page,
+  subject: string,
+  kind: "draft" | "sent",
+) {
+  const headers = {
+    Authorization: `Bearer ${await readProviderAccessToken()}`,
+  };
+  if (isMicrosoftPlaywright()) {
+    const response = await page.request.get(
+      `${process.env.MICROSOFT_BASE_URL}/v1.0/me/messages?$top=100`,
+      { headers },
+    );
+    expect(response.ok(), await response.text()).toBe(true);
+    const { value } = (await response.json()) as {
+      value: Array<{
+        subject?: string;
+        isDraft?: boolean;
+        toRecipients?: Array<{
+          emailAddress?: { name?: string; address?: string };
+        }>;
+      }>;
+    };
+    const message = value.find(
+      (item) =>
+        item.subject === subject && !!item.isDraft === (kind === "draft"),
+    );
+    return (
+      message?.toRecipients
+        ?.map(({ emailAddress }) =>
+          formatEmailWithName(emailAddress?.name, emailAddress?.address),
+        )
+        .join(", ") ?? ""
+    );
+  }
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const listed = await page.request.get(
+    `${base}/messages?labelIds=${kind === "draft" ? "DRAFT" : "SENT"}&maxResults=500`,
+    { headers },
+  );
+  expect(listed.ok(), await listed.text()).toBe(true);
+  const { messages = [] } = (await listed.json()) as {
+    messages?: { id: string }[];
+  };
+  for (const { id } of messages) {
+    const response = await page.request.get(
+      `${base}/messages/${id}?format=full`,
+      { headers },
+    );
+    if (!response.ok()) continue;
+    const message = (await response.json()) as {
+      payload?: { headers?: { name: string; value: string }[] };
+    };
+    const header = (name: string) =>
+      message.payload?.headers?.find((item) => item.name.toLowerCase() === name)
+        ?.value;
+    if (header("subject") === subject) return header("to") ?? "";
+  }
+  return "";
+}

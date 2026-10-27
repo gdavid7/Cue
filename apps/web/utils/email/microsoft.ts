@@ -62,6 +62,7 @@ import {
   sendEmailWithPlainText,
   sendEmailWithHtml,
 } from "@/utils/outlook/mail";
+import { toGraphRecipients } from "@/utils/outlook/recipients";
 import {
   archiveThread,
   markReadThread,
@@ -849,13 +850,13 @@ export class OutlookProvider implements EmailProvider {
     // Left out when empty so creating never clears what the source message set.
     const recipients = {
       ...(params.to.trim()
-        ? { toRecipients: toGraphRecipients(params.to, this.logger) }
+        ? { toRecipients: toDraftRecipients(params.to, this.logger) }
         : {}),
       ...(params.cc?.trim()
-        ? { ccRecipients: toGraphRecipients(params.cc, this.logger) }
+        ? { ccRecipients: toDraftRecipients(params.cc, this.logger) }
         : {}),
       ...(params.bcc?.trim()
-        ? { bccRecipients: toGraphRecipients(params.bcc, this.logger) }
+        ? { bccRecipients: toDraftRecipients(params.bcc, this.logger) }
         : {}),
     };
 
@@ -934,11 +935,11 @@ export class OutlookProvider implements EmailProvider {
     }
 
     if (params.to !== undefined)
-      body.toRecipients = toGraphRecipients(params.to, this.logger);
+      body.toRecipients = toDraftRecipients(params.to, this.logger);
     if (params.cc !== undefined)
-      body.ccRecipients = toGraphRecipients(params.cc, this.logger);
+      body.ccRecipients = toDraftRecipients(params.cc, this.logger);
     if (params.bcc !== undefined)
-      body.bccRecipients = toGraphRecipients(params.bcc, this.logger);
+      body.bccRecipients = toDraftRecipients(params.bcc, this.logger);
 
     await withMicrosoftGraphWriteRetry(
       () =>
@@ -3418,36 +3419,14 @@ function parseOutlookThreadPageToken(
   }
 }
 
-// Graph needs one entry per recipient. Callers pass the same comma-separated
-// string the Gmail RFC-822 path accepts, so split it rather than sending the
-// whole list as a single malformed address.
-function toGraphRecipients(to: string, logger: Logger) {
-  const candidates = splitRecipientList(to);
-  const parsed = candidates.map((candidate) => ({
-    candidate,
-    email: extractEmailAddress(candidate),
-  }));
-  const recipients = parsed
-    .filter(({ email }) => email.length > 0)
-    .map(({ email }) => ({ emailAddress: { address: email } }));
-
-  if (candidates.length > 0 && recipients.length === 0) {
+// A malformed attendee is dropped rather than failing the whole draft: the
+// user reviews the draft before sending, so a missing recipient is recoverable
+// while a missing draft is not. A list with nothing usable still fails.
+function toDraftRecipients(recipientList: string, logger: Logger) {
+  const recipients = toGraphRecipients(recipientList, logger);
+  if (recipientList.trim() && recipients.length === 0) {
     throw new Error("No valid recipient email addresses");
   }
-
-  // A malformed attendee is dropped rather than failing the whole draft: the
-  // user reviews the draft before sending, so a missing recipient is
-  // recoverable while a missing draft is not.
-  const dropped = parsed.filter(({ email }) => email.length === 0);
-  if (dropped.length > 0) {
-    logger.warn("Dropped recipients without a parseable email address", {
-      droppedCount: dropped.length,
-    });
-    logger.trace("Dropped malformed recipients", {
-      dropped: dropped.map(({ candidate }) => candidate),
-    });
-  }
-
   return recipients;
 }
 

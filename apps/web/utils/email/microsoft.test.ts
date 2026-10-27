@@ -2278,14 +2278,35 @@ describe("OutlookProvider.createDraft", () => {
     );
 
     await provider.createDraft({
-      to: "Alice <alice@example.com>, bob@example.com",
+      to: 'Alice <alice@example.com>, "Lovelace, Ada" <ada@example.com>, bob@example.com',
       subject: "Notes from our call",
       messageHtml: "<p>Thanks all</p>",
     });
 
     expect(post.mock.calls[0]?.[0]?.toRecipients).toEqual([
-      { emailAddress: { address: "alice@example.com" } },
+      { emailAddress: { address: "alice@example.com", name: "Alice" } },
+      { emailAddress: { address: "ada@example.com", name: "Lovelace, Ada" } },
       { emailAddress: { address: "bob@example.com" } },
+    ]);
+  });
+
+  it("keeps every recipient when a quoted name escapes a quote", async () => {
+    const post = vi.fn().mockResolvedValue({ id: "draft-1" });
+    const provider = new OutlookProvider(
+      { getClient: () => ({ api: () => ({ post }) }) } as never,
+      createTestLogger(),
+    );
+
+    await provider.createDraft({
+      to: 'a@example.com, "X \\"y" <c@example.com>, "Doe, 5\\" pipe" <d@example.com>',
+      subject: "Notes from our call",
+      messageHtml: "<p>Thanks all</p>",
+    });
+
+    expect(post.mock.calls[0]?.[0]?.toRecipients).toEqual([
+      { emailAddress: { address: "a@example.com" } },
+      { emailAddress: { address: "c@example.com", name: 'X "y' } },
+      { emailAddress: { address: "d@example.com", name: 'Doe, 5" pipe' } },
     ]);
   });
 
@@ -2303,7 +2324,7 @@ describe("OutlookProvider.createDraft", () => {
     });
 
     expect(post.mock.calls[0]?.[0]?.toRecipients).toEqual([
-      { emailAddress: { address: "alice@example.com" } },
+      { emailAddress: { address: "alice@example.com", name: "Alice" } },
       { emailAddress: { address: "bob@example.com" } },
     ]);
   });

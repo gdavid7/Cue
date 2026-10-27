@@ -21,6 +21,7 @@ import { cn } from "@/utils";
 import {
   extractEmailAddress,
   extractNameFromEmail,
+  formatEmailWithName,
   splitRecipientList,
 } from "@/utils/email";
 import {
@@ -161,10 +162,10 @@ export function ComposeContactRecipientField({
     updateSearchQuery("");
   };
 
-  const pickSuggestion = (emailAddress: string) => {
+  const pickSuggestion = (recipient: string) => {
     onSelectedRecipientsChange(
       name,
-      [...selectedEmailAddresses, emailAddress].join(","),
+      [...selectedEmailAddresses, recipient].join(","),
     );
     updateSearchQuery("");
   };
@@ -196,34 +197,38 @@ export function ComposeContactRecipientField({
             className,
           )}
         >
-          {selectedEmailAddresses.map((emailAddress) => (
-            <Badge
-              className="rounded-md"
-              key={emailAddress}
-              variant="secondary"
-            >
-              <button
-                aria-label={`Edit ${emailAddress}`}
-                className="cursor-pointer"
-                onClick={() => {
-                  removeSelectedEmail(emailAddress);
-                  updateSearchQuery(emailAddress);
-                }}
-                type="button"
-              >
-                {extractNameFromEmail(emailAddress)}
-              </button>
-              <button
-                aria-label={`Remove ${emailAddress}`}
-                // A finger-sized target around the small glyph.
-                className="-my-1 -mr-1.5 ml-0.5 rounded-sm p-1.5 hover:bg-muted"
-                onClick={() => removeSelectedEmail(emailAddress)}
-                type="button"
-              >
-                <XIcon className="size-3" />
-              </button>
-            </Badge>
-          ))}
+          {selectedEmailAddresses.map((recipient) => {
+            const address = extractEmailAddress(recipient) || recipient;
+            const displayName = recipientChipLabel(recipient, address);
+            return (
+              <Badge className="rounded-md" key={recipient} variant="secondary">
+                <button
+                  // Names the chip by what it shows, so voice control can
+                  // reach it; the title adds the address.
+                  aria-label={`Edit ${displayName}`}
+                  className="cursor-pointer"
+                  onClick={() => {
+                    removeSelectedEmail(recipient);
+                    updateSearchQuery(recipient);
+                  }}
+                  // The chip shows the name, as in Gmail; hover shows the address.
+                  title={address}
+                  type="button"
+                >
+                  {displayName}
+                </button>
+                <button
+                  aria-label={`Remove ${address}`}
+                  // A finger-sized target around the small glyph.
+                  className="-my-1 -mr-1.5 ml-0.5 rounded-sm p-1.5 hover:bg-muted"
+                  onClick={() => removeSelectedEmail(recipient)}
+                  type="button"
+                >
+                  <XIcon className="size-3" />
+                </button>
+              </Badge>
+            );
+          })}
 
           <div className="relative min-w-32 flex-1">
             <ComboboxInput
@@ -268,7 +273,8 @@ export function ComposeContactRecipientField({
                 const typedWins =
                   !navigatedRef.current &&
                   isValidComposeRecipientList(typed) &&
-                  typed.toLowerCase() !== activeOption?.toLowerCase();
+                  typed.toLowerCase() !==
+                    extractEmailAddress(activeOption ?? "").toLowerCase();
                 if (event.key === "Enter" && typedWins) {
                   // Stops Headless UI picking the highlighted suggestion.
                   event.preventDefault();
@@ -282,7 +288,11 @@ export function ComposeContactRecipientField({
                   !event.shiftKey &&
                   typeof activeOption === "string" &&
                   suggestions.some(
-                    (contact) => contact.emailAddress === activeOption,
+                    (contact) =>
+                      formatEmailWithName(
+                        contact.name,
+                        contact.emailAddress,
+                      ) === activeOption,
                   )
                 ) {
                   pickedOnTabRef.current = true;
@@ -341,7 +351,10 @@ export function ComposeContactRecipientField({
                       `cursor-pointer select-none px-3 py-1 text-foreground ${focus ? "bg-accent" : ""}`
                     }
                     key={contact.emailAddress}
-                    value={contact.emailAddress}
+                    value={formatEmailWithName(
+                      contact.name,
+                      contact.emailAddress,
+                    )}
                   >
                     <div className="my-2 flex items-center">
                       <Avatar className="shrink-0">
@@ -381,3 +394,11 @@ type ContactsFetchError = Error & {
   info?: Partial<ContactsErrorResponse>;
   status?: number;
 };
+
+// Local suggestions take names from inbound headers, so a sender can be named
+// "ceo@company.com" while the address is someone else's. A name that looks
+// like an address (including full-width or small "@") never stands in for it.
+function recipientChipLabel(recipient: string, address: string) {
+  const name = extractNameFromEmail(recipient);
+  return /[@\uFF20\uFE6B]/u.test(name) ? address : name;
+}

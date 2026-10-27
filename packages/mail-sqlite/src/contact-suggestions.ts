@@ -257,7 +257,7 @@ export function parseAddress(address: string) {
   if (!/^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/u.test(email)) return null;
   return {
     email,
-    name: (match?.[1] ?? "").trim().replace(/^"|"$/g, "").trim(),
+    name: unquoteDisplayName((match?.[1] ?? "").trim()),
   };
 }
 
@@ -306,4 +306,13 @@ export async function deleteAccountContactSuggestions(
   ]) {
     await tx.execute(`DELETE FROM ${table} WHERE account_id = ?`, [accountId]);
   }
+}
+
+// Mirrors unquoteDisplayName in apps/web/utils/email.ts, which this package
+// cannot import: a quoted name keeps its escapes otherwise, and they are
+// escaped again when the name is written back into a header.
+function unquoteDisplayName(name: string) {
+  const quoted = name.match(/^"(.*)"$/u);
+  if (!quoted) return name;
+  return quoted[1].replace(/\\(.)/gu, "$1").trim();
 }

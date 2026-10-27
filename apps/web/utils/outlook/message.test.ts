@@ -60,6 +60,18 @@ describe("convertMessage", () => {
     expect(result.headers.bcc).toBe("Private Recipient <hidden@example.com>");
   });
 
+  it("reloads a draft recipient whose name has a comma as one recipient", () => {
+    const result = convertMessage({
+      toRecipients: [
+        { emailAddress: { name: "Lovelace, Ada", address: "ada@example.com" } },
+        { emailAddress: { address: "second@example.com" } },
+      ],
+    });
+    expect(result.headers.to).toBe(
+      '"Lovelace, Ada" <ada@example.com>, second@example.com',
+    );
+  });
+
   it("does not substitute a filename for a missing inline content id", () => {
     const result = convertMessage({
       attachments: [
