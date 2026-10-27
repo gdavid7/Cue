@@ -74,6 +74,11 @@ export async function dispatchMailIpc(engine: MailEngine, payload: unknown) {
         status: "ok" as const,
         result: await engine.getWaitingSummary?.(request.payload.accountIds),
       };
+    case "queryContactSuggestions":
+      return {
+        status: "ok" as const,
+        result: (await engine.queryContactSuggestions?.(request.payload)) ?? [],
+      };
     case "queryImportantPeople":
       return {
         status: "ok" as const,

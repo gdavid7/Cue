@@ -74,7 +74,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { env } from "@/env";
 import { getAccountScopedKey } from "@/utils/swr";
 import { useEmailAccountFull } from "@/hooks/useEmailAccountFull";
 import { usePreSendCheck } from "@/hooks/usePreSendCheck";
@@ -150,6 +149,7 @@ import type { DraftAttachment } from "@/utils/email/types";
 import { cn } from "@/utils";
 import {
   type ComposeRecipientField,
+  findInvalidPendingRecipientField,
   resolveComposeRecipientFields,
 } from "./compose-recipients";
 import { DeliveryOptions, type DeliveryOptionsHandle } from "./DeliveryOptions";
@@ -597,6 +597,11 @@ function ComposeEmailFormContent({
   });
   const [contactsReconnectRequired, setContactsReconnectRequired] =
     useState(false);
+  const [invalidRecipientField, setInvalidRecipientField] =
+    useState<ComposeRecipientField | null>(null);
+  const recipientInputsRef = useRef<
+    Partial<Record<ComposeRecipientField, HTMLInputElement | null>>
+  >({});
   const [isReconnectingContacts, setIsReconnectingContacts] = useState(false);
   const [editReply, setEditReply] = useState(false);
   // Forwards start without a recipient, so focus To. Replies already have one.
@@ -646,7 +651,7 @@ function ComposeEmailFormContent({
     register,
     getValues,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { isSubmitting },
     watch,
     setValue,
     setFocus,
@@ -1412,6 +1417,15 @@ function ComposeEmailFormContent({
       const submitter = (event?.nativeEvent as SubmitEvent | undefined)
         ?.submitter;
       const markDoneAfterSend = submitter === sendAndMarkDoneButtonRef.current;
+      const invalidField = findInvalidPendingRecipientField(
+        pendingRecipientsRef.current,
+      );
+      if (invalidField) {
+        setInvalidRecipientField(invalidField);
+        recipientInputsRef.current[invalidField]?.focus();
+        toastError({ description: "Enter a valid recipient email address." });
+        return;
+      }
       const recipients = resolveComposeRecipientFields({
         selectedRecipients: {
           to: data.to,
@@ -1869,6 +1883,9 @@ function ComposeEmailFormContent({
   const updatePendingRecipient = useCallback(
     (field: ComposeRecipientField, query: string) => {
       pendingRecipientsRef.current[field] = query;
+      setInvalidRecipientField((current) =>
+        current === field ? null : current,
+      );
       queueMicrotask(() => {
         if (isMountedRef.current) captureDraft();
       });
@@ -2333,31 +2350,22 @@ function ComposeEmailFormContent({
                     label={RECIPIENT_LABELS[field]}
                   />
                   <div className="min-w-0 flex-1">
-                    {env.NEXT_PUBLIC_CONTACTS_ENABLED ||
-                    client?.queryContactSuggestions ? (
-                      <ComposeContactRecipientField
-                        {...recipientFieldProps}
-                        active={activeRecipientField === field}
-                        autoFocus={
-                          autoFocus && field === "to" && focusRecipientField
-                        }
-                        className="min-h-8"
-                        name={field}
-                        selectedRecipients={watch(field) ?? ""}
-                      />
-                    ) : (
-                      <Input
-                        type="text"
-                        name={field}
-                        registerProps={{
-                          ...register(field, { required: field === "to" }),
-                          autoFocus:
-                            autoFocus && field === "to" && focusRecipientField,
-                        }}
-                        error={errors[field]}
-                        className="h-7 rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus:border-transparent focus:ring-0 sm:text-sm"
-                      />
-                    )}
+                    {/* Chips, comma and paste work without suggestions,
+                        so engines that can't suggest keep the same field. */}
+                    <ComposeContactRecipientField
+                      {...recipientFieldProps}
+                      active={activeRecipientField === field}
+                      autoFocus={
+                        autoFocus && field === "to" && focusRecipientField
+                      }
+                      className="min-h-8"
+                      inputRef={(input) => {
+                        recipientInputsRef.current[field] = input;
+                      }}
+                      invalid={invalidRecipientField === field}
+                      name={field}
+                      selectedRecipients={watch(field) ?? ""}
+                    />
                   </div>
                   {field === "to" &&
                     (["cc", "bcc"] as const)

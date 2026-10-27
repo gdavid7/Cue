@@ -176,3 +176,92 @@ for (const theme of ["light", "dark"] as const) {
       expect(apiRequests).toBe(0);
   });
 }
+
+test("suggests recipients from mail in a second tab and picks them with Enter or Tab", async ({
+  page,
+}, testInfo) => {
+  // Only the local index answers: production runs with the contacts API off.
+  await page
+    .context()
+    .route("**/api/user/contacts?*", (route) =>
+      route.fulfill({ json: { contacts: [] } }),
+    );
+  await openMail(page);
+  await expect
+    .poll(async () => page.evaluate(() => window.__inboxZeroMailInspect?.role))
+    .toBe("owner");
+
+  const follower = await page.context().newPage();
+  await follower.goto(page.url(), { waitUntil: "domcontentloaded" });
+  await expect(
+    follower.getByRole("listbox", { name: "Conversations" }),
+  ).toBeVisible({ timeout: 60_000 });
+  await expect
+    .poll(
+      async () => follower.evaluate(() => window.__inboxZeroMailInspect?.role),
+      { timeout: 60_000 },
+    )
+    .toBe("follower");
+
+  await follower.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = follower.getByRole("dialog", { name: "New Message" });
+  const to = dialog.getByRole("combobox", { name: "To", exact: true });
+  await to.fill("ali");
+  await expect(
+    follower.getByRole("option", { name: /Alice Example.*alice@example.com/ }),
+  ).toBeVisible();
+  await capturePlaywrightCheckpoint(
+    follower,
+    testInfo,
+    "follower-tab-suggestions",
+  );
+  // The top suggestion is already highlighted, as in Gmail.
+  await to.press("Enter");
+  await expect(
+    dialog.getByRole("button", { name: "Remove alice@example.com" }),
+  ).toBeVisible();
+  await expect(to).toHaveValue("");
+
+  await to.fill("bob");
+  await expect(
+    follower.getByRole("option", { name: /Bob Example.*bob@example.com/ }),
+  ).toBeVisible();
+  await to.press("Tab");
+  await expect(
+    dialog.getByRole("button", { name: "Remove bob@example.com" }),
+  ).toBeVisible();
+  await expect(to).toHaveValue("");
+  await capturePlaywrightCheckpoint(follower, testInfo, "follower-tab-picked");
+  await follower.close();
+});
+
+test("blocks a send while a recipient field holds half-typed text", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/user/contacts?*", (route) =>
+    route.fulfill({ json: { contacts: [] } }),
+  );
+  await openMail(page);
+  await page.getByRole("button", { name: /^Compose/ }).click();
+  const dialog = page.getByRole("dialog", { name: "New Message" });
+  const to = dialog.getByRole("combobox", { name: "To", exact: true });
+  await to.fill("alice@example.com");
+  await to.press(",");
+  await expect(
+    dialog.getByRole("button", { name: "Remove alice@example.com" }),
+  ).toBeVisible();
+  await to.fill("bob@exmaple");
+  await dialog.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(
+    page.getByText("Enter a valid recipient email address."),
+  ).toBeVisible();
+  await expect(to).toBeFocused();
+  await expect(to).toHaveAttribute("aria-invalid", "true");
+  await expect(to).toHaveValue("bob@exmaple");
+  await expect(dialog).toBeVisible();
+  await capturePlaywrightCheckpoint(
+    page,
+    testInfo,
+    "invalid-recipient-blocked",
+  );
+});

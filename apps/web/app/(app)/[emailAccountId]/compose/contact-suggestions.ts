@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type {
   ContactSuggestion,
   ContactSuggestionQuery,
@@ -41,9 +42,17 @@ export function useLocalContactSuggestions({
   query: string;
   active: boolean;
 }) {
-  const client = useOptionalMailClient() ?? getActiveMailClient();
+  const mailClient = useOptionalMailClient() ?? getActiveMailClient();
+  // A follower tab, the desktop bridge or an older owner can be narrower
+  // than this build; the in-tab fallback keeps the index off the UI thread.
+  const client = mailClientSupports(
+    mailClient,
+    "method:queryContactSuggestions",
+  )
+    ? mailClient
+    : null;
   const requestKey =
-    active && query
+    client && active && query
       ? JSON.stringify({
           accountId: emailAccountId,
           ownAddresses,
