@@ -2290,6 +2290,26 @@ describe("OutlookProvider.createDraft", () => {
     ]);
   });
 
+  it("keeps every recipient when a quoted name escapes a quote", async () => {
+    const post = vi.fn().mockResolvedValue({ id: "draft-1" });
+    const provider = new OutlookProvider(
+      { getClient: () => ({ api: () => ({ post }) }) } as never,
+      createTestLogger(),
+    );
+
+    await provider.createDraft({
+      to: 'a@example.com, "X \\"y" <c@example.com>, "Doe, 5\\" pipe" <d@example.com>',
+      subject: "Notes from our call",
+      messageHtml: "<p>Thanks all</p>",
+    });
+
+    expect(post.mock.calls[0]?.[0]?.toRecipients).toEqual([
+      { emailAddress: { address: "a@example.com" } },
+      { emailAddress: { address: "c@example.com", name: 'X "y' } },
+      { emailAddress: { address: "d@example.com", name: 'Doe, 5" pipe' } },
+    ]);
+  });
+
   it("drops recipients without a parseable email address", async () => {
     const post = vi.fn().mockResolvedValue({ id: "draft-1" });
     const provider = new OutlookProvider(
