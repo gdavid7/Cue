@@ -668,3 +668,131 @@ describe("hasReplyAllRecipients", () => {
     ).toBe(false);
   });
 });
+
+describe("buildComposeReplyRecipients with Reply-To (FT-30b)", () => {
+  const ownEmails = ["me@example.com", "me@gmail.com"];
+  const headers: ParsedMessageHeaders = {
+    from: "Ana <noreply@supplier.example>",
+    "reply-to": "Billing <billing@pay.example>",
+    to: "Me <me@example.com>, Alex <alex@example.com>",
+    cc: "sam@example.com",
+    subject: "Invoice",
+    date: "2024-01-01",
+  };
+  const build = (overrides: Partial<ParsedMessageHeaders>, replyAll: boolean) =>
+    buildComposeReplyRecipients({
+      headers: { ...headers, ...overrides },
+      sentFromUser: false,
+      replyAll,
+      ownEmails,
+    });
+
+  it("replies to the Reply-To address, keeping its name, instead of From", () => {
+    expect(build({}, false).to).toBe("Billing <billing@pay.example>");
+  });
+
+  it("replies all to Reply-To in place of From, copying everyone else but the user", () => {
+    const recipients = build({}, true);
+    expect(recipients.to).toBe("Billing <billing@pay.example>");
+    expect(recipients.cc.split(", ").sort()).toEqual([
+      "alex@example.com",
+      "sam@example.com",
+    ]);
+  });
+
+  it("replies to every Reply-To address, and copies none of them again", () => {
+    const recipients = build(
+      {
+        "reply-to": '"Billing, EU" <billing@pay.example>, ops@pay.example',
+        cc: "OPS@pay.example, sam@example.com",
+      },
+      true,
+    );
+    expect(recipients.to).toBe(
+      '"Billing, EU" <billing@pay.example>, ops@pay.example',
+    );
+    expect(recipients.cc.split(", ").sort()).toEqual([
+      "alex@example.com",
+      "sam@example.com",
+    ]);
+    expect(
+      build({ "reply-to": "billing@pay.example, ops@pay.example" }, false).to,
+    ).toBe("billing@pay.example, ops@pay.example");
+  });
+
+  it("replies to From when the message has no Reply-To", () => {
+    expect(build({ "reply-to": undefined }, false).to).toBe(headers.from);
+    expect(build({ "reply-to": "" }, true).to).toBe(headers.from);
+  });
+
+  it("never replies to the user's own address from Reply-To", () => {
+    expect(build({ "reply-to": "Me <ME@gmail.com>" }, false).to).toBe(
+      headers.from,
+    );
+    const recipients = build(
+      { "reply-to": "me@example.com, billing@pay.example" },
+      true,
+    );
+    expect(recipients.to).toBe("billing@pay.example");
+    expect(recipients.cc.split(", ").sort()).toEqual([
+      "alex@example.com",
+      "sam@example.com",
+    ]);
+  });
+
+  it("offers reply all only when someone besides Reply-To and the user is on it", () => {
+    expect(
+      hasReplyAllRecipients(
+        {
+          from: "noreply@supplier.example",
+          "reply-to": "billing@pay.example",
+          to: "me@example.com, billing@pay.example",
+          subject: "Invoice",
+          date: "2024-01-01",
+        },
+        ownEmails,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("buildReplyAllRecipients with Reply-To", () => {
+  const ownEmails = ["me@example.com"];
+
+  it("replies to a mailing list's Reply-To without copying the list again", () => {
+    const recipients = buildReplyAllRecipients(
+      {
+        from: "Ana <ana@supplier.example>",
+        "reply-to": "Team <team@groups.example>",
+        to: "me@example.com, Team <TEAM@groups.example>",
+        cc: "sam@example.com",
+        subject: "Planning",
+        date: "2024-01-01",
+      },
+      undefined,
+      ownEmails,
+    );
+    expect(recipients).toEqual({
+      to: "Team <team@groups.example>",
+      cc: ["sam@example.com"],
+    });
+  });
+
+  it("replies to From when every Reply-To entry is malformed", () => {
+    const recipients = buildReplyAllRecipients(
+      {
+        from: "Ana <ana@supplier.example>",
+        "reply-to": "undisclosed-recipients:, @@",
+        to: "me@example.com, alex@example.com",
+        subject: "Planning",
+        date: "2024-01-01",
+      },
+      undefined,
+      ownEmails,
+    );
+    expect(recipients).toEqual({
+      to: "Ana <ana@supplier.example>",
+      cc: ["alex@example.com"],
+    });
+  });
+});

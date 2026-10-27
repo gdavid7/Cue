@@ -417,6 +417,8 @@ export async function insertInboxThread(
     subject: string;
     body: string;
     from: { name: string; address: string };
+    replyTo?: string;
+    cc?: string;
   },
 ): Promise<{ threadId: string; messageId: string }> {
   const token = await readProviderAccessToken();
@@ -435,6 +437,12 @@ export async function insertInboxThread(
         subject: input.subject,
         body: { contentType: "text", content: input.body },
         toRecipients: [{ emailAddress: { address: email } }],
+        ...(input.cc && {
+          ccRecipients: [{ emailAddress: { address: input.cc } }],
+        }),
+        ...(input.replyTo && {
+          replyTo: [{ emailAddress: { address: input.replyTo } }],
+        }),
       },
     });
     expect(created.ok(), await created.text()).toBe(true);
@@ -470,6 +478,8 @@ export async function insertInboxThread(
       data: {
         from: `${input.from.name} <${input.from.address}>`,
         to: email,
+        cc: input.cc,
+        reply_to: input.replyTo,
         subject: input.subject,
         body_text: input.body,
         labelIds: ["INBOX", "UNREAD"],

@@ -36,4 +36,5 @@ export const LOCAL_MIGRATIONS = {
   },
   leftOpenDraftsIndex: { id: 20, name: "0020-left-open-drafts-index" },
   senderUtcOffsets: { id: 21, name: "0021-sender-utc-offsets" },
+  replyTo: { id: 22, name: "0022-reply-to" },
 } as const;

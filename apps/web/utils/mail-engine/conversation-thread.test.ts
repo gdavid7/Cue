@@ -32,6 +32,21 @@ describe("conversationViewToThreadResponse", () => {
     expect(withoutOffset.headers.date).toBe("2023-11-14T22:13:20.000Z");
   });
 
+  it("gives the reader each message's Reply-To, and none for rows stored without it", () => {
+    const withReplyTo = message();
+    withReplyTo.metadata.replyTo = [
+      "Billing <billing@pay.example>",
+      "ops@pay.example",
+    ];
+    const [replied, old] = conversationViewToThreadResponse(
+      view({ messages: [withReplyTo, message({ messageId: "m-2" })] }),
+    ).thread.messages;
+    expect(replied.headers["reply-to"]).toBe(
+      "Billing <billing@pay.example>, ops@pay.example",
+    );
+    expect(old.headers["reply-to"]).toBeUndefined();
+  });
+
   it("projects stored attachments and meeting invitations onto the reader", () => {
     const thread = conversationViewToThreadResponse(
       view({

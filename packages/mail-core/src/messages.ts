@@ -75,6 +75,11 @@ export const messageMetadataSchema = z.object({
     .min(MIN_UTC_OFFSET_MINUTES)
     .max(MAX_UTC_OFFSET_MINUTES)
     .optional(),
+  /**
+   * The Reply-To header's addresses, where replies go instead of From. Absent
+   * when the message has none, or was stored before it was kept.
+   */
+  replyTo: z.array(z.string().max(4096)).max(MAX_RECIPIENTS).optional(),
 });
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
 

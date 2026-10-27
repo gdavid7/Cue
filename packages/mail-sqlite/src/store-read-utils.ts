@@ -113,7 +113,15 @@ export function metadataFromEffective(
       row.sender_utc_offset_minutes == null
         ? undefined
         : Number(row.sender_utc_offset_minutes),
+    replyTo: replyToFromRow(row.reply_to_json),
   };
+}
+
+/** A row stored before Reply-To was kept reads as having none. */
+export function replyToFromRow(value: SqlValue | undefined) {
+  if (value == null) return;
+  const addresses = jsonStringArray(value);
+  return addresses.length ? addresses : undefined;
 }
 
 function inboxSection(value: string): MessageMetadata["inboxSection"] {

@@ -25,6 +25,7 @@ import {
   mergeAndDedupeRecipients,
 } from "@/utils/email/reply-all";
 import { formatReplySubject } from "@/utils/email/subject";
+import { getReplyAddressee } from "@/utils/email";
 import { buildThreadingHeaders } from "@/utils/email/threading";
 import { ensureEmailSendingEnabled } from "@/utils/mail";
 import { getMessage } from "@/utils/gmail/message";
@@ -219,6 +220,8 @@ export async function replyToEmail(
   options?: {
     replyTo?: string;
     attachments?: Attachment[];
+    /** The user's addresses, so a Reply-To naming one of them answers From. */
+    ownEmails?: string[];
   },
 ) {
   ensureEmailSendingEnabled();
@@ -234,7 +237,10 @@ export async function replyToEmail(
 
   // Only replying to the original sender
   const raw = await createRawMailMessage({
-    to: message.headers["reply-to"] || message.headers.from,
+    to: getReplyAddressee(message.headers, [
+      from,
+      ...(options?.ownEmails ?? []),
+    ]),
     from,
     replyTo: options?.replyTo,
     subject: formatReplySubject(message.headers.subject),

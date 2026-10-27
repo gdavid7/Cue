@@ -24,6 +24,7 @@ const metadataFields = [
   "from",
   "toRecipients",
   "ccRecipients",
+  "replyTo",
   "receivedDateTime",
   "lastModifiedDateTime",
   "changeKey",
