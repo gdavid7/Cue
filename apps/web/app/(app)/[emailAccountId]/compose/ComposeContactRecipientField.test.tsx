@@ -131,6 +131,75 @@ describe("compose contact suggestions", () => {
     expect(api).not.toHaveBeenCalled();
   });
 
+  it("picks the top suggestion on Enter and the highlighted one on Tab", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    local.mockResolvedValue([
+      { name: "Jane Local", emailAddress: "jane@example.com" },
+      { name: "Janet Local", emailAddress: "janet@example.com" },
+    ]);
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "jan" } });
+    await screen.findByRole("option", { name: /Janet Local/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyUp(input, { key: "Enter" });
+    expect(
+      await screen.findByRole("button", { name: "Remove jane@example.com" }),
+    ).toBeTruthy();
+    expect((input as HTMLInputElement).value).toBe("");
+
+    local.mockResolvedValue([
+      { name: "Janet Local", emailAddress: "janet@example.com" },
+      { name: "Janis Local", emailAddress: "janis@example.com" },
+    ]);
+    fireEvent.change(input, { target: { value: "jan" } });
+    await screen.findByRole("option", { name: /Janis Local/ });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Tab" });
+    fireEvent.blur(input);
+    expect(
+      await screen.findByRole("button", { name: "Remove janis@example.com" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Remove janet@example.com" }),
+    ).toBeNull();
+    expect((input as HTMLInputElement).value).toBe("");
+  });
+
+  it("turns a pasted list of addresses into recipients at once", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.paste(input, {
+      clipboardData: {
+        getData: () => "first@example.com, Second <second@example.com>",
+      },
+    });
+    expect(
+      await screen.findByRole("button", { name: "Remove first@example.com" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Remove Second <second@example.com>",
+      }),
+    ).toBeTruthy();
+    expect((input as HTMLInputElement).value).toBe("");
+  });
+
+  it("asks only an engine that reports suggestions, and still takes typed recipients", async () => {
+    env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
+    render(<Harness engineAnswers={false} />);
+    const input = screen.getByRole("combobox", { name: "To" });
+    fireEvent.change(input, { target: { value: "jan" } });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(local).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "jane@example.com" } });
+    fireEvent.keyUp(input, { key: "Enter" });
+    expect(
+      await screen.findByRole("button", { name: "Remove jane@example.com" }),
+    ).toBeTruthy();
+  });
+
   it("discards stale queries and still accepts free-typed recipients when unavailable", async () => {
     env.NEXT_PUBLIC_CONTACTS_ENABLED = false;
     let resolveOld: (value: unknown) => void = () => {};
@@ -157,15 +226,24 @@ describe("compose contact suggestions", () => {
 });
 
 function Harness({
+  engineAnswers = true,
   reconnectRequired = false,
 }: {
+  engineAnswers?: boolean;
   reconnectRequired?: boolean;
 }) {
   const [recipients, setRecipients] = useState("");
   return (
     <SWRConfig value={{ provider: () => new Map(), fetcher: api }}>
       <MailEngineProvider
-        client={{ queryContactSuggestions: local } as unknown as MailClient}
+        client={
+          (engineAnswers
+            ? {
+                capabilities: ["method:queryContactSuggestions"],
+                queryContactSuggestions: local,
+              }
+            : { queryContactSuggestions: local }) as unknown as MailClient
+        }
       >
         <ComposeContactRecipientField
           active

@@ -105,6 +105,46 @@ describe("mail IPC capability handshake", () => {
     }
   });
 
+  it("asks a desktop engine that reports them for recipient suggestions the schema accepts", async () => {
+    const suggestions = [{ emailAddress: "dana@example.com", name: "Dana" }];
+    const invoke = vi.fn(async (_payload: unknown) => ({
+      status: "ok",
+      result: suggestions,
+    }));
+    const query = {
+      accountId: "acc-1",
+      query: "da",
+      ownAddresses: ["me@example.com"],
+      excludeEmails: ["sam@example.com"],
+    };
+    const client = createMailIpcClient(invoke, {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+      capabilities: ["method:queryContactSuggestions"],
+    });
+    expect(mailClientSupports(client, "method:queryContactSuggestions")).toBe(
+      true,
+    );
+    await expect(client.queryContactSuggestions?.(query)).resolves.toEqual(
+      suggestions,
+    );
+    const [[request]] = invoke.mock.calls;
+    expect(request).toMatchObject({
+      method: "queryContactSuggestions",
+      payload: query,
+    });
+    expect(mailIpcRequestSchema.safeParse(request).success).toBe(true);
+
+    const older = createMailIpcClient(vi.fn(), {
+      requestId: () => "req-1",
+      push: createPushHost().transport,
+      capabilities: ["method:queryImportantPeople"],
+    });
+    expect(mailClientSupports(older, "method:queryContactSuggestions")).toBe(
+      false,
+    );
+  });
+
   it("keeps sending requests an engine that predates reporting accepts", async () => {
     const invoke = vi.fn(async (_payload: unknown) => ({
       status: "ok",

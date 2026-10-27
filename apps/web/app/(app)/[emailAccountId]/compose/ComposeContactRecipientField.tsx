@@ -7,7 +7,7 @@ import {
   ComboboxOptions,
 } from "@headlessui/react";
 import { XIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import type {
   ContactsErrorResponse,
@@ -136,14 +136,26 @@ export function ComposeContactRecipientField({
     onSearchQueryChange(name, query);
   };
 
-  const commitTypedRecipients = () => {
-    if (!isValidComposeRecipientList(searchQuery.trim())) return;
+  // Tab picks a suggestion and then moves focus; the blur that follows
+  // must not commit the partial text typed before the pick.
+  const pickedOnTabRef = useRef(false);
+
+  const commitTypedRecipients = (pending = searchQuery) => {
+    if (!isValidComposeRecipientList(pending.trim())) return;
     onSelectedRecipientsChange(
       name,
       resolveComposeRecipients({
         selectedRecipients,
-        pendingRecipient: searchQuery,
+        pendingRecipient: pending,
       }),
+    );
+    updateSearchQuery("");
+  };
+
+  const pickSuggestion = (emailAddress: string) => {
+    onSelectedRecipientsChange(
+      name,
+      [...selectedEmailAddresses, emailAddress].join(","),
     );
     updateSearchQuery("");
   };
@@ -168,127 +180,164 @@ export function ComposeContactRecipientField({
       }}
       value={selectedEmailAddresses}
     >
-      <div
-        className={cn(
-          "flex min-h-10 w-full flex-1 flex-wrap items-center gap-1.5 rounded-md text-sm disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground",
-          className,
-        )}
-      >
-        {selectedEmailAddresses.map((emailAddress) => (
-          <Badge className="rounded-md" key={emailAddress} variant="secondary">
-            <button
-              aria-label={`Edit ${emailAddress}`}
-              className="cursor-pointer"
-              onClick={() => {
-                removeSelectedEmail(emailAddress);
-                updateSearchQuery(emailAddress);
-              }}
-              type="button"
-            >
-              {extractNameFromEmail(emailAddress)}
-            </button>
-            <button
-              aria-label={`Remove ${emailAddress}`}
-              // A finger-sized target around the small glyph.
-              className="-my-1 -mr-1.5 ml-0.5 rounded-sm p-1.5 hover:bg-muted"
-              onClick={() => removeSelectedEmail(emailAddress)}
-              type="button"
-            >
-              <XIcon className="size-3" />
-            </button>
-          </Badge>
-        ))}
-
-        <div className="relative min-w-32 flex-1">
-          <ComboboxInput
-            aria-label={label}
-            autoFocus={autoFocus}
-            className="w-full border-none bg-background p-0 text-base focus:border-none focus:ring-0 md:text-sm"
-            id={name}
-            onChange={(event) => updateSearchQuery(event.target.value)}
-            onFocus={() => onActivate(name)}
-            onBlur={commitTypedRecipients}
-            onKeyDown={(event) => {
-              // A comma ends an address, unless it's inside a quoted name.
-              if (event.key !== "," || !searchQuery.trim()) return;
-              if (!isValidComposeRecipientList(searchQuery.trim())) return;
-              event.preventDefault();
-              commitTypedRecipients();
-            }}
-            onKeyUp={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              commitTypedRecipients();
-            }}
-            // An address, not prose: no capitals, corrections or spellcheck.
-            autoCapitalize="off"
-            autoComplete="off"
-            autoCorrect="off"
-            inputMode="email"
-            spellCheck={false}
-            value={searchQuery}
-          />
-
-          {active && env.NEXT_PUBLIC_CONTACTS_ENABLED && reconnectRequired && (
-            <div
-              className="absolute z-10 mt-1 flex w-80 items-center gap-3 rounded-md border bg-popover p-3 text-sm text-popover-foreground shadow-lg"
-              role="status"
-            >
-              <span className="flex-1">
-                Reconnect this account to enable contact suggestions.
-              </span>
-              <Button
-                className="h-auto p-0"
-                disabled={isReconnectingContacts}
-                loading={isReconnectingContacts}
-                onClick={onReconnectContacts}
-                type="button"
-                variant="link"
-              >
-                Reconnect
-              </Button>
-            </div>
+      {({ activeOption }: { activeOption: string | null }) => (
+        <div
+          className={cn(
+            "flex min-h-10 w-full flex-1 flex-wrap items-center gap-1.5 rounded-md text-sm disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground",
+            className,
           )}
+        >
+          {selectedEmailAddresses.map((emailAddress) => (
+            <Badge
+              className="rounded-md"
+              key={emailAddress}
+              variant="secondary"
+            >
+              <button
+                aria-label={`Edit ${emailAddress}`}
+                className="cursor-pointer"
+                onClick={() => {
+                  removeSelectedEmail(emailAddress);
+                  updateSearchQuery(emailAddress);
+                }}
+                type="button"
+              >
+                {extractNameFromEmail(emailAddress)}
+              </button>
+              <button
+                aria-label={`Remove ${emailAddress}`}
+                // A finger-sized target around the small glyph.
+                className="-my-1 -mr-1.5 ml-0.5 rounded-sm p-1.5 hover:bg-muted"
+                onClick={() => removeSelectedEmail(emailAddress)}
+                type="button"
+              >
+                <XIcon className="size-3" />
+              </button>
+            </Badge>
+          ))}
 
-          {active && !!suggestions.length && (
-            <ComboboxOptions className="absolute z-20 mt-1 max-h-72 w-max min-w-full max-w-[min(28rem,calc(100vw-3rem))] overflow-auto rounded-md border bg-popover py-1 text-sm shadow-lg focus:outline-none">
-              {suggestions.map((contact) => (
-                <ComboboxOption
-                  className={({ focus }) =>
-                    `cursor-pointer select-none px-3 py-1 text-foreground ${focus ? "bg-accent" : ""}`
-                  }
-                  key={contact.emailAddress}
-                  value={contact.emailAddress}
+          <div className="relative min-w-32 flex-1">
+            <ComboboxInput
+              aria-label={label}
+              autoFocus={autoFocus}
+              className="w-full border-none bg-background p-0 text-base focus:border-none focus:ring-0 md:text-sm"
+              id={name}
+              onChange={(event) => {
+                pickedOnTabRef.current = false;
+                updateSearchQuery(event.target.value);
+              }}
+              onFocus={() => onActivate(name)}
+              onBlur={() => {
+                if (pickedOnTabRef.current) {
+                  pickedOnTabRef.current = false;
+                  return;
+                }
+                commitTypedRecipients();
+              }}
+              onPaste={(event) => {
+                // Pasted addresses become recipients at once, as in Gmail.
+                const pasted = event.clipboardData.getData("text");
+                if (searchQuery.trim() || !isValidComposeRecipientList(pasted))
+                  return;
+                event.preventDefault();
+                commitTypedRecipients(pasted);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Tab" &&
+                  !event.shiftKey &&
+                  typeof activeOption === "string" &&
+                  suggestions.some(
+                    (contact) => contact.emailAddress === activeOption,
+                  )
+                ) {
+                  pickedOnTabRef.current = true;
+                  pickSuggestion(activeOption);
+                  return;
+                }
+                // A comma ends an address, unless it's inside a quoted name.
+                if (event.key !== "," || !searchQuery.trim()) return;
+                if (!isValidComposeRecipientList(searchQuery.trim())) return;
+                event.preventDefault();
+                commitTypedRecipients();
+              }}
+              onKeyUp={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                commitTypedRecipients();
+              }}
+              // An address, not prose: no capitals, corrections or spellcheck.
+              autoCapitalize="off"
+              autoComplete="off"
+              autoCorrect="off"
+              inputMode="email"
+              spellCheck={false}
+              value={searchQuery}
+            />
+
+            {active &&
+              env.NEXT_PUBLIC_CONTACTS_ENABLED &&
+              reconnectRequired && (
+                <div
+                  className="absolute z-10 mt-1 flex w-80 items-center gap-3 rounded-md border bg-popover p-3 text-sm text-popover-foreground shadow-lg"
+                  role="status"
                 >
-                  <div className="my-2 flex items-center">
-                    <Avatar className="shrink-0">
-                      <AvatarImage
-                        alt={contact.name ?? contact.emailAddress}
-                        src={contact.profilePictureUrl ?? undefined}
-                      />
-                      <AvatarFallback>
-                        {(contact.name || contact.emailAddress)
-                          .at(0)
-                          ?.toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="ml-3 flex min-w-0 flex-col justify-center">
-                      {contact.name && (
-                        <div className="truncate font-medium text-foreground">
-                          {contact.name}
+                  <span className="flex-1">
+                    Reconnect this account to enable contact suggestions.
+                  </span>
+                  <Button
+                    className="h-auto p-0"
+                    disabled={isReconnectingContacts}
+                    loading={isReconnectingContacts}
+                    onClick={onReconnectContacts}
+                    type="button"
+                    variant="link"
+                  >
+                    Reconnect
+                  </Button>
+                </div>
+              )}
+
+            {active && !!suggestions.length && (
+              <ComboboxOptions className="absolute z-20 mt-1 max-h-72 w-max min-w-full max-w-[min(28rem,calc(100vw-3rem))] overflow-auto rounded-md border bg-popover py-1 text-sm shadow-lg focus:outline-none">
+                {suggestions.map((contact) => (
+                  <ComboboxOption
+                    className={({ focus }) =>
+                      `cursor-pointer select-none px-3 py-1 text-foreground ${focus ? "bg-accent" : ""}`
+                    }
+                    key={contact.emailAddress}
+                    value={contact.emailAddress}
+                  >
+                    <div className="my-2 flex items-center">
+                      <Avatar className="shrink-0">
+                        <AvatarImage
+                          alt={contact.name ?? contact.emailAddress}
+                          src={contact.profilePictureUrl ?? undefined}
+                        />
+                        <AvatarFallback>
+                          {(contact.name || contact.emailAddress)
+                            .at(0)
+                            ?.toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="ml-3 flex min-w-0 flex-col justify-center">
+                        {contact.name && (
+                          <div className="truncate font-medium text-foreground">
+                            {contact.name}
+                          </div>
+                        )}
+                        <div className="truncate text-sm text-muted-foreground">
+                          {contact.emailAddress}
                         </div>
-                      )}
-                      <div className="truncate text-sm text-muted-foreground">
-                        {contact.emailAddress}
                       </div>
                     </div>
-                  </div>
-                </ComboboxOption>
-              ))}
-            </ComboboxOptions>
-          )}
+                  </ComboboxOption>
+                ))}
+              </ComboboxOptions>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </Combobox>
   );
 }

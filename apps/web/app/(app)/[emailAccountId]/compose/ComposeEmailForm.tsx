@@ -74,7 +74,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { env } from "@/env";
 import { getAccountScopedKey } from "@/utils/swr";
 import { useEmailAccountFull } from "@/hooks/useEmailAccountFull";
 import { usePreSendCheck } from "@/hooks/usePreSendCheck";
@@ -642,7 +641,7 @@ function ComposeEmailFormContent({
     register,
     getValues,
     handleSubmit,
-    formState: { errors, isSubmitting },
+    formState: { isSubmitting },
     watch,
     setValue,
     setFocus,
@@ -2329,31 +2328,18 @@ function ComposeEmailFormContent({
                     label={RECIPIENT_LABELS[field]}
                   />
                   <div className="min-w-0 flex-1">
-                    {env.NEXT_PUBLIC_CONTACTS_ENABLED ||
-                    client?.queryContactSuggestions ? (
-                      <ComposeContactRecipientField
-                        {...recipientFieldProps}
-                        active={activeRecipientField === field}
-                        autoFocus={
-                          autoFocus && field === "to" && focusRecipientField
-                        }
-                        className="min-h-8"
-                        name={field}
-                        selectedRecipients={watch(field) ?? ""}
-                      />
-                    ) : (
-                      <Input
-                        type="text"
-                        name={field}
-                        registerProps={{
-                          ...register(field, { required: field === "to" }),
-                          autoFocus:
-                            autoFocus && field === "to" && focusRecipientField,
-                        }}
-                        error={errors[field]}
-                        className="h-7 rounded-none border-0 bg-transparent p-0 text-sm leading-5 shadow-none focus:border-transparent focus:ring-0 sm:text-sm"
-                      />
-                    )}
+                    {/* Chips, comma and paste work without suggestions,
+                        so engines that can't suggest keep the same field. */}
+                    <ComposeContactRecipientField
+                      {...recipientFieldProps}
+                      active={activeRecipientField === field}
+                      autoFocus={
+                        autoFocus && field === "to" && focusRecipientField
+                      }
+                      className="min-h-8"
+                      name={field}
+                      selectedRecipients={watch(field) ?? ""}
+                    />
                   </div>
                   {field === "to" &&
                     (["cc", "bcc"] as const)
