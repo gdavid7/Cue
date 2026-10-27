@@ -6,6 +6,7 @@ import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LeftOpenDraft } from "@inboxzero/mail-core/queries";
 import {
+  ANSWERS_KEPT,
   CUE_AUTHORED_RECOVERIES,
   CUE_AUTHORED_RECOVERY_MS,
   LEFT_OPEN_SHOWN_LIMIT,
@@ -19,6 +20,8 @@ const mail = vi.hoisted(() => ({
   client: {} as { capabilities?: string[]; queryLeftOpenDrafts?: unknown },
   // What the server says Cue wrote, per account; a missing account failed.
   cueAuthored: {} as Record<string, string[]>,
+  // Drafts the server says it didn't check, per account.
+  unchecked: {} as Record<string, string[]>,
   // The status a failed account's read answers with; 503 if unset.
   failStatus: {} as Record<string, number>,
   // Each account the server was asked about, in order.
@@ -67,8 +70,14 @@ vi.mock("@/utils/fetch-for-accounts", () => ({
       throw Object.assign(new Error("failed"), {
         status: mail.failStatus[accountId] ?? 503,
       });
+    const asked = (new URL(path, "http://x").searchParams.get("items") ?? "")
+      .split(",")
+      .map((item) => item.slice(item.lastIndexOf(":") + 1));
+    const checkedMessageIds = asked.filter(
+      (id) => !mail.unchecked[accountId]?.includes(id),
+    );
     return {
-      byAccount: [{ accountId, data: { messageIds } }],
+      byAccount: [{ accountId, data: { messageIds, checkedMessageIds } }],
       failedAccountIds: [],
     };
   },
@@ -85,6 +94,7 @@ describe("useLeftOpenDrafts", () => {
     mail.cueAuthored = {};
     mail.serverReads = [];
     mail.failStatus = {};
+    mail.unchecked = {};
     mail.sequence = 1;
     mail.serverPaths = {};
     mail.pending = null;
@@ -118,6 +128,147 @@ describe("useLeftOpenDrafts", () => {
         "b-draft",
       ]),
     );
+  });
+
+  it("shows no draft the server says it didn't check", async () => {
+    mail.drafts = [draft("a", "unchecked"), draft("a", "users-own")];
+    mail.cueAuthored = { a: [] };
+    mail.unchecked = { a: ["unchecked"] };
+
+    const { result } = renderLeftOpenDrafts();
+
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "users-own",
+      ]),
+    );
+  });
+
+  it("says it takes an answer for only some drafts", async () => {
+    mail.drafts = [draft("a", "users-own")];
+    mail.cueAuthored = { a: [] };
+
+    renderLeftOpenDrafts();
+
+    await waitFor(() => expect(mail.serverPaths.a).toBeDefined());
+    expect(
+      new URL(mail.serverPaths.a, "http://x").searchParams.get("partial"),
+    ).toBe("1");
+  });
+
+  it("shows a draft again when it comes back to the lane, without asking about it again", async () => {
+    mail.drafts = [draft("a", "returns", "t-returns", 1000)];
+    mail.cueAuthored = { a: [] };
+
+    const { result, rerender } = renderLeftOpenDrafts();
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "returns",
+      ]),
+    );
+
+    // Another draft takes its place for a while, as when it is opened
+    // and saved briefly, then the first comes back as it was.
+    mail.sequence += 1;
+    mail.drafts = [draft("a", "other", "t-other", 1200)];
+    rerender();
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "other",
+      ]),
+    );
+    mail.sequence += 1;
+    mail.drafts = [draft("a", "returns", "t-returns", 1000)];
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "returns",
+      ]),
+    );
+    expect(mail.serverReads).toEqual(["a", "a"]);
+  });
+
+  it("asks again only about drafts that are new or saved again, and keeps showing the rest meanwhile", async () => {
+    mail.drafts = [
+      draft("a", "kept", "t-kept", 1000),
+      draft("a", "resaved", "t-resaved", 1000),
+    ];
+    mail.cueAuthored = { a: [] };
+
+    const { result, rerender } = renderLeftOpenDrafts();
+    await waitFor(() => expect(result.current.drafts).toHaveLength(2));
+
+    let release = () => {};
+    mail.pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    mail.sequence += 1;
+    mail.drafts = [
+      draft("a", "kept", "t-kept", 1000),
+      draft("a", "resaved", "t-resaved", 2000),
+      draft("a", "aged-in", "t-aged-in", 1500),
+    ];
+    rerender();
+
+    await waitFor(() => expect(mail.serverReads).toHaveLength(2));
+    expect(
+      new URL(mail.serverPaths.a, "http://x").searchParams
+        .get("items")
+        ?.split(",")
+        .sort(),
+    ).toEqual(["t-aged-in:aged-in", "t-resaved:resaved"]);
+    // What was already answered still shows; a draft saved since may be
+    // Cue's until the server says.
+    expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+      "kept",
+    ]);
+    release();
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "kept",
+        "resaved",
+        "aged-in",
+      ]),
+    );
+  });
+
+  it("keeps no more answers than its cap, dropping the oldest", async () => {
+    mail.drafts = Array.from({ length: ANSWERS_KEPT + 10 }, (_, i) =>
+      draft("a", `d${String(i).padStart(3, "0")}`),
+    );
+    mail.cueAuthored = { a: [] };
+
+    const { cache } = renderLeftOpenDrafts();
+    await waitFor(() =>
+      expect(
+        (cachedAnswers(cache) as Map<string, boolean> | undefined)?.size,
+      ).toBe(ANSWERS_KEPT),
+    );
+    const kept = [...(cachedAnswers(cache) as Map<string, boolean>).keys()];
+    // Asked in message id order, so the first ten asked are the ones dropped.
+    expect(kept.some((key) => key.includes("\0d009\0"))).toBe(false);
+    expect(kept.some((key) => key.includes("\0d010\0"))).toBe(true);
+  });
+
+  it("doesn't ask the server when the only change is a draft leaving the lane", async () => {
+    mail.drafts = [draft("a", "stays"), draft("a", "sent")];
+    mail.cueAuthored = { a: [] };
+
+    const { result, rerender } = renderLeftOpenDrafts();
+    await waitFor(() => expect(result.current.drafts).toHaveLength(2));
+
+    mail.sequence += 1;
+    mail.drafts = [draft("a", "stays")];
+    rerender();
+
+    await waitFor(() =>
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "stays",
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mail.serverReads).toEqual(["a"]);
   });
 
   it("asks each account only about its own drafts", async () => {
@@ -284,6 +435,7 @@ describe("useLeftOpenDrafts", () => {
       const { unmount, cache } = renderLeftOpenDrafts();
       await waitFor(() => expect(mail.serverReads).toHaveLength(2));
       const answered = cachedCueAuthored(cache);
+      const answers = cachedAnswers(cache);
       let release = () => {};
       mail.pending = new Promise((resolve) => {
         release = resolve;
@@ -299,6 +451,58 @@ describe("useLeftOpenDrafts", () => {
 
       expect(readsOf("a")).toBe(2);
       expect(cachedCueAuthored(cache)).toBe(answered);
+      expect(cachedAnswers(cache)).toBe(answers);
+    });
+
+    it("asks once more about the drafts the server didn't get to, and shows them once it checks them", async () => {
+      mail.drafts = [
+        draft("a", "checked-first", "t1", 2000),
+        draft("a", "left-for-later", "t2", 1000),
+      ];
+      mail.cueAuthored = { a: [] };
+      mail.unchecked = { a: ["left-for-later"] };
+
+      const { result } = renderLeftOpenDrafts();
+      await waitFor(() =>
+        expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+          "checked-first",
+        ]),
+      );
+
+      mail.unchecked = {};
+      await vi.advanceTimersByTimeAsync(CUE_AUTHORED_RECOVERY_MS);
+
+      await waitFor(() =>
+        expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+          "checked-first",
+          "left-for-later",
+        ]),
+      );
+      // The follow-up asks only about what wasn't checked.
+      expect(
+        new URL(mail.serverPaths.a, "http://x").searchParams.get("items"),
+      ).toBe("t2:left-for-later");
+      await waitOutRecoveries();
+      expect(readsOf("a")).toBe(2);
+    });
+
+    it("stops asking about drafts the server keeps not getting to", async () => {
+      mail.drafts = [
+        draft("a", "checked-first", "t1", 2000),
+        draft("a", "never-fits", "t2", 1000),
+      ];
+      mail.cueAuthored = { a: [] };
+      mail.unchecked = { a: ["never-fits"] };
+
+      const { result } = renderLeftOpenDrafts();
+      await waitFor(() => expect(result.current.drafts).toHaveLength(1));
+      await waitOutRecoveries();
+
+      // The follow-up checked none of them, so asking again wouldn't help.
+      expect(readsOf("a")).toBe(2);
+      expect(result.current.drafts.map((item) => item.messageId)).toEqual([
+        "checked-first",
+      ]);
     });
 
     it("doesn't ask again for an account with too many of Cue's drafts to check", async () => {
@@ -393,6 +597,13 @@ function renderLeftOpenDrafts() {
 
 function cachedCueAuthored(cache: Map<string, { data?: unknown }>) {
   const key = [...cache.keys()].find((k) => k.includes("cue-authored-drafts"));
+  return key ? cache.get(key)?.data : undefined;
+}
+
+function cachedAnswers(cache: Map<string, { data?: unknown }>) {
+  const key = [...cache.keys()].find((k) =>
+    k.includes("left-open-cue-answers"),
+  );
   return key ? cache.get(key)?.data : undefined;
 }
 

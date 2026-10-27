@@ -1,4 +1,5 @@
 import type { gmail_v1 } from "@googleapis/gmail";
+import PostalMime from "postal-mime";
 import { describe, expect, it, vi } from "vitest";
 import type { ParsedMessage } from "@/utils/types";
 import { parseMessage } from "@/utils/gmail/message";
@@ -71,6 +72,27 @@ describe("createMail", () => {
     );
     expect(toHeader).toMatch(/=\?UTF-8\?[QB]\?[^?]+\?= <zoe@example\.com>/);
     expect(toHeader).not.toContain("Zoë");
+  });
+
+  it("round-trips display names through the sent MIME unchanged", async () => {
+    const names = [
+      "Lovelace, Ada",
+      "Zoë Ångström",
+      "山田 太郎",
+      'Grace "Amazing" Hopper',
+    ];
+    const raw = await createMail({
+      from: "sender@example.com",
+      to: names
+        .map((name, i) => formatEmailWithName(name, `r${i}@example.com`))
+        .join(","),
+      subject: "Round trip",
+      text: "Message",
+    });
+
+    const parsed = await PostalMime.parse(Buffer.from(raw, "base64url"));
+
+    expect(parsed.to?.map((recipient) => recipient.name)).toEqual(names);
   });
 
   it("keeps BCC recipients in raw messages sent through the Gmail API", async () => {

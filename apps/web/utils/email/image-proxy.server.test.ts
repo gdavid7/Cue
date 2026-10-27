@@ -59,6 +59,21 @@ describe("rewriteHtmlForImageProxy", () => {
     expect(result.html).not.toContain("news.example.com");
   });
 
+  it("keeps a 1px-high divider while dropping a 1x1 pixel", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { rewriteHtmlForImageProxy } = await loadModule({
+      NEXT_PUBLIC_IMAGE_PROXY_BASE_URL: "https://proxy.example.com/image",
+    });
+
+    const result = await rewriteHtmlForImageProxy(
+      '<img src="https://cdn.example.com/line.gif" width="600" height="1" /><img src="https://news.example.com/o.gif" width="1" height="1" />',
+      createTestLogger(),
+    );
+
+    expect(result.html).toContain("cdn.example.com%2Fline.gif");
+    expect(result.html).not.toContain("news.example.com");
+  });
+
   it("rewrites remote assets with signed proxy URLs when a signing secret is configured", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { rewriteHtmlForImageProxy } = await loadModule({
