@@ -45,6 +45,9 @@ export const createMockEmailProvider = (
     snippet: "Test thread snippet",
   }),
   getLabels: vi.fn().mockResolvedValue([]),
+  getOwnEmailAddresses: vi
+    .fn()
+    .mockImplementation(async (email: string) => [email]),
   getLabelById: vi.fn().mockResolvedValue(null),
   getLabelByName: vi.fn().mockResolvedValue(null),
   getMessageByRfc822MessageId: vi.fn().mockResolvedValue(null),

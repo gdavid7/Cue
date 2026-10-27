@@ -1245,7 +1245,12 @@ export class GmailProvider implements EmailProvider {
       email,
       content,
       options?.from || (await this.getReplyFrom(email.headers)),
-      { ...options, ownEmails: await this.getSelfEmailAddresses([]) },
+      {
+        ...options,
+        ownEmails: await this.getSelfEmailAddresses(
+          options?.from ? [options.from] : [],
+        ),
+      },
     );
     return { messageId: requireSentMessageId(result.data.id) };
   }
@@ -2329,6 +2334,10 @@ export class GmailProvider implements EmailProvider {
   async getOrCreateFolderIdByName(_folderName: string): Promise<string> {
     this.logger.warn("Moving to folder is not supported for Gmail");
     return "";
+  }
+
+  getOwnEmailAddresses(accountEmail: string): Promise<string[]> {
+    return this.getSelfEmailAddresses([accountEmail]);
   }
 
   async getSignatures(): Promise<EmailSignature[]> {

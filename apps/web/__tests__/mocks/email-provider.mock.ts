@@ -201,6 +201,9 @@ export function createMockEmailProvider(
     isReplyInThread: vi.fn().mockReturnValue(false),
     isSentMessage: vi.fn().mockReturnValue(false),
     getOrCreateFolderIdByName: vi.fn().mockResolvedValue("folder-123"),
+    getOwnEmailAddresses: vi
+      .fn()
+      .mockImplementation(async (email: string) => [email]),
     getSignatures: vi.fn().mockResolvedValue([]),
     getInboxStats: vi.fn().mockResolvedValue({ total: 0, unread: 0 }),
 
