@@ -309,6 +309,24 @@ describe("sanitizeMailHtml marks links that go somewhere else", () => {
     ]);
   });
 
+  it("flags hrefs the browser resolves to another host", () => {
+    const { html, mismatchedLinkCount } = sanitizeMailHtml(`
+      <a href="\\\\evil.example/">paypal.com</a>
+      <a href="/\\evil.example/">paypal.com</a>
+      <a href="ht&#10;tps://evil.example/">paypal.com</a>
+      <a href="/account">paypal.com</a>
+    `);
+    const anchors = Array.from(parse(html).querySelectorAll("a"));
+
+    expect(mismatchedLinkCount).toBe(3);
+    expect(anchors.map((anchor) => anchor.getAttribute("title"))).toEqual([
+      "evil.example",
+      "evil.example",
+      "evil.example",
+      null,
+    ]);
+  });
+
   it("changes nothing but the title", () => {
     const input =
       '<p>Hi <a href="https://evil.example/a" class="btn" target="_blank">paypal.com</a></p>';

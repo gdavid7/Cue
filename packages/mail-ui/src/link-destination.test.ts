@@ -93,10 +93,109 @@ describe("getMismatchedLinkHost", () => {
       "https://example.us1.list-manage.com/track/click?u=1",
       "https://u123.ct.sendgrid.net/ls/click?upn=abc",
       "https://r.us-east-1.awstrack.me/L0/https:%2F%2Fexample.com",
-      "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fexample.com",
-      "https://urldefense.com/v3/__https://example.com__",
+      "https://urldefense.com/v3/__https://evil.example__",
     ]) {
       expect(getMismatchedLinkHost("example.com", href), href).toBeNull();
     }
+  });
+
+  it("compares the destination inside a Safe Links wrapper", () => {
+    expect(
+      getMismatchedLinkHost(
+        "example.com",
+        "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fevil.example%2Flogin&data=1",
+      ),
+    ).toBe("evil.example");
+    expect(
+      getMismatchedLinkHost(
+        "example.com",
+        "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fwww.example.com%2F",
+      ),
+    ).toBeNull();
+    expect(
+      getMismatchedLinkHost(
+        "example.com",
+        "https://nam12.safelinks.protection.outlook.com/?data=1",
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores file names linking to where the file lives", () => {
+    for (const text of [
+      "report.pdf",
+      "package.json",
+      "Q3-Budget.xlsx",
+      "Node.js",
+      "schema.prisma",
+      "index.ts",
+      "notes.zip",
+    ]) {
+      expect(
+        getMismatchedLinkHost(text, "https://github.com/acme/repo"),
+        text,
+      ).toBeNull();
+      expect(
+        getMismatchedLinkHost(text, "https://drive.google.com/file/d/1"),
+        text,
+      ).toBeNull();
+    }
+  });
+
+  it("still reads ICANN, private and Unicode names as hosts", () => {
+    for (const text of [
+      "paypal.com",
+      "bank.co.uk",
+      "alice.github.io",
+      "bücher.de",
+    ]) {
+      expect(getMismatchedLinkHost(text, "https://evil.example/"), text).toBe(
+        "evil.example",
+      );
+    }
+  });
+
+  it("parses hrefs the way the browser does", () => {
+    for (const href of [
+      "\\\\evil.example/",
+      "/\\evil.example/",
+      "https:\\\\evil.example/",
+      "ht\ntps://evil.example/",
+      "\thttps://evil.example/",
+    ]) {
+      expect(getMismatchedLinkHost("paypal.com", href), href).toBe(
+        "evil.example",
+      );
+    }
+    for (const href of ["account", "?x=1", "#top", "javascript:alert(1)"]) {
+      expect(getMismatchedLinkHost("paypal.com", href), href).toBeNull();
+    }
+  });
+
+  it("flags IP address destinations when the text shows a host", () => {
+    expect(
+      getMismatchedLinkHost("paypal.com", "http://203.0.113.5/login"),
+    ).toBe("203.0.113.5");
+    expect(getMismatchedLinkHost("paypal.com", "http://[2001:db8::1]/")).toBe(
+      "[2001:db8::1]",
+    );
+    expect(
+      getMismatchedLinkHost("Click here", "http://203.0.113.5/"),
+    ).toBeNull();
+  });
+
+  it("ignores invisible format characters in the text", () => {
+    for (const text of [
+      "pay\u200Bpal.com",
+      "https://pay\u200Bpal.com",
+      "pay\u00ADpal.com",
+      "\u2060paypal.com\uFEFF",
+    ]) {
+      expect(getMismatchedLinkHost(text, "https://evil.example/"), text).toBe(
+        "evil.example",
+      );
+    }
+    expect(
+      getMismatchedLinkHost("pay\u200Bpal.com", "https://paypal.com/"),
+    ).toBeNull();
   });
 });
