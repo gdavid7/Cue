@@ -4,6 +4,8 @@ import type { Logger } from "@/utils/logger";
 import type { ExecutedRuleStatus } from "@/generated/prisma/enums";
 import { serializedMatchMetadataSchema } from "@/utils/ai/assistant/chat-context-validation";
 import prisma from "@/utils/prisma";
+import { resolveEmailAccountForId } from "@/utils/ai/assistant/chat-other-accounts";
+import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 import { trackRuleToolCall } from "./shared";
 
 const getRuleExecutionForMessageInputSchema = z.object({
@@ -68,10 +70,15 @@ type GetRuleExecutionForMessageOutput =
 export const getRuleExecutionForMessageTool = ({
   email,
   emailAccountId,
+  userId,
+  provider,
   logger,
 }: {
   email: string;
   emailAccountId: string;
+  /** The signed-in user, whose other accounts' emails it may also look up. */
+  userId: string;
+  provider: string;
   logger: Logger;
 }) =>
   tool({
@@ -88,10 +95,24 @@ export const getRuleExecutionForMessageTool = ({
       });
 
       try {
+        // An email from another of the user's accounts was processed by that
+        // account's rules, so its records are read there.
+        const target = await resolveEmailAccountForId({
+          id: messageId,
+          userId,
+          emailAccountId,
+          provider,
+        });
+        if (!target) {
+          return {
+            messageId,
+            error: "That email is not in any of the user's connected accounts.",
+          };
+        }
         const executedRules = await prisma.executedRule.findMany({
           where: {
-            emailAccountId,
-            messageId,
+            emailAccountId: target.emailAccountId,
+            messageId: target.id,
           },
           orderBy: { createdAt: "desc" },
           select: {
@@ -149,9 +170,13 @@ export const getRuleExecutionForMessageTool = ({
           })),
         }));
 
+        const threadId = executedRules[0]?.threadId ?? null;
         return {
           messageId,
-          threadId: executedRules[0]?.threadId ?? null,
+          threadId:
+            threadId && target.otherAccount
+              ? toOtherAccountEmailId(target.emailAccountId, threadId)
+              : threadId,
           evidence: getExecutionEvidence(executions),
           executions,
         };

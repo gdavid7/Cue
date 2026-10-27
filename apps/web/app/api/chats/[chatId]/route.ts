@@ -4,6 +4,7 @@ import prisma from "@/utils/prisma";
 import { withEmailAccount } from "@/utils/middleware";
 import { getLiveStreamId } from "@/utils/chat/active-run";
 import { softDeleteChat } from "@/utils/chat/soft-delete";
+import { ownedChatWhere } from "@/utils/chat/owned-chat";
 
 export type GetChatResponse = Awaited<ReturnType<typeof getChat>>;
 const updateChatSchema = z.object({
@@ -13,7 +14,7 @@ const updateChatSchema = z.object({
 export const GET = withEmailAccount(
   "chats/detail",
   async (request, { params }) => {
-    const { emailAccountId } = request.auth;
+    const { userId } = request.auth;
     const { chatId } = await params;
 
     if (!chatId) {
@@ -23,7 +24,7 @@ export const GET = withEmailAccount(
       );
     }
 
-    const chat = await getChat({ chatId, emailAccountId });
+    const chat = await getChat({ chatId, userId });
 
     return NextResponse.json(chat);
   },
@@ -32,7 +33,7 @@ export const GET = withEmailAccount(
 export const PATCH = withEmailAccount(
   "chats/update",
   async (request, { params }) => {
-    const { emailAccountId } = request.auth;
+    const { userId } = request.auth;
     const { chatId } = await params;
 
     if (!chatId) {
@@ -66,7 +67,7 @@ export const PATCH = withEmailAccount(
 
     const updatedChat = await updateChat({
       chatId,
-      emailAccountId,
+      userId,
       name: data.name,
     });
 
@@ -81,7 +82,7 @@ export const PATCH = withEmailAccount(
 export const DELETE = withEmailAccount(
   "chats/delete",
   async (request, { params }) => {
-    const { emailAccountId } = request.auth;
+    const { userId } = request.auth;
     const { chatId } = await params;
 
     if (!chatId) {
@@ -91,7 +92,7 @@ export const DELETE = withEmailAccount(
       );
     }
 
-    const deleted = await deleteChat({ chatId, emailAccountId });
+    const deleted = await deleteChat({ chatId, userId });
     if (!deleted) {
       return NextResponse.json({ error: "Chat not found." }, { status: 404 });
     }
@@ -100,17 +101,10 @@ export const DELETE = withEmailAccount(
   },
 );
 
-async function getChat({
-  chatId,
-  emailAccountId,
-}: {
-  chatId: string;
-  emailAccountId: string;
-}) {
+async function getChat({ chatId, userId }: { chatId: string; userId: string }) {
   const chat = await prisma.chat.findFirst({
     where: {
-      id: chatId,
-      emailAccountId,
+      ...ownedChatWhere({ chatId, userId }),
       deletedAt: null,
     },
     include: {
@@ -135,17 +129,16 @@ async function getChat({
 
 async function updateChat({
   chatId,
-  emailAccountId,
+  userId,
   name,
 }: {
   chatId: string;
-  emailAccountId: string;
+  userId: string;
   name?: string;
 }) {
   const result = await prisma.chat.updateMany({
     where: {
-      id: chatId,
-      emailAccountId,
+      ...ownedChatWhere({ chatId, userId }),
       deletedAt: null,
     },
     data: {
@@ -157,8 +150,7 @@ async function updateChat({
 
   return prisma.chat.findFirst({
     where: {
-      id: chatId,
-      emailAccountId,
+      ...ownedChatWhere({ chatId, userId }),
       deletedAt: null,
     },
     include: {
@@ -173,10 +165,10 @@ async function updateChat({
 
 async function deleteChat({
   chatId,
-  emailAccountId,
+  userId,
 }: {
   chatId: string;
-  emailAccountId: string;
+  userId: string;
 }) {
-  return softDeleteChat({ chatId, emailAccountId });
+  return softDeleteChat({ chatId, userId });
 }

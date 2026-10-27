@@ -40,6 +40,7 @@ export const POST = withEmailAccount(
       persistenceWaitMs: MOBILE_PENDING_ACTION_PERSIST_WAIT_MS,
       emailAccountId,
       provider: user.account.provider,
+      userId: request.auth.userId,
       logger: request.logger,
     });
 

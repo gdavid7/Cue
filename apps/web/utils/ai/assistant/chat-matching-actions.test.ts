@@ -12,6 +12,12 @@ const { mockStartMatchingBulkJob, store } = vi.hoisted(() => ({
   mockStartMatchingBulkJob: vi.fn(async () => "job-1"),
   store: new Map<string, string>(),
 }));
+const { mockGetOwnedEmailAccount } = vi.hoisted(() => ({
+  mockGetOwnedEmailAccount: vi.fn(),
+}));
+vi.mock("@/utils/ai/assistant/chat-other-accounts", () => ({
+  getOwnedEmailAccount: mockGetOwnedEmailAccount,
+}));
 vi.mock("@/utils/mail-bulk/start-matching-job", () => ({
   startMatchingBulkJob: mockStartMatchingBulkJob,
 }));
@@ -33,6 +39,8 @@ vi.mock("@/utils/redis", () => ({
 }));
 
 const ACCOUNT = "account-1";
+const OTHER = "account-2";
+const USER = "user-1";
 const CHAT = "chat-1";
 const CALL = "call-1";
 const QUERY = "category:promotions after:2025/01/01 before:2026/01/01";
@@ -75,7 +83,12 @@ describe("previewMatchingQueryAction", () => {
       toolCallId: CALL,
       action: "archive",
       conversations: 15,
-      queryHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      accounts: [
+        {
+          emailAccountId: ACCOUNT,
+          queryHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        },
+      ],
     });
   });
 
@@ -151,6 +164,13 @@ describe("confirmMatchingQueryAction", () => {
       jobId: "job-1",
       action: "archive",
       messageCap: expect.any(Number),
+      jobs: [
+        {
+          emailAccountId: ACCOUNT,
+          jobId: "job-1",
+          messageCap: expect.any(Number),
+        },
+      ],
     });
   });
 
@@ -292,6 +312,130 @@ describe("a token issued before conversations was stored", () => {
   });
 });
 
+describe("a search-wide action across the user's accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store.clear();
+    mockGetOwnedEmailAccount.mockResolvedValue({
+      id: OTHER,
+      email: "two@example.com",
+      provider: "google",
+    });
+  });
+
+  it("counts every account into one card, with each account's count", async () => {
+    const result = await previewAcrossAccounts();
+
+    expect(result).toMatchObject({
+      status: "needs_confirmation",
+      conversations: 15 + 4,
+      messages: 30 + 8,
+      accounts: [
+        { account: "me@example.com", conversations: 15, messages: 30 },
+        { account: "two@example.com", conversations: 4, messages: 8 },
+      ],
+      confirmToken: expect.any(String),
+    });
+  });
+
+  it("stores each account's id and keyed hash, never the search (R-1)", async () => {
+    await previewAcrossAccounts();
+
+    const [stored] = [...store.values()];
+    expect(stored).not.toContain("promotions");
+    expect(JSON.parse(stored ?? "").accounts).toEqual([
+      { emailAccountId: ACCOUNT, queryHash: expect.any(String) },
+      { emailAccountId: OTHER, queryHash: expect.any(String) },
+    ]);
+  });
+
+  it("starts one job in each account the card counted", async () => {
+    const token = await tokenAcrossAccounts();
+    mockStartMatchingBulkJob
+      .mockResolvedValueOnce("job-1")
+      .mockResolvedValueOnce("job-2");
+
+    const started = await confirm({ confirmToken: token });
+
+    expect(mockStartMatchingBulkJob).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: ACCOUNT }),
+    );
+    expect(mockStartMatchingBulkJob).toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: OTHER, scope: { q: QUERY } }),
+    );
+    expect(started.jobs).toEqual([
+      expect.objectContaining({ emailAccountId: ACCOUNT, jobId: "job-1" }),
+      expect.objectContaining({ emailAccountId: OTHER, jobId: "job-2" }),
+    ]);
+  });
+
+  it("starts nothing when an account is no longer the user's", async () => {
+    const token = await tokenAcrossAccounts();
+    mockGetOwnedEmailAccount.mockResolvedValue(null);
+
+    await expect(confirm({ confirmToken: token })).rejects.toThrow(
+      MATCHING_CONFIRM_EXPIRED,
+    );
+    expect(mockStartMatchingBulkJob).not.toHaveBeenCalled();
+    expect(mockGetOwnedEmailAccount).toHaveBeenCalledWith({
+      userId: USER,
+      emailAccountId: OTHER,
+    });
+  });
+
+  it("leaves out an account with nothing to change, and reports one that can't be counted", async () => {
+    const result = await preview({
+      otherAccounts: {
+        chatEmail: "me@example.com",
+        previews: [
+          {
+            account: { id: OTHER, email: "two@example.com" },
+            search: { query: QUERY },
+            count: { conversations: 0, total: 0, capped: false },
+          },
+          {
+            account: { id: "account-3", email: "three@example.com" },
+            error: "This account did not answer in time.",
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      conversations: 15,
+      accounts: [
+        { account: "me@example.com", conversations: 15 },
+        { account: "two@example.com", conversations: 0 },
+        { account: "three@example.com", error: expect.any(String) },
+      ],
+    });
+    const [stored] = [...store.values()];
+    expect(JSON.parse(stored ?? "").accounts).toHaveLength(1);
+  });
+});
+
+function previewAcrossAccounts() {
+  return preview({
+    otherAccounts: {
+      chatEmail: "me@example.com",
+      previews: [
+        {
+          account: { id: OTHER, email: "two@example.com" },
+          search: { query: QUERY },
+          count: { conversations: 4, total: 8, capped: false },
+        },
+      ],
+    },
+  });
+}
+
+async function tokenAcrossAccounts() {
+  const result = await previewAcrossAccounts();
+  if (!("confirmToken" in result) || !result.confirmToken)
+    throw new Error("no token");
+  return result.confirmToken;
+}
+
 function cancel(confirmToken: string) {
   return cancelMatchingQueryAction({
     emailAccountId: ACCOUNT,
@@ -341,6 +485,7 @@ function confirm(
   return confirmMatchingQueryAction({
     emailAccountId: ACCOUNT,
     provider: "google",
+    userId: USER,
     chatId: CHAT,
     toolCallId: CALL,
     query: QUERY,

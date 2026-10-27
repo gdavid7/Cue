@@ -48,7 +48,7 @@ describe("GET /api/chat/[id]/stream", () => {
       expect.objectContaining({
         where: expect.objectContaining({
           id: "chat-1",
-          emailAccountId: "email-account-id",
+          emailAccount: { userId: "user-1" },
         }),
       }),
     );
@@ -153,7 +153,7 @@ describe("GET /api/chat/[id]/stream", () => {
     expect(resumeExistingStream).not.toHaveBeenCalled();
   });
 
-  it("does not resume another account's chat", async () => {
+  it("does not resume another user's chat", async () => {
     const resumeExistingStream = vi.fn();
     mockGetChatStreamContext.mockReturnValue({ resumeExistingStream });
     prisma.chat.findFirst.mockResolvedValue(null);

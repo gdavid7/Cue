@@ -64,7 +64,10 @@ import {
 import { withChatToolRuntime } from "@/utils/ai/assistant/chat-tool-runtime";
 import { fitPromptToBudget } from "@/utils/ai/assistant/chat-prompt-budget";
 import { estimateTextTokens } from "@/utils/ai/assistant/prompt-size";
-import { withChatAccountScope } from "@/utils/ai/assistant/chat-other-accounts";
+import {
+  selectOtherAccounts,
+  withChatAccountScope,
+} from "@/utils/ai/assistant/chat-other-accounts";
 import { getLowThinkingStepOptions } from "@/utils/llms/model";
 import { holdGmailInteractiveDemand } from "@/utils/gmail/quota";
 import type { LocalMailSearch } from "@/utils/ai/assistant/local-mail-search";
@@ -72,7 +75,7 @@ import { isGoogleProvider } from "@/utils/email/provider-types";
 
 export const maxDuration = 300;
 // Increment when chat prompts, tools, or routing change so run quality remains attributable.
-export const ASSISTANT_CHAT_PIPELINE_VERSION = 22;
+export const ASSISTANT_CHAT_PIPELINE_VERSION = 23;
 // Someone is watching the reply, so past these the model stops looking and
 // answers from what it found rather than searching on for minutes.
 const ASSISTANT_CHAT_TOOL_BUDGET_MS = {
@@ -196,6 +199,7 @@ export async function aiProcessAssistantChat({
       hasConnectedDrive,
       freshRuleState,
       expectedFixSystemType,
+      coversOtherAccounts,
     ] = await Promise.all([
       isIntegrationActionEnabledForUserId(user.userId),
       hasUsableCalendarConnection(emailAccountId).then(
@@ -235,6 +239,15 @@ export async function aiProcessAssistantChat({
             logger,
           })
         : null,
+      selectOtherAccounts({ userId: user.userId, emailAccountId }).then(
+        (selection) => selection.accounts.length > 0,
+        (error) => {
+          logger.warn("Failed to list the user's accounts for chat", {
+            error,
+          });
+          return false;
+        },
+      ),
     ]);
     let ruleReadState: RuleReadState | null = null;
     const pendingRuleDeletionNames = new Set<string>();
@@ -252,6 +265,7 @@ export async function aiProcessAssistantChat({
       supportsInlineEmailCards,
       messagingPlatform,
       userTimezone,
+      multiAccountAnchorEmail: coversOtherAccounts ? user.email : undefined,
     });
     const toolOptions = {
       email: user.email,
@@ -377,13 +391,21 @@ export async function aiProcessAssistantChat({
     const runtimeTools = withChatToolRuntime({
       logger,
       onGmailCall: gmailDemand.noteGmailCall,
-      // searchInbox may list other accounts' emails; only these read tools
-      // follow them there, and every other tool stays in the chat's account.
+      // searchInbox lists every covered account's emails; these mail tools
+      // follow an email into its account, and the rest stay in the chat's.
       tools: withChatAccountScope({
         userId: user.userId,
         emailAccountId,
         email: user.email,
-        crossAccountTools: ["readEmail", "readAttachment"],
+        crossAccountTools: [
+          "readEmail",
+          "readAttachment",
+          "manageInbox",
+          "replyEmail",
+          "forwardEmail",
+          "getRuleExecutionForMessage",
+          "searchContext",
+        ],
         tools: {
           getAssistantCapabilities: getAssistantCapabilitiesTool(toolOptions),
           getAccountOverview: getAccountOverviewTool(toolOptions),
@@ -970,6 +992,7 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards,
   messagingPlatform,
   userTimezone,
+  multiAccountAnchorEmail,
 }: {
   emailSendToolsEnabled: boolean;
   draftReplyActionsEnabled: boolean;
@@ -980,6 +1003,8 @@ export function buildResolvedSystemPrompt({
   supportsInlineEmailCards: boolean;
   messagingPlatform?: MessagingPlatform;
   userTimezone: string;
+  /** The chat's own account, when the chat covers more than one. */
+  multiAccountAnchorEmail?: string;
 }) {
   const providerPolicy = getAssistantChatProvider(provider);
   const sections = [
@@ -1038,6 +1063,7 @@ export function buildResolvedSystemPrompt({
       provider,
       userTimezone,
       calendarConnection,
+      multiAccountAnchorEmail,
     }),
     providerPolicy.searchSyntaxPolicy,
     `Search strategy:
@@ -1081,14 +1107,21 @@ function getProviderContextSection({
   provider,
   userTimezone,
   calendarConnection,
+  multiAccountAnchorEmail,
 }: {
   provider: string;
   userTimezone: string;
   calendarConnection: CalendarConnectionStatus;
+  multiAccountAnchorEmail?: string;
 }) {
   const lines = [
     "Provider context:",
     `- Current provider: ${provider}.`,
+    ...(multiAccountAnchorEmail
+      ? [
+          `- Searches, counts and inbox actions cover all of the user's connected accounts. Rules and assistant settings apply to ${multiAccountAnchorEmail}.`,
+        ]
+      : []),
     `- User timezone: ${userTimezone}. The current timestamp is in the automated context message. Resolve relative dates like today, tomorrow, this afternoon, Monday, or Friday from this timezone before calling calendar or inbox date-range tools.`,
   ];
 
@@ -1194,6 +1227,7 @@ function createTurnGmailDemand({
 }: {
   emailAccountId: string;
   deadline: number;
+  /** The chat's own account is on Gmail, so it is held from the start. */
   enabled: boolean;
   logger: Logger;
 }) {
@@ -1203,16 +1237,27 @@ function createTurnGmailDemand({
   let gmailCalls = 0;
   // How long sync had been yielding when the turn's first Gmail call came.
   let firstGmailCallAfterHoldMs: number | null = null;
-  const hold = (until: number) => {
+  const hold = (accountId: string, until: number) => {
     const now = Date.now();
     const maxMs = Math.min(until, deadline) - now;
     if (maxMs <= 0) return;
-    const held = holdGmailInteractiveDemand(emailAccountId, maxMs).catch(
-      () => ({ held: false, release: async () => {} }),
-    );
+    const held = holdGmailInteractiveDemand(accountId, maxMs).catch(() => ({
+      held: false,
+      release: async () => {},
+    }));
     if (period) period.holds.push(held);
-    else period = { holds: [held], from: now, until: now + maxMs };
+    else
+      period = {
+        holds: [held],
+        from: now,
+        until: now + maxMs,
+        untilByAccount: new Map(),
+      };
     period.until = Math.max(period.until, now + maxMs);
+    period.untilByAccount.set(
+      accountId,
+      Math.max(period.untilByAccount.get(accountId) ?? 0, now + maxMs),
+    );
   };
   const release = () => {
     if (!period) return;
@@ -1224,14 +1269,18 @@ function createTurnGmailDemand({
     for (const held of ending.holds)
       held.then(({ release }) => release()).catch(() => undefined);
   };
-  if (enabled) hold(Date.now() + SPECULATIVE_HOLD_MS);
+  if (enabled) hold(emailAccountId, Date.now() + SPECULATIVE_HOLD_MS);
   return {
-    noteGmailCall: () => {
-      if (!enabled || ended) return;
+    // Only Gmail calls reach here, so every Gmail account the turn reads or
+    // changes, not only the chat's own, holds its background work back.
+    noteGmailCall: (accountId: string | undefined) => {
+      if (ended) return;
+      const account = accountId ?? emailAccountId;
       gmailCalls += 1;
       if (gmailCalls === 1)
         firstGmailCallAfterHoldMs = period ? Date.now() - period.from : 0;
-      if (!period || period.until < deadline) hold(deadline);
+      if ((period?.untilByAccount.get(account) ?? 0) < deadline)
+        hold(account, deadline);
     },
     endStep: () => {
       if (gmailCalls === 0) release();
@@ -1240,7 +1289,7 @@ function createTurnGmailDemand({
       if (ended) return;
       ended = true;
       release();
-      if (!enabled) return;
+      if (!enabled && gmailCalls === 0) return;
       logTurnDemand({
         periods,
         gmailCalls,
@@ -1257,6 +1306,8 @@ type TurnDemandPeriod = {
   holds: ReturnType<typeof holdGmailInteractiveDemand>[];
   from: number;
   until: number;
+  /** When each held account's latest hold runs out. */
+  untilByAccount: Map<string, number>;
 };
 
 // Counts only holds the store actually set, once every hold has answered.

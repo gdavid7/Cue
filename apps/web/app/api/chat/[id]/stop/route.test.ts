@@ -51,7 +51,7 @@ describe("POST /api/chat/[id]/stop", () => {
     expect(response.status).toBe(200);
     expect(prisma.chat.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "chat-1", emailAccountId: "email-account-id" },
+        where: { id: "chat-1", emailAccount: { userId: "user-1" } },
       }),
     );
     expect(run.abortSignal.aborted).toBe(true);
@@ -112,7 +112,7 @@ describe("POST /api/chat/[id]/stop", () => {
     expect(prisma.chat.updateMany).not.toHaveBeenCalled();
   });
 
-  it("does not stop another account's chat", async () => {
+  it("does not stop another user's chat", async () => {
     const run = await startChatRun("stream-1");
     prisma.chat.findFirst.mockResolvedValue(null);
 

@@ -177,6 +177,7 @@ describe("chat route rule freshness persistence", () => {
     prisma.chat.findUnique.mockResolvedValue({
       id: "chat-1",
       emailAccountId: "email-account-id",
+      emailAccount: { userId: "user-1" },
       lastSeenRulesRevision: 2,
       messages: [],
       compactions: [],
@@ -319,6 +320,77 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("passes on an open thread in another of the user's accounts, and drops one in an account that is not theirs", async () => {
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { id?: string; userId: string };
+    }) =>
+      args.where.id === "other-account" && args.where.userId === "user-1"
+        ? [
+            {
+              id: "other-account",
+              email: "other@test.com",
+              name: null,
+              image: null,
+              includeInAllAccounts: true,
+              account: { provider: "google" },
+            },
+          ]
+        : []) as never);
+
+    const response = await POST(
+      createRequest("What's this about?", {
+        openThreadId: "acct:other-account:t-42",
+        openMessageId: "acct:other-account:m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        openThread: {
+          threadId: "acct:other-account:t-42",
+          messageId: "acct:other-account:m-7",
+        },
+      }),
+    );
+
+    await POST(
+      createRequest("And this one?", {
+        openThreadId: "acct:someone-elses-account:t-42",
+        openMessageId: "acct:someone-elses-account:m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ openThread: undefined }),
+    );
+  });
+
+  it("answers without the open thread when its account cannot be checked", async () => {
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { id?: string };
+    }) => {
+      if (args.where.id === "other-account")
+        throw new Error("Database unavailable");
+      return [];
+    }) as never);
+
+    const response = await POST(
+      createRequest("What's this about?", {
+        openThreadId: "acct:other-account:t-42",
+        openMessageId: "acct:other-account:m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ openThread: undefined }),
+    );
+  });
+
   it("returns 404 when the email account cannot be loaded", async () => {
     mockGetEmailAccountWithAi.mockResolvedValueOnce(null);
 
@@ -330,6 +402,49 @@ describe("chat route rule freshness persistence", () => {
     });
     expect(mockGetInboxStatsForChatContext).not.toHaveBeenCalled();
     expect(mockAiProcessAssistantChat).not.toHaveBeenCalled();
+  });
+
+  it("refuses another user's chat", async () => {
+    prisma.chat.findUnique.mockResolvedValueOnce({
+      id: "chat-1",
+      emailAccountId: "someone-elses-account",
+      emailAccount: { userId: "someone-else" },
+      lastSeenRulesRevision: null,
+      messages: [],
+      compactions: [],
+    });
+
+    const response = await POST(createRequest());
+
+    expect(response.status).toBe(403);
+    expect(prisma.chatMessage.create).not.toHaveBeenCalled();
+    expect(mockAiProcessAssistantChat).not.toHaveBeenCalled();
+  });
+
+  it("runs the user's chat in the account it was started in, from any of their accounts' pages", async () => {
+    prisma.chat.findUnique.mockResolvedValueOnce({
+      id: "chat-1",
+      emailAccountId: "anchor-account-id",
+      emailAccount: { userId: "user-1" },
+      lastSeenRulesRevision: null,
+      messages: [],
+      compactions: [],
+    });
+
+    const response = await POST(createRequest());
+
+    expect(response.status).toBe(200);
+    expect(mockGetEmailAccountWithAi).toHaveBeenLastCalledWith({
+      emailAccountId: "anchor-account-id",
+    });
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ emailAccountId: "anchor-account-id" }),
+    );
+    expect(prisma.chatMemory.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { emailAccount: { userId: "user-1" } },
+      }),
+    );
   });
 
   it("returns a safe validation error for oversized messages", async () => {
@@ -350,6 +465,7 @@ describe("chat route rule freshness persistence", () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",
       emailAccountId: "email-account-id",
+      emailAccount: { userId: "user-1" },
       lastSeenRulesRevision: null,
       messages: [],
       compactions: [],
@@ -549,6 +665,7 @@ describe("chat route rule freshness persistence", () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",
       emailAccountId: "email-account-id",
+      emailAccount: { userId: "user-1" },
       lastSeenRulesRevision: null,
       messages: [
         {
@@ -586,6 +703,7 @@ describe("chat route rule freshness persistence", () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",
       emailAccountId: "email-account-id",
+      emailAccount: { userId: "user-1" },
       lastSeenRulesRevision: 2,
       messages: [
         {
@@ -610,6 +728,7 @@ describe("chat route rule freshness persistence", () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",
       emailAccountId: "email-account-id",
+      emailAccount: { userId: "user-1" },
       lastSeenRulesRevision: null,
       messages: [],
       compactions: [
@@ -661,6 +780,7 @@ describe("chat route rule freshness persistence", () => {
       prisma.chat.findUnique.mockResolvedValueOnce({
         id: "chat-1",
         emailAccountId: "email-account-id",
+        emailAccount: { userId: "user-1" },
         lastSeenRulesRevision: null,
         messages: storedMessages,
         compactions: [],
@@ -708,6 +828,7 @@ describe("chat route rule freshness persistence", () => {
     prisma.chat.findUnique.mockResolvedValueOnce({
       id: "chat-1",
       emailAccountId: "email-account-id",
+      emailAccount: { userId: "user-1" },
       lastSeenRulesRevision: null,
       messages: [
         {

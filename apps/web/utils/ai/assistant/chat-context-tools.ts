@@ -6,6 +6,8 @@ import type { Logger } from "@/utils/logger";
 import { posthogCaptureEvent } from "@/utils/posthog";
 import { searchContext } from "@/utils/thread-context/search-context";
 import { searchExa } from "@/utils/exa/search";
+import { resolveEmailAccountForId } from "@/utils/ai/assistant/chat-other-accounts";
+import { toOtherAccountEmailId } from "@/utils/ai/assistant/other-account-email-id";
 
 const searchContextInputSchema = z.object({
   query: z
@@ -30,11 +32,14 @@ const searchContextInputSchema = z.object({
 export const searchContextTool = ({
   email,
   emailAccountId,
+  userId,
   provider,
   logger,
 }: {
   email: string;
   emailAccountId: string;
+  /** The signed-in user, whose other accounts' threads it may look into. */
+  userId: string;
   provider: string;
   logger: Logger;
 }) =>
@@ -50,20 +55,55 @@ Results have short snippets only: call readEmail with an email result's messageI
       });
 
       try {
-        const emailProvider = await createEmailProvider({
-          emailAccountId,
+        // A thread from another of the user's accounts is looked into there.
+        const target = threadId
+          ? await resolveEmailAccountForId({
+              id: threadId,
+              userId,
+              emailAccountId,
+              provider,
+            })
+          : null;
+        if (threadId && !target) {
+          return {
+            error: "That email is not in any of the user's connected accounts.",
+          };
+        }
+        const account = target?.otherAccount ?? {
+          id: emailAccountId,
+          email,
           provider,
+        };
+        const emailProvider = await createEmailProvider({
+          emailAccountId: account.id,
+          provider: account.provider,
           logger,
         });
         const { results } = await searchContext({
-          emailAccountId,
-          userEmail: email,
+          emailAccountId: account.id,
+          userEmail: account.email,
           query,
-          threadId: threadId ?? undefined,
+          threadId: target?.id,
           emailProvider,
           logger,
         });
-        return { results, count: results.length };
+        const accountResults = target?.otherAccount
+          ? results.map((result) =>
+              result.kind === "email"
+                ? {
+                    ...result,
+                    id: toOtherAccountEmailId(account.id, result.id),
+                    ...(result.messageId && {
+                      messageId: toOtherAccountEmailId(
+                        account.id,
+                        result.messageId,
+                      ),
+                    }),
+                  }
+                : result,
+            )
+          : results;
+        return { results: accountResults, count: accountResults.length };
       } catch (error) {
         logger.error("Failed to search context", { error });
         return {

@@ -182,8 +182,11 @@ type GmailQuotaContext = {
   stats?: GmailQuotaStats;
   /** Caps the gate waits of every call in this context together. */
   maxTotalWaitMs?: number;
-  /** Told before each Gmail call this context makes, admitted or not. */
-  onAdmit?: () => void;
+  /**
+   * Told before each Gmail call this context makes, admitted or not, with
+   * the account the call is for.
+   */
+  onAdmit?: (emailAccountId: string | undefined) => void;
   /**
    * Sync work that still waits for a primary scan to end, as background
    * does: a first sync's older inbox, which must not slow the scan of the
@@ -487,7 +490,7 @@ export function runWithGmailQuota<T>(
     priority: GmailQuotaPriority;
     stats?: GmailQuotaStats;
     maxTotalWaitMs?: number;
-    onAdmit?: () => void;
+    onAdmit?: (emailAccountId: string | undefined) => void;
     afterInitialSync?: boolean;
   },
   operation: () => T,
@@ -644,7 +647,7 @@ export async function admitGmailCall({
 }): Promise<GmailQuotaTicket> {
   const context = currentGmailQuotaContext();
   const priority = priorityOverride ?? context.priority;
-  context.onAdmit?.();
+  context.onAdmit?.(emailAccountId);
   const afterInitialSync = priority === "sync" && !!context.afterInitialSync;
   const ticket: GmailQuotaTicket = {
     emailAccountId,

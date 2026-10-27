@@ -64,7 +64,7 @@ export function RenameChatDialog({
       onSuccess: () => {
         toastSuccess({ description: "Chat renamed." });
         onRenamed();
-        globalMutate(chatMessagesKey(chatId, emailAccountId));
+        globalMutate(chatMessagesKey(chatId));
         onOpenChange(false);
       },
       onError: (error) => {

@@ -4,6 +4,7 @@ import prisma from "@/utils/prisma";
 import { getLiveStreamId, stopChatRun } from "@/utils/chat/active-run";
 import { stopAssistantChatSchema } from "@/utils/actions/assistant-chat.validation";
 import { sleep } from "@/utils/sleep";
+import { ownedChatWhere } from "@/utils/chat/owned-chat";
 
 const RUN_END_POLL_MS = 250;
 const RUN_END_TIMEOUT_MS = 5000;
@@ -21,7 +22,7 @@ export const POST = withEmailAccount(
     }
 
     const chat = await prisma.chat.findFirst({
-      where: { id, emailAccountId: request.auth.emailAccountId },
+      where: ownedChatWhere({ chatId: id, userId: request.auth.userId }),
       select: { activeStreamId: true, activeStreamStartedAt: true },
     });
 

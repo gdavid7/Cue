@@ -320,8 +320,6 @@ export function MailShell() {
     submitTextMessage,
     chatId,
     setNewChat,
-    switchChatAccount,
-    followEmailAccount,
     requestInputFocus: requestChatInputFocus,
   } = useChat();
   // A question waits for a conversation to exist; sent before one, it's dropped.
@@ -2562,13 +2560,9 @@ export function MailShell() {
   const onToggleAssistant = useStableCallback(() =>
     toggleSidebar(["chat-sidebar"]),
   );
-  // The chat already reads the open thread, so asking about this email is
-  // opening it with the cursor in place. In All inboxes the email may be in
-  // another account than the chat's: an idle chat follows it, and one with a
-  // conversation offers the switch rather than losing it.
+  // The chat already reads the open thread, in whichever account it is, so
+  // asking about this email is opening it with the cursor in place.
   const onAskCueAboutThread = useStableCallback(() => {
-    if (openThreadSelection)
-      followEmailAccount(openThreadSelection.emailAccountId);
     const withChat = (open: string[]) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"];
     // Phones keep their own list of open panels.
@@ -2580,8 +2574,6 @@ export function MailShell() {
     setSidebarOpen((open) =>
       open.includes("chat-sidebar") ? open : [...open, "chat-sidebar"],
     );
-    // The answer came from this page's account, so the follow-up runs there.
-    switchChatAccount(emailAccountId);
     if (!chatId) setNewChat();
     setPendingQuestion(question);
   });

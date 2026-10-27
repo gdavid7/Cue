@@ -13,6 +13,8 @@ const OTHER_ACCOUNTS_CONCURRENCY = 3;
 const MAX_OTHER_ACCOUNTS = 10;
 const OTHER_ACCOUNTS_DEADLINE_MS = 15_000;
 
+export const ACCOUNT_SEARCH_FAILED = "Could not search this account.";
+
 type ConnectedEmailAccount = Awaited<
   ReturnType<typeof getConnectedEmailAccounts>
 >[number];
@@ -52,6 +54,60 @@ export async function resolveEmailAccountForId({
   emailAccountId: string;
   provider: string;
 }) {
+  return resolveWith({
+    id,
+    emailAccountId,
+    provider,
+    findOwned: (otherAccountId) =>
+      getOwnedEmailAccount({ userId, emailAccountId: otherAccountId }),
+  });
+}
+
+/**
+ * resolveEmailAccountForId for many ids in one call: the user's connected
+ * accounts are loaded once, the first time an id names another account.
+ */
+export function createEmailAccountResolver({
+  userId,
+  emailAccountId,
+  provider,
+}: {
+  userId: string;
+  emailAccountId: string;
+  provider: string;
+}) {
+  let owned: Promise<Map<string, ConnectedEmailAccount>> | undefined;
+  return (id: string) =>
+    resolveWith({
+      id,
+      emailAccountId,
+      provider,
+      findOwned: async (otherAccountId) => {
+        // A failed lookup is not kept, so the next id tries again.
+        owned ??= getConnectedEmailAccounts({ userId }).then(
+          (accounts) =>
+            new Map(accounts.map((account) => [account.id, account])),
+          (error) => {
+            owned = undefined;
+            throw error;
+          },
+        );
+        return (await owned).get(otherAccountId) ?? null;
+      },
+    });
+}
+
+async function resolveWith({
+  id,
+  emailAccountId,
+  provider,
+  findOwned,
+}: {
+  id: string;
+  emailAccountId: string;
+  provider: string;
+  findOwned: (otherAccountId: string) => Promise<ConnectedEmailAccount | null>;
+}) {
   const parsed = parseOtherAccountEmailId(id);
   if (!parsed || parsed.emailAccountId === emailAccountId) {
     return {
@@ -62,10 +118,7 @@ export async function resolveEmailAccountForId({
     };
   }
 
-  const account = await getOwnedEmailAccount({
-    userId,
-    emailAccountId: parsed.emailAccountId,
-  });
+  const account = await findOwned(parsed.emailAccountId);
   if (!account) return null;
   return {
     emailAccountId: account.id,
@@ -136,10 +189,7 @@ export async function runOnOtherAccounts<T>({
               otherEmailAccountId: account.id,
               error,
             });
-            finished[index] = {
-              account,
-              error: "Could not search this account.",
-            };
+            finished[index] = { account, error: ACCOUNT_SEARCH_FAILED };
           }
         },
       ),
@@ -165,6 +215,8 @@ export async function runOnOtherAccounts<T>({
 export type OtherAccountSelection = {
   accounts: ConnectedEmailAccount[];
   notSearchedCount: number;
+  /** Of those, the accounts kept in All inboxes but past the cap. */
+  overCapCount?: number;
 };
 
 /**
@@ -187,13 +239,17 @@ export async function selectOtherAccounts({
     (account) => account.includeInAllAccounts,
   );
   const accounts = searchable.slice(0, MAX_OTHER_ACCOUNTS);
-  return { accounts, notSearchedCount: otherAccounts.length - accounts.length };
+  return {
+    accounts,
+    notSearchedCount: otherAccounts.length - accounts.length,
+    overCapCount: searchable.length - accounts.length,
+  };
 }
 
 /**
- * Keeps every tool but the named read tools on the chat's own account: an id
+ * Keeps every tool but the named mail tools on the chat's own account: an id
  * from another account's search result is refused before the tool runs, so
- * nothing is changed in either mailbox. The read tools resolve such ids
+ * nothing is changed in either mailbox. The mail tools resolve such ids
  * themselves, after checking the account is the user's.
  */
 export function withChatAccountScope<T extends Record<string, Tool>>({
@@ -207,7 +263,7 @@ export function withChatAccountScope<T extends Record<string, Tool>>({
   userId: string;
   emailAccountId: string;
   /** The chat account's address, for telling the model where it works. */
-  email?: string;
+  email: string;
   crossAccountTools: Array<keyof T>;
 }): T {
   return Object.fromEntries(
@@ -278,7 +334,7 @@ async function refuseOtherAccountEmail({
 }: {
   userId: string;
   otherAccountId: string;
-  chatEmail?: string;
+  chatEmail: string;
 }) {
   const account = await getOwnedEmailAccount({
     userId,
@@ -291,9 +347,8 @@ async function refuseOtherAccountEmail({
     });
   }
 
-  const chatAccount = chatEmail ? ` (${chatEmail})` : "";
   return hideToolErrorFromUser({
-    error: `This email is in the user's other account ${account.email}. This chat works in its own account${chatAccount} and can only act on that account's email, so nothing was done. Tell the user which account the email is in and that they can switch the chat to ${account.email} to act on it.`,
+    error: `This email is in the user's account ${account.email}, and this action works only for email in ${chatEmail}, so nothing was done. Tell the user which account the email is in.`,
     emailAccount: account.email,
   });
 }

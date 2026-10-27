@@ -710,6 +710,7 @@ async function processMessagingAssistantMessage({
     });
 
     const inboxStatsPromise = getInboxStatsForChatContext({
+      userId: emailAccountUser.userId,
       emailAccountId: context.emailAccountId,
       provider: emailAccountUser.account.provider,
       logger: threadLogger,
@@ -957,6 +958,7 @@ async function handlePendingEmailConfirmAction({
     where: { id: chat.emailAccountId },
     select: {
       email: true,
+      userId: true,
       account: { select: { provider: true } },
     },
   });
@@ -1008,20 +1010,26 @@ async function handlePendingEmailConfirmAction({
       waitForPersistence: true,
       emailAccountId: chat.emailAccountId,
       provider: emailAccount.account.provider,
+      userId: emailAccount.userId,
       logger,
     });
+    // A reply sends from the account its email is in, so its link opens there.
+    const sentFrom = ("sentFrom" in confirmation && confirmation.sentFrom) || {
+      email: emailAccount.email,
+      provider: emailAccount.account.provider,
+    };
 
     const successFeedback = buildPendingEmailSuccessFeedback({
       confirmationResult: confirmation.confirmationResult,
-      accountEmail: emailAccount.email,
-      accountProvider: emailAccount.account.provider,
+      accountEmail: sentFrom.email,
+      accountProvider: sentFrom.provider,
     });
 
     if (
       pendingToolPart &&
       (await replacePendingEmailConfirmationCard({
-        accountEmail: emailAccount.email,
-        accountProvider: emailAccount.account.provider,
+        accountEmail: sentFrom.email,
+        accountProvider: sentFrom.provider,
         confirmationResult: confirmation.confirmationResult,
         event,
         logger,
