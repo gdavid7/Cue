@@ -349,6 +349,8 @@ export function createTabFollowerClient(input: {
       call("queryFilesNotOnDevice", [accountIds]) as never,
     queryWaitingOnYou: (query) => call("queryWaitingOnYou", [query]) as never,
     queryRecentBounces: (query) => call("queryRecentBounces", [query]) as never,
+    queryLeftOpenDrafts: (query) =>
+      call("queryLeftOpenDrafts", [query]) as never,
     queryImportantPeople: (accountIds) =>
       call("queryImportantPeople", [accountIds]) as never,
     setImportantPerson: async (input) => {

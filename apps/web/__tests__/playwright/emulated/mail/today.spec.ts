@@ -4,7 +4,9 @@ import { isMicrosoftPlaywright } from "../mail-provider";
 import { capturePlaywrightCheckpoint } from "../playwright-evidence";
 import { test } from "../playwright-test";
 import {
+  conversationWithSubject,
   openMail,
+  openMailboxFromSidebar,
   readLatestMailMutation,
   readProviderAccessToken,
   seedMailFromContact,
@@ -1031,6 +1033,61 @@ test("While you were away says what Cue did since the last visit, links each cou
   }
 });
 
+test("Drafts you left open lists a draft left over an hour ago and opens it in the composer", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000);
+  // The fixtures' "Seeded Draft Message" was last saved long ago. A draft
+  // saved just now is still being written, so it isn't listed.
+  const fresh = await seedFreshDraft(page, `Still writing ${Date.now()}`);
+  try {
+    // The fresh draft is in this browser's mail before Today reads it, so
+    // its absence from the lane is the lane leaving it out.
+    const { conversations, emailAccountId } = await openMail(page);
+    await openMailboxFromSidebar(page, "Drafts");
+    await expect(
+      conversationWithSubject(page, conversations, fresh.subject),
+    ).toBeVisible({ timeout: 120_000 });
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    const list = page.getByRole("list", { name: "Drafts you left open" });
+    const row = list.getByRole("link").filter({
+      hasText: "Seeded Draft Message",
+    });
+    await expect(row).toBeVisible({ timeout: 120_000 });
+    await expect(row).toContainText("Jordan Example");
+    await expect(list).not.toContainText(fresh.subject);
+    for (const size of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(size);
+      await row.scrollIntoViewIfNeeded();
+      const scrollWidth = await page.evaluate(
+        () => document.documentElement.scrollWidth,
+      );
+      expect(scrollWidth).toBeLessThanOrEqual(size.width);
+      await capturePlaywrightCheckpoint(
+        page,
+        testInfo,
+        `today-drafts-left-open-${size.width}`,
+      );
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    await row.click();
+    await expect(page).toHaveURL(/thr_playwright_draft.*[?&]from=today/);
+    await expect(
+      page.getByRole("textbox", { name: "Email message" }),
+    ).toContainText("This unsent draft is visible in the Drafts view.", {
+      timeout: 60_000,
+    });
+  } finally {
+    await fresh.remove();
+  }
+});
+
 test("Before your meeting stays inside a phone-width Today in both themes", async ({
   page,
 }, testInfo) => {
@@ -1708,4 +1765,53 @@ async function readPreviousVisit(emailAccountId: string) {
     );
     return result.rows[0]?.previousVisitAt ?? null;
   });
+}
+
+/** A new email's draft saved now, in the provider, and what removes it. */
+async function seedFreshDraft(page: Page, subject: string) {
+  const token = await readProviderAccessToken();
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+  };
+  if (isMicrosoftPlaywright()) {
+    const base = `${process.env.MICROSOFT_BASE_URL}/v1.0/me`;
+    const created = await page.request.post(`${base}/messages`, {
+      headers,
+      data: {
+        subject,
+        body: { contentType: "text", content: "Half a thought" },
+        toRecipients: [{ emailAddress: { address: KAI_ADDRESS } }],
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    return {
+      subject,
+      remove: async () => {
+        await page.request.post(`${base}/messages/${id}/permanentDelete`, {
+          headers,
+        });
+      },
+    };
+  }
+  const base = `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me`;
+  const created = await page.request.post(`${base}/drafts`, {
+    headers,
+    data: {
+      message: {
+        to: KAI_ADDRESS,
+        subject,
+        body_text: "Half a thought",
+      },
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const { id } = (await created.json()) as { id: string };
+  return {
+    subject,
+    remove: async () => {
+      await page.request.delete(`${base}/drafts/${id}`, { headers });
+    },
+  };
 }

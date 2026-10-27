@@ -34,4 +34,5 @@ export const LOCAL_MIGRATIONS = {
     id: 19,
     name: "0019-operations-account-status-index",
   },
+  leftOpenDraftsIndex: { id: 20, name: "0020-left-open-drafts-index" },
 } as const;
