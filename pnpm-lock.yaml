@@ -1064,6 +1064,9 @@ importers:
       tlds:
         specifier: 1.261.0
         version: 1.261.0
+      tldts:
+        specifier: 7.4.12
+        version: 7.4.12
     devDependencies:
       '@types/linkify-it':
         specifier: 5.0.0

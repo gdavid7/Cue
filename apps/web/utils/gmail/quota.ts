@@ -288,6 +288,8 @@ const ROUTE_PRIORITY = new Map<string, GmailQuotaPriority>([
     "user/meeting-recorder/meeting-draft",
     // The composer's "Share my free times", asked for by the person writing.
     "user/calendar/free-times",
+    // The snooze picker's calendar presets, read when the person opens it.
+    "user/calendar/snooze-times",
     "labels/counts",
     "/api/labels/create",
     "/api/user/drive/preview",

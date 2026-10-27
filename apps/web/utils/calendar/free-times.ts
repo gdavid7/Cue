@@ -37,6 +37,66 @@ export async function getFreeTimes({
   now?: Date;
   logger: Logger;
 }) {
+  const availability = await readFreeTimeAvailability({
+    emailAccountId,
+    now,
+    logger,
+  });
+  if (availability.status === "no-calendar") return availability;
+
+  const {
+    bookingLink,
+    busyPeriods,
+    durationMinutes,
+    end,
+    minimumNoticeMinutes,
+    rules,
+    searchDays,
+    timezone,
+  } = availability;
+  const slotIntervalMinutes = getSlotIntervalMinutes(durationMinutes);
+  const slots = generateBookableSlots({
+    now,
+    timezone,
+    start: now,
+    end,
+    rules,
+    busyPeriods,
+    policy: {
+      durationMinutes,
+      slotIntervalMinutes,
+      minimumNoticeMinutes,
+      bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0,
+      bookingWindowDays: searchDays,
+    },
+  });
+
+  return {
+    status: "ok" as const,
+    timezone,
+    durationMinutes,
+    searchDays,
+    slots: pickOpenings(slots, slotIntervalMinutes, FREE_TIMES_COUNT),
+    bookingLink,
+  };
+}
+
+/**
+ * What free times are worked out from: the account's zone and weekly hours,
+ * how far ahead to look, and when its calendars and pending bookings say it
+ * is busy. Shared with the snooze picker's "Next free hour" so both read
+ * working hours the same way.
+ */
+export async function readFreeTimeAvailability({
+  emailAccountId,
+  now,
+  logger,
+}: {
+  emailAccountId: string;
+  now: Date;
+  logger: Logger;
+}) {
   const [emailAccount, schedule, enabledCalendars] = await Promise.all([
     prisma.emailAccount.findUnique({
       where: { id: emailAccountId },
@@ -158,13 +218,16 @@ export async function getFreeTimes({
     }),
   ]);
 
-  const slotIntervalMinutes = getSlotIntervalMinutes(durationMinutes);
-  const slots = generateBookableSlots({
-    now,
+  return {
+    status: "ok" as const,
+    bookingLink,
     timezone,
-    start: now,
-    end,
+    durationMinutes,
+    minimumNoticeMinutes:
+      cueBookingLink?.minimumNoticeMinutes ?? DEFAULT_MINIMUM_NOTICE_MINUTES,
     rules,
+    searchDays,
+    end,
     busyPeriods: [
       ...calendarBusy,
       ...bookingHolds.map((hold) => ({
@@ -172,24 +235,6 @@ export async function getFreeTimes({
         end: hold.endTime,
       })),
     ],
-    policy: {
-      durationMinutes,
-      slotIntervalMinutes,
-      minimumNoticeMinutes:
-        cueBookingLink?.minimumNoticeMinutes ?? DEFAULT_MINIMUM_NOTICE_MINUTES,
-      bufferBeforeMinutes: 0,
-      bufferAfterMinutes: 0,
-      bookingWindowDays: searchDays,
-    },
-  });
-
-  return {
-    status: "ok" as const,
-    timezone,
-    durationMinutes,
-    searchDays,
-    slots: pickOpenings(slots, slotIntervalMinutes, FREE_TIMES_COUNT),
-    bookingLink,
   };
 }
 

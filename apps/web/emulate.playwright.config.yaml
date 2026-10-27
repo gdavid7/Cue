@@ -497,6 +497,17 @@ google:
       label_ids:
         - SENT
       internal_date: "1734880000000"
+    - id: msg_playwright_link_mismatch
+      thread_id: thr_playwright_link_mismatch
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from: Account Notices <notices@example.com>
+      to: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Link Mismatch Statement
+      body_text: Your statement is ready.
+      body_html: "<p>Your statement is ready.</p><p><a href='https://login.example.net/statement'>account.example.com/statement</a></p><p><a href='https://www.example.com/help'>example.com/help</a></p>"
+      label_ids:
+        - SENT
+      internal_date: "1734880000000"
     - id: msg_playwright_matched_earlier
       thread_id: thr_playwright_matched_reason
       user_email: __PLAYWRIGHT_TEST_EMAIL__

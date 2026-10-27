@@ -327,6 +327,7 @@ export function ThreadReader({
   const toolbar = (
     <>
       <ReaderToolbar
+        emailAccountId={emailAccountId}
         isStarred={isThreadStarred(
           thread?.messages.length ? thread.messages : messages,
         )}

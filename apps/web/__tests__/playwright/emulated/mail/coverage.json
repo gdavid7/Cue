@@ -300,6 +300,12 @@
     "emulate.playwright.config.yaml",
     "emulate.playwright.microsoft.yaml"
   ],
+  "link-mismatch.spec.ts": [
+    "components/email-list/EmailContents.tsx",
+    "utils/email/prepare-html.client.ts",
+    "emulate.playwright.config.yaml",
+    "emulate.playwright.microsoft.yaml"
+  ],
   "plain-text-links.spec.ts": [
     "components/email-list/EmailMessage.tsx",
     "components/email-list/EmailContents.tsx"

@@ -36,6 +36,7 @@ const featureGroups = [
     name: "connected-apps",
     specs: [
       "calendars/calendar-core-flows.spec.ts",
+      "calendars/snooze-calendar-presets.spec.ts",
       "channels/channel-routing.spec.ts",
       "integrations/integration-configuration.spec.ts",
       "meetings/meeting-bot-core-flow.spec.ts",
@@ -131,6 +132,7 @@ const featureGroups = [
       "mail/reader-transition.spec.ts",
       "mail/person-card.spec.ts",
       "mail/sender-notice.spec.ts",
+      "mail/link-mismatch.spec.ts",
     ],
   },
   {

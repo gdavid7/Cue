@@ -7,7 +7,7 @@ import {
   getMailHtmlDocumentKey,
 } from "@inboxzero/mail-ui/MailBody";
 import { useTheme } from "next-themes";
-import { EllipsisIcon, ShieldCheckIcon } from "lucide-react";
+import { EllipsisIcon, LinkIcon, ShieldCheckIcon } from "lucide-react";
 import { decodeHtmlEntities } from "@/utils/gmail/decode";
 import {
   getPreparedEmailHtml,
@@ -60,10 +60,11 @@ export function HtmlEmail({
   onNavigateMessage?: (direction: -1 | 1) => void;
   onFocusMessage?: () => void;
 }) {
-  const { html: sanitizedHtml, hiddenTrackerCount } = useMemo(
-    () => sanitizeEmailHtml(html),
-    [html],
-  );
+  const {
+    html: sanitizedHtml,
+    hiddenTrackerCount,
+    mismatchedLinkCount,
+  } = useMemo(() => sanitizeEmailHtml(html), [html]);
   // Message objects are rebuilt whenever the conversation republishes, so the
   // effect keys on the attachments' identity rather than the array or its
   // order. Re-running it would mint new object URLs and remount the frame
@@ -183,13 +184,25 @@ export function HtmlEmail({
 
   return (
     <div className="relative min-w-0 overflow-x-hidden">
-      {hiddenTrackerCount > 0 && (
-        <p className="mb-2 flex items-center gap-1.5 text-muted-foreground text-xs">
-          <ShieldCheckIcon aria-hidden className="size-3.5" />
-          {hiddenTrackerCount === 1
-            ? "Hid 1 tracker"
-            : `Hid ${hiddenTrackerCount} trackers`}
-        </p>
+      {(hiddenTrackerCount > 0 || mismatchedLinkCount > 0) && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground text-xs">
+          {hiddenTrackerCount > 0 && (
+            <p className="flex items-center gap-1.5">
+              <ShieldCheckIcon aria-hidden className="size-3.5 shrink-0" />
+              {hiddenTrackerCount === 1
+                ? "Hid 1 tracker"
+                : `Hid ${hiddenTrackerCount} trackers`}
+            </p>
+          )}
+          {mismatchedLinkCount > 0 && (
+            <p className="flex items-center gap-1.5">
+              <LinkIcon aria-hidden className="size-3.5 shrink-0" />
+              {mismatchedLinkCount === 1
+                ? "1 link shows one address but goes to another"
+                : `${mismatchedLinkCount} links show one address but go to another`}
+            </p>
+          )}
+        </div>
       )}
       <BufferedMailHtmlFrame
         srcDoc={srcDoc}

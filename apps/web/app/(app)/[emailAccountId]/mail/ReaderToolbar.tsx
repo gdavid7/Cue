@@ -23,6 +23,8 @@ import { Tooltip } from "@/components/Tooltip";
 import { Button } from "@/components/ui/button";
 
 type ReaderToolbarProps = {
+  /** The conversation's own account. */
+  emailAccountId: string;
   subject: string;
   isStarred: boolean;
   isUnread: boolean;
@@ -63,6 +65,7 @@ type ReaderToolbarProps = {
  * Archive and read state stay visible; everything else lives in `menu`.
  */
 export function ReaderToolbar({
+  emailAccountId,
   subject,
   isStarred,
   isUnread,
@@ -101,7 +104,10 @@ export function ReaderToolbar({
             {extraAction}
             {onSnooze ? (
               <span className="contents max-lg:hidden">
-                <SnoozeButton onSnooze={onSnooze} />
+                <SnoozeButton
+                  emailAccountId={emailAccountId}
+                  onSnooze={onSnooze}
+                />
               </span>
             ) : null}
           </>

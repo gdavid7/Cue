@@ -29,10 +29,16 @@ const inFlightPreparation = new Map<
  * dropped and counted so the reader can say how many it hid.
  */
 export function sanitizeEmailHtml(html: string) {
-  const { html: sanitizedHtml, hiddenCount } = sanitizeMailHtml(html, {
-    dropImage: isSentMessageOpenPixelUrl,
-  });
-  return { html: sanitizedHtml, hiddenTrackerCount: hiddenCount };
+  const {
+    html: sanitizedHtml,
+    hiddenCount,
+    mismatchedLinkCount,
+  } = sanitizeMailHtml(html, { dropImage: isSentMessageOpenPixelUrl });
+  return {
+    html: sanitizedHtml,
+    hiddenTrackerCount: hiddenCount,
+    mismatchedLinkCount,
+  };
 }
 
 export function getPreparedEmailHtml({

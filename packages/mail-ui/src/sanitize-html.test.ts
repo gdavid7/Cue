@@ -284,6 +284,69 @@ describe("sanitizeMailHtml hides tracking images", () => {
   });
 });
 
+describe("sanitizeMailHtml marks links that go somewhere else", () => {
+  it("counts mismatched links and titles each with its real host", () => {
+    const { html, mismatchedLinkCount } = sanitizeMailHtml(`
+      <p><a href="https://evil.example/login">paypal.com/verify</a></p>
+      <p><a href="https://login.other.example/" title="Sign in">www.bank.example.com</a></p>
+      <p><a href="https://www.example.com/">example.com</a></p>
+      <p><a href="https://evil.example/">Click here</a></p>
+      <p><a href="mailto:help@evil.example">example.com</a></p>
+      <p><a href="https://u1.ct.sendgrid.net/ls/click?upn=x">example.com</a></p>
+      <p>Bare https://example.org stays linked.</p>
+    `);
+    const anchors = Array.from(parse(html).querySelectorAll("a"));
+
+    expect(mismatchedLinkCount).toBe(2);
+    expect(anchors.map((anchor) => anchor.getAttribute("title"))).toEqual([
+      "evil.example",
+      "login.other.example",
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("flags hrefs the browser resolves to another host", () => {
+    const { html, mismatchedLinkCount } = sanitizeMailHtml(`
+      <a href="\\\\evil.example/">paypal.com</a>
+      <a href="/\\evil.example/">paypal.com</a>
+      <a href="ht&#10;tps://evil.example/">paypal.com</a>
+      <a href="/account">paypal.com</a>
+    `);
+    const anchors = Array.from(parse(html).querySelectorAll("a"));
+
+    expect(mismatchedLinkCount).toBe(3);
+    expect(anchors.map((anchor) => anchor.getAttribute("title"))).toEqual([
+      "evil.example",
+      "evil.example",
+      "evil.example",
+      null,
+    ]);
+  });
+
+  it("changes nothing but the title", () => {
+    const input =
+      '<p>Hi <a href="https://evil.example/a" class="btn" target="_blank">paypal.com</a></p>';
+    const flagged = sanitizeMailHtml(input);
+    const plain = sanitizeMailHtml(input.replace("paypal.com", "Open"));
+
+    expect(flagged.mismatchedLinkCount).toBe(1);
+    expect(
+      flagged.html
+        .replace(' title="evil.example"', "")
+        .replace("paypal.com", "Open"),
+    ).toBe(plain.html);
+  });
+
+  it("counts nothing in an email without links", () => {
+    expect(sanitizeMailHtml("<p>Hello</p>").mismatchedLinkCount).toBe(0);
+    expect(sanitizeMailHtml("").mismatchedLinkCount).toBe(0);
+  });
+});
+
 const LONG_TRACKING_URL = `https://click.mail.example.com/ls/click?upn=${"u001.aB3-_x%2F9".repeat(18)}&utm_source=newsletter`;
 
 function parse(html: string) {

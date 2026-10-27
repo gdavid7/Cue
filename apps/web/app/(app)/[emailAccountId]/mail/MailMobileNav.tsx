@@ -27,6 +27,8 @@ import { cn } from "@/utils";
 import { parseMailPath } from "@/utils/mail-url";
 
 export type MailMobileReaderActions = {
+  /** The open conversation's own account. */
+  emailAccountId: string;
   onBack: () => void;
   /** Absent for a conversation that's already archived. */
   onArchive?: () => void;
@@ -114,6 +116,7 @@ export function MailMobileNav({
         />
         {readerActions.onSnooze ? (
           <SnoozeButton
+            emailAccountId={readerActions.emailAccountId}
             onSnooze={readerActions.onSnooze}
             trigger={
               <button
