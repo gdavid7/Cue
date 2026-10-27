@@ -654,6 +654,26 @@ describe("changing email across the user's accounts", () => {
     ]);
   });
 
+  it("counts a search-wide action in each account, and never acts on a search that only carries over as keywords", async () => {
+    const result = await manage("google", {
+      action: "archive_threads",
+      query: "label:work older_than:1y",
+    });
+
+    expect(providers["account-1"].listMatchingMessages).toHaveBeenCalled();
+    expect(providers["account-2"].listMatchingMessages).toHaveBeenCalled();
+    expect(providers["account-3"].listMatchingMessages).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "needs_confirmation",
+      conversations: 2,
+      accounts: [
+        { account: CHAT_EMAIL, conversations: 1 },
+        { account: "two@example.com", conversations: 1 },
+        { account: "three@example.com", error: expect.any(String) },
+      ],
+    });
+  });
+
   it("prepares a reply that sends from the account the email is in", async () => {
     const result: any = await replyEmailTool(chatToolOptions()).execute?.(
       {
@@ -727,12 +747,16 @@ function messageOn(id: string, date: string) {
 }
 
 function fakeProvider(messageId: string, threadId: string) {
-  const message = getMockMessage({
-    id: messageId,
-    threadId,
-    from: "legal@acme.example",
-    subject: "Contract renewal",
-  });
+  // One date for every account's message, so they list in account order.
+  const message = {
+    ...getMockMessage({
+      id: messageId,
+      threadId,
+      from: "legal@acme.example",
+      subject: "Contract renewal",
+    }),
+    date: "2026-01-01T10:00:00Z",
+  };
   return {
     searchMessages: vi.fn().mockResolvedValue({ messages: [message] }),
     getLabels: vi.fn().mockResolvedValue([]),
@@ -749,5 +773,8 @@ function fakeProvider(messageId: string, threadId: string) {
     labelMessage: vi.fn().mockResolvedValue(undefined),
     getMessagesFromSender: vi.fn().mockResolvedValue({ messages: [message] }),
     bulkArchiveFromSenders: vi.fn().mockResolvedValue(undefined),
+    listMatchingMessages: vi
+      .fn()
+      .mockResolvedValue({ messages: [{ id: messageId, threadId }] }),
   };
 }

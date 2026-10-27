@@ -57,7 +57,19 @@ export async function persistAssistantMatchingActionOutcome({
   toolCallId: string;
   emailAccountId: string;
   outcome:
-    | { status: "started"; jobId: string; messageCap: number }
+    | {
+        status: "started";
+        jobId: string;
+        messageCap: number;
+        /** One job per account the search covered. */
+        jobs: Array<{
+          emailAccountId: string;
+          jobId: string;
+          messageCap: number;
+        }>;
+        /** Accounts where the job did not start. */
+        notStarted?: Array<{ account: string | null; error: string }>;
+      }
     | { status: "cancelled" };
   logger: Logger;
 }) {

@@ -50,7 +50,12 @@ import {
   requiresSenderEmails,
 } from "@/utils/ai/assistant/manage-inbox-actions";
 import { hideToolErrorFromUser } from "@/utils/ai/assistant/tool-error-visibility";
-import { previewMatchingQueryAction } from "@/utils/ai/assistant/chat-matching-actions";
+import {
+  countMatchingInAccount,
+  type OtherAccountMatchingPreview,
+  previewMatchingQueryAction,
+  searchForAccount,
+} from "@/utils/ai/assistant/chat-matching-actions";
 import { withoutConfirmToken } from "@/utils/ai/assistant/matching-query-actions";
 import {
   getMatchingQueryActions,
@@ -919,7 +924,7 @@ const outlookManageInboxInputSchema = z
         "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
     query: matchingQuerySchema.describe(
-      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches once the user presses Confirm. Tell them how many conversations would change; calling again does not start it.",
+      "Instead of threadIds, an Outlook search in searchInbox's query syntax, with an exact sender written as from:person@example.com: archive_threads, mark_read_threads or categorize_threads then applies to every email it matches, in all of the user's connected accounts, once the user presses Confirm. Tell them how many conversations would change in each account; calling again does not start it.",
     ),
     categoryName: z
       .string()
@@ -963,7 +968,7 @@ const gmailManageInboxInputSchema = z
         "Required for thread actions unless query is set. Use IDs from searchInbox results or IDs the user already provided; omit for sender-wide actions.",
       ),
     query: matchingQuerySchema.describe(
-      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches once the user presses Confirm. Tell them how many conversations would change; calling again does not start it.",
+      "Instead of threadIds, a Gmail search in searchInbox's syntax: archive_threads, mark_read_threads or label_threads then applies to every email it matches, in all of the user's connected accounts, once the user presses Confirm. Tell them how many conversations would change in each account; calling again does not start it.",
     ),
     labelName: z
       .string()
@@ -1122,8 +1127,7 @@ const buildManageInboxTool = ({
           const result = await runManageInboxQuery({
             parsedInput: { ...parsedInput, query: parsedInput.query },
             emailProvider,
-            emailAccountId,
-            provider,
+            options,
             taxonomy,
             // Only the web chat shows the card a confirmation is pressed on.
             confirmation:
@@ -1133,7 +1137,6 @@ const buildManageInboxTool = ({
                 ? { chatId: options.chatId, toolCallId: callOptions.toolCallId }
                 : undefined,
             abortSignal: callOptions?.abortSignal,
-            logger,
           });
           logger.info("manageInbox query ran", {
             action: originalAction,
@@ -3138,27 +3141,35 @@ function normalizeOutlookManageInboxInput(
 async function runManageInboxQuery({
   parsedInput,
   emailProvider,
-  emailAccountId,
-  provider,
+  options,
   taxonomy,
   confirmation,
   abortSignal,
-  logger,
 }: {
   parsedInput: NormalizedManageInboxInput & { query: string };
   emailProvider: EmailProvider;
-  emailAccountId: string;
-  provider: string;
+  options: InboxToolOptions;
   taxonomy: ManageInboxTaxonomyConfig;
   confirmation?: { chatId: string; toolCallId: string };
   abortSignal?: AbortSignal;
-  logger: Logger;
 }) {
+  const { userId, email, emailAccountId, provider, logger } = options;
   const { action, labelName, read, query, originalAction } = parsedInput;
   const bulkAction = toMatchingBulkAction(action, read);
   if (!bulkAction) return { error: "This action can't run over a search." };
 
+  const selection = await selectOtherAccounts({ userId, emailAccountId }).catch(
+    (error) => {
+      logger.warn("Could not list the user's accounts for a search action", {
+        error,
+      });
+      return null;
+    },
+  );
+  const multiAccount = Boolean(selection?.accounts.length);
+
   let labelId: string | undefined;
+  let chatAccountError: string | undefined;
   if (action === "label_threads") {
     try {
       const resolved = await resolveThreadLabel({
@@ -3173,26 +3184,130 @@ async function runManageInboxQuery({
       logger.warn("Failed to resolve label for a search-wide action", {
         error,
       });
-      return hideToolErrorFromUser({
-        error:
-          error instanceof Error
-            ? error.message
-            : taxonomy.labelResolutionFallbackError,
-      });
+      const message =
+        error instanceof Error
+          ? error.message
+          : taxonomy.labelResolutionFallbackError;
+      if (!multiAccount) return hideToolErrorFromUser({ error: message });
+      chatAccountError = message;
     }
   }
+
+  const otherAccounts =
+    multiAccount && selection
+      ? {
+          chatEmail: email,
+          previews: (
+            await runOnOtherAccounts({
+              userId,
+              emailAccountId,
+              logger,
+              abortSignal,
+              selection,
+              run: (account, signal) =>
+                previewMatchingInOtherAccount({
+                  account,
+                  chatProvider: provider,
+                  query,
+                  bulkAction,
+                  labelName,
+                  signal,
+                  logger: logger.with({ otherEmailAccountId: account.id }),
+                }),
+            })
+          ).results.map(
+            (entry): OtherAccountMatchingPreview =>
+              "error" in entry
+                ? { account: entry.account, error: entry.error }
+                : { account: entry.account, ...entry.result },
+          ),
+        }
+      : undefined;
 
   return previewMatchingQueryAction({
     originalAction,
     query,
     bulkAction,
     labelId,
+    chatAccountError,
     emailProvider,
     emailAccountId,
     provider,
+    otherAccounts,
     confirmation,
     abortSignal,
   });
+}
+
+/**
+ * What a search-wide action would change in one of the user's other
+ * accounts. Only a search that carries over exactly is acted on, and only a
+ * label or category that already exists there (D-008).
+ */
+async function previewMatchingInOtherAccount({
+  account,
+  chatProvider,
+  query,
+  bulkAction,
+  labelName,
+  signal,
+  logger,
+}: {
+  account: ChatAccount;
+  chatProvider: string;
+  query: string;
+  bulkAction: NonNullable<ReturnType<typeof toMatchingBulkAction>>;
+  labelName?: string | null;
+  signal: AbortSignal;
+  logger: Logger;
+}): Promise<
+  | { error: string }
+  | {
+      search: AccountSearch;
+      labelId?: string;
+      count: Extract<
+        Awaited<ReturnType<typeof countMatchingInAccount>>,
+        { total: number }
+      >;
+    }
+> {
+  const search = searchForAccount({
+    query,
+    from: chatProvider,
+    to: account.provider,
+  });
+  if (!search)
+    return { error: "Nothing in this search applies to this account." };
+
+  const emailProvider = await createEmailProvider({
+    emailAccountId: account.id,
+    provider: account.provider,
+    logger,
+  });
+  signal.throwIfAborted();
+  let labelId: string | undefined;
+  if (bulkAction === "label") {
+    const label = labelName
+      ? await emailProvider.getLabelByName(labelName)
+      : null;
+    if (!label)
+      return {
+        error: getManageInboxTaxonomy(account.provider).missingLabelError(
+          labelName ?? "",
+          "label_threads",
+        ),
+      };
+    labelId = label.id;
+  }
+  const count = await countMatchingInAccount({
+    search,
+    provider: account.provider,
+    bulkAction,
+    emailProvider,
+    abortSignal: signal,
+  });
+  if ("error" in count) return count;
+  return { search, ...(labelId ? { labelId } : {}), count };
 }
 
 function isThreadLabelAction(

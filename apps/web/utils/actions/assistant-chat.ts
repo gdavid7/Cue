@@ -153,12 +153,13 @@ export const confirmAssistantMatchingAction = actionClient
   .inputSchema(confirmAssistantMatchingActionBody)
   .action(
     async ({
-      ctx: { emailAccountId, provider, logger },
+      ctx: { emailAccountId, provider, userId, logger },
       parsedInput: { chatId, chatMessageId, toolCallId, confirmToken, query },
     }) => {
       const started = await confirmMatchingQueryAction({
         emailAccountId,
         provider,
+        userId,
         chatId,
         toolCallId,
         confirmToken,
@@ -175,6 +176,8 @@ export const confirmAssistantMatchingAction = actionClient
           status: "started",
           jobId: started.jobId,
           messageCap: started.messageCap,
+          jobs: started.jobs,
+          ...(started.notStarted ? { notStarted: started.notStarted } : {}),
         },
         logger,
       }).catch((error) => {

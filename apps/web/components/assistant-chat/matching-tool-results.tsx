@@ -77,21 +77,26 @@ export function ManageInboxQueryResult({
       confirmToken,
       query,
     });
-    const jobId = result?.data?.jobId;
-    if (!jobId) {
+    const jobs = result?.data?.jobs;
+    if (!jobs?.length) {
       setAnswer(null);
       toastError({ description: getActionErrorMessage(result ?? {}) });
       return;
     }
     setAnswer("started");
     refreshChat();
+    // One job per account the search covered, followed together.
+    const accountIds = jobs.map((job) => job.emailAccountId);
     followMatchingJobs({
-      jobs: [{ accountId: emailAccountId, jobId }],
+      jobs: jobs.map((job) => ({
+        accountId: job.emailAccountId,
+        jobId: job.jobId,
+      })),
       action,
       // The mail list follows the local store, which this brings up to date.
       onFinished: () => {
         getActiveMailClient()
-          ?.requestSync([emailAccountId])
+          ?.requestSync(accountIds)
           .catch(() => undefined);
       },
     }).catch(() => undefined);
