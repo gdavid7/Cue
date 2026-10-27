@@ -80,6 +80,7 @@ import { SafeError } from "@/utils/error";
 import { getEmailUrlForMessage } from "@/utils/url";
 import {
   ACCOUNT_SEARCH_FAILED,
+  createEmailAccountResolver,
   type OtherAccountResult,
   resolveEmailAccountForId,
   runOnOtherAccounts,
@@ -2375,13 +2376,13 @@ async function runThreadActionsAcrossAccounts({
   >();
   const notOwned: string[] = [];
   const resolved = new Map<string, ChatAccount | null>();
+  const resolve = createEmailAccountResolver({
+    userId,
+    emailAccountId,
+    provider,
+  });
   for (const requested of threadIds) {
-    const target = await resolveEmailAccountForId({
-      id: requested,
-      userId,
-      emailAccountId,
-      provider,
-    }).then(
+    const target = await resolve(requested).then(
       (found) => found,
       () => null,
     );

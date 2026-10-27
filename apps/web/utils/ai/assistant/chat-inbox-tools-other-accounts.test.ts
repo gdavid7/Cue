@@ -658,6 +658,28 @@ describe("changing email across the user's accounts", () => {
     ]);
   });
 
+  it("looks up the user's accounts once for a call, however many emails it names", async () => {
+    await manage("google", {
+      action: "archive_threads",
+      threadIds: [
+        toOtherAccountEmailId("account-2", "gmail-thread"),
+        toOtherAccountEmailId("account-2", "gmail-thread-2"),
+        toOtherAccountEmailId("account-3", "outlook-thread"),
+        toOtherAccountEmailId("account-9", "thread-x"),
+      ],
+    });
+
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.emailAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ userId: USER_ID }),
+      }),
+    );
+    expect(providers["account-2"].archiveThreadWithLabel).toHaveBeenCalledTimes(
+      2,
+    );
+  });
+
   it("changes nothing for an email in no account of the user's, and only that email fails", async () => {
     const foreign = toOtherAccountEmailId("account-9", "thread-x");
 

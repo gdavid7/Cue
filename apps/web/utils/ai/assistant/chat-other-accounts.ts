@@ -54,6 +54,55 @@ export async function resolveEmailAccountForId({
   emailAccountId: string;
   provider: string;
 }) {
+  return resolveWith({
+    id,
+    emailAccountId,
+    provider,
+    findOwned: (otherAccountId) =>
+      getOwnedEmailAccount({ userId, emailAccountId: otherAccountId }),
+  });
+}
+
+/**
+ * resolveEmailAccountForId for many ids in one call: the user's connected
+ * accounts are loaded once, the first time an id names another account.
+ */
+export function createEmailAccountResolver({
+  userId,
+  emailAccountId,
+  provider,
+}: {
+  userId: string;
+  emailAccountId: string;
+  provider: string;
+}) {
+  let owned: Promise<Map<string, ConnectedEmailAccount>> | undefined;
+  return (id: string) =>
+    resolveWith({
+      id,
+      emailAccountId,
+      provider,
+      findOwned: async (otherAccountId) => {
+        owned ??= getConnectedEmailAccounts({ userId }).then(
+          (accounts) =>
+            new Map(accounts.map((account) => [account.id, account])),
+        );
+        return (await owned).get(otherAccountId) ?? null;
+      },
+    });
+}
+
+async function resolveWith({
+  id,
+  emailAccountId,
+  provider,
+  findOwned,
+}: {
+  id: string;
+  emailAccountId: string;
+  provider: string;
+  findOwned: (otherAccountId: string) => Promise<ConnectedEmailAccount | null>;
+}) {
   const parsed = parseOtherAccountEmailId(id);
   if (!parsed || parsed.emailAccountId === emailAccountId) {
     return {
@@ -64,10 +113,7 @@ export async function resolveEmailAccountForId({
     };
   }
 
-  const account = await getOwnedEmailAccount({
-    userId,
-    emailAccountId: parsed.emailAccountId,
-  });
+  const account = await findOwned(parsed.emailAccountId);
   if (!account) return null;
   return {
     emailAccountId: account.id,
