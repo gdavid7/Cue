@@ -2025,11 +2025,14 @@ async function searchAllAccounts<
       countError: chatCountError,
     }),
     ...otherAccounts.map(describeOtherAccount),
-    ...notReached.map((account) => ({
-      account: account.email,
-      returned: 0,
-      hasMore: true,
-    })),
+    ...notReached.map((account) =>
+      describeChatAccount({
+        email: account.email,
+        result: null,
+        hasMore: true,
+        error: undefined,
+      }),
+    ),
   ];
   const answered = accounts.filter((entry) => !("error" in entry));
   const exactCounts = answered.map((entry) =>
