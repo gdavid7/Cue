@@ -523,6 +523,19 @@ microsoft:
       parent_folder_id: sentitems
       is_read: true
       received_date_time: "2025-12-29T12:00:00.000Z"
+    - id: msg_playwright_link_mismatch
+      conversation_id: thr_playwright_link_mismatch
+      user_email: __PLAYWRIGHT_TEST_EMAIL__
+      from:
+        address: notices@example.com
+        name: Account Notices
+      to_recipients:
+        - address: __PLAYWRIGHT_TEST_EMAIL__
+      subject: Link Mismatch Statement
+      body_content: "<p>Your statement is ready.</p><p><a href='https://login.example.net/statement'>account.example.com/statement</a></p><p><a href='https://www.example.com/help'>example.com/help</a></p>"
+      parent_folder_id: sentitems
+      is_read: true
+      received_date_time: "2025-12-29T12:00:00.000Z"
     - id: msg_playwright_matched_earlier
       conversation_id: thr_playwright_matched_reason
       user_email: __PLAYWRIGHT_TEST_EMAIL__

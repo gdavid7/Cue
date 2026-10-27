@@ -139,6 +139,41 @@ describe("HtmlEmail", () => {
     expect(proxiedHtml).not.toContain("mailtrack.io");
   });
 
+  it("says when links show one address but go to another", () => {
+    const { getByText, queryByText, rerender } = render(
+      <HtmlEmail
+        html={`<p><a href="https://evil.example/login">bank.example.com/verify</a></p>
+          <p><a href="https://example.com/">www.example.com</a></p>`}
+        messageId="mismatched-link"
+      />,
+    );
+    expect(
+      getByText("1 link shows one address but goes to another"),
+    ).toBeTruthy();
+    expect(queryByText(/^Hid \d+ tracker/)).toBeNull();
+
+    rerender(
+      <HtmlEmail
+        html={`<a href="https://evil.example/a">bank.example.com</a>
+          <a href="https://other.example/b">https://bank.example.com</a>`}
+        messageId="mismatched-links"
+      />,
+    );
+    expect(
+      getByText("2 links show one address but go to another"),
+    ).toBeTruthy();
+  });
+
+  it("shows no link line when every link goes where it says", () => {
+    const { queryByText } = render(
+      <HtmlEmail
+        html={`<a href="https://www.example.com/">example.com</a> <a href="https://evil.example/">Click here</a>`}
+        messageId="matching-links"
+      />,
+    );
+    expect(queryByText(/show(s)? one address but go/)).toBeNull();
+  });
+
   it("shows no tracker line when the email has none", () => {
     const { queryByText } = render(
       <HtmlEmail html="<p>Hello</p>" messageId="no-trackers" />,
