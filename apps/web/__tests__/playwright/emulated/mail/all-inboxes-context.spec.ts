@@ -20,7 +20,7 @@ test("one chat covers every account and lists every account's chats", async ({
   const { emailAccountId } = await openMail(page);
   const primary = await getEmailAccount(page);
   const second = await createSecondEmailAccount(emailAccountId);
-  const chatIds = [
+  const chatIds: string[] = [
     `playwright-chat-${second.id}`,
     `playwright-chat-${primary.id}`,
   ];
@@ -52,6 +52,34 @@ test("one chat covers every account and lists every account's chats", async ({
     await expect(page.getByText(/Switched to /)).toHaveCount(0);
     await expect(page.getByText(/The open email is in /)).toHaveCount(0);
     await capturePlaywrightCheckpoint(page, testInfo, "chat-covers-accounts");
+
+    // A message sent with the other account's email open names that email
+    // with its account, and the chat answers it.
+    const chatReply = `Cross-account reply ${Date.now()}`;
+    await registerLlmReply({
+      match: "this other account email",
+      text: chatReply,
+    });
+    const chatInput = page.getByTestId("chat-input");
+    await chatInput.fill("What is this other account email about?");
+    const chatRequest = page.waitForRequest(
+      (request) =>
+        request.method() === "POST" &&
+        new URL(request.url()).pathname === "/api/chat",
+    );
+    const chatResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/chat",
+      { timeout: 60_000 },
+    );
+    await chatInput.press("Enter");
+    expect((await chatRequest).postDataJSON().openThreadId).toMatch(
+      new RegExp(`^acct:${second.id}:`),
+    );
+    expect((await chatResponse).status()).toBe(200);
+    await expect(page.getByText(chatReply)).toBeVisible({ timeout: 60_000 });
+    chatIds.push((await chatRequest).postDataJSON().id);
 
     await page.getByRole("button", { name: "Chat History" }).click();
     const secondChat = page.getByRole("menuitem", {
@@ -142,6 +170,18 @@ async function unarchive(page: Page, emailAccountId: string) {
       headers: { "X-Email-Account-ID": emailAccountId },
     })
     .catch(() => undefined);
+}
+
+async function registerLlmReply(reply: { match: string; text: string }) {
+  const response = await fetch(
+    `${process.env.PLAYWRIGHT_LLM_BASE_URL}/__emulator/replies`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(reply),
+    },
+  );
+  expect(response.ok).toBe(true);
 }
 
 async function seedChat(id: string, emailAccountId: string, name: string) {

@@ -320,6 +320,54 @@ describe("chat route rule freshness persistence", () => {
     );
   });
 
+  it("passes on an open thread in another of the user's accounts, and drops one in an account that is not theirs", async () => {
+    prisma.emailAccount.findMany.mockImplementation((async (args: {
+      where: { id?: string; userId: string };
+    }) =>
+      args.where.id === "other-account" && args.where.userId === "user-1"
+        ? [
+            {
+              id: "other-account",
+              email: "other@test.com",
+              name: null,
+              image: null,
+              includeInAllAccounts: true,
+              account: { provider: "google" },
+            },
+          ]
+        : []) as never);
+
+    const response = await POST(
+      createRequest("What's this about?", {
+        openThreadId: "acct:other-account:t-42",
+        openMessageId: "acct:other-account:m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        openThread: {
+          threadId: "acct:other-account:t-42",
+          messageId: "acct:other-account:m-7",
+        },
+      }),
+    );
+
+    await POST(
+      createRequest("And this one?", {
+        openThreadId: "acct:someone-elses-account:t-42",
+        openMessageId: "acct:someone-elses-account:m-7",
+      }),
+      { params: Promise.resolve({}) },
+    );
+
+    expect(mockAiProcessAssistantChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ openThread: undefined }),
+    );
+  });
+
   it("returns 404 when the email account cannot be loaded", async () => {
     mockGetEmailAccountWithAi.mockResolvedValueOnce(null);
 
