@@ -48,6 +48,7 @@ import { forwardEmailHtml, forwardEmailSubject } from "@/utils/gmail/forward";
 import { extractDraftComposerContent } from "@/utils/parse/extract-reply.client";
 import type { ReplyingToEmail } from "@/app/(app)/[emailAccountId]/compose/ComposeEmailForm";
 import { getThreadAddresses } from "@/app/(app)/[emailAccountId]/compose/thread-addresses";
+import { getLatestSenderOffsets } from "@/app/(app)/[emailAccountId]/compose/recipient-local-time";
 import { createReplyContent } from "@/utils/gmail/reply";
 import { cn } from "@/utils";
 import { textToHtmlParagraphs } from "@/utils/string";
@@ -1158,6 +1159,7 @@ function ReplyPanel({
         return {
           ...prepareDraftReplyEmail(draftSource),
           ...(threadMessages && getThreadAddresses(threadMessages)),
+          senderUtcOffsets: getLatestSenderOffsets(threadMessages ?? []),
         };
 
       const reply = prepareReplyingToEmail({
@@ -1166,14 +1168,15 @@ function ReplyPanel({
         replyAll,
         ownEmails,
       });
+      const repliedThread = threadMessages?.some(
+        (item) => item.id === message.id,
+      )
+        ? threadMessages
+        : [message, ...(threadMessages ?? [])];
       return {
         ...reply,
-        ...(threadMessages &&
-          getThreadAddresses(
-            threadMessages.some((item) => item.id === message.id)
-              ? threadMessages
-              : [message, ...threadMessages],
-          )),
+        ...(threadMessages && getThreadAddresses(repliedThread)),
+        senderUtcOffsets: getLatestSenderOffsets(repliedThread),
         to: suggestedRecipients?.to ?? reply.to,
         cc: suggestedRecipients?.cc ?? reply.cc,
         bcc: suggestedRecipients?.bcc ?? reply.bcc,

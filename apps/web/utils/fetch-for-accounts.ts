@@ -4,11 +4,20 @@ import { swrFetcher } from "@/providers/swr-fetcher";
  * Reads an account-scoped route for each account, as that account, so the
  * server checks each one is the user's. Accounts that fail are listed rather
  * than failing the rest; only when every account fails does this throw.
+ * `path` may differ per account.
  */
-export async function fetchForAccounts<T>(path: string, accountIds: string[]) {
+export async function fetchForAccounts<T>(
+  path: string | ((accountId: string) => string),
+  accountIds: string[],
+) {
   const results = await Promise.allSettled(
     accountIds.map(
-      (accountId) => swrFetcher(path, undefined, accountId) as Promise<T>,
+      (accountId) =>
+        swrFetcher(
+          typeof path === "string" ? path : path(accountId),
+          undefined,
+          accountId,
+        ) as Promise<T>,
     ),
   );
   const failedAccountIds = accountIds.filter(

@@ -119,6 +119,33 @@ describe("HtmlEmail", () => {
     expect(document.body.classList.contains("dark")).toBe(true);
   });
 
+  it("hides tracking pixels from the proxy and says how many it hid", () => {
+    const { getByText } = render(
+      <HtmlEmail
+        html={`<p>Hello</p>
+          <img src="https://cdn.example.com/logo.png" width="24" height="24" alt="Logo">
+          <img src="https://news.example.com/o/abc.gif" width="1" height="1" alt="">
+          <img src="https://mailtrack.io/trace/mail/abc.png">`}
+        messageId="trackers"
+      />,
+    );
+
+    expect(getByText("Hid 2 trackers")).toBeTruthy();
+    const proxiedHtml = JSON.parse(
+      String(vi.mocked(fetch).mock.calls[0]?.[1]?.body),
+    ).html as string;
+    expect(proxiedHtml).toContain("https://cdn.example.com/logo.png");
+    expect(proxiedHtml).not.toContain("news.example.com");
+    expect(proxiedHtml).not.toContain("mailtrack.io");
+  });
+
+  it("shows no tracker line when the email has none", () => {
+    const { queryByText } = render(
+      <HtmlEmail html="<p>Hello</p>" messageId="no-trackers" />,
+    );
+    expect(queryByText(/^Hid \d+ tracker/)).toBeNull();
+  });
+
   it("renders designed html with its own dark styles in dark mode", () => {
     mockTheme.theme = "dark";
     mockTheme.resolvedTheme = "dark";

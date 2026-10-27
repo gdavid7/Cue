@@ -34,6 +34,9 @@ export type MessageAttachmentDescriptor = z.infer<
 export const MAX_RECIPIENTS = 500;
 // RFC 5322's line limit; a longer header can't be a real Message-ID.
 export const MAX_INTERNET_MESSAGE_ID_LENGTH = 998;
+// The furthest real time zones sit from UTC (UTC-12 and UTC+14).
+export const MIN_UTC_OFFSET_MINUTES = -12 * 60;
+export const MAX_UTC_OFFSET_MINUTES = 14 * 60;
 
 export const messageMetadataSchema = z.object({
   subject: z.string().max(16_384),
@@ -61,6 +64,16 @@ export const messageMetadataSchema = z.object({
     .string()
     .min(1)
     .max(MAX_INTERNET_MESSAGE_ID_LENGTH)
+    .optional(),
+  /**
+   * The UTC offset, in minutes, written in the sender's Date header, so a
+   * reply can show the hour it is for them. Absent when the header gave none.
+   */
+  senderUtcOffsetMinutes: z
+    .number()
+    .int()
+    .min(MIN_UTC_OFFSET_MINUTES)
+    .max(MAX_UTC_OFFSET_MINUTES)
     .optional(),
 });
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;

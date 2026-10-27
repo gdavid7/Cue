@@ -29,15 +29,6 @@ export function appendSentMessageOpenPixel(html: string, pixelUrl: string) {
   return `${html}${pixel}`;
 }
 
-export function stripSentMessageOpenPixels(html: string) {
-  if (!html) return html;
-  return html.replace(/<img\b[^>]*\/?>/gi, (tag) => {
-    const src = getImgSrc(tag);
-    if (!src) return tag;
-    return isSentMessageOpenPixelUrl(src.replace(/&amp;/g, "&")) ? "" : tag;
-  });
-}
-
 export function isSameOriginSentMessageOpenRequest({
   requestUrl,
   referer,
@@ -100,10 +91,4 @@ function parseDate(value: Date | string | null) {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function getImgSrc(tag: string) {
-  const quoted = tag.match(/\bsrc\s*=\s*(["'])([^"']*)\1/i)?.[2];
-  if (quoted !== undefined) return quoted;
-  return tag.match(/\bsrc\s*=\s*([^\s>]+)/i)?.[1];
 }

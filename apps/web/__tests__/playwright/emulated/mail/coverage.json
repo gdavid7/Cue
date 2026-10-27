@@ -45,6 +45,9 @@
     "app/(app)/[emailAccountId]/home/use-waiting-on-you.ts",
     "app/(app)/[emailAccountId]/home/BounceNotices.tsx",
     "app/(app)/[emailAccountId]/home/use-recent-bounces.ts",
+    "app/(app)/[emailAccountId]/home/DraftsLeftOpen.tsx",
+    "app/(app)/[emailAccountId]/home/use-left-open-drafts.ts",
+    "app/api/user/cue-authored-drafts/route.ts",
     "app/api/user/home/cue/route.ts",
     "app/(app)/[emailAccountId]/mail/ReadingBundle.tsx",
     "app/(app)/[emailAccountId]/mail/reading-lane.ts",
@@ -313,7 +316,10 @@
     "components/email-list/ThreadDeliveryStatus.tsx",
     "components/email-list/EmailThread.tsx",
     "hooks/useProviderDraftAutosave.ts",
-    "utils/scheduled-email/service.ts"
+    "utils/scheduled-email/service.ts",
+    "app/(app)/[emailAccountId]/compose/RecipientLocalTime.tsx",
+    "app/(app)/[emailAccountId]/compose/recipient-local-time.ts",
+    "utils/email/date-header-offset.ts"
   ],
   "phone-flows.spec.ts": [
     "components/email-list/EmailMessage.tsx",

@@ -23,6 +23,7 @@ import type {
   ConversationSummary,
   MailboxView,
   RecentBounce,
+  LeftOpenDraft,
 } from "@inboxzero/mail-core/queries";
 import type { useLocalInboxRows } from "./use-local-inbox-rows";
 import { readCachedToday, writeCachedToday } from "@/utils/home/today-cache";
@@ -57,6 +58,9 @@ const mocks = vi.hoisted(() => ({
   dismissWaitingOnYou: vi.fn(),
   // Recent bounces in local mail, and which of them were dismissed.
   bounces: [] as RecentBounce[],
+  // Drafts the user left, as local mail lists them.
+  leftOpenDrafts: [] as LeftOpenDraft[],
+  leftOpenCapped: false,
   dismissedBounces: [] as string[],
   // By account, whether Cue has read the mailbox, asked before Today's answer.
   homeCue: undefined as Record<string, boolean> | undefined,
@@ -214,6 +218,12 @@ vi.mock("./use-recent-bounces", async (importOriginal) => {
     }),
   };
 });
+vi.mock("./use-left-open-drafts", () => ({
+  useLeftOpenDrafts: () => ({
+    drafts: mocks.leftOpenDrafts,
+    capped: mocks.leftOpenCapped,
+  }),
+}));
 vi.mock("@/app/(app)/[emailAccountId]/mail/CatchUp", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -1205,6 +1215,94 @@ describe("HomeDashboard Didn't reach someone", () => {
       ).toBe("/mail/u/0/all-inboxes/inbox/sent?account=1&from=today");
       expect(
         within(card).getByRole("img", { name: "Account: ada@work.example" }),
+      ).toBeTruthy();
+    } finally {
+      mocks.searchParams = new URLSearchParams();
+      mocks.emailAccounts = [];
+      mocks.homes = {};
+    }
+  });
+});
+
+describe("HomeDashboard Drafts you left open", () => {
+  const draft: LeftOpenDraft = {
+    accountId: "account",
+    conversationId: "plans",
+    messageId: "plans-draft",
+    subject: "Weekend plans",
+    to: ["Sam Lee <sam@example.com>"],
+    savedAtMs: Date.now() - 2 * 86_400_000,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.client.getDiagnostics.mockResolvedValue({ revision: 1 });
+    mocks.home.error = undefined;
+    mocks.home.gaveUp = false;
+    mocks.home.data = homeData([thread("a", "Quarterly numbers")]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    mocks.leftOpenDrafts = [];
+    mocks.leftOpenCapped = false;
+  });
+
+  it("lists each draft, opening its conversation's composer from Today", () => {
+    mocks.leftOpenDrafts = [draft];
+
+    renderToday();
+
+    const list = screen.getByRole("list", { name: "Drafts you left open" });
+    const link = within(list).getByRole("link");
+    expect(within(link).getByText("Weekend plans")).toBeTruthy();
+    expect(within(link).getByText("Sam Lee")).toBeTruthy();
+    expect(link.getAttribute("href")).toBe("/mail/u/0/inbox/plans?from=today");
+    expect(
+      within(section("Drafts you left open")).queryByText("Open drafts"),
+    ).toBe(null);
+  });
+
+  it("is hidden when nothing was left open", () => {
+    renderToday();
+
+    expect(screen.queryByText("Drafts you left open")).toBe(null);
+  });
+
+  it("says there are more and links to Drafts past the cap", () => {
+    mocks.leftOpenDrafts = [draft];
+    mocks.leftOpenCapped = true;
+
+    renderToday();
+
+    expect(
+      within(section("Drafts you left open")).getByRole("link", {
+        name: "Open drafts",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(section("Drafts you left open")).getByText("1+"),
+    ).toBeTruthy();
+  });
+
+  it("opens a draft in its own account across accounts", () => {
+    mocks.searchParams = new URLSearchParams({ accounts: "all" });
+    mocks.emailAccounts = [
+      emailAccount("account", "ada@example.com"),
+      emailAccount("account-b", "ada@work.example"),
+    ];
+    mocks.homes = { account: homeData([]), "account-b": homeData([]) };
+    mocks.leftOpenDrafts = [{ ...draft, accountId: "account-b" }];
+
+    try {
+      renderToday();
+
+      const list = screen.getByRole("list", { name: "Drafts you left open" });
+      expect(within(list).getByRole("link").getAttribute("href")).toBe(
+        "/mail/u/0/all-inboxes/inbox/plans?account=1&from=today",
+      );
+      expect(
+        within(list).getByRole("img", { name: "Account: ada@work.example" }),
       ).toBeTruthy();
     } finally {
       mocks.searchParams = new URLSearchParams();
@@ -2232,6 +2330,10 @@ function onlyStatus() {
   const statuses = screen.getAllByRole("status");
   expect(statuses).toHaveLength(1);
   return statuses[0];
+}
+
+function section(name: string) {
+  return screen.getByRole("region", { name });
 }
 
 function lane(name: string) {

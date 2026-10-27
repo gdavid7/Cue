@@ -9,11 +9,12 @@ import { isDuplicateError } from "@/utils/prisma-helpers";
 import type { Logger } from "@/utils/logger";
 import type { EmailProvider } from "@/utils/email/types";
 import type { SendEmailBody } from "@/utils/types/mail";
+import { removeHtmlImages } from "@/utils/email/rewrite-html";
 import {
   appendSentMessageOpenPixel,
+  isSentMessageOpenPixelUrl,
   isSentMessageOpenToken,
   sentMessageOpenPath,
-  stripSentMessageOpenPixels,
 } from "./sent-message-open";
 
 const SENT_MESSAGE_OPEN_TOKEN_PAYLOAD_BYTES = 18;
@@ -181,6 +182,13 @@ export async function sendHtmlEmailWithOpenTracking({
     logger,
   });
   return result;
+}
+
+/** Drops the open pixels of earlier sent messages, such as one in a quote. */
+export function stripSentMessageOpenPixels(html: string) {
+  return removeHtmlImages(html, (getAttribute) =>
+    isSentMessageOpenPixelUrl(getAttribute("src")?.trim() ?? ""),
+  );
 }
 
 function sentMessageOpenTokenMac(payload: Buffer) {

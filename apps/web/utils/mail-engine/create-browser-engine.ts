@@ -390,6 +390,8 @@ async function createWorkerOwnedEngine(
       callWorker(worker, pending, "queryWaitingOnYou", [query]),
     queryRecentBounces: (query) =>
       callWorker(worker, pending, "queryRecentBounces", [query]),
+    queryLeftOpenDrafts: (query) =>
+      callWorker(worker, pending, "queryLeftOpenDrafts", [query]),
     queryImportantPeople: (accountIds) =>
       callWorker(worker, pending, "queryImportantPeople", [accountIds]),
     setImportantPerson: (input) =>

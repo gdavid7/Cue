@@ -120,12 +120,21 @@ test("adapts a white newsletter and remembers Show original for its sender", asy
 test("adapts a receipt and puts its dark logo on a light backing", async ({
   page,
 }, testInfo) => {
+  // The receipt's open pixels are never requested, directly or proxied.
+  const trackerRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/(open|beacon)\.lumen\.example/.test(request.url()))
+      trackerRequests.push(request.url());
+  });
   const { emailAccountId } = await openMail(page);
   const frame = await openThread(page, emailAccountId, {
     threadId: "thr_playwright_dark_receipt",
     subject: "Lumen Coffee Receipt",
     text: "Thanks for your order",
   });
+
+  await expect(page.getByText("Hid 2 trackers")).toBeVisible();
+  await expect(frame.locator('img[src*="lumen.example"]')).toHaveCount(0);
 
   // The wordmark is dark artwork on a transparent background.
   await expect(frame.getByRole("img", { name: "Lumen Coffee" })).toHaveCSS(
@@ -147,6 +156,7 @@ test("adapts a receipt and puts its dark logo on a light backing", async ({
     WHITE,
   );
   await captureReader(page, testInfo, "dark-receipt-original");
+  expect(trackerRequests).toEqual([]);
 });
 
 test("uses the sender's own dark palette when the email has one", async ({

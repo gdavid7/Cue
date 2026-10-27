@@ -77,6 +77,29 @@ test("schedules a reply with a reminder, persists it and cancels both", async ({
   }
 });
 
+test.describe("recipient's local time", () => {
+  // Away from UTC, so a UTC Date header differs from the user's own offset.
+  test.use({ timezoneId: "Asia/Tokyo" });
+
+  test("stays hidden when the sender's Date header is UTC, as a rewriting server writes it", async ({
+    page,
+  }, testInfo) => {
+    // Both emulators write every Date header in UTC (Outlook only has UTC
+    // times), which says nothing reliable about where the sender is. Other
+    // offsets are covered by recipient-local-time and date-header-offset
+    // unit tests.
+    await openReply(page);
+    await expect(
+      page.getByRole("button", { name: "Send later", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(/their time$/)).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /^Send at .+ their time$/ }),
+    ).toHaveCount(0);
+    await capturePlaywrightCheckpoint(page, testInfo, "22-no-their-time-utc");
+  });
+});
+
 test("offers recovery for a failed scheduled reply and guards uncertain delivery", async ({
   page,
 }, testInfo) => {

@@ -108,6 +108,23 @@ export async function rewriteHtmlRemoteAssetUrls(
   return isDocument ? $.html() : ($.root().html() ?? html);
 }
 
+/** Removes the <img> elements `shouldRemove` matches, on a parsed DOM. */
+export function removeHtmlImages(
+  html: string,
+  shouldRemove: (getAttribute: (name: string) => string | undefined) => boolean,
+) {
+  if (!html) return html;
+  const isDocument = DOCUMENT_PATTERN.test(html);
+  const $ = cheerio.load(html, null, isDocument);
+  const images = $("img").filter((_, element) =>
+    shouldRemove((name) => $(element).attr(name)),
+  );
+  if (!images.length) return html;
+
+  images.remove();
+  return isDocument ? $.html() : ($.root().html() ?? html);
+}
+
 export async function rewriteCssRemoteAssetUrls(
   css: string,
   getSignedUrl:

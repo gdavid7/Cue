@@ -13,6 +13,7 @@ import {
   type ProviderChange,
 } from "@inboxzero/mail-core/sync";
 import { splitRecipientList } from "@/utils/email";
+import { parseDateHeaderOffsetMinutes } from "@/utils/email/date-header-offset";
 import type { ParsedMessage } from "@/utils/types";
 
 const ROLE_LABELS = {
@@ -63,6 +64,7 @@ export function parsedMessageMetadata(message: ParsedMessage): MessageMetadata {
     hasAttachments:
       message.hasAttachment ?? Boolean(message.attachments?.length),
     ...internetMessageId(message),
+    ...senderUtcOffset(message),
   };
 }
 
@@ -158,6 +160,14 @@ function internetMessageId(message: ParsedMessage) {
   const value = message.headers["message-id"]?.trim();
   if (!value || value.length > MAX_INTERNET_MESSAGE_ID_LENGTH) return {};
   return { internetMessageId: value };
+}
+
+// Gmail keeps the sender's Date header as written. Outlook's parser fills the
+// date from receivedDateTime, which is always UTC, so it records zero, which
+// readers treat as unknown.
+function senderUtcOffset(message: ParsedMessage) {
+  const offset = parseDateHeaderOffsetMinutes(message.headers.date);
+  return offset === undefined ? {} : { senderUtcOffsetMinutes: offset };
 }
 
 function receivedAtMs(message: ParsedMessage): number {

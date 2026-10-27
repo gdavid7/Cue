@@ -86,6 +86,7 @@ import {
 } from "./CueNotice";
 import { BeforeYourMeeting } from "./BeforeYourMeeting";
 import { BounceNotices } from "./BounceNotices";
+import { DraftsLeftOpenList } from "./DraftsLeftOpen";
 import { ConnectLine, NextUpList } from "./NextUp";
 import { formatSenders, formatTime } from "./today-format";
 import { GetStartedChecklist } from "./GetStartedChecklist";
@@ -102,6 +103,7 @@ import { YourDay } from "./YourDay";
 import { useWaitingOnYou, waitingOnYouScope } from "./use-waiting-on-you";
 import { useNeverReadSenders } from "./use-never-read-senders";
 import { useRecentBounces } from "./use-recent-bounces";
+import { useLeftOpenDrafts } from "./use-left-open-drafts";
 import { useImportantPeople } from "@/hooks/useImportantPeople";
 import { useAwaySummary, WhileYouWereAway } from "./WhileYouWereAway";
 
@@ -273,6 +275,7 @@ export function HomeDashboard() {
   // Only ever adds cards: a bounce's From isn't authenticated, so it never
   // hides or moves another row on Today.
   const bounces = useRecentBounces({ accounts: localAccounts });
+  const leftOpen = useLeftOpenDrafts({ accounts: localAccounts });
   // Each conversation shows once on Today: never one it already lists as
   // needing a reply or waiting on someone else, in any of the mailboxes.
   // Across accounts, every account's own lists: the merge caps each lane,
@@ -924,6 +927,41 @@ export function HomeDashboard() {
             onCorrect={correct}
             onDismissWaitingOnYou={dismissWaitingOnYou}
             onWaitingOnYouShown={reportWaitingOnYouShown}
+            leftOpenDrafts={
+              leftOpen.drafts.length > 0 ? (
+                <Section
+                  title="Drafts you left open"
+                  count={formatCount(leftOpen.drafts.length, leftOpen.capped)}
+                  action={
+                    leftOpen.capped ? (
+                      <Link
+                        className="font-sans text-muted-foreground text-sm underline-offset-2 hover:text-foreground hover:underline"
+                        href={mailHref({
+                          allInboxes: Boolean(allInboxesAccounts),
+                          view: { kind: "type", type: "draft" },
+                        })}
+                      >
+                        Open drafts
+                      </Link>
+                    ) : null
+                  }
+                >
+                  <DraftsLeftOpenList
+                    accountColorIndexById={accountColorIndexById}
+                    accounts={allInboxesAccounts ? localAccounts : undefined}
+                    drafts={leftOpen.drafts}
+                    href={(draft) =>
+                      threadHref({
+                        threadId: draft.conversationId,
+                        account: allInboxesAccounts
+                          ? { id: draft.accountId }
+                          : undefined,
+                      })
+                    }
+                  />
+                </Section>
+              ) : null
+            }
             neverRead={
               <NeverReadCard
                 accountColorIndexById={accountColorIndexById}
@@ -985,6 +1023,7 @@ function HomeLanes({
   onCorrect,
   onDismissWaitingOnYou,
   onWaitingOnYouShown,
+  leftOpenDrafts,
   neverRead,
   pending,
   outdated,
@@ -1023,6 +1062,8 @@ function HomeLanes({
   onCorrect: (thread: TodayThread, needsReply: boolean) => Promise<void>;
   onDismissWaitingOnYou: (thread: TodayThread) => void;
   onWaitingOnYouShown: (threads: TodayThread[]) => void;
+  /** What the user started writing and left, from local mail. */
+  leftOpenDrafts: React.ReactNode;
   /**
    * The first week's clean-up card. Below what needs a reply or waits on
    * someone, which is the day's work; above the rest of the inbox.
@@ -1151,6 +1192,9 @@ function HomeLanes({
           </div>
         </Section>
       ) : null}
+
+      {/* The user's own unfinished work, next to what Cue drafted for them. */}
+      {leftOpenDrafts}
 
       {allClear ? null : yourDay}
       {/* The All clear names what's next itself. */}
