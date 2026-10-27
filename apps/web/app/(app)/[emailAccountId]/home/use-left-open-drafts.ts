@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
-import useSWR from "swr";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import useSWR, { unstable_serialize, useSWRConfig } from "swr";
 import { mailClientSupports } from "@inboxzero/mail-core/capabilities";
 import type {
   ConversationQuery,
@@ -25,9 +25,15 @@ export const LEFT_OPEN_SHOWN_LIMIT = 5;
 // one more says there are more.
 const READ_LIMIT = 20;
 const NO_DRAFTS: LeftOpenDraft[] = [];
+const NO_ANSWERS: ReadonlyMap<string, boolean> = new Map();
 const CUE_AUTHORED_DRAFTS_PATH = "/api/user/cue-authored-drafts";
+// Answers kept per account set: past what the lane reads, so a draft that
+// leaves and comes back is still answered, while a long session's saves
+// don't pile up.
+export const ANSWERS_KEPT = 200;
 // How often, and from how long after, an account the server couldn't answer
-// for is asked again: past a typical Gmail deferral, then doubling.
+// for, or answered for only some drafts of, is asked again: past a typical
+// Gmail deferral, then doubling.
 export const CUE_AUTHORED_RECOVERIES = 3;
 export const CUE_AUTHORED_RECOVERY_MS = 30_000;
 
@@ -109,98 +115,129 @@ export function useLeftOpenDrafts({ accounts }: { accounts: TodayAccount[] }): {
   );
 
   const read = ready && data ? data : NO_DRAFTS;
-  // Each account is asked about only its drafts the lane could show, and
-  // again only when those change, as each ask may read Cue's drafts from
-  // the mailbox.
-  const requests = useMemo(() => cueAuthoredRequests(read), [read]);
-  const requestsKey = requests.map((r) => r.path).join("\n");
-  const { data: cueAuthored, mutate: mutateCueAuthored } = useSWR(
-    requests.length
-      ? [
-          CUE_AUTHORED_DRAFTS_PATH,
-          ...requests.flatMap((r) => [r.accountId, r.path]),
-        ]
-      : null,
-    async () => ({
-      ...(await askCueAuthored(requests)),
-      requestsKey,
-      checked: new Set(requests.flatMap((r) => r.draftKeys)),
-      recoveries: 0,
-    }),
+  // This tab's answer for each draft as last saved, so a draft that ages in
+  // or is saved again asks the server about it alone: each ask may read
+  // Cue's drafts from the mailbox. Message ids and save times only.
+  const answersKey = useMemo(
+    () => ["left-open-cue-answers", accountIds.join(",")],
+    [accountIds],
+  );
+  const { data: answers = NO_ANSWERS } = useSWR<ReadonlyMap<string, boolean>>(
+    answersKey,
+    null,
+  );
+  const { mutate, cache } = useSWRConfig();
+  const answersRef = useRef(answers);
+  const readRef = useRef(read);
+  useEffect(() => {
+    answersRef.current = answers;
+    readRef.current = read;
+  });
+  // Under the accounts that were asked about, even if they've changed since.
+  const recordAnswers = useCallback(
+    (key: string[], answered: Map<string, boolean>) =>
+      mutate<ReadonlyMap<string, boolean>>(
+        key,
+        (previous) => {
+          const next = new Map(previous ?? NO_ANSWERS);
+          for (const [answer, cueAuthored] of answered) {
+            // Newest last, so the oldest go first.
+            next.delete(answer);
+            next.set(answer, cueAuthored);
+          }
+          for (const answer of next.keys()) {
+            if (next.size <= ANSWERS_KEPT) break;
+            next.delete(answer);
+          }
+          return next;
+        },
+        { revalidate: false },
+      ),
+    [mutate],
+  );
+
+  // Moves whenever a draft the lane could show does; a revision that moves
+  // no draft's save asks nothing.
+  const draftsKey = read.map(answerKey).sort().join("\n");
+  const { data: asked, mutate: mutateAsked } = useSWR(
+    read.length ? [CUE_AUTHORED_DRAFTS_PATH, draftsKey] : null,
+    async () => {
+      // This render's drafts: the refs catch up only after SWR starts this.
+      // The answers as cached now, not as this render saw them, which may be
+      // another account set's.
+      const toAsk = unanswered(
+        read,
+        (cache.get(unstable_serialize(answersKey))?.data as
+          | ReadonlyMap<string, boolean>
+          | undefined) ?? NO_ANSWERS,
+      );
+      const result = toAsk.length
+        ? await askCueAuthored(cueAuthoredRequests(toAsk))
+        : { answers: new Map<string, boolean>(), retryAccountIds: [] };
+      if (result.answers.size) await recordAnswers(answersKey, result.answers);
+      return {
+        retryAccountIds: result.retryAccountIds,
+        draftsKey,
+        recoveries: 0,
+      };
+    },
     {
       keepPreviousData: true,
       revalidateOnFocus: false,
-      // The key changes whenever the drafts do; a mount with the same ones
-      // needn't read the mailbox again.
-      revalidateIfStale: false,
       // Recovery below asks again, only for the accounts that failed and
       // only a few times, so a busy Gmail account isn't asked without end.
       shouldRetryOnError: false,
     },
   );
 
-  // Read by the recovery below, which mustn't restart when the drafts' text
-  // or revision moves but the requests don't.
-  const requestsRef = useRef(requests);
-  useEffect(() => {
-    requestsRef.current = requests;
-  });
-
   // An account the server couldn't answer for, such as one Gmail deferred,
-  // is asked again a few times, further apart each time, while its drafts
-  // stay hidden.
+  // or answered for only some drafts of, is asked again about the rest a
+  // few times, further apart each time, while those drafts stay hidden.
   useEffect(() => {
-    if (!cueAuthored?.retryAccountIds.length) return;
-    if (cueAuthored.recoveries >= CUE_AUTHORED_RECOVERIES) return;
+    if (!asked?.retryAccountIds.length) return;
+    if (asked.recoveries >= CUE_AUTHORED_RECOVERIES) return;
     // Still the previous drafts' answer while theirs loads.
-    if (cueAuthored.requestsKey !== requestsKey) return;
-    const retry = new Set(cueAuthored.retryAccountIds);
+    if (asked.draftsKey !== draftsKey) return;
+    const retry = new Set(asked.retryAccountIds);
     let cancelled = false;
     const timer = setTimeout(
       async () => {
         const retried = await askCueAuthored(
-          requestsRef.current.filter((r) => retry.has(r.accountId)),
+          cueAuthoredRequests(
+            unanswered(readRef.current, answersRef.current).filter((draft) =>
+              retry.has(draft.accountId),
+            ),
+          ),
         );
         if (cancelled) return;
-        mutateCueAuthored(
+        recordAnswers(answersKey, retried.answers);
+        mutateAsked(
           {
-            ...cueAuthored,
-            byAccount: [...cueAuthored.byAccount, ...retried.byAccount],
-            failedAccountIds: [
-              ...cueAuthored.failedAccountIds.filter((id) => !retry.has(id)),
-              ...retried.failedAccountIds,
-            ],
+            ...asked,
             retryAccountIds: retried.retryAccountIds,
-            recoveries: cueAuthored.recoveries + 1,
+            recoveries: asked.recoveries + 1,
           },
           { revalidate: false },
         );
       },
-      CUE_AUTHORED_RECOVERY_MS * 2 ** cueAuthored.recoveries,
+      CUE_AUTHORED_RECOVERY_MS * 2 ** asked.recoveries,
     );
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [cueAuthored, requestsKey, mutateCueAuthored]);
+  }, [asked, draftsKey, answersKey, mutateAsked, recordAnswers]);
 
-  return useMemo(() => {
-    if (!cueAuthored) return selectLeftOpenDrafts(NO_DRAFTS, hidden);
-    // A draft the server hasn't answered for, or whose account it couldn't
-    // answer for, may be Cue's.
-    const checked = read.filter(
-      (draft) =>
-        cueAuthored.checked.has(draftKey(draft)) &&
-        !cueAuthored.failedAccountIds.includes(draft.accountId),
-    );
-    return selectLeftOpenDrafts(checked, [
-      ...hidden,
-      ...cueAuthored.byAccount.map(({ accountId, data }) => ({
-        emailAccountId: accountId,
-        messageIds: data.messageIds,
-      })),
-    ]);
-  }, [read, hidden, cueAuthored]);
+  return useMemo(
+    () =>
+      // A draft shows only once the server has said that, as last saved,
+      // it isn't Cue's.
+      selectLeftOpenDrafts(
+        read.filter((draft) => answers.get(answerKey(draft)) === false),
+        hidden,
+      ),
+    [read, hidden, answers],
+  );
 }
 
 /**
@@ -227,6 +264,18 @@ function draftKey(draft: LeftOpenDraft) {
   return `${draft.accountId}\0${draft.messageId}`;
 }
 
+/** A draft as last saved: one saved again is asked about again. */
+function answerKey(draft: LeftOpenDraft) {
+  return `${draftKey(draft)}\0${draft.savedAtMs}`;
+}
+
+function unanswered(
+  drafts: LeftOpenDraft[],
+  answers: ReadonlyMap<string, boolean>,
+) {
+  return drafts.filter((draft) => !answers.has(answerKey(draft)));
+}
+
 function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
   const byAccount = new Map<string, LeftOpenDraft[]>();
   for (const draft of drafts)
@@ -245,45 +294,55 @@ function cueAuthoredRequests(drafts: LeftOpenDraft[]) {
           .map((draft) => `${draft.conversationId}:${draft.messageId}`)
           .join(","),
         savedAtMs: sorted.map((draft) => draft.savedAtMs).join(","),
+        partial: "1",
       });
       return {
         accountId,
         path: `${CUE_AUTHORED_DRAFTS_PATH}?${params}`,
-        draftKeys: sorted.map(draftKey),
+        drafts: sorted,
       };
     });
 }
 
 /**
- * Every account's answer, each asked alone so its failure keeps its status.
- * A failed account is listed, and also listed to retry unless the server
- * said asking again won't help.
+ * Every account's answer for each draft the server checked, each account
+ * asked alone so its failure keeps its status. A failed account answers
+ * for none of its drafts, and is listed to retry unless the server said
+ * asking again won't help; one the server checked only some drafts of is
+ * listed to ask about the rest, unless it checked none.
  */
-async function askCueAuthored(requests: { accountId: string; path: string }[]) {
-  const results = await Promise.all(
-    requests.map(async ({ accountId, path }) => {
+async function askCueAuthored(
+  requests: ReturnType<typeof cueAuthoredRequests>,
+) {
+  const answers = new Map<string, boolean>();
+  const retryAccountIds: string[] = [];
+  await Promise.all(
+    requests.map(async ({ accountId, path, drafts }) => {
       try {
-        return {
-          accountId,
-          ...(await fetchForAccounts<CueAuthoredDraftsResponse>(path, [
-            accountId,
-          ])),
-        };
+        const { byAccount } = await fetchForAccounts<CueAuthoredDraftsResponse>(
+          path,
+          [accountId],
+        );
+        const data = byAccount.find((a) => a.accountId === accountId)?.data;
+        if (!data) {
+          retryAccountIds.push(accountId);
+          return;
+        }
+        const checked = new Set(data.checkedMessageIds);
+        const cueAuthored = new Set(data.messageIds);
+        for (const draft of drafts)
+          if (checked.has(draft.messageId))
+            answers.set(answerKey(draft), cueAuthored.has(draft.messageId));
+        if (
+          checked.size > 0 &&
+          drafts.some((draft) => !checked.has(draft.messageId))
+        )
+          retryAccountIds.push(accountId);
       } catch (error) {
-        return {
-          accountId,
-          byAccount: [],
-          failedAccountIds: [accountId],
-          retryable: (error as { status?: number })?.status !== 409,
-        };
+        if ((error as { status?: number })?.status !== 409)
+          retryAccountIds.push(accountId);
       }
     }),
   );
-  return {
-    byAccount: results.flatMap((result) => result.byAccount),
-    failedAccountIds: results.flatMap((result) => result.failedAccountIds),
-    retryAccountIds: results.flatMap((result) =>
-      "retryable" in result && result.retryable ? [result.accountId] : [],
-    ),
-  };
+  return { answers, retryAccountIds };
 }

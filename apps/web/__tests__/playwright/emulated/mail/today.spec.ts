@@ -1088,6 +1088,51 @@ test("Drafts you left open lists a draft left over an hour ago and opens it in t
   }
 });
 
+test("Drafts you left open still lists the user's drafts when another conversation has more old drafts of Cue's than one check reads, and never lists one of Cue's", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const emailAccountId = await getEmailAccountId(page);
+  // Cue drafted many replies in "Draft deletion example" before replies
+  // became suggestions; they were all sent or deleted long ago. That crowds
+  // the check's mailbox reads on Gmail only: an Outlook draft of Cue's is
+  // matched by its id, so the old ones are never read there, and Outlook
+  // proves just that the user's draft shows and Cue's doesn't (the route's
+  // tests cover Outlook's matching).
+  await seedRuleDrafts(
+    emailAccountId,
+    "thr_draft_indicator",
+    Array.from({ length: 45 }, (_, i) => `${LEFT_OPEN_RULE_PREFIX}gone-${i}`),
+  );
+  try {
+    const list = page.getByRole("list", { name: "Drafts you left open" });
+    const row = list.getByRole("link").filter({
+      hasText: "Seeded Draft Message",
+    });
+    const answered = waitForCueAuthoredAnswer(page);
+    await openMail(page);
+    await page.goto(`/${emailAccountId}/home`, {
+      waitUntil: "domcontentloaded",
+    });
+    expect((await answered).status()).toBe(200);
+    await expect(row).toBeVisible({ timeout: 120_000 });
+
+    // Once a rule's draft names the seeded draft, it's Cue's.
+    await seedRuleDrafts(emailAccountId, "thr_playwright_draft", [
+      await readSeededDraftId(page),
+    ]);
+    const answeredAgain = waitForCueAuthoredAnswer(page);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const body = (await (await answeredAgain).json()) as {
+      messageIds: string[];
+    };
+    expect(body.messageIds).toHaveLength(1);
+    await expect(row).toHaveCount(0);
+  } finally {
+    await clearRuleDrafts();
+  }
+});
+
 test("Before your meeting stays inside a phone-width Today in both themes", async ({
   page,
 }, testInfo) => {
@@ -1814,4 +1859,75 @@ async function seedFreshDraft(page: Page, subject: string) {
       await page.request.delete(`${base}/drafts/${id}`, { headers });
     },
   };
+}
+
+const LEFT_OPEN_RULE_PREFIX = "playwright-left-open-";
+
+/** Rule drafts Cue wrote into a conversation, by their mailbox draft ids. */
+async function seedRuleDrafts(
+  emailAccountId: string,
+  threadId: string,
+  draftIds: string[],
+) {
+  await withClient(async (client) => {
+    const ruleId = `${LEFT_OPEN_RULE_PREFIX}rule`;
+    await client.query(
+      `INSERT INTO "Rule" (id, "updatedAt", name, "emailAccountId")
+       VALUES ($1, now(), 'Playwright left open rule', $2)
+       ON CONFLICT (id) DO NOTHING`,
+      [ruleId, emailAccountId],
+    );
+    const executedRuleId = `${LEFT_OPEN_RULE_PREFIX}${threadId}`;
+    await client.query(
+      `INSERT INTO "ExecutedRule" (id, "createdAt", "updatedAt", "threadId", "messageId", status, automated, "emailAccountId", "ruleId")
+       VALUES ($1, now() - interval '30 days', now(), $2, $1, 'APPLIED', true, $3, $4)
+       ON CONFLICT (id) DO NOTHING`,
+      [executedRuleId, threadId, emailAccountId, ruleId],
+    );
+    for (const draftId of draftIds)
+      await client.query(
+        `INSERT INTO "ExecutedAction" (id, "updatedAt", type, "executionStatus", "executedRuleId", "draftId")
+         VALUES ($1, now(), 'DRAFT_EMAIL', 'SUCCEEDED', $2, $3)`,
+        [`${executedRuleId}-${draftId}`, executedRuleId, draftId],
+      );
+  });
+}
+
+async function clearRuleDrafts() {
+  await withClient(async (client) => {
+    await client.query(`DELETE FROM "ExecutedRule" WHERE id LIKE $1`, [
+      `${LEFT_OPEN_RULE_PREFIX}%`,
+    ]);
+    await client.query(`DELETE FROM "Rule" WHERE id LIKE $1`, [
+      `${LEFT_OPEN_RULE_PREFIX}%`,
+    ]);
+  });
+}
+
+function waitForCueAuthoredAnswer(page: Page) {
+  return page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/user/cue-authored-drafts") &&
+      response.request().method() === "GET",
+    { timeout: 120_000 },
+  );
+}
+
+/** The mailbox draft id of the fixtures' "Seeded Draft Message". */
+async function readSeededDraftId(page: Page) {
+  if (isMicrosoftPlaywright()) return "msg_playwright_draft";
+  const token = await readProviderAccessToken();
+  const response = await page.request.get(
+    `${process.env.GOOGLE_BASE_URL}/gmail/v1/users/me/drafts`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  expect(response.ok(), await response.text()).toBe(true);
+  const { drafts } = (await response.json()) as {
+    drafts?: { id: string; message?: { id?: string } }[];
+  };
+  const seeded = drafts?.find(
+    (draft) => draft.message?.id === "msg_playwright_draft",
+  );
+  if (!seeded) throw new Error("The seeded draft isn't in the mailbox");
+  return seeded.id;
 }
