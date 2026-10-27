@@ -199,10 +199,13 @@ export function ComposeContactRecipientField({
         >
           {selectedEmailAddresses.map((recipient) => {
             const address = extractEmailAddress(recipient) || recipient;
+            const displayName = extractNameFromEmail(recipient);
             return (
               <Badge className="rounded-md" key={recipient} variant="secondary">
                 <button
-                  aria-label={`Edit ${address}`}
+                  // Names the chip by what it shows, so voice control can
+                  // reach it; the title adds the address.
+                  aria-label={`Edit ${displayName}`}
                   className="cursor-pointer"
                   onClick={() => {
                     removeSelectedEmail(recipient);
@@ -212,7 +215,7 @@ export function ComposeContactRecipientField({
                   title={address}
                   type="button"
                 >
-                  {extractNameFromEmail(recipient)}
+                  {displayName}
                 </button>
                 <button
                   aria-label={`Remove ${address}`}

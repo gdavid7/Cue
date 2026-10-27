@@ -141,7 +141,7 @@ for (const theme of ["light", "dark"] as const) {
       dialog.getByRole("button", { name: "Remove alice@example.com" }),
     ).toBeVisible();
     await expect(
-      dialog.getByRole("button", { name: "Edit alice@example.com" }),
+      dialog.getByRole("button", { name: "Edit Alice Example" }),
     ).toHaveText("Alice Example");
     await expect(to).toHaveValue("");
     await capturePlaywrightCheckpoint(
@@ -297,7 +297,7 @@ test("sends a picked suggestion to its name and address, and keeps the name in t
   const to = dialog.getByRole("combobox", { name: "To", exact: true });
   await to.fill("lovel");
   await page.getByRole("option", { name: /Lovelace, Ada/ }).click();
-  const chip = dialog.getByRole("button", { name: "Edit ada@example.com" });
+  const chip = dialog.getByRole("button", { name: "Edit Lovelace, Ada" });
   await expect(chip).toHaveText("Lovelace, Ada");
   await expect(chip).toHaveAttribute("title", "ada@example.com");
   await capturePlaywrightCheckpoint(page, testInfo, "named-recipient-chip");
@@ -314,7 +314,7 @@ test("sends a picked suggestion to its name and address, and keeps the name in t
   await page.reload();
   await page.getByRole("button", { name: /^Compose/ }).click();
   await expect(
-    dialog.getByRole("button", { name: "Edit ada@example.com" }),
+    dialog.getByRole("button", { name: "Edit Lovelace, Ada" }),
   ).toHaveText("Lovelace, Ada");
   await capturePlaywrightCheckpoint(page, testInfo, "named-recipient-reopened");
 

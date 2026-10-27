@@ -86,7 +86,7 @@ describe("compose contact suggestions", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.keyUp(input, { key: "Enter" });
     const ada = await screen.findByRole("button", {
-      name: "Edit ada@example.com",
+      name: "Edit Lovelace, Ada",
     });
     expect(ada.textContent).toBe("Lovelace, Ada");
     expect(ada.getAttribute("title")).toBe("ada@example.com");
@@ -96,7 +96,7 @@ describe("compose contact suggestions", () => {
     fireEvent.keyDown(input, { key: "Tab" });
     fireEvent.blur(input);
     const zoe = await screen.findByRole("button", {
-      name: "Edit zoe@example.com",
+      name: "Edit Zoë Ångström",
     });
     expect(zoe.textContent).toBe("Zoë Ångström");
 
@@ -124,7 +124,7 @@ describe("compose contact suggestions", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     fireEvent.keyUp(input, { key: "Enter" });
     expect(
-      (await screen.findByRole("button", { name: "Edit jane@example.com" }))
+      (await screen.findByRole("button", { name: "Edit Jane Local" }))
         .textContent,
     ).toBe("Jane Local");
     expect(screen.getByTestId("recipients").textContent).toBe(
@@ -141,7 +141,7 @@ describe("compose contact suggestions", () => {
     });
     fireEvent.blur(input);
     const grace = await screen.findByRole("button", {
-      name: "Edit grace@example.com",
+      name: "Edit Grace Hopper",
     });
     expect(grace.textContent).toBe("Grace Hopper");
     expect(grace.getAttribute("title")).toBe("grace@example.com");
