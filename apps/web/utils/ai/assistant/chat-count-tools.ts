@@ -380,10 +380,12 @@ export async function countEmails({
   );
   // Accounts the user keeps out of All inboxes are not covered, so leaving
   // them out does not make the count partial; they are reported apart.
+  // Covered accounts past the cap do.
   const exact =
     counted.every((entry) => entry.exact) &&
     failed.length === 0 &&
-    notSearched.length === 0;
+    notSearched.length === 0 &&
+    !selection?.overCapCount;
   logUsage(exact);
 
   return {

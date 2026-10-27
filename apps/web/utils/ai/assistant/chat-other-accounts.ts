@@ -164,6 +164,8 @@ export async function runOnOtherAccounts<T>({
 export type OtherAccountSelection = {
   accounts: ConnectedEmailAccount[];
   notSearchedCount: number;
+  /** Of those, the accounts kept in All inboxes but past the cap. */
+  overCapCount?: number;
 };
 
 /**
@@ -186,7 +188,11 @@ export async function selectOtherAccounts({
     (account) => account.includeInAllAccounts,
   );
   const accounts = searchable.slice(0, MAX_OTHER_ACCOUNTS);
-  return { accounts, notSearchedCount: otherAccounts.length - accounts.length };
+  return {
+    accounts,
+    notSearchedCount: otherAccounts.length - accounts.length,
+    overCapCount: searchable.length - accounts.length,
+  };
 }
 
 /**

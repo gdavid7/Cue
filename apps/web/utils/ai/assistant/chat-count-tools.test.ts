@@ -325,6 +325,39 @@ describe("countEmails across accounts and groups", () => {
     });
   });
 
+  // Those accounts are covered but past the cap, so their mail is missing
+  // from the total.
+  it("calls the count partial when it leaves out accounts past the cap", async () => {
+    const covered = Array.from({ length: 12 }, (_, index) =>
+      account(`account-${index + 2}`, `me${index + 2}@example.com`, "google"),
+    );
+    prisma.emailAccount.findMany.mockResolvedValue([
+      account(ACCOUNT, "me@example.com", "google"),
+      ...covered,
+    ] as never);
+    vi.mocked(createEmailProvider).mockResolvedValue(headersProvider());
+    const local = localCount({
+      status: "counted",
+      accounts: [ACCOUNT, ...covered.slice(0, 10).map(({ id }) => id)].map(
+        (accountId) => ({ accountId, total: 1 }),
+      ),
+      groups: [],
+      groupCount: 0,
+      newest: [],
+    });
+
+    const result = await countEmails({
+      options: options(local),
+      input: { query: "" },
+    });
+
+    expect(result).toMatchObject({
+      total: 11,
+      exact: false,
+      accountsNotSearched: 2,
+    });
+  });
+
   it("lists only groups it could name and says when the largest could not be", async () => {
     const provider = headersProvider();
     provider.getLabels = vi.fn(async () => [
