@@ -7,15 +7,19 @@ import { isAllowedMicrosoftGraphPageToken } from "@/utils/outlook/page-token";
 const PREFIX = "accounts:";
 const MAX_ACCOUNTS = 16;
 
+// An account's entry is its provider's next page token, or null for an
+// account that page left out, which the next page searches from its start.
 const tokensSchema = z
-  .record(z.string().min(1).max(64), z.string().min(1).max(4096))
+  .record(z.string().min(1).max(64), z.string().min(1).max(4096).nullable())
   .refine((tokens) => Object.keys(tokens).length <= MAX_ACCOUNTS)
   .refine((tokens) =>
-    Object.values(tokens).every(isAllowedMicrosoftGraphPageToken),
+    Object.values(tokens).every(
+      (token) => token === null || isAllowedMicrosoftGraphPageToken(token),
+    ),
   );
 
 /** One page token that continues each listed account's search. */
-export function toAllAccountsPageToken(tokens: Record<string, string>) {
+export function toAllAccountsPageToken(tokens: Record<string, string | null>) {
   return `${PREFIX}${Buffer.from(JSON.stringify(tokens)).toString("base64url")}`;
 }
 
@@ -27,7 +31,7 @@ export function toAllAccountsPageToken(tokens: Record<string, string>) {
  */
 export function parseAllAccountsPageToken(
   pageToken: string | null | undefined,
-): Record<string, string> | null {
+): Record<string, string | null> | null {
   if (!pageToken?.startsWith(PREFIX)) return null;
   return decode(pageToken) ?? {};
 }

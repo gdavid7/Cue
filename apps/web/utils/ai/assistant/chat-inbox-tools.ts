@@ -1816,9 +1816,6 @@ async function searchOutlookChatAccount({
   }
 }
 
-// Each account gets a share of the page, at least a few matches, so the page
-// stays about one page long however many accounts there are.
-const MIN_ACCOUNT_PAGE_SHARE = 5;
 const OTHER_ACCOUNT_EMAIL_NOT_FOUND =
   "That email is not in any of the user's connected accounts.";
 const NO_SUCH_SCOPE_IN_ACCOUNT =
@@ -1900,7 +1897,7 @@ async function searchAllAccounts<
       : !input.pageToken || accountId === emailAccountId;
   const pageTokenFor = (accountId: string) =>
     pageTokens
-      ? pageTokens[accountId]
+      ? (pageTokens[accountId] ?? undefined)
       : accountId === emailAccountId
         ? input.pageToken
         : undefined;
@@ -1912,14 +1909,21 @@ async function searchAllAccounts<
       : result;
   }
 
-  const accountCount = 1 + (selection?.accounts.length ?? 0);
-  const limit = Math.min(
-    input.limit,
-    Math.max(MIN_ACCOUNT_PAGE_SHARE, Math.ceil(input.limit / accountCount)),
-  );
   const otherSearch = getOtherAccountsSearch(input, provider);
-  const others = (selection?.accounts ?? []).filter((account) =>
-    searchesAccount(account.id),
+  const searchable = [
+    emailAccountId,
+    ...(otherSearch
+      ? (selection?.accounts ?? []).map((account) => account.id)
+      : []),
+  ];
+  // A continued search takes its accounts in the page token's order, which
+  // puts those the last page had no room for first, so each gets its turn.
+  const continuing = pageTokens
+    ? Object.keys(pageTokens).filter((id) => searchable.includes(id))
+    : searchable.filter(searchesAccount);
+  const shares = splitPage(continuing, input.limit);
+  const others = (selection?.accounts ?? []).filter(
+    (account) => (shares.get(account.id) ?? 0) > 0,
   );
   const otherResultsPromise =
     selection && otherSearch && others.length
@@ -1937,7 +1941,7 @@ async function searchAllAccounts<
               account,
               chatProvider: provider,
               search: otherSearch,
-              limit,
+              limit: shares.get(account.id) ?? 0,
               pageToken: pageTokenFor(account.id),
               signal,
               logger: logger.with({ otherEmailAccountId: account.id }),
@@ -1951,10 +1955,11 @@ async function searchAllAccounts<
           notSearchedCount: selection?.notSearchedCount ?? 0,
         });
 
-  const chatResult = searchesAccount(emailAccountId)
+  const chatShare = shares.get(emailAccountId) ?? 0;
+  const chatResult = chatShare
     ? await searchChatAccount({
         ...input,
-        limit,
+        limit: chatShare,
         pageToken: pageTokenFor(emailAccountId) ?? null,
       })
     : null;
@@ -1974,7 +1979,13 @@ async function searchAllAccounts<
     (a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0),
   );
 
-  const nextPageTokens: Record<string, string> = {};
+  // An account this page had no room for is searched on the next one, from
+  // where it was, so none of its matches are skipped.
+  const nextPageTokens: Record<string, string | null> = {};
+  for (const accountId of continuing) {
+    if (!shares.get(accountId))
+      nextPageTokens[accountId] = pageTokenFor(accountId) ?? null;
+  }
   if (chatResult?.nextPageToken)
     nextPageTokens[emailAccountId] = chatResult.nextPageToken;
   for (const entry of otherAccounts) {
@@ -2003,6 +2014,7 @@ async function searchAllAccounts<
     describeChatAccount({
       email,
       result: chatResult,
+      hasMore: emailAccountId in nextPageTokens,
       error: chatError,
       exactCount: chatExactCount,
       countError: chatCountError,
@@ -2255,13 +2267,15 @@ function otherAccountEmailFields(
 function describeChatAccount({
   email,
   result,
+  hasMore,
   error,
   exactCount,
   countError,
 }: {
   email: string;
-  /** Null once an earlier page found every match in this account. */
+  /** Null when this page did not search this account. */
   result: ChatAccountSearchResult | null;
+  hasMore: boolean;
   error: unknown;
   exactCount?: number;
   countError?: string;
@@ -2270,7 +2284,7 @@ function describeChatAccount({
   return {
     account: email,
     returned: result?.messages?.length ?? 0,
-    hasMore: Boolean(result?.nextPageToken),
+    hasMore,
     ...(exactCount !== undefined && { exactCount }),
     ...(countError && { countError }),
   };
@@ -3412,4 +3426,17 @@ function searchInboxModelOutput({ output }: { output: unknown }) {
     type: "json" as const,
     value: toSearchInboxModelValue(JSON.parse(JSON.stringify(output))),
   };
+}
+
+/**
+ * Splits a page of `limit` messages between the accounts a search continues,
+ * in order, so the merged page is never longer than asked for. With more
+ * accounts than messages, the last ones get none this page.
+ */
+function splitPage(accountIds: string[], limit: number) {
+  const base = Math.floor(limit / Math.max(accountIds.length, 1));
+  const extra = limit % Math.max(accountIds.length, 1);
+  return new Map(
+    accountIds.map((id, index) => [id, base + (index < extra ? 1 : 0)]),
+  );
 }

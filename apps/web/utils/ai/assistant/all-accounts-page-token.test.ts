@@ -19,6 +19,19 @@ describe("all-accounts page token", () => {
     expect(searchPageTokenSchema.safeParse(token).success).toBe(true);
   });
 
+  it("carries an account a page left out, to search from its start", () => {
+    const token = toAllAccountsPageToken({
+      "account-1": "GMAIL_PAGE_2",
+      "account-2": null,
+    });
+
+    expect(parseAllAccountsPageToken(token)).toEqual({
+      "account-1": "GMAIL_PAGE_2",
+      "account-2": null,
+    });
+    expect(searchPageTokenSchema.safeParse(token).success).toBe(true);
+  });
+
   it("is no all-accounts token for a single provider's token", () => {
     expect(parseAllAccountsPageToken("GMAIL_PAGE_2")).toBeNull();
     expect(parseAllAccountsPageToken(undefined)).toBeNull();

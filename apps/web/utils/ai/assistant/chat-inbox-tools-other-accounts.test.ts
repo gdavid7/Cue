@@ -9,6 +9,7 @@ import {
   replyEmailTool,
   searchInboxTool,
 } from "./chat-inbox-tools";
+import { toAllAccountsPageToken } from "./all-accounts-page-token";
 import { toOtherAccountEmailId } from "./other-account-email-id";
 
 vi.mock("@/utils/prisma");
@@ -135,10 +136,109 @@ describe("searchInbox across the user's accounts", () => {
       limit: 20,
     });
 
+    const shares = ["account-1", "account-2", "account-3"].map(
+      (id) => providers[id].searchMessages.mock.calls[0][0].maxResults,
+    );
+    expect(shares).toEqual([7, 7, 6]);
+  });
+
+  it("keeps a short page to its limit, and continues the accounts left out from their first page", async () => {
     for (const id of ["account-1", "account-2", "account-3"]) {
-      const [{ maxResults }] = providers[id].searchMessages.mock.calls[0];
-      expect(maxResults).toBe(7);
+      providers[id].searchMessages.mockImplementation(
+        async ({ maxResults }: { maxResults: number }) => ({
+          messages: Array.from({ length: maxResults }, (_, index) =>
+            messageOn(`${id}-msg-${index}`, "2026-01-01T10:00:00Z"),
+          ),
+          nextPageToken: `${id}-PAGE_2`,
+        }),
+      );
     }
+
+    const first = await search("google", {
+      query: "contract renewal",
+      limit: 2,
+    });
+
+    expect(first.messages).toHaveLength(2);
+    expect(providers["account-3"].searchMessages).not.toHaveBeenCalled();
+    expect(first.hasMore).toBe(true);
+    vi.clearAllMocks();
+
+    await search("google", {
+      query: "contract renewal",
+      limit: 20,
+      pageToken: first.nextPageToken,
+    });
+
+    expect(providers["account-1"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "account-1-PAGE_2" }),
+    );
+    expect(providers["account-2"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "account-2-PAGE_2" }),
+    );
+    const [{ pageToken: thirdPageToken }] =
+      providers["account-3"].searchMessages.mock.calls[0];
+    expect(thirdPageToken).toBeUndefined();
+  });
+
+  it("gives the accounts a short page left out the next pages first, so each gets its turn", async () => {
+    for (const id of ["account-1", "account-2", "account-3"]) {
+      providers[id].searchMessages.mockImplementation(async () => ({
+        messages: [messageOn(`${id}-msg`, "2026-01-01T10:00:00Z")],
+        nextPageToken: `${id}-NEXT`,
+      }));
+    }
+
+    const searchedOnEachPage: string[][] = [];
+    const chatAccountOnEachPage: unknown[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < 3; page++) {
+      vi.clearAllMocks();
+      const result = await search("google", {
+        query: "contract renewal",
+        limit: 1,
+        pageToken,
+      });
+      pageToken = result.nextPageToken;
+      chatAccountOnEachPage.push(result.accounts[0]);
+      searchedOnEachPage.push(
+        ["account-1", "account-2", "account-3"].filter(
+          (id) => providers[id].searchMessages.mock.calls.length > 0,
+        ),
+      );
+    }
+
+    expect(searchedOnEachPage).toEqual([
+      ["account-1"],
+      ["account-2"],
+      ["account-3"],
+    ]);
+    // Left out of a page, the chat's account still has more to find.
+    expect(chatAccountOnEachPage[1]).toEqual({
+      account: CHAT_EMAIL,
+      returned: 0,
+      hasMore: true,
+    });
+  });
+
+  it("ignores an account in a page token that is not one of the user's", async () => {
+    const result = await search("google", {
+      query: "contract renewal",
+      pageToken: toAllAccountsPageToken({
+        "account-2": "GMAIL_PAGE_2",
+        "account-9": "FOREIGN_PAGE_2",
+      }),
+    });
+
+    expect(createEmailProvider).not.toHaveBeenCalledWith(
+      expect.objectContaining({ emailAccountId: "account-9" }),
+    );
+    expect(providers["account-2"].searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "GMAIL_PAGE_2" }),
+    );
+    expect(providers["account-1"].searchMessages).not.toHaveBeenCalled();
+    expect(result.messages).toHaveLength(1);
+    expect(result.nextPageToken).toBeUndefined();
   });
 
   it("lists every account's messages newest first", async () => {
