@@ -398,6 +398,11 @@ export interface EmailProvider {
   getOriginalMessage(
     originalMessageId: string | undefined,
   ): Promise<ParsedMessage | null>;
+  /**
+   * Every address the user sends from on this account, for telling their own
+   * mail apart from other people's. Always includes `accountEmail`.
+   */
+  getOwnEmailAddresses(accountEmail: string): Promise<string[]>;
   getPreviousConversationMessages(
     messageIds: string[],
   ): Promise<ParsedMessage[]>;

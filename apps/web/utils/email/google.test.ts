@@ -1277,6 +1277,44 @@ describe("GmailProvider.createDraft", () => {
   });
 });
 
+describe("GmailProvider own addresses", () => {
+  it("includes send-as aliases alongside the account address", async () => {
+    gmailSignatureMock.getGmailSignatures.mockResolvedValue([
+      { email: "alias@school.edu", signature: "", isDefault: false },
+    ]);
+    const provider = new GmailProvider({} as any);
+
+    await expect(
+      provider.getOwnEmailAddresses("User <user@example.com>"),
+    ).resolves.toEqual(["user@example.com", "alias@school.edu"]);
+  });
+
+  it("keeps the account address when the send-as lookup fails", async () => {
+    gmailSignatureMock.getGmailSignatures.mockRejectedValue(new Error("boom"));
+    const provider = new GmailProvider({} as any);
+
+    await expect(
+      provider.getOwnEmailAddresses("user@example.com"),
+    ).resolves.toEqual(["user@example.com"]);
+  });
+
+  it("seeds reply addresses with the sender when the send-as lookup fails", async () => {
+    gmailSignatureMock.getGmailSignatures.mockRejectedValue(new Error("boom"));
+    gmailMailMock.replyToEmail.mockResolvedValue({ data: { id: "sent-1" } });
+    const provider = new GmailProvider({} as any);
+
+    await provider.replyToEmail(
+      createParsedMessage({ id: "message-1", internalDate: "1000" }),
+      "Thanks",
+      { from: "User <user@example.com>" },
+    );
+
+    expect(gmailMailMock.replyToEmail.mock.calls[0]?.[4]).toMatchObject({
+      ownEmails: ["user@example.com"],
+    });
+  });
+});
+
 describe("GmailProvider.updateDraft", () => {
   it("does not write a draft that has been sent or deleted", async () => {
     const update = vi.fn();

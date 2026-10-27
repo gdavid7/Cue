@@ -132,6 +132,7 @@ import { OutlookLabel } from "@/utils/outlook/constants";
 import { resolveOutlookCategoryName } from "@/utils/outlook/search-scope";
 import {
   extractEmailAddress,
+  extractUniqueEmailAddresses,
   getSearchTermForSender,
   splitRecipientList,
 } from "@/utils/email";
@@ -2846,6 +2847,11 @@ export class OutlookProvider implements EmailProvider {
       unread: folder.unreadItemCount ?? 0,
       systemType: folder.systemType,
     }));
+  }
+
+  // Graph exposes no aliases for the mailbox, so the account address stands alone.
+  async getOwnEmailAddresses(accountEmail: string): Promise<string[]> {
+    return extractUniqueEmailAddresses([accountEmail]);
   }
 
   async getSignatures(): Promise<EmailSignature[]> {

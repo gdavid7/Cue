@@ -1031,6 +1031,10 @@ async function sendDraftReplyFromNotification({
       fallbackEmail: context.executedRule.emailAccount.email,
     });
 
+    const ownEmails = await provider.getOwnEmailAddresses(
+      formattedFrom || context.executedRule.emailAccount.email,
+    );
+
     await provider.sendEmailWithHtml(
       buildNotificationReplySendBody({
         sourceMessage,
@@ -1041,6 +1045,7 @@ async function sendDraftReplyFromNotification({
         subject: context.subject,
         content,
         formattedFrom,
+        ownEmails,
         attachments: serializeMailAttachments(attachments),
       }),
     );
@@ -1208,6 +1213,7 @@ export function buildNotificationReplySendBody({
   subject,
   content,
   formattedFrom,
+  ownEmails,
   attachments,
 }: {
   sourceMessage: Pick<ParsedMessage, "id" | "threadId" | "headers">;
@@ -1218,6 +1224,7 @@ export function buildNotificationReplySendBody({
   subject?: string | null;
   content: string;
   formattedFrom?: string | null;
+  ownEmails: string[];
   attachments: Array<{
     filename: string;
     content: string;
@@ -1231,7 +1238,9 @@ export function buildNotificationReplySendBody({
       references: sourceMessage.headers.references,
       messageId: sourceMessage.id,
     },
-    to: to || getReplyAddressee(sourceMessage.headers, [formattedFrom]),
+    to:
+      to ||
+      getReplyAddressee(sourceMessage.headers, [formattedFrom, ...ownEmails]),
     cc: cc ?? undefined,
     bcc: bcc ?? undefined,
     subject: subject || formatReplySubject(sourceMessage.headers.subject),

@@ -126,6 +126,7 @@ describe("confirmAssistantEmailAction", () => {
         .mockResolvedValue(
           getMockMessage({ id: "source-message-1", threadId: "thread-1" }),
         ),
+      getOwnEmailAddresses: vi.fn().mockResolvedValue(["owner@example.com"]),
       replyToEmail: vi.fn().mockResolvedValue(undefined),
       forwardEmail: vi.fn().mockResolvedValue(undefined),
       getSentMessageIds: vi.fn().mockResolvedValue({ messages: [] }),
@@ -560,6 +561,7 @@ describe("confirmAssistantEmailAction", () => {
             ? sourceMessage
             : { externalUrl: "https://outlook.office.com/owa/?ItemID=sent-1" },
         ),
+      getOwnEmailAddresses: vi.fn().mockResolvedValue(["owner@example.com"]),
       replyToEmail,
       getSentMessageIds: vi.fn().mockResolvedValue({
         messages: [{ id: "reply-message-2", threadId: "thread-1" }],
@@ -626,6 +628,7 @@ describe("confirmAssistantEmailAction", () => {
       subject: "Original subject",
     };
     vi.mocked(createEmailProvider).mockResolvedValue({
+      getOwnEmailAddresses: vi.fn().mockResolvedValue(["owner@example.com"]),
       getMessage: vi.fn().mockResolvedValue(sourceMessage),
       replyToEmail: vi.fn().mockResolvedValue(undefined),
       getSentMessageIds: vi.fn().mockResolvedValue({
@@ -643,6 +646,65 @@ describe("confirmAssistantEmailAction", () => {
       } as any,
     );
 
+    expect(result?.data?.confirmationResult).toMatchObject({
+      actionType: "reply_email",
+      to: "sender@example.com",
+    });
+  });
+
+  it("reports From as the reply recipient when Reply-To is a send-as alias of the user", async () => {
+    (prisma.emailAccount.findUnique as any)
+      .mockResolvedValueOnce({
+        email: "owner@example.com",
+        account: { userId: "u1", provider: "google" },
+      })
+      .mockResolvedValueOnce({
+        name: "Owner",
+        email: "owner@example.com",
+      });
+
+    prisma.chatMessage.findFirst.mockResolvedValue({
+      id: "chat-message-1",
+      chatId: "chat-1",
+      updatedAt: new Date("2026-02-23T00:00:00.000Z"),
+      parts: [buildPendingReplyPart("Thanks")],
+    } as any);
+    prisma.chatMessage.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    const getOwnEmailAddresses = vi
+      .fn()
+      .mockResolvedValue(["owner@example.com", "alias@school.edu"]);
+    vi.mocked(createEmailProvider).mockResolvedValue({
+      getOwnEmailAddresses,
+      getMessage: vi.fn().mockResolvedValue({
+        id: "source-message-1",
+        threadId: "thread-1",
+        headers: {
+          from: "sender@example.com",
+          "reply-to": "Alias <alias@school.edu>",
+          subject: "Original subject",
+        },
+        subject: "Original subject",
+      }),
+      replyToEmail: vi.fn().mockResolvedValue(undefined),
+      getSentMessageIds: vi.fn().mockResolvedValue({
+        messages: [{ id: "reply-message-2", threadId: "thread-1" }],
+      }),
+    } as any);
+
+    const result = await confirmAssistantEmailAction(
+      "ea_1" as any,
+      {
+        chatId: "chat-1",
+        chatMessageId: "chat-message-1",
+        toolCallId: "tool-1",
+        actionType: "reply_email",
+      } as any,
+    );
+
+    expect(getOwnEmailAddresses).toHaveBeenCalledWith(
+      "Owner <owner@example.com>",
+    );
     expect(result?.data?.confirmationResult).toMatchObject({
       actionType: "reply_email",
       to: "sender@example.com",

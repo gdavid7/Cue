@@ -927,6 +927,7 @@ async function confirmPendingReplyEmailAction({
   );
   const from = await getFormattedSenderAddress({ emailAccountId });
   const replyOptions = from ? { from } : undefined;
+  const ownEmails = from ? await emailProvider.getOwnEmailAddresses(from) : [];
   const sentAfter = new Date();
   await emailProvider.replyToEmail(
     message,
@@ -944,7 +945,7 @@ async function confirmPendingReplyEmailAction({
     actionType: output.actionType,
     messageId,
     threadId: message.threadId || null,
-    to: getReplyAddressee(message.headers, [from]) || null,
+    to: getReplyAddressee(message.headers, [from, ...ownEmails]) || null,
     subject: message.subject || message.headers.subject || null,
     confirmedAt,
   };
