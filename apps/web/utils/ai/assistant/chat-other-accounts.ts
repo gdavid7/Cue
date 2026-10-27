@@ -83,9 +83,14 @@ export function createEmailAccountResolver({
       emailAccountId,
       provider,
       findOwned: async (otherAccountId) => {
+        // A failed lookup is not kept, so the next id tries again.
         owned ??= getConnectedEmailAccounts({ userId }).then(
           (accounts) =>
             new Map(accounts.map((account) => [account.id, account])),
+          (error) => {
+            owned = undefined;
+            throw error;
+          },
         );
         return (await owned).get(otherAccountId) ?? null;
       },
