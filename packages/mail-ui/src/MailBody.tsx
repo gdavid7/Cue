@@ -63,7 +63,7 @@ export function MailMessageBody({
 }) {
   const document = useMemo(() => {
     if (!html) return null;
-    const sanitizedHtml = sanitizeMailHtml(html);
+    const sanitizedHtml = sanitizeMailHtml(html).html;
     const darkTreatment = getMailDarkTreatment(sanitizedHtml, {
       isDarkMode,
       adaptDesignedEmails: false,

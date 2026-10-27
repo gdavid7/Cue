@@ -7,7 +7,7 @@ import {
   getMailHtmlDocumentKey,
 } from "@inboxzero/mail-ui/MailBody";
 import { useTheme } from "next-themes";
-import { EllipsisIcon } from "lucide-react";
+import { EllipsisIcon, ShieldCheckIcon } from "lucide-react";
 import { decodeHtmlEntities } from "@/utils/gmail/decode";
 import {
   getPreparedEmailHtml,
@@ -60,7 +60,10 @@ export function HtmlEmail({
   onNavigateMessage?: (direction: -1 | 1) => void;
   onFocusMessage?: () => void;
 }) {
-  const sanitizedHtml = useMemo(() => sanitizeEmailHtml(html), [html]);
+  const { html: sanitizedHtml, hiddenTrackerCount } = useMemo(
+    () => sanitizeEmailHtml(html),
+    [html],
+  );
   // Message objects are rebuilt whenever the conversation republishes, so the
   // effect keys on the attachments' identity rather than the array or its
   // order. Re-running it would mint new object URLs and remount the frame
@@ -180,6 +183,14 @@ export function HtmlEmail({
 
   return (
     <div className="relative min-w-0 overflow-x-hidden">
+      {hiddenTrackerCount > 0 && (
+        <p className="mb-2 flex items-center gap-1.5 text-muted-foreground text-xs">
+          <ShieldCheckIcon aria-hidden className="size-3.5" />
+          {hiddenTrackerCount === 1
+            ? "Hid 1 tracker"
+            : `Hid ${hiddenTrackerCount} trackers`}
+        </p>
+      )}
       <BufferedMailHtmlFrame
         srcDoc={srcDoc}
         documentKey={documentKey}

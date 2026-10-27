@@ -16,7 +16,7 @@ describe("sanitizeEmailHtml", () => {
   it("wraps and sanitizes email fragments as complete documents", () => {
     const sanitized = sanitizeEmailHtml(
       "<div onclick=\"alert('unsafe')\">Readable content</div>",
-    );
+    ).html;
     const parsedDocument = new DOMParser().parseFromString(
       sanitized,
       "text/html",
@@ -35,7 +35,7 @@ describe("sanitizeEmailHtml", () => {
           <div>Readable content</div>
         </body>
       </html>
-    `);
+    `).html;
 
     const parsedDocument = new DOMParser().parseFromString(
       sanitized,
@@ -59,7 +59,7 @@ describe("sanitizeEmailHtml", () => {
           <img src="https://example.com/image.png" onerror="alert('unsafe')">
         </body>
       </html>
-    `);
+    `).html;
 
     const parsedDocument = new DOMParser().parseFromString(
       sanitized,
@@ -74,11 +74,33 @@ describe("sanitizeEmailHtml", () => {
   });
 
   it("strips sent-message open pixels so viewing mail does not count as opened", () => {
-    const sanitized = sanitizeEmailHtml(
+    const { html, hiddenTrackerCount } = sanitizeEmailHtml(
       '<p>Hi</p><img src="https://app.example.com/t/abcdefghijklmnopqrstuvwxyz012345" width="1" height="1" alt="">',
     );
 
-    expect(sanitized).not.toContain("/t/abcdefghijklmnopqrstuvwxyz012345");
-    expect(sanitized).toContain("<p>Hi</p>");
+    expect(html).not.toContain("/t/abcdefghijklmnopqrstuvwxyz012345");
+    expect(html).toContain("<p>Hi</p>");
+    expect(hiddenTrackerCount).toBe(0);
+  });
+
+  it("removes and counts senders' tracking pixels but keeps visible images", () => {
+    const { html, hiddenTrackerCount } = sanitizeEmailHtml(`
+      <p>Hi</p>
+      <img src="https://cdn.example.com/logo.png" width="24" height="24" alt="Logo">
+      <img src="https://news.example.com/open/abc.gif" width="1" height="1" alt="">
+      <img src="https://news.example.com/beacon" style="display:none;width:1px;height:1px">
+      <img src="https://cdn.example.com/hero-mobile.jpg" class="show-mobile" style="display:none;mso-hide:all">
+    `);
+    const parsedDocument = new DOMParser().parseFromString(html, "text/html");
+
+    expect(hiddenTrackerCount).toBe(2);
+    expect(
+      [...parsedDocument.querySelectorAll("img")].map((image) =>
+        image.getAttribute("src"),
+      ),
+    ).toEqual([
+      "https://cdn.example.com/logo.png",
+      "https://cdn.example.com/hero-mobile.jpg",
+    ]);
   });
 });

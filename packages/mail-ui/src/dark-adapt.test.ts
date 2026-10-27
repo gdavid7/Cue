@@ -194,7 +194,8 @@ describe("buildMailHtmlDocument with the sender's dark styles", () => {
     const document = buildMailHtmlDocument({
       html: sanitizeMailHtml(`<html><head><style>
         @media (prefers-color-scheme: dark) { .card { background: #202124; } }
-      </style></head><body><div class="card" style="font-size:16px">Hi</div></body></html>`),
+      </style></head><body><div class="card" style="font-size:16px">Hi</div></body></html>`)
+        .html,
       darkTreatment: "authored",
       imageProxyBaseUrl: null,
       imageProxyOrigin: null,

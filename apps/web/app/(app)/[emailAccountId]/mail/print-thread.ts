@@ -100,7 +100,7 @@ ${sections}
 
 function printableBody(message: PrintableMessage) {
   if (message.textHtml) {
-    const sanitized = sanitizeEmailHtml(message.textHtml);
+    const sanitized = sanitizeEmailHtml(message.textHtml).html;
     // The reader's copy routes remote images through the image proxy.
     const html =
       getPreparedEmailHtml({ messageId: message.id, sourceHtml: sanitized }) ??
