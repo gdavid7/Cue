@@ -58,9 +58,9 @@ export async function getSnoozeTimes({
 }
 
 /**
- * The end of the next meeting that starts within the next 8 hours. One
- * already under way isn't next; all-day entries and meetings the user
- * declined don't hold them up.
+ * The end of the meeting the user is in now, or else of the next one starting
+ * within 8 hours. All-day entries, events marked free and meetings the user
+ * declined don't count.
  */
 export function resolveAfterNextMeeting({
   events,
@@ -69,7 +69,7 @@ export function resolveAfterNextMeeting({
 }: {
   events: Pick<
     CalendarEvent,
-    "allDay" | "attendees" | "endTime" | "startTime"
+    "allDay" | "attendees" | "endTime" | "markedFree" | "startTime"
   >[];
   now: Date;
   self: ReadonlySet<string>;
@@ -80,8 +80,8 @@ export function resolveAfterNextMeeting({
 
   for (const event of events) {
     const startMs = event.startTime.getTime();
-    if (startMs < nowMs || startMs > latestStartMs) continue;
-    if (event.endTime.getTime() <= startMs) continue;
+    if (startMs > latestStartMs || event.endTime.getTime() <= nowMs) continue;
+    if (event.endTime.getTime() <= startMs || event.markedFree) continue;
     if (!isMeetingForUser(event, self)) continue;
     if (!next || startMs < next.startTime.getTime()) next = event;
   }

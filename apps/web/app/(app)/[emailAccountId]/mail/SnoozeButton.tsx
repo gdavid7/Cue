@@ -27,9 +27,10 @@ import {
 import { getAccountScopedKey } from "@/utils/swr";
 
 /**
- * The reader's snooze control: the same presets as `h` in the command palette,
- * plus a date and time of your own. With a calendar connected it also offers
- * times read from the calendar of the conversation's own account.
+ * The reader's snooze control: the clock presets of `h` in the command palette
+ * and a date and time of your own. With a calendar connected it also offers
+ * times read from the calendar of the conversation's own account, listed last
+ * so the rows under the pointer never move when they arrive.
  */
 export function SnoozeButton({
   emailAccountId,
@@ -45,14 +46,22 @@ export function SnoozeButton({
   const [open, setOpen] = useState(false);
   const [showCustom, setShowCustom] = useState(false);
   const [custom, setCustom] = useState("");
-  // Read only once the picker opens; until it answers, or if it can't, the
-  // calendar presets simply aren't there.
+  const [warm, setWarm] = useState(false);
+  // Read once the picker opens, or when the pointer or focus reaches the
+  // trigger so it's usually ready by then. Until it answers, or if it can't,
+  // the calendar presets simply aren't there. Each read asks every connected
+  // calendar, so a quick reopen doesn't ask again.
   const { data: calendarTimes, error: calendarError } =
     useSWR<GetSnoozeTimesResponse>(
-      open
+      open || warm
         ? getAccountScopedKey("/api/user/calendar/snooze-times", emailAccountId)
         : null,
-      { revalidateOnFocus: false, shouldRetryOnError: false },
+      {
+        revalidateOnFocus: false,
+        revalidateIfStale: false,
+        dedupingInterval: 60_000,
+        shouldRetryOnError: false,
+      },
     );
   const now = new Date();
   const calendarPresets = calendarError
@@ -87,6 +96,10 @@ export function SnoozeButton({
       setCustom("");
     }
   };
+  const triggerProps = {
+    onFocus: () => setWarm(true),
+    onPointerEnter: () => setWarm(true),
+  };
   const choose = (until: Date) => {
     onOpenChange(false);
     onSnooze(until);
@@ -95,10 +108,12 @@ export function SnoozeButton({
   return (
     <Popover onOpenChange={onOpenChange} open={open}>
       {trigger ? (
-        <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+        <PopoverTrigger asChild {...triggerProps}>
+          {trigger}
+        </PopoverTrigger>
       ) : (
         <Tooltip shortcuts={["snooze"]}>
-          <PopoverTrigger asChild>
+          <PopoverTrigger asChild {...triggerProps}>
             <Button aria-label="Snooze" size="iconXs" variant="outline">
               <Clock3Icon className="size-3.5" />
             </Button>
@@ -150,19 +165,6 @@ export function SnoozeButton({
           </div>
         ) : (
           <>
-            {calendarPresets.length ? (
-              <>
-                {calendarPresets.map((preset) => (
-                  <SnoozePresetButton
-                    key={preset.id}
-                    label={preset.label}
-                    onClick={() => choose(preset.until)}
-                    until={preset.until}
-                  />
-                ))}
-                <div className="my-1 border-t" />
-              </>
-            ) : null}
             {getSnoozePresets(now).map((preset) => (
               <SnoozePresetButton
                 key={preset.id}
@@ -182,6 +184,19 @@ export function SnoozeButton({
               Choose date and time
               <ChevronRightIcon className="ml-auto size-3.5 text-muted-foreground" />
             </Button>
+            {calendarPresets.length ? (
+              <>
+                <div className="my-1 border-t" />
+                {calendarPresets.map((preset) => (
+                  <SnoozePresetButton
+                    key={preset.id}
+                    label={preset.label}
+                    onClick={() => choose(preset.until)}
+                    until={preset.until}
+                  />
+                ))}
+              </>
+            ) : null}
           </>
         )}
       </PopoverContent>

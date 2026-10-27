@@ -37,18 +37,40 @@ describe("resolveAfterNextMeeting", () => {
     );
   });
 
-  it("passes over a meeting already in progress for the next one", () => {
+  it("ends with the meeting already in progress, not a later one", () => {
     const events = [
+      meeting("2026-10-23T15:00:00Z", "2026-10-23T15:30:00Z"),
       meeting("2026-10-23T13:45:00Z", "2026-10-23T14:15:00Z"),
+    ];
+
+    expect(resolveAfterNextMeeting({ events, now: NOW, self: SELF })).toEqual(
+      new Date("2026-10-23T14:15:00Z"),
+    );
+  });
+
+  it("ignores a meeting that has already ended", () => {
+    const events = [
+      meeting("2026-10-23T13:00:00Z", "2026-10-23T14:00:00Z"),
       meeting("2026-10-23T15:00:00Z", "2026-10-23T15:30:00Z"),
     ];
 
     expect(resolveAfterNextMeeting({ events, now: NOW, self: SELF })).toEqual(
       new Date("2026-10-23T15:30:00Z"),
     );
-    expect(
-      resolveAfterNextMeeting({ events: [events[0]], now: NOW, self: SELF }),
-    ).toBe(null);
+  });
+
+  it("skips events marked free", () => {
+    const events = [
+      {
+        ...meeting("2026-10-23T14:30:00Z", "2026-10-23T15:00:00Z"),
+        markedFree: true,
+      },
+      meeting("2026-10-23T16:00:00Z", "2026-10-23T16:30:00Z"),
+    ];
+
+    expect(resolveAfterNextMeeting({ events, now: NOW, self: SELF })).toEqual(
+      new Date("2026-10-23T16:30:00Z"),
+    );
   });
 
   it("ends with the first of back-to-back meetings", () => {
@@ -308,7 +330,10 @@ describe("getSnoozeTimes", () => {
 function meeting(
   start: string,
   end: string,
-): Pick<CalendarEvent, "allDay" | "attendees" | "endTime" | "startTime"> {
+): Pick<
+  CalendarEvent,
+  "allDay" | "attendees" | "endTime" | "markedFree" | "startTime"
+> {
   return {
     startTime: new Date(start),
     endTime: new Date(end),

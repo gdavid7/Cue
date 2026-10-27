@@ -56,16 +56,49 @@ describe("SnoozeButton calendar presets", () => {
       "/api/user/calendar/snooze-times",
       "account-2",
     ]);
-    // Above the clock presets.
-    const names = screen
-      .getAllByRole("button")
-      .map((button) => button.textContent ?? "");
+    // Below the clock presets and the date and time row.
+    const names = buttonNames();
     expect(
       names.findIndex((name) => name.startsWith("After my next meeting")),
-    ).toBeLessThan(names.findIndex((name) => name.startsWith("Tomorrow")));
+    ).toBeGreaterThan(
+      names.findIndex((name) => name.startsWith("Choose date and time")),
+    );
 
     fireEvent.click(afterMeeting);
     expect(onSnooze).toHaveBeenCalledWith(meetingEnds);
+  });
+
+  it("keeps the clock presets where they are when calendar times arrive", async () => {
+    let answer: (times: unknown) => void = () => {};
+    renderPicker({
+      fetcher: () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    });
+    openPicker();
+    await screen.findByRole("button", { name: /^Tomorrow/ });
+    const before = buttonNames();
+
+    answer({
+      afterNextMeeting: new Date(Date.now() + 2 * HOUR).toISOString(),
+      nextFreeHour: new Date(Date.now() + 3 * HOUR).toISOString(),
+    });
+    await screen.findByRole("button", { name: /^After my next meeting/ });
+
+    expect(buttonNames().slice(0, before.length)).toEqual(before);
+  });
+
+  it("starts reading when the pointer reaches the trigger", async () => {
+    const fetcher = vi.fn(async () => ({
+      afterNextMeeting: null,
+      nextFreeHour: null,
+    }));
+    renderPicker({ fetcher });
+
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "Snooze" }));
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
   });
 
   it("shows only the time the calendar could work out", async () => {
@@ -144,6 +177,12 @@ function renderPicker({
       <SnoozeButton emailAccountId="account-2" onSnooze={onSnooze} />
     </SWRConfig>,
   );
+}
+
+function buttonNames() {
+  return screen
+    .getAllByRole("button")
+    .map((button) => button.textContent ?? "");
 }
 
 function openPicker() {
